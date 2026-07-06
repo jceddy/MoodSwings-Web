@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register - MoodSwings-Web</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <main>
+        <h1>Create an account</h1>
+
+        <form id="register-form">
+            <div class="field">
+                <label for="register-username">Username</label>
+                <input type="text" id="register-username" name="username" required autocomplete="username" minlength="3" maxlength="32">
+            </div>
+            <div class="field">
+                <label for="register-email">Email</label>
+                <input type="email" id="register-email" name="email" required autocomplete="email">
+            </div>
+            <div class="field">
+                <label for="register-phone">Phone number (optional)</label>
+                <input type="tel" id="register-phone" name="phone_number" autocomplete="tel">
+            </div>
+            <div class="field">
+                <label for="register-password">Password</label>
+                <input type="password" id="register-password" name="password" required autocomplete="new-password" minlength="8" maxlength="72">
+            </div>
+            <button type="submit">Register</button>
+            <p id="register-error" class="error" hidden></p>
+            <p id="register-success" class="success" hidden></p>
+        </form>
+
+        <p><a href="/">Back to login</a></p>
+    </main>
+    <script src="js/app.js"></script>
+    <script src="js/register.js"></script>
+</body>
+</html>
