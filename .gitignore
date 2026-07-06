@@ -2,6 +2,7 @@
 php-app/vendor/
 php-app/composer.lock
 php-app/.env
+php-app/.phpunit.result.cache
 
 # OS
 .DS_Store
