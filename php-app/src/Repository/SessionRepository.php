@@ -32,7 +32,7 @@ final class SessionRepository
     public function findValidByTokenHash(string $tokenHash): ?array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT sessions.id, sessions.user_id, users.username
+            'SELECT sessions.id, sessions.user_id, users.username, users.email, users.phone_number
              FROM sessions
              INNER JOIN users ON users.id = sessions.user_id
              WHERE sessions.token_hash = :token_hash AND sessions.expires_at > NOW()'
