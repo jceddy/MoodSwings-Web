@@ -117,6 +117,7 @@ if ($path === '/register' && $method === 'POST') {
     try {
         sendVerificationEmail($result['user'], $result['verificationToken']);
     } catch (\Throwable $e) {
+        error_log('Failed to send registration verification email: ' . $e->getMessage());
         $auth->cancelRegistration((int) $result['user']['id']);
         respond(502, [
             'status' => 'error',
@@ -145,6 +146,7 @@ if ($path === '/resend-verification' && $method === 'POST') {
         try {
             sendVerificationEmail($result['user'], $result['verificationToken']);
         } catch (\Throwable $e) {
+            error_log('Failed to send resend-verification email: ' . $e->getMessage());
             respond(502, [
                 'status' => 'error',
                 'message' => 'Could not send the verification email. Please try again shortly.',
