@@ -15,11 +15,13 @@ final class AuthService
     public const COOKIE_NAME = 'session_token';
     public const SESSION_TTL_DAYS = 30;
     public const EMAIL_VERIFICATION_TTL_HOURS = 24;
+    public const RESEND_MIN_INTERVAL_SECONDS = 60;
 
     public function __construct(
         private readonly UserRepository $users,
         private readonly SessionRepository $sessions,
         private readonly EmailVerificationRepository $emailVerifications,
+        private readonly int $resendMinIntervalSeconds = self::RESEND_MIN_INTERVAL_SECONDS,
     ) {
     }
 
@@ -86,6 +88,38 @@ final class AuthService
     public function cancelRegistration(int $userId): void
     {
         $this->users->delete($userId);
+    }
+
+    /**
+     * Issues a fresh verification token for an unverified account, invalidating
+     * any prior ones. Returns null when there's nothing to do (unknown email,
+     * already verified, or a resend was requested too recently) so the caller
+     * can respond identically in every case and avoid leaking account state.
+     *
+     * @return array{user: array, verificationToken: string}|null
+     */
+    public function resendVerificationEmail(string $email): ?array
+    {
+        $user = $this->users->findByEmail(trim($email));
+
+        if ($user === null || $user['email_verified_at'] !== null) {
+            return null;
+        }
+
+        $userId = (int) $user['id'];
+        $lastSentAt = $this->emailVerifications->mostRecentCreatedAtForUser($userId);
+
+        if ($lastSentAt !== null && (time() - $lastSentAt->getTimestamp()) < $this->resendMinIntervalSeconds) {
+            return null;
+        }
+
+        $this->emailVerifications->deleteAllForUser($userId);
+
+        $token = bin2hex(random_bytes(32));
+        $expiresAt = new DateTimeImmutable('+' . self::EMAIL_VERIFICATION_TTL_HOURS . ' hours');
+        $this->emailVerifications->create($userId, hash('sha256', $token), $expiresAt);
+
+        return ['user' => $user, 'verificationToken' => $token];
     }
 
     public function verifyEmail(string $token): array

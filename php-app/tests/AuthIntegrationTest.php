@@ -52,7 +52,9 @@ final class AuthIntegrationTest extends TestCase
         putenv("DB_USER={$user}");
         putenv("DB_PASSWORD={$password}");
 
-        $this->auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository());
+        // resendMinIntervalSeconds: 0 so tests can resend immediately after
+        // registering; the default cooldown is covered by a dedicated test.
+        $this->auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository(), 0);
     }
 
     /**
@@ -179,6 +181,50 @@ final class AuthIntegrationTest extends TestCase
     public function testCurrentUserRejectsUnknownToken(): void
     {
         self::assertNull($this->auth->currentUser(bin2hex(random_bytes(32))));
+    }
+
+    public function testResendVerificationIssuesNewTokenAndRevokesOld(): void
+    {
+        $registered = $this->auth->register('henry', 'henry@example.com', 'correcthorsebattery', null);
+
+        $resend = $this->auth->resendVerificationEmail('henry@example.com');
+
+        self::assertNotNull($resend);
+        self::assertNotSame($registered['verificationToken'], $resend['verificationToken']);
+
+        $this->expectException(InvalidVerificationTokenException::class);
+        $this->auth->verifyEmail($registered['verificationToken']);
+    }
+
+    public function testResendVerificationNewTokenVerifiesSuccessfully(): void
+    {
+        $this->auth->register('iris', 'iris@example.com', 'correcthorsebattery', null);
+        $resend = $this->auth->resendVerificationEmail('iris@example.com');
+
+        $user = $this->auth->verifyEmail($resend['verificationToken']);
+        self::assertSame('iris', $user['username']);
+    }
+
+    public function testResendVerificationForUnknownEmailReturnsNull(): void
+    {
+        self::assertNull($this->auth->resendVerificationEmail('nobody@example.com'));
+    }
+
+    public function testResendVerificationForAlreadyVerifiedUserReturnsNull(): void
+    {
+        $this->registerAndVerify('jack');
+
+        self::assertNull($this->auth->resendVerificationEmail('jack@example.com'));
+    }
+
+    public function testResendVerificationRespectsDefaultCooldown(): void
+    {
+        // Uses the real default cooldown (unlike $this->auth, which disables
+        // it above for test convenience) to confirm production behavior.
+        $auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository());
+        $auth->register('kevin', 'kevin@example.com', 'correcthorsebattery', null);
+
+        self::assertNull($auth->resendVerificationEmail('kevin@example.com'));
     }
 
     public function testCancelRegistrationDeletesUser(): void

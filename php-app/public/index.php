@@ -77,6 +77,16 @@ function clearSessionCookie(): void
     ]);
 }
 
+/**
+ * @throws \Throwable if the email fails to send
+ */
+function sendVerificationEmail(array $user, string $token): void
+{
+    $verificationUrl = rtrim(Config::get('APP_URL', ''), '/') . '/verify-email?token=' . urlencode($token);
+
+    (new Mailer())->sendVerificationEmail($user['email'], $user['username'], $verificationUrl);
+}
+
 if ($path === '/health' && $method === 'GET') {
     try {
         Connection::get()->query('SELECT 1');
@@ -104,15 +114,8 @@ if ($path === '/register' && $method === 'POST') {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 
-    $verificationUrl = rtrim(Config::get('APP_URL', ''), '/')
-        . '/verify-email?token=' . urlencode($result['verificationToken']);
-
     try {
-        (new Mailer())->sendVerificationEmail(
-            $result['user']['email'],
-            $result['user']['username'],
-            $verificationUrl
-        );
+        sendVerificationEmail($result['user'], $result['verificationToken']);
     } catch (\Throwable $e) {
         $auth->cancelRegistration((int) $result['user']['id']);
         respond(502, [
@@ -125,6 +128,35 @@ if ($path === '/register' && $method === 'POST') {
         'status' => 'ok',
         'message' => 'Check your email to verify your account before logging in.',
         'user' => publicUser($result['user']),
+    ]);
+}
+
+if ($path === '/resend-verification' && $method === 'POST') {
+    $body = requestBody();
+    $email = (string) ($body['email'] ?? '');
+
+    if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        respond(400, ['status' => 'error', 'message' => 'A valid email address is required.']);
+    }
+
+    $result = $auth->resendVerificationEmail($email);
+
+    if ($result !== null) {
+        try {
+            sendVerificationEmail($result['user'], $result['verificationToken']);
+        } catch (\Throwable $e) {
+            respond(502, [
+                'status' => 'error',
+                'message' => 'Could not send the verification email. Please try again shortly.',
+            ]);
+        }
+    }
+
+    // Always the same response, whether or not an email was actually sent, so
+    // this endpoint can't be used to discover which addresses are registered.
+    respond(200, [
+        'status' => 'ok',
+        'message' => 'If an account with that email exists and needs verification, a new email has been sent.',
     ]);
 }
 
