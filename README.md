@@ -43,11 +43,15 @@ files serve from the domain root, and the PHP app is reachable under `/app`
    - `SITE_URL` — your live site's base URL (e.g. `https://example.com`). If
      set, the workflow curls `$SITE_URL/app/health` after each deploy as a
      smoke test.
-5. Create the database itself and load the schema — this repo's GitHub
-   Actions runner cannot reach Bluehost's MySQL directly, so run
-   `database/schema.sql` yourself via phpMyAdmin in cPanel (or Bluehost's
-   Remote MySQL feature if you prefer a local client).
+5. Create the database itself and apply its migrations — this repo's GitHub
+   Actions runner cannot reach Bluehost's MySQL directly, so run each file
+   in `database/migrations/` (in order) yourself via phpMyAdmin's SQL tab in
+   cPanel (or Bluehost's Remote MySQL feature if you prefer a local client).
+   See [`database/README.md`](database/README.md) for details.
 
 Once secrets are set and `main` has the schema-backed database ready, a push
-to `main` deploys automatically.
+to `main` deploys automatically. Deploys only push application files —
+whenever a PR adds a new file under `database/migrations/`, apply it to the
+production database yourself before (or right after) that PR's changes go
+live, the same way as the initial setup above.
 

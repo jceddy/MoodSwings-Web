@@ -1,5 +1,9 @@
--- MoodSwings-Web database schema
--- Target: MySQL 8.0+
+-- Baseline: the full schema as of when the migrations workflow was
+-- introduced. If your database was already provisioned before this (i.e.
+-- you'd previously run the old schema.sql), you don't need to run this one
+-- — start from whichever migration comes next. Safe to run on an empty
+-- database or replay on one that already matches it (CREATE TABLE IF NOT
+-- EXISTS everywhere).
 
 SET NAMES utf8mb4;
 
