@@ -5,3 +5,26 @@ body {
     padding: 0 1rem;
     color: #222;
 }
+
+.field {
+    margin-bottom: 1rem;
+}
+
+.field label {
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
+.field input {
+    width: 100%;
+    padding: 0.5rem;
+    box-sizing: border-box;
+}
+
+.error {
+    color: #b00020;
+}
+
+.success {
+    color: #0a7a2e;
+}
