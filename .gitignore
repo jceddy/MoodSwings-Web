@@ -2,6 +2,7 @@
 php-app/vendor/
 php-app/.env
 php-app/.phpunit.result.cache
+php-app/src/mail-errors.log
 
 # Deploy artifact
 /dist/
