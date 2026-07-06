@@ -61,22 +61,30 @@ jobs:
           cp -R php-app/src dist/src
           cp -R php-app/vendor dist/vendor
 
-          # Runtime config generated from repo secrets; never committed.
-          cat > dist/.env <<EOF
-          DB_HOST=$DB_HOST
-          DB_PORT=$DB_PORT
-          DB_NAME=$DB_NAME
-          DB_USER=$DB_USER
-          DB_PASSWORD=$DB_PASSWORD
-          APP_URL=$APP_URL
-          SMTP_HOST=$SMTP_HOST
-          SMTP_PORT=$SMTP_PORT
-          SMTP_USERNAME=$SMTP_USERNAME
-          SMTP_PASSWORD=$SMTP_PASSWORD
-          SMTP_ENCRYPTION=$SMTP_ENCRYPTION
-          SMTP_FROM_ADDRESS=$SMTP_FROM_ADDRESS
-          SMTP_FROM_NAME=$SMTP_FROM_NAME
-          EOF
+          # Runtime config generated from repo secrets; never committed. Only
+          # write a line when the secret/variable is actually set, so unset
+          # optional ones (e.g. SMTP_PORT) fall back to Config::get()'s coded
+          # defaults instead of resolving to a literal empty string.
+          write_env_var() {
+            if [ -n "$2" ]; then
+              echo "$1=$2" >> dist/.env
+            fi
+          }
+
+          : > dist/.env
+          write_env_var DB_HOST "$DB_HOST"
+          write_env_var DB_PORT "$DB_PORT"
+          write_env_var DB_NAME "$DB_NAME"
+          write_env_var DB_USER "$DB_USER"
+          write_env_var DB_PASSWORD "$DB_PASSWORD"
+          write_env_var APP_URL "$APP_URL"
+          write_env_var SMTP_HOST "$SMTP_HOST"
+          write_env_var SMTP_PORT "$SMTP_PORT"
+          write_env_var SMTP_USERNAME "$SMTP_USERNAME"
+          write_env_var SMTP_PASSWORD "$SMTP_PASSWORD"
+          write_env_var SMTP_ENCRYPTION "$SMTP_ENCRYPTION"
+          write_env_var SMTP_FROM_ADDRESS "$SMTP_FROM_ADDRESS"
+          write_env_var SMTP_FROM_NAME "$SMTP_FROM_NAME"
 
           # dist/, vendor/, and src/ all end up under the shared document
           # root (no Bluehost document-root change required), so block
