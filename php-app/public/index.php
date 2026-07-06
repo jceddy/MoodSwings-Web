@@ -45,6 +45,37 @@ function respond(int $status, array $body): never
     exit;
 }
 
+/**
+ * Only used by /verify-email: unlike every other route, that one is meant
+ * to be opened directly from an emailed link by a human, not called by our
+ * own JS, so it renders a page instead of JSON. $redirectTo is an absolute
+ * site path (e.g. "/"); when set, the page redirects there automatically.
+ */
+function respondHtml(int $status, string $title, string $heading, string $message, ?string $redirectTo = null): never
+{
+    header('Content-Type: text/html; charset=utf-8', true);
+    http_response_code($status);
+
+    $redirectMeta = $redirectTo !== null
+        ? sprintf('<meta http-equiv="refresh" content="5;url=%s">', htmlspecialchars($redirectTo, ENT_QUOTES))
+        : '';
+    $link = $redirectTo !== null
+        ? sprintf('<p><a href="%s">Continue to login</a></p>', htmlspecialchars($redirectTo, ENT_QUOTES))
+        : '<p><a href="/">Back to login</a></p>';
+
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+        . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        . '<title>' . htmlspecialchars($title, ENT_QUOTES) . '</title>'
+        . '<link rel="stylesheet" href="/css/style.css">'
+        . $redirectMeta
+        . '</head><body><main>'
+        . '<h1>' . htmlspecialchars($heading, ENT_QUOTES) . '</h1>'
+        . '<p>' . htmlspecialchars($message, ENT_QUOTES) . '</p>'
+        . $link
+        . '</main></body></html>';
+    exit;
+}
+
 function publicUser(array $user): array
 {
     return [
@@ -186,9 +217,15 @@ if ($path === '/verify-email' && $method === 'GET') {
 
     try {
         $user = $auth->verifyEmail($token);
-        respond(200, ['status' => 'ok', 'message' => 'Email verified. You can now log in.', 'user' => publicUser($user)]);
+        respondHtml(
+            200,
+            'Email verified - MoodSwings-Web',
+            'Email verified',
+            "Thanks, {$user['username']}! Your account is verified and you can now log in. Redirecting you shortly...",
+            '/'
+        );
     } catch (InvalidVerificationTokenException $e) {
-        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+        respondHtml(400, 'Verification failed - MoodSwings-Web', 'Verification failed', $e->getMessage());
     }
 }
 
