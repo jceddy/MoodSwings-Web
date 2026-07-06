@@ -91,10 +91,18 @@ function sendVerificationEmail(array $user, string $token): void
  * Writes to a fixed, non-web-accessible file (src/ already has a
  * deny-all .htaccess) rather than PHP's ambient error_log destination,
  * which varies by host and isn't always what cPanel's error log UI shows.
+ * Includes the resolved (non-secret) SMTP host/port/encryption so a
+ * misconfigured or unset value is visible without checking GitHub secrets.
  */
 function logMailError(string $message): void
 {
-    $line = '[' . date('Y-m-d H:i:s') . '] ' . $message . "\n";
+    $config = sprintf(
+        'host=%s port=%s encryption=%s',
+        Config::get('SMTP_HOST', '') ?: '(empty)',
+        Config::get('SMTP_PORT', '587'),
+        Config::get('SMTP_ENCRYPTION', 'tls') ?: '(none)'
+    );
+    $line = '[' . date('Y-m-d H:i:s') . "] {$message} [{$config}]\n";
     error_log($line, 3, dirname(__DIR__) . '/src/mail-errors.log');
 }
 
