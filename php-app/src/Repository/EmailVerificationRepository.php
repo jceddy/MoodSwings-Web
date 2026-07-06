@@ -34,6 +34,18 @@ final class EmailVerificationRepository
         return $row === false ? null : $row;
     }
 
+    public function mostRecentCreatedAtForUser(int $userId): ?DateTimeImmutable
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT created_at FROM email_verifications
+             WHERE user_id = :user_id ORDER BY created_at DESC LIMIT 1'
+        );
+        $stmt->execute(['user_id' => $userId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : new DateTimeImmutable($row['created_at']);
+    }
+
     public function deleteAllForUser(int $userId): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM email_verifications WHERE user_id = :user_id');
