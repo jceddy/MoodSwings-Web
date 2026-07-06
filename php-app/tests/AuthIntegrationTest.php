@@ -5,8 +5,12 @@ declare(strict_types=1);
 namespace MoodSwings\Tests;
 
 use MoodSwings\Auth\AuthService;
+use MoodSwings\Auth\DuplicateEmailException;
 use MoodSwings\Auth\DuplicateUsernameException;
+use MoodSwings\Auth\EmailNotVerifiedException;
 use MoodSwings\Auth\InvalidCredentialsException;
+use MoodSwings\Auth\InvalidVerificationTokenException;
+use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
 use PDO;
@@ -37,6 +41,7 @@ final class AuthIntegrationTest extends TestCase
         }
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+        $pdo->exec('TRUNCATE TABLE email_verifications');
         $pdo->exec('TRUNCATE TABLE sessions');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
@@ -47,40 +52,94 @@ final class AuthIntegrationTest extends TestCase
         putenv("DB_USER={$user}");
         putenv("DB_PASSWORD={$password}");
 
-        $this->auth = new AuthService(new UserRepository(), new SessionRepository());
+        $this->auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository());
     }
 
-    public function testRegisterCreatesUser(): void
+    /**
+     * Registers and immediately verifies a user, returning the registration result.
+     */
+    private function registerAndVerify(string $username, string $password = 'correcthorsebattery', ?string $phoneNumber = null): array
     {
-        $user = $this->auth->register('alice', 'supersecret');
+        $result = $this->auth->register($username, "{$username}@example.com", $password, $phoneNumber);
+        $this->auth->verifyEmail($result['verificationToken']);
 
-        self::assertSame('alice', $user['username']);
-        self::assertArrayHasKey('id', $user);
+        return $result;
+    }
+
+    public function testRegisterCreatesUnverifiedUser(): void
+    {
+        $result = $this->auth->register('alice', 'alice@example.com', 'supersecret', null);
+
+        self::assertSame('alice', $result['user']['username']);
+        self::assertSame('alice@example.com', $result['user']['email']);
+        self::assertNull($result['user']['email_verified_at']);
+        self::assertNotEmpty($result['verificationToken']);
+    }
+
+    public function testRegisterAcceptsOptionalPhoneNumber(): void
+    {
+        $result = $this->auth->register('alicep', 'alicep@example.com', 'supersecret', '+1 (555) 123-4567');
+
+        self::assertSame('+1 (555) 123-4567', $result['user']['phone_number']);
     }
 
     public function testRegisterRejectsDuplicateUsername(): void
     {
-        $this->auth->register('bob', 'supersecret');
+        $this->auth->register('bob', 'bob@example.com', 'supersecret', null);
 
         $this->expectException(DuplicateUsernameException::class);
-        $this->auth->register('bob', 'anotherpassword');
+        $this->auth->register('bob', 'bob2@example.com', 'anotherpassword', null);
+    }
+
+    public function testRegisterRejectsDuplicateEmail(): void
+    {
+        $this->auth->register('bob2', 'shared@example.com', 'supersecret', null);
+
+        $this->expectException(DuplicateEmailException::class);
+        $this->auth->register('bob3', 'shared@example.com', 'anotherpassword', null);
     }
 
     public function testRegisterRejectsShortPassword(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->auth->register('carol', 'short');
+        $this->auth->register('carol', 'carol@example.com', 'short', null);
     }
 
     public function testRegisterRejectsInvalidUsername(): void
     {
         $this->expectException(\InvalidArgumentException::class);
-        $this->auth->register('a b!', 'supersecret');
+        $this->auth->register('a b!', 'carol2@example.com', 'supersecret', null);
     }
 
-    public function testLoginWithValidCredentialsCreatesSession(): void
+    public function testRegisterRejectsInvalidEmail(): void
     {
-        $this->auth->register('dave', 'correcthorsebattery');
+        $this->expectException(\InvalidArgumentException::class);
+        $this->auth->register('carol3', 'not-an-email', 'supersecret', null);
+    }
+
+    public function testRegisterRejectsInvalidPhoneNumber(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->auth->register('carol4', 'carol4@example.com', 'supersecret', 'not a phone number!!');
+    }
+
+    public function testLoginBeforeVerificationFails(): void
+    {
+        $this->auth->register('unverified', 'unverified@example.com', 'correcthorsebattery', null);
+
+        $this->expectException(EmailNotVerifiedException::class);
+        $this->auth->login('unverified', 'correcthorsebattery', null, null);
+    }
+
+    public function testVerifyEmailWithInvalidTokenFails(): void
+    {
+        $this->expectException(InvalidVerificationTokenException::class);
+        $this->auth->verifyEmail(bin2hex(random_bytes(32)));
+    }
+
+    public function testLoginWithValidCredentialsCreatesSessionAfterVerification(): void
+    {
+        $this->registerAndVerify('dave');
 
         $result = $this->auth->login('dave', 'correcthorsebattery', '127.0.0.1', 'phpunit');
 
@@ -90,11 +149,12 @@ final class AuthIntegrationTest extends TestCase
         $current = $this->auth->currentUser($result['token']);
         self::assertNotNull($current);
         self::assertSame('dave', $current['user']['username']);
+        self::assertSame('dave@example.com', $current['user']['email']);
     }
 
     public function testLoginWithWrongPasswordFails(): void
     {
-        $this->auth->register('erin', 'correcthorsebattery');
+        $this->registerAndVerify('erin');
 
         $this->expectException(InvalidCredentialsException::class);
         $this->auth->login('erin', 'wrongpassword', null, null);
@@ -108,7 +168,7 @@ final class AuthIntegrationTest extends TestCase
 
     public function testLogoutInvalidatesSession(): void
     {
-        $this->auth->register('frank', 'correcthorsebattery');
+        $this->registerAndVerify('frank');
         $result = $this->auth->login('frank', 'correcthorsebattery', null, null);
 
         $this->auth->logout($result['token']);
@@ -119,5 +179,16 @@ final class AuthIntegrationTest extends TestCase
     public function testCurrentUserRejectsUnknownToken(): void
     {
         self::assertNull($this->auth->currentUser(bin2hex(random_bytes(32))));
+    }
+
+    public function testCancelRegistrationDeletesUser(): void
+    {
+        $result = $this->auth->register('gina', 'gina@example.com', 'supersecret', null);
+
+        $this->auth->cancelRegistration((int) $result['user']['id']);
+
+        // The username and email are free again after cancellation.
+        $reregistered = $this->auth->register('gina', 'gina@example.com', 'anotherpassword', null);
+        self::assertSame('gina', $reregistered['user']['username']);
     }
 }

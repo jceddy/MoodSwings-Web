@@ -14,7 +14,13 @@ final class Config
             self::$values = self::load();
         }
 
-        return self::$values[$key] ?? getenv($key) ?: $default;
+        if (array_key_exists($key, self::$values)) {
+            return self::$values[$key];
+        }
+
+        $envValue = getenv($key);
+
+        return $envValue !== false ? $envValue : $default;
     }
 
     private static function load(): array

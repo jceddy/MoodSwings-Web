@@ -5,9 +5,15 @@ declare(strict_types=1);
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 use MoodSwings\Auth\AuthService;
+use MoodSwings\Auth\DuplicateEmailException;
 use MoodSwings\Auth\DuplicateUsernameException;
+use MoodSwings\Auth\EmailNotVerifiedException;
 use MoodSwings\Auth\InvalidCredentialsException;
+use MoodSwings\Auth\InvalidVerificationTokenException;
+use MoodSwings\Config;
 use MoodSwings\Database\Connection;
+use MoodSwings\Mail\Mailer;
+use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
 
@@ -37,6 +43,16 @@ function respond(int $status, array $body): never
     http_response_code($status);
     echo json_encode($body);
     exit;
+}
+
+function publicUser(array $user): array
+{
+    return [
+        'id' => (int) $user['id'],
+        'username' => $user['username'],
+        'email' => $user['email'],
+        'phone_number' => $user['phone_number'],
+    ];
 }
 
 function setSessionCookie(string $token, DateTimeImmutable $expiresAt): void
@@ -70,26 +86,55 @@ if ($path === '/health' && $method === 'GET') {
     }
 }
 
-$auth = new AuthService(new UserRepository(), new SessionRepository());
+$auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository());
 
 if ($path === '/register' && $method === 'POST') {
     $body = requestBody();
 
     try {
-        $username = (string) ($body['username'] ?? '');
-        $password = (string) ($body['password'] ?? '');
-
-        $auth->register($username, $password);
-        $result = $auth->login($username, $password, $_SERVER['REMOTE_ADDR'] ?? null, $_SERVER['HTTP_USER_AGENT'] ?? null);
-
-        setSessionCookie($result['token'], $result['expiresAt']);
-        respond(201, ['status' => 'ok', 'user' => [
-            'id' => (int) $result['user']['id'],
-            'username' => $result['user']['username'],
-        ]]);
-    } catch (DuplicateUsernameException $e) {
+        $result = $auth->register(
+            (string) ($body['username'] ?? ''),
+            (string) ($body['email'] ?? ''),
+            (string) ($body['password'] ?? ''),
+            isset($body['phone_number']) ? (string) $body['phone_number'] : null
+        );
+    } catch (DuplicateUsernameException | DuplicateEmailException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+
+    $verificationUrl = rtrim(Config::get('APP_URL', ''), '/')
+        . '/verify-email?token=' . urlencode($result['verificationToken']);
+
+    try {
+        (new Mailer())->sendVerificationEmail(
+            $result['user']['email'],
+            $result['user']['username'],
+            $verificationUrl
+        );
+    } catch (\Throwable $e) {
+        $auth->cancelRegistration((int) $result['user']['id']);
+        respond(502, [
+            'status' => 'error',
+            'message' => 'Could not send the verification email. Please try registering again.',
+        ]);
+    }
+
+    respond(201, [
+        'status' => 'ok',
+        'message' => 'Check your email to verify your account before logging in.',
+        'user' => publicUser($result['user']),
+    ]);
+}
+
+if ($path === '/verify-email' && $method === 'GET') {
+    $token = (string) ($_GET['token'] ?? '');
+
+    try {
+        $user = $auth->verifyEmail($token);
+        respond(200, ['status' => 'ok', 'message' => 'Email verified. You can now log in.', 'user' => publicUser($user)]);
+    } catch (InvalidVerificationTokenException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
@@ -106,12 +151,11 @@ if ($path === '/login' && $method === 'POST') {
         );
 
         setSessionCookie($result['token'], $result['expiresAt']);
-        respond(200, ['status' => 'ok', 'user' => [
-            'id' => (int) $result['user']['id'],
-            'username' => $result['user']['username'],
-        ]]);
+        respond(200, ['status' => 'ok', 'user' => publicUser($result['user'])]);
     } catch (InvalidCredentialsException $e) {
         respond(401, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (EmailNotVerifiedException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 

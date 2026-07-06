@@ -21,7 +21,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ env.PHP_VERSION }}
-          extensions: mbstring, pdo, pdo_mysql
+          extensions: mbstring, pdo, pdo_mysql, openssl
           coverage: none
 
       - name: Install PHP dependencies
@@ -35,6 +35,14 @@ jobs:
           DB_NAME: ${{ secrets.DB_NAME }}
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          APP_URL: ${{ vars.APP_URL }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          SMTP_ENCRYPTION: ${{ secrets.SMTP_ENCRYPTION }}
+          SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
+          SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
         run: |
           set -euo pipefail
           rm -rf dist
@@ -60,6 +68,14 @@ jobs:
           DB_NAME=$DB_NAME
           DB_USER=$DB_USER
           DB_PASSWORD=$DB_PASSWORD
+          APP_URL=$APP_URL
+          SMTP_HOST=$SMTP_HOST
+          SMTP_PORT=$SMTP_PORT
+          SMTP_USERNAME=$SMTP_USERNAME
+          SMTP_PASSWORD=$SMTP_PASSWORD
+          SMTP_ENCRYPTION=$SMTP_ENCRYPTION
+          SMTP_FROM_ADDRESS=$SMTP_FROM_ADDRESS
+          SMTP_FROM_NAME=$SMTP_FROM_NAME
           EOF
 
           # dist/, vendor/, and src/ all end up under the shared document
