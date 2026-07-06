@@ -1,0 +1,92 @@
+name: Deploy to Bluehost
+
+on:
+  push:
+    branches: [main]
+
+env:
+  # Must be >= the "php": ">=8.1" requirement in php-app/composer.json, and
+  # should match the PHP version set for your domain in cPanel's MultiPHP
+  # Manager so the deployed code actually runs the way it was built.
+  PHP_VERSION: '8.1'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: mbstring, pdo, pdo_mysql
+          coverage: none
+
+      - name: Install PHP dependencies
+        working-directory: php-app
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Assemble deploy artifact
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist
+
+          # Static site at the domain root.
+          cp -R web-static/. dist/
+
+          # PHP app's front controller lives under /app; public/.htaccess
+          # rewrites requests to it so index.php's router still works.
+          mkdir -p dist/app
+          cp -R php-app/public/. dist/app/
+
+          # App code and dependencies, siblings of app/ so index.php's
+          # existing dirname(__DIR__) paths resolve unchanged.
+          cp -R php-app/src dist/src
+          cp -R php-app/vendor dist/vendor
+
+          # Runtime config generated from repo secrets; never committed.
+          cat > dist/.env <<EOF
+          DB_HOST=$DB_HOST
+          DB_PORT=$DB_PORT
+          DB_NAME=$DB_NAME
+          DB_USER=$DB_USER
+          DB_PASSWORD=$DB_PASSWORD
+          EOF
+
+          # dist/, vendor/, and src/ all end up under the shared document
+          # root (no Bluehost document-root change required), so block
+          # direct HTTP access to the files that aren't meant to be served.
+          cat > dist/.htaccess <<'HTACCESS'
+          <FilesMatch "^\.env$">
+              Require all denied
+          </FilesMatch>
+          HTACCESS
+          echo 'Require all denied' > dist/vendor/.htaccess
+          echo 'Require all denied' > dist/src/.htaccess
+
+      - name: Deploy to Bluehost via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
+          local-dir: ./dist/
+          exclude: |
+            **/.git*
+            **/.git*/**
+
+      - name: Smoke test deployed health endpoint
+        if: ${{ vars.SITE_URL != '' }}
+        env:
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: curl -fsS "$SITE_URL/app/health"
