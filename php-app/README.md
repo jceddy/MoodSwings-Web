@@ -60,6 +60,14 @@ e.g. `https://example.com/app` if deployed under `/app`. Phone numbers and
 verified email are captured for future notification use but nothing sends
 notifications yet.
 
+If a verification email fails to send, the real error (e.g. the SMTP
+error PHPMailer raised) is appended to `src/mail-errors.log` — a fixed,
+predictable location rather than PHP's ambient `error_log()` destination,
+which varies by host and isn't always what cPanel's error log page shows.
+`src/` already has a deny-all `.htaccess` from the deploy workflow, so
+that file isn't web-accessible; check it via cPanel's File Manager or FTP,
+not a browser.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises

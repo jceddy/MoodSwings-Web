@@ -87,6 +87,17 @@ function sendVerificationEmail(array $user, string $token): void
     (new Mailer())->sendVerificationEmail($user['email'], $user['username'], $verificationUrl);
 }
 
+/**
+ * Writes to a fixed, non-web-accessible file (src/ already has a
+ * deny-all .htaccess) rather than PHP's ambient error_log destination,
+ * which varies by host and isn't always what cPanel's error log UI shows.
+ */
+function logMailError(string $message): void
+{
+    $line = '[' . date('Y-m-d H:i:s') . '] ' . $message . "\n";
+    error_log($line, 3, dirname(__DIR__) . '/src/mail-errors.log');
+}
+
 if ($path === '/health' && $method === 'GET') {
     try {
         Connection::get()->query('SELECT 1');
@@ -117,7 +128,7 @@ if ($path === '/register' && $method === 'POST') {
     try {
         sendVerificationEmail($result['user'], $result['verificationToken']);
     } catch (\Throwable $e) {
-        error_log('Failed to send registration verification email: ' . $e->getMessage());
+        logMailError('Failed to send registration verification email: ' . $e->getMessage());
         $auth->cancelRegistration((int) $result['user']['id']);
         respond(502, [
             'status' => 'error',
@@ -146,7 +157,7 @@ if ($path === '/resend-verification' && $method === 'POST') {
         try {
             sendVerificationEmail($result['user'], $result['verificationToken']);
         } catch (\Throwable $e) {
-            error_log('Failed to send resend-verification email: ' . $e->getMessage());
+            logMailError('Failed to send resend-verification email: ' . $e->getMessage());
             respond(502, [
                 'status' => 'error',
                 'message' => 'Could not send the verification email. Please try again shortly.',
