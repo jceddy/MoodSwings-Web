@@ -8,7 +8,12 @@ use MoodSwings\Database\Connection;
 
 header('Content-Type: application/json');
 
-$path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+// __route is set by public/.htaccess when the app is deployed under a
+// subfolder (e.g. /app on shared hosting), so routing works regardless of
+// where the front controller is mounted.
+$path = isset($_GET['__route'])
+    ? '/' . ltrim($_GET['__route'], '/')
+    : (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/');
 
 if ($path === '/health') {
     try {

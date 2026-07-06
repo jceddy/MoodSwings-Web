@@ -4,6 +4,9 @@ php-app/composer.lock
 php-app/.env
 php-app/.phpunit.result.cache
 
+# Deploy artifact
+/dist/
+
 # OS
 .DS_Store
 Thumbs.db
