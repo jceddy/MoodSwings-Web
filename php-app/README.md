@@ -35,13 +35,16 @@ database.
 
 ## API
 
-All responses are JSON with a `status` field (`ok` or `error`).
+All responses are JSON with a `status` field (`ok` or `error`), except
+`/verify-email` — that one's opened directly from an emailed link by a
+human rather than called by our own JS, so it renders an HTML page
+instead.
 
 | Method | Path            | Body                                                          | Notes |
 | ------ | --------------- | -------------------------------------------------------------- | ----- |
 | GET    | `/health`       | —                                                                | Checks DB connectivity. |
 | POST   | `/register`     | `{"username", "email", "password", "phone_number"?}`             | Creates an unverified user and emails a verification link. Username: 3-32 chars (letters/numbers/`_`/`-`); email: valid format; password: 8-72 chars; phone (optional): 7-20 chars, digits/`+`/`-`/`.`/spaces/parens. `409` on duplicate username/email, `400` on validation failure, `502` if the verification email can't be sent (registration is rolled back so you can retry). |
-| GET    | `/verify-email` | query param `token`                                              | Marks the account verified. `400` if the token is invalid/expired. |
+| GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with just a manual link (no auto-redirect) if the token is invalid/expired. |
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
