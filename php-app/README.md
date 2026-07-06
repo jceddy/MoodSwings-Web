@@ -10,8 +10,13 @@ composer install
 cp .env.example .env   # then edit with your local MySQL credentials
 ```
 
-Load the schema from `../database/schema.sql` into MySQL (see that project's
-README), then start the built-in dev server:
+Apply the database migrations (see [`../database`](../database) for details):
+
+```sh
+composer migrate
+```
+
+then start the built-in dev server:
 
 ```sh
 php -S localhost:8000 -t public
@@ -24,6 +29,8 @@ database.
 
 - `public/` — Web server document root / front controller.
 - `src/` — Application source (PSR-4 autoloaded under `MoodSwings\`).
+- `bin/migrate.php` — Applies pending database migrations from
+  `../database/migrations/` (see that project's README).
 - `tests/` — PHPUnit tests.
 
 ## API
@@ -42,7 +49,7 @@ All responses are JSON with a `status` field (`ok` or `error`).
 
 Authentication uses an httpOnly, `Secure`, `SameSite=Lax` cookie
 (`session_token`) holding a random token; only its SHA-256 hash is stored in
-the `sessions` table (see `database/schema.sql`), so a database leak alone
+the `sessions` table (see `database/migrations/0001_baseline.sql`), so a database leak alone
 can't be used to log in. Sessions last 30 days and slide forward on each
 authenticated request.
 
@@ -58,8 +65,15 @@ notifications yet.
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises
 registration/login/session-tracking against a real MySQL-compatible
 database and is skipped automatically if one isn't reachable. To run it
-locally, point it at a throwaway database via environment variables (all
-optional, shown with their defaults):
+locally, provision a throwaway database with the migration runner:
+
+```sh
+DB_HOST=127.0.0.1 DB_PORT=3306 DB_NAME=moodswings_test DB_USER=root DB_PASSWORD= \
+composer migrate
+```
+
+then point the tests at it via environment variables (all optional, shown
+with their defaults):
 
 ```sh
 TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=3306 TEST_DB_NAME=moodswings_test \

@@ -20,5 +20,8 @@
         "psr-4": {
             "MoodSwings\\Tests\\": "tests/"
         }
+    },
+    "scripts": {
+        "migrate": "php bin/migrate.php"
     }
 }
