@@ -33,10 +33,36 @@ Add a new file named `NNNN_description.sql` (next sequential 4-digit
 number) containing only the incremental change (e.g. an `ALTER TABLE`),
 not a full schema dump. Migrations are immutable once merged — never edit
 one that's already shipped; add a new one instead. Keep each migration to
-plain DDL statements (no stored procedures/triggers with embedded
-semicolons) since `bin/migrate.php` splits files on `;`.
+plain DDL statements (no stored procedures/triggers) — and if a migration
+seeds data (like `0003`'s card catalog `INSERT`s), make sure none of the
+values contain a literal semicolon — since `bin/migrate.php` splits files
+on `;`.
 
 ## Layout
 
 - `migrations/` — Ordered `.sql` files, one per schema change, applied in
   filename order.
+
+## Schema overview
+
+- **Accounts/friends** (`0001`, `0002`): `users`, `sessions`,
+  `email_verifications`, `friendships`.
+- **Card catalog** (`0003`): `cards` — reference data for the full 133-card
+  Mood Swings pool (name, color, rarity, value(s), printed rules text, and
+  which of the three ability timings it has). Seeded once by the migration
+  itself, not written by the app. See the migration file's header comment
+  for what's deliberately *not* in there (Hurt Feelings, the Love Headliner
+  treatment) and why.
+- **Games** (`0004`): `games`, `game_players`, `game_rounds`,
+  `game_round_scores`, `game_cards`, `game_events` — a played match, its
+  seated players, its rounds and their scores, where every physical card
+  currently is (deck/hand/in-play/discard, ownership, suppression), and an
+  append-only log of every action taken so a game can be studied after the
+  fact. See that migration's comments for the reasoning behind each design
+  choice (e.g. why Hurt Feelings is a round attribute and not a card, and
+  why history is a separate event log rather than derived from the
+  current-state tables).
+  
+  This covers the data model only — the actual rules engine (resolving
+  each card's effect, turn/phase flow, scoring) is future work, built
+  incrementally against `cards.rules_text` and keyed off `cards.effect_key`.
