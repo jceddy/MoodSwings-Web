@@ -24,6 +24,7 @@ use MoodSwings\Rules\Effects\CondescensionEffect;
 use MoodSwings\Rules\Effects\ConfusionEffect;
 use MoodSwings\Rules\Effects\ContemptEffect;
 use MoodSwings\Rules\Effects\ConvictionEffect;
+use MoodSwings\Rules\Effects\CorruptionEffect;
 use MoodSwings\Rules\Effects\CourageEffect;
 use MoodSwings\Rules\Effects\CrueltyEffect;
 use MoodSwings\Rules\Effects\CuriosityEffect;
@@ -32,6 +33,7 @@ use MoodSwings\Rules\Effects\DenialEffect;
 use MoodSwings\Rules\Effects\DeterminationEffect;
 use MoodSwings\Rules\Effects\DignityEffect;
 use MoodSwings\Rules\Effects\DisorientationEffect;
+use MoodSwings\Rules\Effects\DoubtEffect;
 use MoodSwings\Rules\Effects\EagernessEffect;
 use MoodSwings\Rules\Effects\EnvyEffect;
 use MoodSwings\Rules\Effects\EuphoriaEffect;
@@ -62,6 +64,7 @@ use MoodSwings\Rules\Effects\KindnessEffect;
 use MoodSwings\Rules\Effects\LoveEffect;
 use MoodSwings\Rules\Effects\MaliceEffect;
 use MoodSwings\Rules\Effects\MeeknessEffect;
+use MoodSwings\Rules\Effects\MelancholyEffect;
 use MoodSwings\Rules\Effects\MiseryEffect;
 use MoodSwings\Rules\Effects\NeurosisEffect;
 use MoodSwings\Rules\Effects\NostalgiaEffect;
@@ -69,6 +72,8 @@ use MoodSwings\Rules\Effects\PacifismEffect;
 use MoodSwings\Rules\Effects\PairedColorThresholdEffect;
 use MoodSwings\Rules\Effects\PanicEffect;
 use MoodSwings\Rules\Effects\ParanoiaEffect;
+use MoodSwings\Rules\Effects\PlayedThisRoundValueEffect;
+use MoodSwings\Rules\Effects\PrideEffect;
 use MoodSwings\Rules\Effects\RageEffect;
 use MoodSwings\Rules\Effects\RationalizationEffect;
 use MoodSwings\Rules\Effects\RebellionEffect;
@@ -135,11 +140,23 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * it), a "give this mood away, it returns to you after scoring if still
  * in play" tag (Betrayal; Recklessness's taken mood), a score swap
  * between two players applied before the round's winner is determined
- * (Sneakiness), and a "skip scoring entirely this round" marker paired
- * with Honor's firstPlayerOverride key to choose next round's first
- * player instead (Awe) -- not full coverage. Cards not registered here
- * throw EffectNotImplementedException if their ability is actually
- * invoked; implementing the rest is incremental follow-up work.
+ * (Sneakiness), a "skip scoring entirely this round" marker paired with a
+ * one-time (as opposed to Honor's perpetual) first-player override for
+ * next round only (Awe), and an unconditional "the round's winner gets
+ * an extra win" tag (Corruption -- GameService::consumeExtraWinMarker()),
+ * a round-scoped "this mood's value changes if you played it this round"
+ * pair sharing one stateless class (Patience/Glee -- the 'playedInRound'
+ * tag every mood is stamped with on entering play, and
+ * BoardState::currentRoundNumber()), a variable-count extra-play grant
+ * sized to close a mood-count gap with a chosen opponent (Pride), an
+ * "as though it were in your hand" widening of which zone a player's
+ * normal plays can draw from, special-cased by effect_key the same way
+ * BoardState::colorOf() special-cases Imagination (Melancholy), and a
+ * next-round-only color ban fed by the same 'playedInRound' tag (Doubt --
+ * see BoardState::bannedColorsThisRound()) -- not full coverage. Cards
+ * not registered here throw EffectNotImplementedException if their
+ * ability is actually invoked; implementing the rest is incremental
+ * follow-up work.
  */
 final class DefaultEffectRegistry
 {
@@ -235,10 +252,17 @@ final class DefaultEffectRegistry
         $registry->register('recklessness', new RecklessnessEffect());
         $registry->register('gluttony', new GluttonyEffect());
         $registry->register('insecurity', new InsecurityEffect());
+        $registry->register('pride', new PrideEffect());
+        $registry->register('corruption', new CorruptionEffect());
+        $registry->register('melancholy', new MelancholyEffect());
+        $registry->register('doubt', new DoubtEffect());
 
         $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
         $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));
         $registry->register('delight', new HandDiscardValueBoostEffect([1, 3, 5], 5));
+
+        $registry->register('patience', new PlayedThisRoundValueEffect());
+        $registry->register('glee', new PlayedThisRoundValueEffect());
 
         $registry->register('ambivalence', new PairedColorThresholdEffect('red', 'green'));
         $registry->register('discipline', new PairedColorThresholdEffect('black', 'red'));
