@@ -107,12 +107,17 @@ account/friends layer above. The core pieces:
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-Only a first slice of the 133-card pool has a registered effect so far
-(see `DefaultEffectRegistry`) — chosen to exercise the range of patterns
-the engine needs (unconditional/conditional grants, a global color
-override, a reusable parameterized effect covering ten similar cards,
-multi-target choices, and deck/hand manipulation across players), not
-full coverage. Implementing the rest is incremental follow-up work.
+27 of the 133-card pool have a registered effect so far (see
+`DefaultEffectRegistry`) — chosen to exercise the range of patterns the
+engine needs: unconditional/conditional extra-play grants, one-time value
+overrides paid for by an optional cost, a global color override, a
+reusable parameterized effect covering ten similar cards, multi-target
+choices (both a per-target ceiling and a combined-total ceiling), deck/hand
+manipulation across players (including handing a card directly from one
+player's hand to another's), mandatory "to play" costs paid from hand or
+from a player's own moods already in play, dynamic values keyed off an
+opponent's board state or the discard pile, and source-tied suppression.
+Not full coverage — implementing the rest is incremental follow-up work.
 
 ## Game layer
 
