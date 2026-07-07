@@ -23,9 +23,16 @@ files serve from the domain root, and the PHP app is reachable under `/app`
 
 1. In cPanel, create (or reuse) an FTP account for deploys and note its
    host/username/password.
-2. Create (or reuse) an email account/SMTP credentials for sending the
-   registration verification email — Bluehost's Email Accounts section in
-   cPanel gives you an SMTP host, username, and password.
+2. Get SMTP credentials for sending the registration verification email.
+   A transactional email service (e.g. SendGrid, Mailgun, Postmark) is
+   recommended over Bluehost's own mail server — shared-hosting IPs have
+   no sending reputation of their own, which can mean mail gets silently
+   filtered by providers like Gmail even with correct SPF/DKIM. These
+   services have SMTP relays that work as a drop-in replacement (e.g.
+   SendGrid: host `smtp.sendgrid.net`, port `587`, username `apikey`,
+   password = an API key from your account, `SMTP_FROM_ADDRESS` = a
+   sender you've verified with them) — no code changes needed either way,
+   since `Mailer.php` just speaks plain SMTP to whatever's configured.
 3. In your GitHub repo, go to **Settings → Secrets and variables → Actions**
    and add these **secrets**:
    - `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD` — from step 1.
