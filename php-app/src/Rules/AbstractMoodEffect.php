@@ -28,4 +28,8 @@ abstract class AbstractMoodEffect implements MoodEffect
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
     }
+
+    public function reactToAnotherPlay(BoardState $state, int $reactorCardId, int $playedCardId, int $playerId, PlayerChoices $choices): void
+    {
+    }
 }

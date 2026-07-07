@@ -108,5 +108,22 @@ final class MoodPlayService
         if ($effectiveRow['hasAfterPlaying']) {
             $this->registry->for($effectiveEffectKey)->afterPlaying($state, $cardId, $playerId, $choices);
         }
+
+        // Scorn/Validation's "each time you play another mood" reacts to
+        // *this* player's own subsequent plays, using the same
+        // PlayerChoices already submitted for this play -- see
+        // MoodEffect::reactToAnotherPlay(). registry->has() guards against
+        // an as-yet-unimplemented card the player happens to also own;
+        // for every other (registered) mood this is a no-op inherited
+        // from AbstractMoodEffect.
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            if ($mood->cardId === $cardId) {
+                continue;
+            }
+            $reactorEffectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if ($this->registry->has($reactorEffectKey)) {
+                $this->registry->for($reactorEffectKey)->reactToAnotherPlay($state, $mood->cardId, $cardId, $playerId, $choices);
+            }
+        }
     }
 }

@@ -2761,4 +2761,200 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertFalse($state->isSuppressed(9));
     }
+
+    public function testScornSuppressesAnyMoodWhenPlayed(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 5]]); // Scorn, Complacency
+        $state->moveHandToInPlay(1, 5);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 24, new PlayerChoices(['target_mood_id' => 5]));
+
+        self::assertTrue($state->isSuppressed(5));
+    }
+
+    public function testScornReactsToASubsequentPlaySharingItsColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 5, 3, 7]]); // Scorn, Complacency, Charity (white), Courage (white)
+        $state->moveHandToInPlay(1, 5);
+        $state->startTurn(1);
+        $state->grantExtraPlay(2); // enough plays for Scorn, Charity, and Courage
+
+        $this->plays->playMood($state, 1, 24, new PlayerChoices(['target_mood_id' => 5])); // Scorn's mandatory suppression
+        $this->plays->playMood($state, 1, 3, new PlayerChoices([])); // Charity -- grants an extra play
+        $this->plays->playMood($state, 1, 7, new PlayerChoices(['scorn_suppress_target' => 3])); // Courage (white) triggers the reaction
+
+        self::assertTrue($state->isSuppressed(3));
+    }
+
+    public function testScornRejectsAReactionTargetNotSharingColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 5, 55, 7]]); // Scorn, Complacency, Apathy (black), Courage (white)
+        $state->moveHandToInPlay(1, 5);
+        $state->moveHandToInPlay(1, 55);
+        $state->startTurn(1);
+        $state->grantExtraPlay(1);
+        $this->plays->playMood($state, 1, 24, new PlayerChoices(['target_mood_id' => 5]));
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 7, new PlayerChoices(['scorn_suppress_target' => 55]));
+    }
+
+    public function testScornReactionDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 5, 7]]);
+        $state->moveHandToInPlay(1, 5);
+        $state->startTurn(1);
+        $state->grantExtraPlay(1);
+        $this->plays->playMood($state, 1, 24, new PlayerChoices(['target_mood_id' => 5]));
+
+        $this->plays->playMood($state, 1, 7, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(7));
+        self::assertFalse($state->isSuppressed(7));
+    }
+
+    public function testValidationGrantsAnExtraPlayWhenPlayed(): void
+    {
+        $state = $this->boardState(hands: [1 => [26, 5]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 26, new PlayerChoices([]));
+
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    public function testValidationReactsToALowValuedSubsequentPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [26, 20, 5]]); // Validation, Pacifism (value 1), Complacency
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // grants 1 extra play
+        $this->plays->playMood($state, 1, 20, new PlayerChoices(['validation_extra_play' => true])); // Pacifism, value 1
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testValidationDoesNotReactToAHighValuedSubsequentPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [26, 5]]); // Validation, Complacency (value 4)
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // grants 1 extra play
+        $this->plays->playMood($state, 1, 5, new PlayerChoices(['validation_extra_play' => true]));
+
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testCompulsionTakesARandomCardFromTheTargetsHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [86], 2 => [3, 7]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 86, new PlayerChoices(['target_player_id' => 2]));
+
+        $p1Hand = $state->hand(1);
+        $p2Hand = $state->hand(2);
+        self::assertCount(1, $p1Hand);
+        self::assertCount(1, $p2Hand);
+        self::assertContains($p1Hand[0], [3, 7]);
+        self::assertNotSame($p1Hand[0], $p2Hand[0]);
+    }
+
+    public function testCompulsionDoesNothingWhenTargetHasNoCards(): void
+    {
+        $state = $this->boardState(hands: [1 => [86], 2 => []]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 86, new PlayerChoices(['target_player_id' => 2]));
+
+        self::assertSame([], $state->hand(1));
+    }
+
+    public function testCompulsionRejectsTargetingYourself(): void
+    {
+        $state = $this->boardState(hands: [1 => [86]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 86, new PlayerChoices(['target_player_id' => 1]));
+    }
+
+    public function testIntimidationRevealsARandomCardAndGrantsItAsAnExtraPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [67], 2 => [3]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 67, new PlayerChoices(['target_player_id' => 2]));
+
+        self::assertContains(3, $state->hand(1));
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 3, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(3));
+    }
+
+    public function testIntimidationsGrantOnlyAllowsTheRevealedCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [67, 5], 2 => [3]]);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 67, new PlayerChoices(['target_player_id' => 2]));
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+    }
+
+    public function testIntimidationDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [67]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 67, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(67));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testIntimidationDoesNothingWhenTargetHasNoCards(): void
+    {
+        $state = $this->boardState(hands: [1 => [67], 2 => []]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 67, new PlayerChoices(['target_player_id' => 2]));
+
+        self::assertSame([], $state->hand(1));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testDisillusionmentNeverDiscardsItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [10]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 10, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(10));
+    }
+
+    public function testDisillusionmentDiscardsMoodsMatchingRandomlyChosenColors(): void
+    {
+        $state = $this->boardState(hands: [1 => [10], 2 => [9, 28, 53]]);
+        $state->moveHandToInPlay(2, 9); // Discipline, white
+        $state->moveHandToInPlay(2, 28); // Anxiety, blue
+        $state->moveHandToInPlay(2, 53); // Ambition, black
+        $state->startTurn(1);
+
+        // Deterministic with this seed: 3 players -> picks black, black, blue.
+        mt_srand(42);
+        $this->plays->playMood($state, 1, 10, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(10));
+        self::assertTrue($state->isInPlay(9));
+        self::assertFalse($state->isInPlay(28));
+        self::assertFalse($state->isInPlay(53));
+    }
 }

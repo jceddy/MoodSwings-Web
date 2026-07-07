@@ -636,6 +636,9 @@ final class BoardState
             'shares_color_with_your_moods' => $this->sharesColorWithOwnMoods($cardId, $playerId),
             'does_not_share_color_with_your_moods' => !$this->sharesColorWithOwnMoods($cardId, $playerId),
             'base_value_in' => in_array($this->catalogRow($cardId)['baseValue'], $restriction['values'], true),
+            // Intimidation: the grant only ever covers the one specific
+            // card it revealed, not any card sharing some trait with it.
+            'specific_card_ids' => in_array($cardId, $restriction['values'], true),
             default => throw new InvalidArgumentException("Unknown play grant restriction type '{$restriction['type']}'"),
         };
     }
