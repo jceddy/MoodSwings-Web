@@ -49,6 +49,16 @@ instead.
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
 | GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. |
+| GET    | `/friends`      | —                                                                 | Requires auth. Lists accepted friends (`friend_id`, `friend_username`, `created_at`). |
+| GET    | `/friends/invites` | —                                                              | Requires auth. Returns `{"incoming": [...], "outgoing": [...]}`, each entry has `other_user_id`/`other_username`/`created_at`. |
+| POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
+| POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
+
+Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
+missing/invalid). Friendships are stored as one row per pair of users
+(see `database/migrations/0002_create_friendships_table.sql`), so each pair
+can only ever have a single pending/accepted/blocked relationship — there's
+no separate "invite" record that outlives the relationship it represents.
 
 Authentication uses an httpOnly, `Secure`, `SameSite=Lax` cookie
 (`session_token`) holding a random token; only its SHA-256 hash is stored in
@@ -91,5 +101,6 @@ TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=3306 TEST_DB_NAME=moodswings_test \
 TEST_DB_USER=root TEST_DB_PASSWORD= vendor/bin/phpunit
 ```
 
-The test suite truncates `users`/`sessions`/`email_verifications` in that
-database before each test, so never point it at a database with real data.
+The test suite truncates `users`/`sessions`/`email_verifications`/
+`friendships` in that database before each test, so never point it at a
+database with real data.
