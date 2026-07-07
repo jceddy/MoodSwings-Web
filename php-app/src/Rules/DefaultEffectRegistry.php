@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Rules;
 
+use MoodSwings\Rules\Effects\AmbitionEffect;
 use MoodSwings\Rules\Effects\AngerEffect;
 use MoodSwings\Rules\Effects\AnimosityEffect;
 use MoodSwings\Rules\Effects\AnxietyEffect;
@@ -26,21 +27,26 @@ use MoodSwings\Rules\Effects\EnvyEffect;
 use MoodSwings\Rules\Effects\EuphoriaEffect;
 use MoodSwings\Rules\Effects\FaithEffect;
 use MoodSwings\Rules\Effects\FascinationEffect;
+use MoodSwings\Rules\Effects\FearEffect;
 use MoodSwings\Rules\Effects\FondnessEffect;
 use MoodSwings\Rules\Effects\FriendlinessEffect;
 use MoodSwings\Rules\Effects\FuryEffect;
 use MoodSwings\Rules\Effects\GuileEffect;
 use MoodSwings\Rules\Effects\GuiltEffect;
+use MoodSwings\Rules\Effects\HandDiscardValueBoostEffect;
+use MoodSwings\Rules\Effects\HappinessEffect;
 use MoodSwings\Rules\Effects\HateEffect;
 use MoodSwings\Rules\Effects\ImaginationEffect;
 use MoodSwings\Rules\Effects\IndecisivenessEffect;
 use MoodSwings\Rules\Effects\KindnessEffect;
 use MoodSwings\Rules\Effects\LoveEffect;
 use MoodSwings\Rules\Effects\MeeknessEffect;
+use MoodSwings\Rules\Effects\MiseryEffect;
 use MoodSwings\Rules\Effects\NeurosisEffect;
 use MoodSwings\Rules\Effects\PacifismEffect;
 use MoodSwings\Rules\Effects\PairedColorThresholdEffect;
 use MoodSwings\Rules\Effects\PanicEffect;
+use MoodSwings\Rules\Effects\ParanoiaEffect;
 use MoodSwings\Rules\Effects\RageEffect;
 use MoodSwings\Rules\Effects\RebellionEffect;
 use MoodSwings\Rules\Effects\RegretEffect;
@@ -54,6 +60,8 @@ use MoodSwings\Rules\Effects\ShockEffect;
 use MoodSwings\Rules\Effects\SlothEffect;
 use MoodSwings\Rules\Effects\SpiteEffect;
 use MoodSwings\Rules\Effects\SuperiorityEffect;
+use MoodSwings\Rules\Effects\SuspicionEffect;
+use MoodSwings\Rules\Effects\ThrillEffect;
 use MoodSwings\Rules\Effects\TranquilityEffect;
 use MoodSwings\Rules\Effects\TriumphEffect;
 use MoodSwings\Rules\Effects\VanityEffect;
@@ -66,24 +74,28 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * Wires up every MoodEffect implemented so far. This is a growing slice of
  * the full 133-card pool, chosen to exercise the range of patterns the
  * engine needs to support (unconditional/conditional/restricted extra-play
- * grants, one-time value overrides paid for by optional costs, a global
- * color override with a per-mood stored choice, a reusable parameterized
- * effect covering ten cards at once, multi-target choices validated
- * against live values, deck/hand manipulation across players (including
- * stealing a mood directly into the acting player's own hand, distinct
- * from returning it to its owner's), mandatory "to play" costs, dynamic
- * values keyed off an opponent's board, the discard pile, or who went
- * first this round, source-tied and end-of-round suppression, modal
- * single-vs-mass choices (mandatory and optional), a "most common
- * color(s)" board computation, a mandatory effect touching every player at
- * once, a range of pure while-in-play value formulas (self-vs-every-
- * opponent comparisons, a universal or any-opponent threshold, a distinct
- * color count, parity checks, and a five-color-presence check), a
- * genuinely-random target (rather than another player's informed choice),
- * a pairwise qualifying condition across two chosen targets, and a
- * two-stage optional effect -- not full coverage. Cards not registered
- * here throw EffectNotImplementedException if their ability is actually
- * invoked; implementing the rest is incremental follow-up work.
+ * grants, one-time value overrides paid for by optional costs (including a
+ * reusable parameterized class for the "discard a qualifying hand card ->
+ * value becomes X" family), a global color override with a per-mood stored
+ * choice, a reusable parameterized effect covering ten cards at once,
+ * multi-target choices validated against live values, deck/hand
+ * manipulation across players (including stealing a mood directly into the
+ * acting player's own hand, distinct from returning it to its owner's),
+ * mandatory "to play" costs, dynamic values keyed off an opponent's board,
+ * the discard pile, or who went first this round, source-tied and
+ * end-of-round suppression, modal single-vs-mass choices (mandatory and
+ * optional), "most common color(s)"/"any color reaches N" board
+ * computations over moods in play or the discard pile, a mandatory effect
+ * touching every player at once, a range of pure while-in-play value
+ * formulas (self-vs-every-opponent comparisons, a universal or
+ * any-opponent threshold, a distinct color count, parity checks, and a
+ * five-color-presence check), a genuinely-random target (rather than
+ * another player's informed choice), a pairwise qualifying condition
+ * across two chosen targets, a two-stage optional effect, and two
+ * independent options in one effect with no cost/reward link between them
+ * -- not full coverage. Cards not registered here throw
+ * EffectNotImplementedException if their ability is actually invoked;
+ * implementing the rest is incremental follow-up work.
  */
 final class DefaultEffectRegistry
 {
@@ -147,6 +159,17 @@ final class DefaultEffectRegistry
         $registry->register('panic', new PanicEffect());
         $registry->register('worry', new WorryEffect());
         $registry->register('contempt', new ContemptEffect());
+        $registry->register('happiness', new HappinessEffect());
+        $registry->register('misery', new MiseryEffect());
+        $registry->register('ambition', new AmbitionEffect());
+        $registry->register('thrill', new ThrillEffect());
+        $registry->register('fear', new FearEffect());
+        $registry->register('paranoia', new ParanoiaEffect());
+        $registry->register('suspicion', new SuspicionEffect());
+
+        $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
+        $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));
+        $registry->register('delight', new HandDiscardValueBoostEffect([1, 3, 5], 5));
 
         $registry->register('ambivalence', new PairedColorThresholdEffect('red', 'green'));
         $registry->register('discipline', new PairedColorThresholdEffect('black', 'red'));

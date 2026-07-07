@@ -1523,4 +1523,208 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertTrue($state->isInPlay(59));
     }
+
+    public function testHappinessValueIs8WhenAPlayerHasBothARedAndWhiteMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [122], 2 => [106, 3]]);
+        $state->moveHandToInPlay(2, 106); // Zeal, red
+        $state->moveHandToInPlay(2, 3); // Charity, white
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 122, new PlayerChoices([]));
+
+        self::assertSame(8, $state->valueOf(122));
+    }
+
+    public function testHappinessValueIsBaseWhenNoPlayerHasBothColors(): void
+    {
+        $state = $this->boardState(hands: [1 => [122], 2 => [106]]);
+        $state->moveHandToInPlay(2, 106);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 122, new PlayerChoices([]));
+
+        self::assertSame(2, $state->valueOf(122));
+    }
+
+    public function testMiseryValueIs8WhenTwoDiscardedCardsShareAColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [70]], discard: [3, 7]); // both white
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 70, new PlayerChoices([]));
+
+        self::assertSame(8, $state->valueOf(70));
+    }
+
+    public function testMiseryValueIsBaseWhenNoColorRepeatsInDiscard(): void
+    {
+        $state = $this->boardState(hands: [1 => [70]], discard: [3, 106]); // white, red
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 70, new PlayerChoices([]));
+
+        self::assertSame(2, $state->valueOf(70));
+    }
+
+    public function testEmbarrassmentBoostsValueWhenQualifyingCardDiscarded(): void
+    {
+        $state = $this->boardState(hands: [1 => [87, 9]]); // Discipline, value 6, qualifies (4/5/6)
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 87, new PlayerChoices(['discard_card_id' => 9]));
+
+        self::assertSame(5, $state->valueOf(87));
+    }
+
+    public function testCheerBoostsValueWhenQualifyingCardDiscarded(): void
+    {
+        $state = $this->boardState(hands: [1 => [110, 5]]); // Complacency, value 4, qualifies (0/2/4/6)
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 110, new PlayerChoices(['discard_card_id' => 5]));
+
+        self::assertSame(5, $state->valueOf(110));
+    }
+
+    public function testDelightRejectsANonQualifyingDiscard(): void
+    {
+        $state = $this->boardState(hands: [1 => [111, 9]]); // Discipline, value 6, doesn't qualify (1/3/5)
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 111, new PlayerChoices(['discard_card_id' => 9]));
+    }
+
+    public function testAmbitionDiscardsHandCardAndGrantsAnExtraPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [53, 9, 106]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 53, new PlayerChoices(['discard_card_id' => 9]));
+
+        self::assertFalse($state->isInHand(1, 9));
+        self::assertSame([9], $state->discardPile());
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 106, new PlayerChoices([]));
+        self::assertTrue($state->isInPlay(106));
+    }
+
+    public function testAmbitionDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [53]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 53, new PlayerChoices([]));
+
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testThrillReturnsChosenMoodsAndGrantsThatManyExtraPlays(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 9, 3, 106]]);
+        $state->moveHandToInPlay(1, 9);
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 103, new PlayerChoices(['hand_mood_ids' => [9, 3]]));
+
+        self::assertTrue($state->isInHand(1, 9));
+        self::assertTrue($state->isInHand(1, 3));
+        self::assertSame(2, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 106, new PlayerChoices([]));
+        self::assertTrue($state->isInPlay(106));
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    public function testThrillDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [103]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 103, new PlayerChoices([]));
+
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testFearGrantsAnUnconditionalExtraPlayAndOptionallyReturnsAMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 9, 106]]);
+        $state->moveHandToInPlay(1, 9);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 38, new PlayerChoices(['hand_mood_id' => 9]));
+
+        self::assertTrue($state->isInHand(1, 9));
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 106, new PlayerChoices([]));
+        self::assertTrue($state->isInPlay(106));
+    }
+
+    public function testFearGrantsTheExtraPlayEvenWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [38, 106]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 38, new PlayerChoices([]));
+
+        self::assertSame(1, $state->playsRemaining());
+        $this->plays->playMood($state, 1, 106, new PlayerChoices([]));
+        self::assertTrue($state->isInPlay(106));
+    }
+
+    public function testParanoiaBottomsARandomCardFromTheTargetsHandAndDraws(): void
+    {
+        $state = $this->boardState(hands: [1 => [71], 2 => [9, 3]], deck: [106]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 71, new PlayerChoices(['target_player_id' => 2]));
+
+        self::assertCount(1, $state->hand(2));
+        self::assertTrue($state->isInHand(1, 106));
+        self::assertCount(1, $state->deck());
+    }
+
+    public function testParanoiaRejectsATargetWithAnEmptyHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [71], 2 => []]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 71, new PlayerChoices(['target_player_id' => 2]));
+    }
+
+    public function testParanoiaDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [71]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 71, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(71));
+    }
+
+    public function testSuspicionDiscardsARandomCardFromEachChosenPlayersHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [78], 2 => [9, 3], 3 => [106]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 78, new PlayerChoices(['player_ids' => [2, 3]]));
+
+        self::assertCount(1, $state->hand(2));
+        self::assertCount(0, $state->hand(3));
+        self::assertCount(2, $state->discardPile());
+    }
+
+    public function testSuspicionRejectsAChosenPlayerWithAnEmptyHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [78], 2 => []]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 78, new PlayerChoices(['player_ids' => [2]]));
+    }
 }
