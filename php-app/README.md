@@ -112,9 +112,39 @@ Only a first slice of the 133-card pool has a registered effect so far
 the engine needs (unconditional/conditional grants, a global color
 override, a reusable parameterized effect covering ten similar cards,
 multi-target choices, and deck/hand manipulation across players), not
-full coverage. Implementing the rest, and the GameService that will load
-a `BoardState` from `game_cards`/`game_players` and persist it back, are
-incremental follow-up work.
+full coverage. Implementing the rest is incremental follow-up work.
+
+## Game layer
+
+`src/Game/` wires the pure rules engine above to the
+`games`/`game_players`/`game_rounds`/`game_round_scores`/`game_cards`/
+`game_events` tables, since a real game spans many separate HTTP
+request/response round trips with no process alive in between to hold a
+`BoardState` in memory.
+
+- `BoardStateRepository` — the only place the rules engine touches the
+  database. `load()` reconstructs a `BoardState` from `game_cards`/
+  `game_players`; `save()` rewrites every one of a game's `game_cards`
+  rows (cheap enough at 133 cards per game, and avoids having to track
+  which rows a given effect touched). Suppression's self-referencing
+  source id is resolved in a second pass after the main upsert, since it
+  points at another row's surrogate id that doesn't exist until after
+  that row's insert/update has run.
+- `GameService` — one method per player-facing action (`createGame`,
+  `startGame`, `playMood`, `pass`), each loading state, delegating to the
+  rules engine, persisting the result, and appending a `game_events` row,
+  all within a single request. Turn advancement, round scoring (via
+  `RoundScorer`), Hurt Feelings assignment (3+ player games only), losers
+  drawing a card, and game completion once a player reaches
+  `wins_needed` are all handled internally as one play or pass ripples
+  through to the end of a round if it's the last play of the game.
+
+Known limitations: Corruption's "win two rounds instead of one" isn't
+implemented (schema supports `game_rounds.wins_awarded` but nothing sets
+it above the default of 1 yet), nor is Awe's "no scoring this round"
+branch (no card implements either one yet). `GameService` takes
+`game_player` ids directly and assumes the caller has already authorized
+the action -- there's no HTTP/API endpoint layer in front of it yet.
 
 ## Tests
 
