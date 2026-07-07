@@ -107,7 +107,7 @@ account/friends layer above. The core pieces:
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-87 of the 133-card pool have a registered effect so far (see
+95 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
 engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
@@ -142,9 +142,17 @@ discard pile rather than moods in play, two independent options in one
 effect with no cost/reward link between them (unlike the "if you do"
 cards elsewhere), a single-pass turn-order distribution from the discard
 pile with the remainder shuffled onto the bottom of the deck (Altruism),
-and a random reveal from a hand feeding a conditional (not automatic)
-one-time value override (Curiosity). Not full coverage — implementing
-the rest is incremental follow-up work.
+a random reveal from a hand feeding a conditional (not automatic)
+one-time value override (Curiosity), extra-play grants sourced from the
+discard pile instead of hand (Harmony/Grief/Angst — see
+`BoardState::isInDiscardPile()`/`moveDiscardToInPlay()`, and
+`MoodPlayService`'s zone-aware play resolution), a persistent "who goes
+first next round" override that `GameService` consults instead of the
+round winner (Honor — see `BoardState::firstPlayerOverride()`, stored
+as a per-mood `effectState` key so it self-corrects if that mood ever
+leaves play), and a direction-based simultaneous exchange with every
+player at the table (Avoidance/Confusion/Rationalization). Not full
+coverage — implementing the rest is incremental follow-up work.
 
 ## Game layer
 

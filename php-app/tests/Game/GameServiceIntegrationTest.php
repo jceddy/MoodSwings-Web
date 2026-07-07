@@ -432,4 +432,46 @@ final class GameServiceIntegrationTest extends TestCase
         $state = (new BoardStateRepository($registry))->load($gameId);
         self::assertSame(5, $state->valueOf(4)); // p2 didn't go first this round
     }
+
+    /**
+     * Honor's "the chosen player goes first each round regardless of who
+     * won" has to survive the same load()/save() round trip as everything
+     * else, and GameService has to actually consult it (instead of the
+     * round winner) when starting the next round.
+     */
+    public function testHonorOverridesWhoGoesFirstNextRoundInsteadOfTheWinner(): void
+    {
+        $u1 = $this->insertUser('honor1');
+        $u2 = $this->insertUser('honor2');
+        $u3 = $this->insertUser('honor3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // p1 plays Honor naming p3, then wins round 1 outright (3 vs 0/0).
+        $this->games->playMood($gameId, $p1, 15, ['target_player_id' => $p3]);
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->pass($gameId, $p3);
+
+        self::assertTrue($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        $round1Stmt = $this->pdo->prepare('SELECT winner_game_player_id FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $round1Stmt->execute(['game_id' => $gameId]);
+        self::assertSame($p1, (int) $round1Stmt->fetchColumn());
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p3, (int) $round2['first_game_player_id']); // Honor's override, not the winner (p1)
+    }
 }

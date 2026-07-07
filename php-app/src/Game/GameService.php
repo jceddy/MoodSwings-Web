@@ -258,7 +258,10 @@ final class GameService
             // Hurt Feelings only exists in games of 3 or more players.
             $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($scores, $turnOrder) : null;
 
-            $nextRoundPlaysRemaining = $hurtFeelingsHolder === $winnerId ? 2 : 1;
+            // Honor overrides who goes first next round regardless of who
+            // won -- see BoardState::firstPlayerOverride().
+            $nextFirstPlayer = $state->firstPlayerOverride() ?? $winnerId;
+            $nextRoundPlaysRemaining = $hurtFeelingsHolder === $nextFirstPlayer ? 2 : 1;
 
             $insertRound = $pdo->prepare(
                 "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -267,9 +270,9 @@ final class GameService
             $insertRound->execute([
                 'game_id' => $gameId,
                 'round_number' => (int) $round['round_number'] + 1,
-                'first_player' => $winnerId,
+                'first_player' => $nextFirstPlayer,
                 'hurt_feelings' => $hurtFeelingsHolder,
-                'first_player_turn' => $winnerId,
+                'first_player_turn' => $nextFirstPlayer,
                 'plays_remaining' => $nextRoundPlaysRemaining,
                 'pending_play_grants' => json_encode(array_fill(0, $nextRoundPlaysRemaining, null)),
             ]);
