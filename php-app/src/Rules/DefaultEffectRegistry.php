@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Rules;
 
+use MoodSwings\Rules\Effects\AltruismEffect;
 use MoodSwings\Rules\Effects\AmbitionEffect;
 use MoodSwings\Rules\Effects\AngerEffect;
 use MoodSwings\Rules\Effects\AnimosityEffect;
@@ -14,10 +15,13 @@ use MoodSwings\Rules\Effects\BravadoEffect;
 use MoodSwings\Rules\Effects\CelebrationEffect;
 use MoodSwings\Rules\Effects\CharityEffect;
 use MoodSwings\Rules\Effects\ChivalryEffect;
+use MoodSwings\Rules\Effects\CondescensionEffect;
 use MoodSwings\Rules\Effects\ContemptEffect;
 use MoodSwings\Rules\Effects\ConvictionEffect;
 use MoodSwings\Rules\Effects\CourageEffect;
 use MoodSwings\Rules\Effects\CrueltyEffect;
+use MoodSwings\Rules\Effects\CuriosityEffect;
+use MoodSwings\Rules\Effects\CynicismEffect;
 use MoodSwings\Rules\Effects\DenialEffect;
 use MoodSwings\Rules\Effects\DeterminationEffect;
 use MoodSwings\Rules\Effects\DignityEffect;
@@ -28,6 +32,7 @@ use MoodSwings\Rules\Effects\EuphoriaEffect;
 use MoodSwings\Rules\Effects\FaithEffect;
 use MoodSwings\Rules\Effects\FascinationEffect;
 use MoodSwings\Rules\Effects\FearEffect;
+use MoodSwings\Rules\Effects\FicklenessEffect;
 use MoodSwings\Rules\Effects\FondnessEffect;
 use MoodSwings\Rules\Effects\FriendlinessEffect;
 use MoodSwings\Rules\Effects\FuryEffect;
@@ -36,13 +41,18 @@ use MoodSwings\Rules\Effects\GuiltEffect;
 use MoodSwings\Rules\Effects\HandDiscardValueBoostEffect;
 use MoodSwings\Rules\Effects\HappinessEffect;
 use MoodSwings\Rules\Effects\HateEffect;
+use MoodSwings\Rules\Effects\HesitationEffect;
+use MoodSwings\Rules\Effects\HostilityEffect;
 use MoodSwings\Rules\Effects\ImaginationEffect;
 use MoodSwings\Rules\Effects\IndecisivenessEffect;
+use MoodSwings\Rules\Effects\InfatuationEffect;
 use MoodSwings\Rules\Effects\KindnessEffect;
 use MoodSwings\Rules\Effects\LoveEffect;
+use MoodSwings\Rules\Effects\MaliceEffect;
 use MoodSwings\Rules\Effects\MeeknessEffect;
 use MoodSwings\Rules\Effects\MiseryEffect;
 use MoodSwings\Rules\Effects\NeurosisEffect;
+use MoodSwings\Rules\Effects\NostalgiaEffect;
 use MoodSwings\Rules\Effects\PacifismEffect;
 use MoodSwings\Rules\Effects\PairedColorThresholdEffect;
 use MoodSwings\Rules\Effects\PanicEffect;
@@ -91,11 +101,13 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * any-opponent threshold, a distinct color count, parity checks, and a
  * five-color-presence check), a genuinely-random target (rather than
  * another player's informed choice), a pairwise qualifying condition
- * across two chosen targets, a two-stage optional effect, and two
- * independent options in one effect with no cost/reward link between them
- * -- not full coverage. Cards not registered here throw
- * EffectNotImplementedException if their ability is actually invoked;
- * implementing the rest is incremental follow-up work.
+ * across two chosen targets, two-stage optional effects, two independent
+ * options in one effect with no cost/reward link between them, and a
+ * single-pass turn-order distribution from the discard pile with the
+ * remainder shuffled onto the bottom of the deck -- not full coverage.
+ * Cards not registered here throw EffectNotImplementedException if their
+ * ability is actually invoked; implementing the rest is incremental
+ * follow-up work.
  */
 final class DefaultEffectRegistry
 {
@@ -166,6 +178,16 @@ final class DefaultEffectRegistry
         $registry->register('fear', new FearEffect());
         $registry->register('paranoia', new ParanoiaEffect());
         $registry->register('suspicion', new SuspicionEffect());
+        $registry->register('altruism', new AltruismEffect());
+        $registry->register('curiosity', new CuriosityEffect());
+        $registry->register('condescension', new CondescensionEffect());
+        $registry->register('cynicism', new CynicismEffect());
+        $registry->register('infatuation', new InfatuationEffect());
+        $registry->register('hostility', new HostilityEffect());
+        $registry->register('malice', new MaliceEffect());
+        $registry->register('fickleness', new FicklenessEffect());
+        $registry->register('hesitation', new HesitationEffect());
+        $registry->register('nostalgia', new NostalgiaEffect());
 
         $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
         $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));
