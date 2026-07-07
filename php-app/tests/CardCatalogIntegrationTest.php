@@ -81,7 +81,7 @@ final class CardCatalogIntegrationTest extends TestCase
         self::assertSame('white', $altruism['color']);
         self::assertSame('rare', $altruism['rarity']);
         self::assertSame(3, (int) $altruism['base_value']);
-        self::assertSame(6, (int) $altruism['alt_value']);
+        self::assertSame(7, (int) $altruism['alt_value']);
         self::assertSame(1, (int) $altruism['has_after_playing_ability']);
         self::assertSame(0, (int) $altruism['has_while_in_play_ability']);
     }
@@ -95,6 +95,33 @@ final class CardCatalogIntegrationTest extends TestCase
         self::assertSame(0, (int) $creativity['has_to_play_ability']);
         self::assertSame(0, (int) $creativity['has_while_in_play_ability']);
         self::assertSame(0, (int) $creativity['has_after_playing_ability']);
+    }
+
+    public function testCompoundTwoDieValuesAreSummedNotTruncated(): void
+    {
+        // These cards show a value of 7-12 as two die icons side by side
+        // (e.g. a "6" die next to a "1" die means 6+1=7) -- see
+        // 0005_fix_card_alt_values.sql for the transcription bug this
+        // guards against.
+        $expectedAltValues = [
+            'altruism' => 7,
+            'misery' => 8,
+            'superiority' => 7,
+            'infatuation' => 9,
+            'celebration' => 7,
+            'fascination' => 7,
+            'fondness' => 7,
+            'happiness' => 8,
+            'love' => 12,
+            'vulnerability' => 7,
+        ];
+
+        foreach ($expectedAltValues as $effectKey => $expectedAltValue) {
+            $card = $this->cards->findByEffectKey($effectKey);
+
+            self::assertNotNull($card, "Expected a card with effect_key {$effectKey}");
+            self::assertSame($expectedAltValue, (int) $card['alt_value'], "Wrong alt_value for {$effectKey}");
+        }
     }
 
     public function testFindByIdReturnsNullForUnknownCard(): void
