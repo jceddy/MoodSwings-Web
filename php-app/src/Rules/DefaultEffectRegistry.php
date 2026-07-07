@@ -21,6 +21,7 @@ use MoodSwings\Rules\Effects\BravadoEffect;
 use MoodSwings\Rules\Effects\CelebrationEffect;
 use MoodSwings\Rules\Effects\CharityEffect;
 use MoodSwings\Rules\Effects\ChivalryEffect;
+use MoodSwings\Rules\Effects\CompulsionEffect;
 use MoodSwings\Rules\Effects\CondescensionEffect;
 use MoodSwings\Rules\Effects\ConfusionEffect;
 use MoodSwings\Rules\Effects\ContemptEffect;
@@ -33,6 +34,7 @@ use MoodSwings\Rules\Effects\CynicismEffect;
 use MoodSwings\Rules\Effects\DenialEffect;
 use MoodSwings\Rules\Effects\DeterminationEffect;
 use MoodSwings\Rules\Effects\DignityEffect;
+use MoodSwings\Rules\Effects\DisillusionmentEffect;
 use MoodSwings\Rules\Effects\DisorientationEffect;
 use MoodSwings\Rules\Effects\DoubtEffect;
 use MoodSwings\Rules\Effects\EagernessEffect;
@@ -64,6 +66,7 @@ use MoodSwings\Rules\Effects\IndecisivenessEffect;
 use MoodSwings\Rules\Effects\InfatuationEffect;
 use MoodSwings\Rules\Effects\InsecurityEffect;
 use MoodSwings\Rules\Effects\InstabilityEffect;
+use MoodSwings\Rules\Effects\IntimidationEffect;
 use MoodSwings\Rules\Effects\JoyEffect;
 use MoodSwings\Rules\Effects\KindnessEffect;
 use MoodSwings\Rules\Effects\LoveEffect;
@@ -87,6 +90,7 @@ use MoodSwings\Rules\Effects\RegretEffect;
 use MoodSwings\Rules\Effects\RejectionEffect;
 use MoodSwings\Rules\Effects\RepentanceEffect;
 use MoodSwings\Rules\Effects\SadnessEffect;
+use MoodSwings\Rules\Effects\ScornEffect;
 use MoodSwings\Rules\Effects\SelfLoathingEffect;
 use MoodSwings\Rules\Effects\SerenityEffect;
 use MoodSwings\Rules\Effects\ShameEffect;
@@ -100,6 +104,7 @@ use MoodSwings\Rules\Effects\SuspicionEffect;
 use MoodSwings\Rules\Effects\ThrillEffect;
 use MoodSwings\Rules\Effects\TranquilityEffect;
 use MoodSwings\Rules\Effects\TriumphEffect;
+use MoodSwings\Rules\Effects\ValidationEffect;
 use MoodSwings\Rules\Effects\VanityEffect;
 use MoodSwings\Rules\Effects\WonderEffect;
 use MoodSwings\Rules\Effects\WorryEffect;
@@ -174,7 +179,24 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * still have it" cascade that fires when the taking card itself leaves
  * play, tracking who currently holds the taken mood so a later give-away
  * doesn't wrongly trigger the return (Arrogance -- BoardState's
- * cascadeMoodLeavingPlay()) -- not full coverage. Cards not registered
+ * cascadeMoodLeavingPlay()), a fourth ability timing for the handful of
+ * cards whose "while in play" ability is actually "each time you play
+ * another mood, ..." -- a mandatory suppression paired with an optional
+ * color-matched reaction (Scorn) and an unconditional grant paired with
+ * a conditional reaction to a low-valued play (Validation) -- dispatched
+ * via MoodEffect::reactToAnotherPlay() using the same PlayerChoices
+ * already submitted for the triggering play, since the reaction is the
+ * same player's own decision made in the same request (Duplicity's
+ * version of this -- repeating another mood's own after-playing effect
+ * with fresh choices -- remains out of scope; see below), a mandatory
+ * hidden hand-card choice by another (non-acting) player resolved via a
+ * genuine random pick, same rationale as Instability's public-info
+ * one (Compulsion; Intimidation's optional version, whose resulting
+ * grant is restricted to that one specific card via the
+ * 'specific_card_ids' restriction type), and the same random-choice
+ * treatment applied per player at the whole table at once, discarding
+ * every other mood matching any of the resulting colors regardless of
+ * owner (Disillusionment) -- not full coverage. Cards not registered
  * here throw EffectNotImplementedException if their ability is actually
  * invoked; implementing the rest is incremental follow-up work.
  */
@@ -282,6 +304,11 @@ final class DefaultEffectRegistry
         $registry->register('generosity', new GenerosityEffect());
         $registry->register('joy', new JoyEffect());
         $registry->register('arrogance', new ArroganceEffect());
+        $registry->register('scorn', new ScornEffect());
+        $registry->register('validation', new ValidationEffect());
+        $registry->register('compulsion', new CompulsionEffect());
+        $registry->register('intimidation', new IntimidationEffect());
+        $registry->register('disillusionment', new DisillusionmentEffect());
 
         $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
         $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));

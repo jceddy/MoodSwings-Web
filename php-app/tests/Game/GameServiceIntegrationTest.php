@@ -852,4 +852,100 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p2, $reloaded->ownerOf(8));
         self::assertFalse($reloaded->isInPlay(82));
     }
+
+    /**
+     * Scorn's reaction has to keep working on a mood that was played (and
+     * saved/reloaded) in an *earlier* round -- it isn't tied to the turn
+     * or round Scorn itself was played in, just to its owner's
+     * subsequent plays, however much later those happen.
+     */
+    public function testScornReactsToASubsequentPlayInALaterRoundAfterReload(): void
+    {
+        $u1 = $this->insertUser('scorn1');
+        $u2 = $this->insertUser('scorn2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play needed to also play Scorn this turn
+        $this->insertGameCard($gameId, 24, 'hand', $p1); // Scorn, value 2, white
+        $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white -- played next round to trigger the reaction
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 3, []);
+        $this->games->playMood($gameId, $p1, 24, ['target_mood_id' => 3]); // Scorn suppresses Charity
+        $this->games->pass($gameId, $p2);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']); // p1 won round 1 (2 to 0)
+
+        $this->games->playMood($gameId, $p1, 7, ['scorn_suppress_target' => 24]); // Courage (white) reacts, suppressing Scorn itself
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isSuppressed(24));
+    }
+
+    public function testCompulsionTakesACardFromTheTargetsHandAfterReload(): void
+    {
+        $u1 = $this->insertUser('comp1');
+        $u2 = $this->insertUser('comp2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $this->insertGameCard($gameId, 7, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 86, ['target_player_id' => $p2]);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        $p1Hand = $state->hand($p1);
+        $p2Hand = $state->hand($p2);
+        self::assertCount(1, $p1Hand);
+        self::assertCount(1, $p2Hand);
+        self::assertContains($p1Hand[0], [3, 7]);
+    }
+
+    public function testIntimidationsGrantSurvivesReloadAndOnlyAllowsTheRevealedCard(): void
+    {
+        $u1 = $this->insertUser('intim1');
+        $u2 = $this->insertUser('intim2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 67, 'hand', $p1); // Intimidation
+        $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency -- not the revealed card
+        $this->insertGameCard($gameId, 3, 'hand', $p2); // p2's only card -- guaranteed to be the one revealed
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 67, ['target_player_id' => $p2]);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->games->playMood($gameId, $p1, 5, []);
+    }
 }

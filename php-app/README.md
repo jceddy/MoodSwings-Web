@@ -100,14 +100,18 @@ account/friends layer above. The core pieces:
   A card only overrides the ability timings it actually has (see
   `cards.has_*_ability`); an unregistered ability throws
   `EffectNotImplementedException` rather than silently doing nothing.
+  A fourth method, `reactToAnotherPlay()`, covers the handful of cards
+  whose "while in play" ability triggers off the same player's own
+  subsequent plays rather than computing a value (Scorn, Validation).
 - `MoodPlayService` — resolves playing one mood: pay its to-play cost (if
-  any), move it into play, resolve its after-playing effect (if any).
+  any), move it into play, resolve its after-playing effect (if any),
+  then let any of the player's other in-play moods react to it.
 - `RoundScorer` — sums each player's mood values and settles the win/Hurt
   Feelings tie-breaks (opposite directions: ties for the win go to whoever
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-114 of the 133-card pool have a registered effect so far (see
+119 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
 engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
@@ -203,8 +207,25 @@ currently holds the taken mood so a later give-away doesn't wrongly
 trigger the return (Arrogance — `BoardState`'s `cascadeMoodLeavingPlay()`,
 which also finally wires up the long-dormant `clearSuppressionsFrom()`
 into every "leaves play" transition, automatically lifting Faith's
-suppression too). Not full coverage — implementing the rest is
-incremental follow-up work.
+suppression too), a fourth ability timing for the handful of cards whose
+"while in play" ability is actually "each time you play another mood,
+..." — a mandatory suppression paired with an optional color-matched
+reaction (Scorn) and an unconditional grant paired with a conditional
+reaction to a low-valued play (Validation) — dispatched via
+`MoodEffect::reactToAnotherPlay()` using the same `PlayerChoices` already
+submitted for the triggering play, since the reaction is the same
+player's own decision made in the same request (Duplicity's version of
+this — repeating another mood's own after-playing effect with *fresh*
+choices — remains out of scope, since there's no way to submit separate
+choices for a repeat within one flat choices bag), a mandatory hidden
+hand-card choice by another player resolved via a genuine random pick,
+same rationale as Instability's public-info one (Compulsion;
+Intimidation's optional version, whose resulting grant is restricted to
+that one specific card via a new `specific_card_ids` restriction type),
+and that same random-choice treatment applied per player at the whole
+table at once, discarding every other mood matching any of the
+resulting colors regardless of owner (Disillusionment). Not full
+coverage — implementing the rest is incremental follow-up work.
 
 ## Game layer
 

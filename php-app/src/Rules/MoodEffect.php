@@ -11,6 +11,10 @@ namespace MoodSwings\Rules;
  * this mood"); a card only needs to override the ones its
  * has_*_ability flags say it has -- see AbstractMoodEffect for the
  * no-op/default-value defaults every other method falls back to.
+ *
+ * reactToAnotherPlay() is a fourth, narrower hook for the small handful
+ * of cards whose "while in play" ability is actually "each time you play
+ * another mood, ..." (Scorn, Validation) -- see MoodPlayService.
  */
 interface MoodEffect
 {
@@ -41,4 +45,16 @@ interface MoodEffect
      * applied to the board, per the Extended Rules' resolution order).
      */
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void;
+
+    /**
+     * Called on every one of $playerId's *other* moods already in play,
+     * immediately after $playerId plays $playedCardId (and that card's own
+     * afterPlaying(), if any, has resolved) -- see
+     * MoodPlayService::playMood(). $reactorCardId is the reacting mood
+     * (this effect's own card), distinct from $playedCardId. Reads its
+     * optional choices from the same PlayerChoices submitted for the
+     * triggering play, since the reaction is the same player's own
+     * decision, made in the same request.
+     */
+    public function reactToAnotherPlay(BoardState $state, int $reactorCardId, int $playedCardId, int $playerId, PlayerChoices $choices): void;
 }
