@@ -39,11 +39,14 @@ final class BoardState
     private ?int $roundFirstPlayerId = null;
 
     /**
-     * @var array<int, ?array{type?: string, values?: int[], source?: string}> one entry per
+     * @var array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> one entry per
      * outstanding "play an additional mood" grant this turn. null means
      * unconditional (e.g. Charity); a restriction array means the grant
      * only covers a card matching it (e.g. Benevolence's "if it doesn't
-     * share a color with any of your moods") -- see grantAllows().
+     * share a color with any of your moods") -- see grantAllows(). The
+     * 'onUseEffectState' key (Gluttony/Insecurity) tags whichever specific
+     * card ends up consuming this grant with effectState to apply once
+     * it's played -- see useGrantFor() and MoodPlayService.
      */
     private array $playGrants = [];
 
@@ -278,7 +281,7 @@ final class BoardState
         );
     }
 
-    /** @param array<int, ?array{type?: string, values?: int[], source?: string}> $playGrants */
+    /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> $playGrants */
     public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId): void
     {
         $this->currentPlayerId = $currentPlayerId;
@@ -335,6 +338,12 @@ final class BoardState
     public function effectState(int $cardId, string $key): mixed
     {
         return $this->moodsInPlay[$cardId]->effectState[$key] ?? null;
+    }
+
+    /** Unsets a specific effectState key so a one-shot marker (e.g. an after-scoring tag) doesn't reapply next round once it's been resolved. */
+    public function clearEffectState(int $cardId, string $key): void
+    {
+        unset($this->moodInPlay($cardId)->effectState[$key]);
     }
 
     /** A one-time score change from an "after playing" effect (e.g. Dignity's "value becomes 5"), as opposed to a continuously recomputed "while in play" value. */
@@ -422,19 +431,28 @@ final class BoardState
 
     /**
      * Whoever should go first *next* round, per a currently-in-play mood
-     * that overrides the normal "round winner goes first" rule (e.g.
-     * Honor). Stored as a per-mood effectState key ('firstPlayerOverride')
-     * rather than a dedicated BoardState field, so it's automatically
-     * self-correcting if that mood later leaves play -- there's nothing
-     * separate to clean up. GameService checks this when starting a new
-     * round; the first override found wins (only one card grants this
-     * today, so there's no defined tie-break for multiple).
+     * that overrides the normal "round winner goes first" rule. Two
+     * distinct effectState keys feed this, since they have different
+     * lifetimes: Honor's 'firstPlayerOverride' is perpetual -- "while in
+     * play, the chosen player goes first each round" -- so it's simply
+     * never cleared, and is automatically self-correcting if Honor later
+     * leaves play, with nothing separate to clean up. Awe's
+     * 'oneTimeFirstPlayerOverride' only covers the round immediately after
+     * it's played ("you choose which player goes first next round"), so
+     * GameService::skipScoringAndAdvance() explicitly clears it once
+     * consumed -- otherwise Awe staying in play would keep overriding
+     * every future round too, which its text doesn't support. GameService
+     * checks this when starting a new round; the first override found
+     * wins (no defined tie-break if both happen to be in play at once).
      */
     public function firstPlayerOverride(): ?int
     {
         foreach ($this->moodsInPlay as $mood) {
             if (array_key_exists('firstPlayerOverride', $mood->effectState)) {
                 return $mood->effectState['firstPlayerOverride'];
+            }
+            if (array_key_exists('oneTimeFirstPlayerOverride', $mood->effectState)) {
+                return $mood->effectState['oneTimeFirstPlayerOverride'];
             }
         }
 
@@ -462,7 +480,7 @@ final class BoardState
         return count($this->playGrants);
     }
 
-    /** @return array<int, ?array{type?: string, values?: int[], source?: string}> */
+    /** @return array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> */
     public function pendingPlayGrants(): array
     {
         return $this->playGrants;
@@ -480,17 +498,27 @@ final class BoardState
         return false;
     }
 
-    /** Removes one outstanding grant that permits playing $cardId (see hasUsablePlayGrant()). */
-    public function useGrantFor(int $cardId, int $playerId): void
+    /**
+     * Removes one outstanding grant that permits playing $cardId (see
+     * hasUsablePlayGrant()), returning the restriction descriptor it
+     * consumed (or null for an unconditional grant, or if none matched) so
+     * callers can react to a grant-specific tag -- see the
+     * 'onUseEffectState' key.
+     *
+     * @return ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}
+     */
+    public function useGrantFor(int $cardId, int $playerId): ?array
     {
         foreach ($this->playGrants as $index => $restriction) {
             if ($this->grantAllows($restriction, $cardId, $playerId)) {
                 unset($this->playGrants[$index]);
                 $this->playGrants = array_values($this->playGrants);
 
-                return;
+                return $restriction;
             }
         }
+
+        return null;
     }
 
     /** Consumes one grant regardless of restriction -- for tests/setup that don't care which. MoodPlayService uses useGrantFor() instead, since it must consume a grant that actually permits the card being played. */

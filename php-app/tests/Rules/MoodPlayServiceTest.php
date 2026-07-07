@@ -2225,4 +2225,162 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertTrue($state->isInPlay(96));
     }
+
+    public function testBashfulnessTagsItselfForAfterScoringIfWon(): void
+    {
+        $state = $this->boardState(hands: [1 => [30]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 30, new PlayerChoices([]));
+
+        self::assertSame(['action' => 'bottom_and_draw', 'condition' => 'if_won'], $state->effectState(30, 'afterScoring'));
+    }
+
+    public function testBetrayalGivesAMoodAwayAndTagsItToReturn(): void
+    {
+        $state = $this->boardState(hands: [1 => [56, 3]]); // Betrayal, Charity
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 56, new PlayerChoices(['target_mood_id' => 3, 'recipient_player_id' => 2]));
+
+        self::assertSame(2, $state->ownerOf(3));
+        self::assertSame(1, $state->effectState(3, 'returnsToOwnerAfterScoring'));
+    }
+
+    public function testBetrayalRejectsATargetNotOwnedByYou(): void
+    {
+        $state = $this->boardState(hands: [1 => [56], 2 => [3]]);
+        $state->moveHandToInPlay(2, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 56, new PlayerChoices(['target_mood_id' => 3, 'recipient_player_id' => 2]));
+    }
+
+    public function testBetrayalRejectsGivingToYourself(): void
+    {
+        $state = $this->boardState(hands: [1 => [56, 3]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 56, new PlayerChoices(['target_mood_id' => 3, 'recipient_player_id' => 1]));
+    }
+
+    public function testSneakinessTagsAnOpponentForAScoreSwap(): void
+    {
+        $state = $this->boardState(hands: [1 => [51]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 51, new PlayerChoices(['opponent_player_id' => 2]));
+
+        self::assertSame(2, $state->effectState(51, 'swapScoreWithPlayerId'));
+    }
+
+    public function testSneakinessRejectsTargetingYourself(): void
+    {
+        $state = $this->boardState(hands: [1 => [51]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 51, new PlayerChoices(['opponent_player_id' => 1]));
+    }
+
+    public function testAweTagsFirstPlayerOverrideAndSkipScoring(): void
+    {
+        $state = $this->boardState(hands: [1 => [107]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 107, new PlayerChoices(['target_player_id' => 3]));
+
+        self::assertSame(3, $state->firstPlayerOverride());
+        self::assertTrue($state->effectState(107, 'skipScoringThisRound'));
+    }
+
+    public function testAweRejectsAnInvalidPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [107]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 107, new PlayerChoices(['target_player_id' => 99]));
+    }
+
+    public function testRecklessnessTagsItselfUnconditionallyForAfterScoring(): void
+    {
+        $state = $this->boardState(hands: [1 => [100]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 100, new PlayerChoices([]));
+
+        self::assertSame(['action' => 'bottom_and_draw', 'condition' => 'always'], $state->effectState(100, 'afterScoring'));
+    }
+
+    public function testRecklessnessOptionallyTakesAnOpponentsMoodAndTagsItToReturn(): void
+    {
+        $state = $this->boardState(hands: [1 => [100], 2 => [3]]);
+        $state->moveHandToInPlay(2, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 100, new PlayerChoices(['target_mood_id' => 3]));
+
+        self::assertSame(1, $state->ownerOf(3));
+        self::assertSame(2, $state->effectState(3, 'returnsToOwnerAfterScoring'));
+    }
+
+    public function testRecklessnessRejectsTakingYourOwnMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [100, 3]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 100, new PlayerChoices(['target_mood_id' => 3]));
+    }
+
+    public function testRecklessnessDoesNothingExtraWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [100]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 100, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(100));
+    }
+
+    public function testGluttonyGrantsAnExtraPlayTaggedToDiscardAfterScoring(): void
+    {
+        $state = $this->boardState(hands: [1 => [93, 5]]); // Gluttony, Complacency (no abilities)
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 93, new PlayerChoices([]));
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(5));
+        self::assertSame(['action' => 'discard', 'condition' => 'always'], $state->effectState(5, 'afterScoring'));
+    }
+
+    public function testGluttonyLeavesNoTagWhenTheExtraPlayGoesUnused(): void
+    {
+        $state = $this->boardState(hands: [1 => [93]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 93, new PlayerChoices([]));
+
+        self::assertNull($state->effectState(93, 'afterScoring'));
+    }
+
+    public function testInsecurityGrantsAnExtraPlayTaggedToReturnToHandAfterScoring(): void
+    {
+        $state = $this->boardState(hands: [1 => [45, 5]]); // Insecurity, Complacency (no abilities)
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 45, new PlayerChoices([]));
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertSame(['action' => 'return_to_hand', 'condition' => 'always'], $state->effectState(5, 'afterScoring'));
+    }
 }

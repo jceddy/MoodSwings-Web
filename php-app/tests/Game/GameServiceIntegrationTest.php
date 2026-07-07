@@ -474,4 +474,141 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p3, (int) $round2['first_game_player_id']); // Honor's override, not the winner (p1)
     }
+
+    /**
+     * Sneakiness's score swap has to actually change who wins, so it must
+     * be applied before RoundScorer::winner() runs -- not just recorded
+     * for information after the fact.
+     */
+    public function testSneakinessSwapsScoresBeforeDeterminingTheWinner(): void
+    {
+        $u1 = $this->insertUser('sneak1');
+        $u2 = $this->insertUser('sneak2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 51, 'hand', $p1); // Sneakiness, value 5
+        $this->insertGameCard($gameId, 120, 'in_play', $p2); // Generosity, value 6 -- already ahead
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Before the swap, p2 leads 6 to 5; after it, p1 should win 6 to 5.
+        $this->games->playMood($gameId, $p1, 51, ['opponent_player_id' => $p2]);
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+
+        $round1Stmt = $this->pdo->prepare('SELECT winner_game_player_id FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $round1Stmt->execute(['game_id' => $gameId]);
+        self::assertSame($p1, (int) $round1Stmt->fetchColumn());
+
+        $scoresStmt = $this->pdo->prepare(
+            "SELECT s.game_player_id, s.score FROM game_round_scores s
+             JOIN game_rounds r ON r.id = s.game_round_id
+             WHERE r.game_id = :game_id AND r.round_number = 1"
+        );
+        $scoresStmt->execute(['game_id' => $gameId]);
+        $scores = array_column($scoresStmt->fetchAll(), 'score', 'game_player_id');
+        self::assertSame(6, (int) $scores[$p1]);
+        self::assertSame(5, (int) $scores[$p2]);
+    }
+
+    /**
+     * Awe skips scoring entirely: no winner, no scores recorded, no one
+     * draws, and next round's first player comes from Awe's own
+     * one-time override rather than the (nonexistent) round winner.
+     */
+    public function testAweSkipsScoringAndSetsNextRoundsFirstPlayer(): void
+    {
+        $u1 = $this->insertUser('awe1');
+        $u2 = $this->insertUser('awe2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameCard($gameId, 3, 'deck', null, 0); // would be drawn if scoring weren't skipped
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 107, ['target_player_id' => $p2]);
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        $round1Stmt = $this->pdo->prepare('SELECT status, winner_game_player_id FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $round1Stmt->execute(['game_id' => $gameId]);
+        $round1 = $round1Stmt->fetch();
+        self::assertSame('scored', $round1['status']);
+        self::assertNull($round1['winner_game_player_id']);
+
+        $scoresStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_round_scores s JOIN game_rounds r ON r.id = s.game_round_id
+             WHERE r.game_id = :game_id AND r.round_number = 1"
+        );
+        $scoresStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $scoresStmt->fetchColumn());
+
+        // No one drew a card -- the deck filler is still sitting in the deck.
+        $deckCardStmt = $this->pdo->prepare("SELECT zone FROM game_cards WHERE game_id = :game_id AND card_id = 3");
+        $deckCardStmt->execute(['game_id' => $gameId]);
+        self::assertSame('deck', $deckCardStmt->fetchColumn());
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['first_game_player_id']);
+        self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+    }
+
+    /**
+     * Bashfulness's after-scoring hook has to survive a real load()/save()
+     * round trip: it's tagged when played, then resolved once the round's
+     * winner is known, moving itself to the bottom of the deck and
+     * drawing its owner a replacement -- distinct from the loser's draw,
+     * which happens to every non-winner regardless of any card effect.
+     */
+    public function testBashfulnessMovesToBottomOfDeckAndDrawsWhenItsOwnerWinsTheRound(): void
+    {
+        $u1 = $this->insertUser('bash1');
+        $u2 = $this->insertUser('bash2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
+        $this->insertGameCard($gameId, 3, 'deck', null, 0); // p2's loser draw
+        $this->insertGameCard($gameId, 7, 'deck', null, 1); // p1's replacement draw
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 30, []);
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertFalse($state->isInPlay(30));
+        self::assertContains(7, $state->hand($p1));
+        self::assertContains(3, $state->hand($p2));
+        self::assertSame([30], $state->deck());
+    }
 }

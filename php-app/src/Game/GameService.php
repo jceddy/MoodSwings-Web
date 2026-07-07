@@ -6,6 +6,7 @@ namespace MoodSwings\Game;
 
 use MoodSwings\Database\Connection;
 use MoodSwings\Game\Exceptions\GameStateException;
+use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\RoundScorer;
@@ -21,10 +22,14 @@ use Throwable;
  * process alive between them, so every bit of turn/round state that
  * matters has to already be in the database by the time a method returns.
  *
+ * Round-end also resolves a handful of effectState-tagged hooks set by
+ * cards played earlier in the round -- see applyScoreSwaps() (Sneakiness),
+ * applyAfterScoringHooks() (Bashfulness/Betrayal/Recklessness/Gluttony/
+ * Insecurity), and hasSkipScoringMarker()/skipScoringAndAdvance() (Awe).
+ *
  * Deliberately out of scope for now: Corruption's "win two rounds instead
  * of one" (schema supports game_rounds.wins_awarded but nothing sets it
- * above the default of 1 yet), Awe's "no scoring this round" branch (no
- * card implements it yet), and any HTTP/auth layer -- this takes
+ * above the default of 1 yet), and any HTTP/auth layer -- this takes
  * game_player ids directly and treats them as already-authorized.
  */
 final class GameService
@@ -210,7 +215,12 @@ final class GameService
     {
         $roundId = (int) $round['id'];
         $state = $this->boardStates->load($gameId);
-        $scores = $this->scorer->score($state);
+
+        if ($this->hasSkipScoringMarker($state)) {
+            return $this->skipScoringAndAdvance($gameId, $round, $state);
+        }
+
+        $scores = $this->applyScoreSwaps($state, $this->scorer->score($state));
         $winnerId = $this->scorer->winner($scores, $turnOrder);
 
         $pdo = Connection::get();
@@ -234,6 +244,7 @@ final class GameService
                     $state->drawCard($playerId);
                 }
             }
+            $this->applyAfterScoringHooks($state, $winnerId);
             $this->boardStates->save($gameId, $state);
 
             $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
@@ -275,6 +286,154 @@ final class GameService
                 'first_player_turn' => $nextFirstPlayer,
                 'plays_remaining' => $nextRoundPlaysRemaining,
                 'pending_play_grants' => json_encode(array_fill(0, $nextRoundPlaysRemaining, null)),
+            ]);
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+
+        return ['round_scored' => true, 'game_completed' => false];
+    }
+
+    /**
+     * Sneakiness: "choose an opponent... after scoring, swap your score
+     * with that player before determining who wins the round." Applied
+     * right after RoundScorer::score() and before RoundScorer::winner(),
+     * so the swap actually changes who wins.
+     *
+     * @param array<int, int> $scores game_player_id => score
+     * @return array<int, int>
+     */
+    private function applyScoreSwaps(BoardState $state, array $scores): array
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            $swapWithPlayerId = $state->effectState($mood->cardId, 'swapScoreWithPlayerId');
+            if ($swapWithPlayerId === null) {
+                continue;
+            }
+
+            $state->clearEffectState($mood->cardId, 'swapScoreWithPlayerId');
+            $ownerId = $mood->ownerId;
+            [$scores[$ownerId], $scores[$swapWithPlayerId]] = [$scores[$swapWithPlayerId], $scores[$ownerId]];
+        }
+
+        return $scores;
+    }
+
+    /**
+     * Resolves every mood's one-shot "after scoring" tag -- 'afterScoring'
+     * (Bashfulness; Gluttony/Insecurity via MoodPlayService's
+     * onUseEffectState; Recklessness's own "while in play" ability) and
+     * 'returnsToOwnerAfterScoring' (Betrayal; the mood Recklessness took) --
+     * then clears each tag so it doesn't reapply next round. Snapshots the
+     * mood list up front since some actions remove the mood from play,
+     * which would otherwise mutate moodsInPlay() mid-iteration.
+     */
+    private function applyAfterScoringHooks(BoardState $state, int $winnerId): void
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            $cardId = $mood->cardId;
+            $ownerId = $mood->ownerId;
+
+            $afterScoring = $state->effectState($cardId, 'afterScoring');
+            if ($afterScoring !== null) {
+                $state->clearEffectState($cardId, 'afterScoring');
+            }
+
+            // Resolved before 'afterScoring' below, since a mood can carry
+            // both tags at once (e.g. Recklessness took a mood that already
+            // had its own after-scoring tag) and 'afterScoring' may remove
+            // the mood from play, which would leave nothing for
+            // giveInPlayToPlayer() to act on.
+            $returnsToOwnerId = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
+            if ($returnsToOwnerId !== null) {
+                $state->clearEffectState($cardId, 'returnsToOwnerAfterScoring');
+                $state->giveInPlayToPlayer($cardId, $returnsToOwnerId);
+            }
+
+            if ($afterScoring !== null) {
+                $conditionMet = ($afterScoring['condition'] ?? 'always') === 'always' || $ownerId === $winnerId;
+                if ($conditionMet) {
+                    match ($afterScoring['action']) {
+                        'discard' => $state->moveInPlayToDiscard($cardId),
+                        'return_to_hand' => $state->moveInPlayToHand($cardId),
+                        'bottom_and_draw' => $this->bottomOfDeckAndDraw($state, $cardId, $ownerId),
+                        default => throw new GameStateException("Unknown afterScoring action '{$afterScoring['action']}'"),
+                    };
+                }
+            }
+        }
+    }
+
+    private function bottomOfDeckAndDraw(BoardState $state, int $cardId, int $ownerId): void
+    {
+        $state->moveInPlayToBottomOfDeck($cardId);
+        $state->drawCard($ownerId);
+    }
+
+    private function hasSkipScoringMarker(BoardState $state): bool
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'skipScoringThisRound')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Awe: "there is no scoring this round. No one wins or loses this
+     * round... You choose which player goes first next round." No scores
+     * are recorded, no one draws a card, there's no Hurt Feelings, and win
+     * totals are untouched -- the round is simply marked scored with no
+     * winner and play moves on. Awe's 'oneTimeFirstPlayerOverride'
+     * effectState key (see BoardState::firstPlayerOverride()) picks who
+     * goes first; unlike Honor's perpetual override, it's explicitly
+     * cleared here alongside skipScoringThisRound once consumed, since
+     * Awe's choice only covers this one transition.
+     *
+     * @return array{round_scored: bool, game_completed: bool}
+     */
+    private function skipScoringAndAdvance(int $gameId, array $round, BoardState $state): array
+    {
+        $roundId = (int) $round['id'];
+
+        $nextFirstPlayer = $state->firstPlayerOverride()
+            ?? throw new GameStateException("Round {$roundId} was marked to skip scoring but no player was chosen to go first next round");
+
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'skipScoringThisRound')) {
+                $state->clearEffectState($mood->cardId, 'skipScoringThisRound');
+                $state->clearEffectState($mood->cardId, 'oneTimeFirstPlayerOverride');
+            }
+        }
+
+        $pdo = Connection::get();
+        $pdo->beginTransaction();
+
+        try {
+            $updateRound = $pdo->prepare(
+                "UPDATE game_rounds SET status = 'scored', scored_at = NOW() WHERE id = :round_id"
+            );
+            $updateRound->execute(['round_id' => $roundId]);
+
+            $this->boardStates->save($gameId, $state);
+
+            $this->logEvent($gameId, $roundId, null, 'round_scored', null, ['skipped' => true]);
+
+            $insertRound = $pdo->prepare(
+                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+                 VALUES (:game_id, :round_number, :first_player, :first_player_turn, 1, :pending_play_grants, 'in_progress')"
+            );
+            $insertRound->execute([
+                'game_id' => $gameId,
+                'round_number' => (int) $round['round_number'] + 1,
+                'first_player' => $nextFirstPlayer,
+                'first_player_turn' => $nextFirstPlayer,
+                'pending_play_grants' => json_encode([null]),
             ]);
 
             $pdo->commit();

@@ -107,7 +107,7 @@ account/friends layer above. The core pieces:
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-95 of the 133-card pool have a registered effect so far (see
+102 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
 engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
@@ -150,9 +150,27 @@ discard pile instead of hand (Harmony/Grief/Angst — see
 first next round" override that `GameService` consults instead of the
 round winner (Honor — see `BoardState::firstPlayerOverride()`, stored
 as a per-mood `effectState` key so it self-corrects if that mood ever
-leaves play), and a direction-based simultaneous exchange with every
-player at the table (Avoidance/Confusion/Rationalization). Not full
-coverage — implementing the rest is incremental follow-up work.
+leaves play), a direction-based simultaneous exchange with every
+player at the table (Avoidance/Confusion/Rationalization), and a family
+of round-scoring hooks that `GameService` resolves once a round's
+scores are computed rather than at play time: a one-shot "after
+scoring, do X to this mood" tag, conditional on winning or unconditional
+(Bashfulness, Recklessness — `GameService::applyAfterScoringHooks()`),
+the same tag applied to whichever specific card ends up consuming an
+optional granted extra play rather than the mood that granted it
+(Gluttony/Insecurity — an `onUseEffectState` payload on the play grant
+itself, applied by `MoodPlayService` when `BoardState::useGrantFor()`
+reports which grant a card actually consumed), a "give this mood away,
+it returns to you after scoring if still in play" tag (Betrayal;
+Recklessness's taken mood), a score swap between two players applied
+before the round's winner is determined rather than after
+(Sneakiness — `GameService::applyScoreSwaps()`), and a "skip scoring
+entirely this round" marker paired with a one-time (as opposed to
+Honor's perpetual) first-player override for next round only (Awe —
+`GameService::hasSkipScoringMarker()`/`skipScoringAndAdvance()`, and
+`BoardState::firstPlayerOverride()`'s `oneTimeFirstPlayerOverride` key).
+Not full coverage — implementing the rest is incremental follow-up
+work.
 
 ## Game layer
 
@@ -179,16 +197,17 @@ request/response round trips with no process alive in between to hold a
   rules engine, persisting the result, and appending a `game_events` row,
   all within a single request. Turn advancement, round scoring (via
   `RoundScorer`), Hurt Feelings assignment (3+ player games only), losers
-  drawing a card, and game completion once a player reaches
-  `wins_needed` are all handled internally as one play or pass ripples
-  through to the end of a round if it's the last play of the game.
+  drawing a card, game completion once a player reaches `wins_needed`,
+  and the round-scoring hooks described above (score swaps, after-scoring
+  tags, and Awe's skip-scoring branch) are all handled internally as one
+  play or pass ripples through to the end of a round if it's the last
+  play of the game.
 
 Known limitations: Corruption's "win two rounds instead of one" isn't
 implemented (schema supports `game_rounds.wins_awarded` but nothing sets
-it above the default of 1 yet), nor is Awe's "no scoring this round"
-branch (no card implements either one yet). `GameService` takes
-`game_player` ids directly and assumes the caller has already authorized
-the action -- there's no HTTP/API endpoint layer in front of it yet.
+it above the default of 1 yet). `GameService` takes `game_player` ids
+directly and assumes the caller has already authorized the action --
+there's no HTTP/API endpoint layer in front of it yet.
 
 ## Tests
 
