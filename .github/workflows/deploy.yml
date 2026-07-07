@@ -51,6 +51,15 @@ jobs:
           # Static site at the domain root.
           cp -R web-static/. dist/
 
+          # Bust browser caches on every deploy: filenames never change
+          # between deploys, so a browser that already cached an old JS/CSS
+          # file (e.g. from before a feature existed) can silently keep
+          # serving it even after the HTML referencing it is fresh. Appending
+          # the commit SHA to each reference forces a fetch of the new file.
+          SHORT_SHA="${GITHUB_SHA:0:8}"
+          find dist -name '*.html' -print0 \
+            | xargs -0 sed -i -E "s/(src|href)=\"([^\"]+\.(js|css))\"/\1=\"\2?v=${SHORT_SHA}\"/g"
+
           # PHP app's front controller lives under /app; public/.htaccess
           # rewrites requests to it so index.php's router still works.
           mkdir -p dist/app
