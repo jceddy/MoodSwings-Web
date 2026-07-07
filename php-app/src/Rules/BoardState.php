@@ -41,6 +41,9 @@ final class BoardState
     /** The current round's number (game_rounds.round_number), used to stamp newly-played moods with when they were played -- see moveHandToInPlay()/moveDiscardToInPlay() and the 'playedInRound' effectState key (Patience, Glee, Doubt). */
     private ?int $currentRoundNumber = null;
 
+    /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
+    private array $pendingEffectState = [];
+
     /**
      * @var array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> one entry per
      * outstanding "play an additional mood" grant this turn. null means
@@ -147,20 +150,50 @@ final class BoardState
     public function moveHandToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromHand($playerId, $cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->playedInRoundTag());
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId));
     }
 
     /** Harmony/Grief/Angst: plays a mood "from the discard pile" instead of from hand -- see BoardState::$playGrants' 'source' key and MoodPlayService. */
     public function moveDiscardToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromDiscard($cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->playedInRoundTag());
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId));
+    }
+
+    /** @return array<string, mixed> */
+    private function initialEffectState(int $cardId): array
+    {
+        return [...$this->playedInRoundTag(), ...$this->consumeStagedEffectState($cardId)];
     }
 
     /** @return array<string, mixed> */
     private function playedInRoundTag(): array
     {
         return $this->currentRoundNumber !== null ? ['playedInRound' => $this->currentRoundNumber] : [];
+    }
+
+    /**
+     * Stashes an effectState key/value for $cardId to apply the moment it
+     * actually enters play -- for a "to play this card" cost that needs to
+     * capture something (e.g. Bliss recording the color of the card its
+     * cost discards) before the card exists as a MoodInPlay to attach
+     * effectState to normally; payToPlayCost() always runs before the
+     * card is moved into play. Consumed (and cleared) by
+     * moveHandToInPlay()/moveDiscardToInPlay() within that same call, so
+     * nothing here needs to survive being reloaded from the database.
+     */
+    public function stagePrePlayEffectState(int $cardId, string $key, mixed $value): void
+    {
+        $this->pendingEffectState[$cardId][$key] = $value;
+    }
+
+    /** @return array<string, mixed> */
+    private function consumeStagedEffectState(int $cardId): array
+    {
+        $staged = $this->pendingEffectState[$cardId] ?? [];
+        unset($this->pendingEffectState[$cardId]);
+
+        return $staged;
     }
 
     public function moveInPlayToDiscard(int $cardId): void

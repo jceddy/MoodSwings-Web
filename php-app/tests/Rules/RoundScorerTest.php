@@ -84,4 +84,66 @@ final class RoundScorerTest extends TestCase
 
         self::assertSame(2, $loser);
     }
+
+    public function testExhilarationDoublesItsOwnersWholeTotal(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 3, 8]]); // Exhilaration (0), Charity (1), Dignity (base 3)
+        $state->moveHandToInPlay(1, 89);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 8);
+
+        $scores = $this->scorer->score($state);
+
+        self::assertSame([1 => 8, 2 => 0, 3 => 0], $scores);
+    }
+
+    public function testBlissTriplesOwnMoodsSharingTheDiscardedCardsColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [108, 3, 8, 55]]); // Bliss, Charity (white), Dignity (white), Apathy (black)
+        $state->moveHandToInPlay(1, 108);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 8);
+        $state->moveHandToInPlay(1, 55);
+        $state->setEffectState(108, 'blissColor', 'white');
+
+        $scores = $this->scorer->score($state);
+
+        // base: Bliss(2) + Charity(1) + Dignity(3) + Apathy(4) = 10
+        // bonus: 2 * (Charity(1) + Dignity(3)) = 8 -- Apathy (black) excluded
+        self::assertSame([1 => 18, 2 => 0, 3 => 0], $scores);
+    }
+
+    public function testBlissAddsNoBonusWithoutARecordedColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [108]]);
+        $state->moveHandToInPlay(1, 108);
+
+        $scores = $this->scorer->score($state);
+
+        self::assertSame([1 => 2, 2 => 0, 3 => 0], $scores);
+    }
+
+    public function testEnthusiasmAddsItsOwnersHighestValuedMoodAgain(): void
+    {
+        $state = $this->boardState(hands: [1 => [116, 3, 8]]); // Enthusiasm (0), Charity (1), Dignity (base 3)
+        $state->moveHandToInPlay(1, 116);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 8);
+
+        $scores = $this->scorer->score($state);
+
+        self::assertSame([1 => 7, 2 => 0, 3 => 0], $scores);
+    }
+
+    public function testPassionAddsTheHighestValuedOpponentMoodWithoutRemovingItFromThem(): void
+    {
+        $state = $this->boardState(hands: [1 => [97], 2 => [8, 3]]); // Passion; Dignity (3), Charity (1) for p2
+        $state->moveHandToInPlay(1, 97);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 3);
+
+        $scores = $this->scorer->score($state);
+
+        self::assertSame([1 => 3, 2 => 4, 3 => 0], $scores);
+    }
 }

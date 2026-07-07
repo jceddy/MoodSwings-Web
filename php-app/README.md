@@ -109,9 +109,13 @@ account/friends layer above. The core pieces:
 - `RoundScorer` — sums each player's mood values and settles the win/Hurt
   Feelings tie-breaks (opposite directions: ties for the win go to whoever
   played *earliest* that round, Hurt Feelings ties go to whoever played
-  *latest*).
+  *latest*). Also resolves a small cluster of "you may score X an extra
+  time" cards unconditionally, rather than through an interactive
+  scoring-time choice -- since card values are never negative, taking the
+  bonus is always at least as good as declining it (Exhilaration, Bliss,
+  Enthusiasm, Passion — see below).
 
-119 of the 133-card pool have a registered effect so far (see
+125 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
 engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
@@ -224,8 +228,21 @@ Intimidation's optional version, whose resulting grant is restricted to
 that one specific card via a new `specific_card_ids` restriction type),
 and that same random-choice treatment applied per player at the whole
 table at once, discarding every other mood matching any of the
-resulting colors regardless of owner (Disillusionment). Not full
-coverage — implementing the rest is incremental follow-up work.
+resulting colors regardless of owner (Disillusionment), a genuine
+reshuffle-and-redeal of every mood in play (including the card causing
+it), reassigning ownership only and never re-triggering after-playing
+effects (Chaos), a repeat of another card's own after-playing effect
+with a *fresh*, nested sub-choices bag rather than reusing the
+triggering play's choices verbatim — needed since e.g. a specific card
+already discarded once can't be discarded again — handled directly by
+`MoodPlayService` since no `MoodEffect` implementation has access to the
+registry it needs to re-invoke another card's effect (Duplicity —
+`PlayerChoices::sub()`), and the scoring-time multiplier cluster
+described above (Exhilaration, Bliss — whose color is captured via
+`BoardState::stagePrePlayEffectState()` before the card exists as a
+`MoodInPlay` to attach `effectState` to normally, since its cost runs
+first — Enthusiasm, Passion). Not full coverage — implementing the rest
+is incremental follow-up work.
 
 ## Game layer
 
