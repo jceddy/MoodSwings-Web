@@ -107,7 +107,7 @@ account/friends layer above. The core pieces:
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-102 of the 133-card pool have a registered effect so far (see
+108 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
 engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
@@ -168,8 +168,24 @@ before the round's winner is determined rather than after
 entirely this round" marker paired with a one-time (as opposed to
 Honor's perpetual) first-player override for next round only (Awe —
 `GameService::hasSkipScoringMarker()`/`skipScoringAndAdvance()`, and
-`BoardState::firstPlayerOverride()`'s `oneTimeFirstPlayerOverride` key).
-Not full coverage — implementing the rest is incremental follow-up
+`BoardState::firstPlayerOverride()`'s `oneTimeFirstPlayerOverride` key),
+and an unconditional "the round's winner is awarded an extra win" tag
+that doubles `game_rounds.wins_awarded` regardless of who plays it or
+who wins (Corruption — `GameService::consumeExtraWinMarker()`). A
+separate, reusable "was this mood played this round" tag
+(`playedInRound`, stamped on every mood the moment it enters play from
+`BoardState::currentRoundNumber()`) backs a round-scoped value formula
+shared by two cards with no constructor arguments needed
+(Patience/Glee — `PlayedThisRoundValueEffect`), a variable-count
+extra-play grant sized to close a mood-count gap with a chosen opponent
+computed once at play time (Pride), a widening of which zone a
+player's *normal* plays (not just bonus ones) can draw from, special-
+cased by `effect_key` inside `BoardState::grantAllows()` the same way
+`colorOf()` special-cases Imagination (Melancholy), and a color ban
+that applies to every player but only during the single round right
+after it's tagged (Doubt — `BoardState::bannedColorsThisRound()`,
+checked by `MoodPlayService` before any grant/zone check). Not full
+coverage — implementing the rest is incremental follow-up
 work.
 
 ## Game layer
@@ -188,10 +204,11 @@ request/response round trips with no process alive in between to hold a
   source id is resolved in a second pass after the main upsert, since it
   points at another row's surrogate id that doesn't exist until after
   that row's insert/update has run. Turn state includes
-  `game_rounds.pending_play_grants` and `first_game_player_id`, since a
-  *restricted* extra-play grant (see above) and who went first this round
-  (Chivalry/Triumph) both have to survive being reloaded fresh on the next
-  request just as much as whose turn it is does.
+  `game_rounds.pending_play_grants`, `first_game_player_id`, and
+  `round_number`, since a *restricted* extra-play grant (see above), who
+  went first this round (Chivalry/Triumph), and which round a mood was
+  played in (Patience/Glee/Doubt) all have to survive being reloaded
+  fresh on the next request just as much as whose turn it is does.
 - `GameService` — one method per player-facing action (`createGame`,
   `startGame`, `playMood`, `pass`), each loading state, delegating to the
   rules engine, persisting the result, and appending a `game_events` row,
@@ -199,15 +216,13 @@ request/response round trips with no process alive in between to hold a
   `RoundScorer`), Hurt Feelings assignment (3+ player games only), losers
   drawing a card, game completion once a player reaches `wins_needed`,
   and the round-scoring hooks described above (score swaps, after-scoring
-  tags, and Awe's skip-scoring branch) are all handled internally as one
-  play or pass ripples through to the end of a round if it's the last
-  play of the game.
+  tags, Awe's skip-scoring branch, and Corruption's extra-win marker) are
+  all handled internally as one play or pass ripples through to the end
+  of a round if it's the last play of the game.
 
-Known limitations: Corruption's "win two rounds instead of one" isn't
-implemented (schema supports `game_rounds.wins_awarded` but nothing sets
-it above the default of 1 yet). `GameService` takes `game_player` ids
-directly and assumes the caller has already authorized the action --
-there's no HTTP/API endpoint layer in front of it yet.
+Known limitations: `GameService` takes `game_player` ids directly and
+assumes the caller has already authorized the action -- there's no
+HTTP/API endpoint layer in front of it yet.
 
 ## Tests
 

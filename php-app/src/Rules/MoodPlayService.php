@@ -37,6 +37,12 @@ final class MoodPlayService
         if ($state->currentPlayerId() !== $playerId) {
             throw new IllegalPlayException("It is not player {$playerId}'s turn");
         }
+        // Doubt bans specific colors for everyone during the round after
+        // it's played, regardless of whose turn it is or which grant would
+        // otherwise permit the play -- see BoardState::bannedColorsThisRound().
+        if (in_array($state->colorOf($cardId), $state->bannedColorsThisRound(), true)) {
+            throw new IllegalPlayException("Card {$cardId}'s color is banned from being played this round");
+        }
         if (!$state->hasUsablePlayGrant($cardId, $playerId)) {
             throw new IllegalPlayException("Player {$playerId} has no plays remaining this turn that allow playing card {$cardId}");
         }

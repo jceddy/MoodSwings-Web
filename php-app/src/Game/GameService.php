@@ -25,11 +25,10 @@ use Throwable;
  * Round-end also resolves a handful of effectState-tagged hooks set by
  * cards played earlier in the round -- see applyScoreSwaps() (Sneakiness),
  * applyAfterScoringHooks() (Bashfulness/Betrayal/Recklessness/Gluttony/
- * Insecurity), and hasSkipScoringMarker()/skipScoringAndAdvance() (Awe).
+ * Insecurity), hasSkipScoringMarker()/skipScoringAndAdvance() (Awe), and
+ * consumeExtraWinMarker() (Corruption).
  *
- * Deliberately out of scope for now: Corruption's "win two rounds instead
- * of one" (schema supports game_rounds.wins_awarded but nothing sets it
- * above the default of 1 yet), and any HTTP/auth layer -- this takes
+ * Deliberately out of scope for now: any HTTP/auth layer -- this takes
  * game_player ids directly and treats them as already-authorized.
  */
 final class GameService
@@ -222,6 +221,7 @@ final class GameService
 
         $scores = $this->applyScoreSwaps($state, $this->scorer->score($state));
         $winnerId = $this->scorer->winner($scores, $turnOrder);
+        $winsAwarded = $this->consumeExtraWinMarker($state);
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -235,9 +235,9 @@ final class GameService
             }
 
             $updateRound = $pdo->prepare(
-                "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, scored_at = NOW() WHERE id = :round_id"
+                "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, wins_awarded = :wins_awarded, scored_at = NOW() WHERE id = :round_id"
             );
-            $updateRound->execute(['winner' => $winnerId, 'round_id' => $roundId]);
+            $updateRound->execute(['winner' => $winnerId, 'wins_awarded' => $winsAwarded, 'round_id' => $roundId]);
 
             foreach (array_keys($scores) as $playerId) {
                 if ($playerId !== $winnerId) {
@@ -320,6 +320,26 @@ final class GameService
         }
 
         return $scores;
+    }
+
+    /**
+     * Corruption: "...or the winner of the current round wins two rounds
+     * instead of one (each losing player still draws only one card)."
+     * Doesn't matter who played Corruption or who ends up winning -- it's
+     * unconditional on the round itself, unlike Bashfulness's
+     * winner-dependent 'afterScoring' tag.
+     */
+    private function consumeExtraWinMarker(BoardState $state): int
+    {
+        $winsAwarded = 1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $state->clearEffectState($mood->cardId, 'awardsExtraWin');
+                $winsAwarded = 2;
+            }
+        }
+
+        return $winsAwarded;
     }
 
     /**

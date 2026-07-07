@@ -2383,4 +2383,217 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertSame(['action' => 'return_to_hand', 'condition' => 'always'], $state->effectState(5, 'afterScoring'));
     }
+
+    public function testPatienceValueIs1WhenPlayedThisRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [21]]);
+        $state->startRound(1, 5);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 21, new PlayerChoices([]));
+
+        self::assertSame(1, $state->valueOf(21));
+    }
+
+    public function testPatienceValueIsBaseOnceTheRoundHasMovedOn(): void
+    {
+        $state = $this->boardState(hands: [1 => [21]]);
+        $state->startRound(1, 5);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 21, new PlayerChoices([]));
+
+        $state->startRound(2, 6);
+
+        self::assertSame(5, $state->valueOf(21));
+    }
+
+    public function testGleeValueIs6WhenPlayedThisRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [92]]);
+        $state->startRound(1, 5);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 92, new PlayerChoices([]));
+
+        self::assertSame(6, $state->valueOf(92));
+    }
+
+    public function testGleeValueIsBaseOnceTheRoundHasMovedOn(): void
+    {
+        $state = $this->boardState(hands: [1 => [92]]);
+        $state->startRound(1, 5);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 92, new PlayerChoices([]));
+
+        $state->startRound(2, 6);
+
+        self::assertSame(0, $state->valueOf(92));
+    }
+
+    public function testPrideGrantsExtraPlaysToMatchTheChosenPlayersMoodCount(): void
+    {
+        $state = $this->boardState(hands: [1 => [22, 4, 9], 2 => [5, 32, 55]]);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 32);
+        $state->moveHandToInPlay(2, 55);
+        $state->startTurn(1);
+
+        // Pride itself already counts, so player 1 has 1 mood vs player 2's
+        // 3 -- a gap of 2 extra plays.
+        $this->plays->playMood($state, 1, 22, new PlayerChoices(['target_player_id' => 2]));
+        self::assertSame(2, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 4, new PlayerChoices([]));
+        $this->plays->playMood($state, 1, 9, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(4));
+        self::assertTrue($state->isInPlay(9));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testPrideRejectsAPlayerWithoutMoreMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [22], 2 => [5]]);
+        $state->moveHandToInPlay(2, 5);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 22, new PlayerChoices(['target_player_id' => 2]));
+    }
+
+    public function testPrideDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [22]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 22, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(22));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testCorruptionCyclesDiscardCardsAndDraws(): void
+    {
+        $state = $this->boardState(hands: [1 => [60]], deck: [7, 9], discard: [3, 8]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 60, new PlayerChoices(['mode' => 'cycle', 'discard_card_ids' => [3, 8]]));
+
+        self::assertSame([3, 8], $state->deck());
+        self::assertSame([], $state->discardPile());
+        self::assertContains(7, $state->hand(1));
+        self::assertContains(9, $state->hand(1));
+    }
+
+    public function testCorruptionRejectsMoreThanTwoDiscardTargets(): void
+    {
+        $state = $this->boardState(hands: [1 => [60]], discard: [3, 8, 9]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 60, new PlayerChoices(['mode' => 'cycle', 'discard_card_ids' => [3, 8, 9]]));
+    }
+
+    public function testCorruptionTagsTheRoundForAnExtraWin(): void
+    {
+        $state = $this->boardState(hands: [1 => [60]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 60, new PlayerChoices(['mode' => 'double_win']));
+
+        self::assertTrue($state->effectState(60, 'awardsExtraWin'));
+    }
+
+    public function testCorruptionRejectsAnInvalidMode(): void
+    {
+        $state = $this->boardState(hands: [1 => [60]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 60, new PlayerChoices(['mode' => 'bogus']));
+    }
+
+    public function testCorruptionDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [60]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 60, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(60));
+        self::assertNull($state->effectState(60, 'awardsExtraWin'));
+    }
+
+    public function testMelancholyAllowsPlayingFromTheDiscardPileAsANormalPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [69]], discard: [5]);
+        $state->moveHandToInPlay(1, 69);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(5));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testCannotPlayADiscardPileCardWithoutMelancholy(): void
+    {
+        $state = $this->boardState(hands: [1 => []], discard: [5]);
+        $state->startTurn(1);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+    }
+
+    public function testDoubtBansRevealedColorsDuringTheFollowingRoundOnly(): void
+    {
+        $state = $this->boardState(hands: [1 => [36, 8]], deck: [55, 106]); // Doubt, Dignity (white)
+        $state->startRound(1, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 36, new PlayerChoices(['reveal_card_ids' => [8]]));
+
+        self::assertSame([], $state->bannedColorsThisRound()); // still round 3 -- not active yet
+
+        $state->startRound(2, 4);
+        self::assertSame(['white'], $state->bannedColorsThisRound());
+
+        $state->startRound(1, 5);
+        self::assertSame([], $state->bannedColorsThisRound()); // expired
+    }
+
+    public function testDoubtBlocksPlayingABannedColorDuringTheFollowingRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [36, 8], 2 => [7]]); // Dignity/Courage are both white
+        $state->startRound(1, 3);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 36, new PlayerChoices(['reveal_card_ids' => [8]]));
+
+        $state->startRound(2, 4);
+        $state->startTurn(2);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 2, 7, new PlayerChoices([]));
+    }
+
+    public function testDoubtRejectsARevealedCardNotInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [36]], discard: [8]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 36, new PlayerChoices(['reveal_card_ids' => [8]]));
+    }
+
+    public function testDoubtDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [36]]);
+        $state->startRound(1, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 36, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(36));
+        self::assertSame([], $state->bannedColorsThisRound());
+    }
 }

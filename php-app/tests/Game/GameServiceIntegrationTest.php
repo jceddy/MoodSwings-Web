@@ -611,4 +611,81 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertContains(3, $state->hand($p2));
         self::assertSame([30], $state->deck());
     }
+
+    /**
+     * Corruption's "the winner of the current round wins two rounds
+     * instead of one" has to actually move game_rounds.wins_awarded, and
+     * totalWinsFor() has to pick that up when checking for game
+     * completion -- here a single round is enough to finish a
+     * wins-needed-2 game instead of the usual two.
+     */
+    public function testCorruptionsDoubleWinCompletesTheGameAfterOneRound(): void
+    {
+        $u1 = $this->insertUser('corrupt1');
+        $u2 = $this->insertUser('corrupt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 60, 'hand', $p1); // Corruption, value 2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 60, ['mode' => 'double_win']);
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p1, $result['winner_game_player_id']);
+
+        $roundStmt = $this->pdo->prepare('SELECT wins_awarded FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $roundStmt->execute(['game_id' => $gameId]);
+        self::assertSame(2, (int) $roundStmt->fetchColumn());
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * Doubt's next-round color ban has to survive a real load()/save()
+     * round trip: tagged when played (round 1), inert during that same
+     * round, then enforced during round 2 -- rejecting a matching-color
+     * play even though it would otherwise be perfectly legal.
+     */
+    public function testDoubtBansAColorForTheFollowingRoundOnlyAfterReload(): void
+    {
+        $u1 = $this->insertUser('doubt1');
+        $u2 = $this->insertUser('doubt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 36, 'hand', $p1); // Doubt
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, white -- revealed
+        $this->insertGameCard($gameId, 7, 'hand', $p2); // Courage, white -- would be banned next round
+        $this->insertGameCard($gameId, 55, 'deck', null, 0); // p1's replacement draw
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 36, ['reveal_card_ids' => [8]]);
+        $this->games->pass($gameId, $p2);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['current_turn_game_player_id']); // p1 won round 1
+
+        $this->games->pass($gameId, $p1); // advance to p2's turn without ending round 2
+
+        $this->expectException(IllegalPlayException::class);
+        $this->games->playMood($gameId, $p2, 7, []);
+    }
 }

@@ -88,7 +88,7 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, first_game_player_id, plays_remaining, pending_play_grants FROM game_rounds
+            "SELECT current_turn_game_player_id, first_game_player_id, plays_remaining, pending_play_grants, round_number FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
@@ -106,6 +106,7 @@ final class BoardStateRepository
                 $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null,
                 $playGrants,
                 (int) $roundRow['first_game_player_id'],
+                (int) $roundRow['round_number'],
             );
         }
 

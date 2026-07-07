@@ -38,6 +38,9 @@ final class BoardState
     /** Whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- distinct from currentPlayerId, which changes every turn. */
     private ?int $roundFirstPlayerId = null;
 
+    /** The current round's number (game_rounds.round_number), used to stamp newly-played moods with when they were played -- see moveHandToInPlay()/moveDiscardToInPlay() and the 'playedInRound' effectState key (Patience, Glee, Doubt). */
+    private ?int $currentRoundNumber = null;
+
     /**
      * @var array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> one entry per
      * outstanding "play an additional mood" grant this turn. null means
@@ -144,14 +147,20 @@ final class BoardState
     public function moveHandToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromHand($playerId, $cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId);
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->playedInRoundTag());
     }
 
     /** Harmony/Grief/Angst: plays a mood "from the discard pile" instead of from hand -- see BoardState::$playGrants' 'source' key and MoodPlayService. */
     public function moveDiscardToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromDiscard($cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId);
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->playedInRoundTag());
+    }
+
+    /** @return array<string, mixed> */
+    private function playedInRoundTag(): array
+    {
+        return $this->currentRoundNumber !== null ? ['playedInRound' => $this->currentRoundNumber] : [];
     }
 
     public function moveInPlayToDiscard(int $cardId): void
@@ -282,11 +291,12 @@ final class BoardState
     }
 
     /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> $playGrants */
-    public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId): void
+    public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId, ?int $currentRoundNumber = null): void
     {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
         $this->roundFirstPlayerId = $roundFirstPlayerId;
+        $this->currentRoundNumber = $currentRoundNumber;
     }
 
     // --- suppression ---
@@ -418,10 +428,48 @@ final class BoardState
         $this->playGrants = array_fill(0, $hasHurtFeelings ? 2 : 1, null);
     }
 
-    /** Marks $playerId as whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- called once per round, unlike startTurn() which happens every turn. */
-    public function startRound(int $playerId): void
+    /**
+     * Marks $playerId as whoever took the first turn of the current round
+     * (e.g. for Chivalry/Triumph) -- called once per round, unlike
+     * startTurn() which happens every turn. $roundNumber is optional since
+     * most tests don't care about it; production code instead gets it via
+     * restoreTurnState(), since this method is never called outside tests
+     * (GameService/BoardStateRepository populate round state directly from
+     * the database).
+     */
+    public function startRound(int $playerId, ?int $roundNumber = null): void
     {
         $this->roundFirstPlayerId = $playerId;
+        $this->currentRoundNumber = $roundNumber;
+    }
+
+    public function currentRoundNumber(): ?int
+    {
+        return $this->currentRoundNumber;
+    }
+
+    /**
+     * Colors banned from being played this round by any player, per Doubt's
+     * "during the next round, players can't play moods that share a color
+     * with any of the revealed cards" -- active for exactly the round
+     * immediately after Doubt's own 'playedInRound', using the same tag
+     * moveHandToInPlay()/moveDiscardToInPlay() stamp on every mood (see
+     * DoubtEffect).
+     *
+     * @return string[]
+     */
+    public function bannedColorsThisRound(): array
+    {
+        $banned = [];
+        foreach ($this->moodsInPlay as $mood) {
+            $bannedColors = $mood->effectState['bannedColors'] ?? null;
+            $playedInRound = $mood->effectState['playedInRound'] ?? null;
+            if ($bannedColors !== null && $playedInRound !== null && $this->currentRoundNumber === $playedInRound + 1) {
+                array_push($banned, ...$bannedColors);
+            }
+        }
+
+        return array_values(array_unique($banned));
     }
 
     public function roundFirstPlayerId(): ?int
@@ -537,9 +585,17 @@ final class BoardState
         // 'source' defaults to 'hand'; Harmony/Grief/Angst grant plays
         // sourced from the discard pile instead, so a hand-sourced grant
         // must not match a card that's actually sitting in the discard
-        // pile, and vice versa.
+        // pile, and vice versa -- except Melancholy, which lets its owner
+        // treat the whole discard pile as part of their hand for every
+        // play (not just a dedicated bonus one), so a hand-sourced grant
+        // is allowed to match a discard-pile card for that specific player.
         $source = $restriction['source'] ?? 'hand';
-        if (($source === 'discard') !== $this->isInDiscardPile($cardId)) {
+        $cardInDiscard = $this->isInDiscardPile($cardId);
+        if ($source === 'discard') {
+            if (!$cardInDiscard) {
+                return false;
+            }
+        } elseif ($cardInDiscard && !$this->playerHasMoodInPlay($playerId, 'melancholy')) {
             return false;
         }
 
@@ -560,6 +616,17 @@ final class BoardState
         $color = $this->colorOf($cardId);
         foreach ($this->moodsOwnedBy($playerId) as $mood) {
             if ($this->colorOf($mood->cardId) === $color) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function playerHasMoodInPlay(int $playerId, string $effectKey): bool
+    {
+        foreach ($this->moodsOwnedBy($playerId) as $mood) {
+            if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === $effectKey) {
                 return true;
             }
         }
