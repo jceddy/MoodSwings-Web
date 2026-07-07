@@ -688,4 +688,168 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(IllegalPlayException::class);
         $this->games->playMood($gameId, $p2, 7, []);
     }
+
+    /**
+     * Hope's "every turn while in play" grant is computed fresh by
+     * GameService at the start of each turn, not stored anywhere on
+     * Hope's own mood -- so this only proves it's actually wired up if a
+     * *later* turn (after a real load()/save() round trip and a full
+     * round boundary) still reflects it.
+     */
+    public function testHopePersistsAPerpetualExtraPlayIntoFutureTurnsAfterReload(): void
+    {
+        $u1 = $this->insertUser('hope1');
+        $u2 = $this->insertUser('hope2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 124, 'hand', $p1); // Hope, value 0
+        $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4 -- played with Hope's same-turn bonus
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 124, []);
+        $this->games->playMood($gameId, $p1, 55, []);
+        $this->games->pass($gameId, $p2);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']); // p1 won round 1 (4 to 0)
+        self::assertSame(2, (int) $round2['plays_remaining']); // base 1 + Hope's perpetual bonus
+    }
+
+    /**
+     * Stubbornness's bonus depends on live mood counts checked fresh at
+     * the start of each turn -- here p2's two pre-seeded moods outnumber
+     * p1's one (Stubbornness itself) by the time round 2 starts, so p1's
+     * first turn of round 2 should include the bonus.
+     */
+    public function testStubbornnessGrantsAnExtraPlayWhenAnotherPlayerHasMoreMoodsAfterReload(): void
+    {
+        $u1 = $this->insertUser('stub1');
+        $u2 = $this->insertUser('stub2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 102, 'hand', $p1); // Stubbornness, value 3
+        $this->insertGameCard($gameId, 66, 'in_play', $p2); // Hate, value 0
+        $this->insertGameCard($gameId, 105, 'in_play', $p2); // Wrath, value 0 -- p2 now has 2 moods
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 102, []);
+        $this->games->pass($gameId, $p2);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']); // p1 won round 1 (3 to 0)
+        self::assertSame(2, (int) $round2['plays_remaining']); // base 1 + Stubbornness's bonus (p2 has more moods)
+    }
+
+    public function testGenerosityBanksAnExtraPlayForTheChosenPlayersNextTurn(): void
+    {
+        $u1 = $this->insertUser('gen1');
+        $u2 = $this->insertUser('gen2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 120, 'hand', $p1); // Generosity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 120, ['target_player_id' => $p2]);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+        self::assertSame(2, (int) $round['plays_remaining']); // base 1 + Generosity's banked play
+    }
+
+    /**
+     * Joy banks its bonus for the acting player's *own* next turn, which
+     * (in a 2-player game) is the very first turn of the next round --
+     * proving it survives not just a turn boundary but a full round
+     * boundary (scoring, a new game_rounds row, reload) too.
+     */
+    public function testJoyBanksAnExtraPlayForYourOwnNextTurnAcrossARoundBoundary(): void
+    {
+        $u1 = $this->insertUser('joy1');
+        $u2 = $this->insertUser('joy2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 125, 'hand', $p1); // Joy, value 3
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 125, []);
+        $this->games->pass($gameId, $p2);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']); // p1 won round 1 (3 to 0)
+        self::assertSame(2, (int) $round2['plays_remaining']); // base 1 + Joy's banked play
+    }
+
+    /**
+     * Arrogance's "give it back if you still have it" only triggers once
+     * the mood actually leaves play -- exercised here via a direct
+     * BoardStateRepository round trip, since no player action in this
+     * batch discards one's own already-in-play mood generically.
+     */
+    public function testArroganceReturnsTheTakenMoodAfterReloadWhenItLeavesPlay(): void
+    {
+        $u1 = $this->insertUser('arr1');
+        $u2 = $this->insertUser('arr2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 82, 'hand', $p1); // Arrogance
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, white
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 82, ['opponent_player_id' => $p2]);
+
+        $registry = DefaultEffectRegistry::build();
+        $repository = new BoardStateRepository($registry);
+        $state = $repository->load($gameId);
+        self::assertSame($p1, $state->ownerOf(8));
+
+        $state->moveInPlayToDiscard(82);
+        $repository->save($gameId, $state);
+
+        $reloaded = $repository->load($gameId);
+        self::assertSame($p2, $reloaded->ownerOf(8));
+        self::assertFalse($reloaded->isInPlay(82));
+    }
 }

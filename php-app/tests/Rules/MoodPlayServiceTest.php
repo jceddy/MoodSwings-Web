@@ -2596,4 +2596,169 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInPlay(36));
         self::assertSame([], $state->bannedColorsThisRound());
     }
+
+    public function testHopeGrantsAnExtraPlayTheTurnItsPlayed(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 5]]); // Hope, Complacency (no abilities)
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 124, new PlayerChoices([]));
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(5));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testGraceGrantsADiscardSourcedColorMatchingPlayTheTurnItsPlayed(): void
+    {
+        $state = $this->boardState(hands: [1 => [121]], discard: [110]); // Grace (green), Cheer (green) in discard
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 121, new PlayerChoices([]));
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 110, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(110));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testGraceDoesNotGrantAHandSourcedPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [121, 5]]); // Grace, Complacency in hand (not discard)
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 121, new PlayerChoices([]));
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+    }
+
+    public function testStubbornnessHasNoImmediateEffect(): void
+    {
+        $state = $this->boardState(hands: [1 => [102]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 102, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(102));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testGenerosityTagsAnOpponentForANextTurnGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [120]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 120, new PlayerChoices(['target_player_id' => 2]));
+
+        self::assertSame(2, $state->effectState(120, 'banksExtraPlayForPlayerId'));
+    }
+
+    public function testGenerosityRejectsTargetingYourself(): void
+    {
+        $state = $this->boardState(hands: [1 => [120]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 120, new PlayerChoices(['target_player_id' => 1]));
+    }
+
+    public function testJoyTagsItselfForANextTurnGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [125]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 125, new PlayerChoices([]));
+
+        self::assertSame(1, $state->effectState(125, 'banksExtraPlayForPlayerId'));
+    }
+
+    public function testArroganceTakesARandomQualifyingMoodAndTagsItToReturn(): void
+    {
+        $state = $this->boardState(hands: [1 => [82], 2 => [8]]); // Arrogance; Dignity (white) for p2
+        $state->moveHandToInPlay(2, 8);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 2]));
+
+        self::assertSame(1, $state->ownerOf(8));
+        self::assertSame(
+            ['sourceCardId' => 82, 'ownerId' => 2, 'heldByPlayerId' => 1],
+            $state->effectState(8, 'returnsToOwnerIfCardLeavesPlay'),
+        );
+    }
+
+    public function testArroganceDoesNothingWhenTheOpponentHasNoQualifyingMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [82], 2 => [55]]); // Apathy is black, doesn't qualify
+        $state->moveHandToInPlay(2, 55);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 2]));
+
+        self::assertSame(2, $state->ownerOf(55));
+    }
+
+    public function testArroganceRejectsTargetingYourself(): void
+    {
+        $state = $this->boardState(hands: [1 => [82]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 1]));
+    }
+
+    public function testArroganceDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [82]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 82, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(82));
+    }
+
+    public function testArroganceReturnsTheTakenMoodWhenItLeavesPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [82], 2 => [8]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 2]));
+        self::assertSame(1, $state->ownerOf(8));
+
+        $state->moveInPlayToDiscard(82);
+
+        self::assertSame(2, $state->ownerOf(8));
+        self::assertFalse($state->isInPlay(82));
+        self::assertTrue($state->isInPlay(8));
+    }
+
+    public function testArroganceDoesNotReturnTheMoodIfNoLongerHeldWhenItLeavesPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [82], 2 => [8]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 2]));
+        self::assertSame(1, $state->ownerOf(8));
+
+        $state->giveInPlayToPlayer(8, 3); // player1 gives it away before Arrogance leaves play
+        $state->moveInPlayToDiscard(82);
+
+        self::assertSame(3, $state->ownerOf(8));
+    }
+
+    public function testFaithsSuppressionClearsAutomaticallyWhenItLeavesPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [12, 27, 9]]); // Faith, Ambivalence (blue, qualifies), Discipline to suppress
+        $state->moveHandToInPlay(1, 9);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 12, new PlayerChoices(['discard_card_id' => 27, 'target_mood_id' => 9]));
+        self::assertTrue($state->isSuppressed(9));
+
+        $state->moveInPlayToHand(12); // Faith leaves play
+
+        self::assertFalse($state->isSuppressed(9));
+    }
 }

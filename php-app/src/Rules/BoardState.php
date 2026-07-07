@@ -168,6 +168,7 @@ final class BoardState
         $this->moodInPlay($cardId);
         unset($this->moodsInPlay[$cardId]);
         $this->discard[] = $cardId;
+        $this->cascadeMoodLeavingPlay($cardId);
     }
 
     public function moveInPlayToHand(int $cardId): void
@@ -175,6 +176,7 @@ final class BoardState
         $owner = $this->moodInPlay($cardId)->ownerId;
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$owner][] = $cardId;
+        $this->cascadeMoodLeavingPlay($cardId);
     }
 
     /** Regret: takes a mood directly into $newOwnerId's hand regardless of who actually owns it -- distinct from moveInPlayToHand(), which always returns a mood to its own owner's hand. */
@@ -183,6 +185,7 @@ final class BoardState
         $this->moodInPlay($cardId);
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$newOwnerId][] = $cardId;
+        $this->cascadeMoodLeavingPlay($cardId);
     }
 
     public function moveInPlayToBottomOfDeck(int $cardId): void
@@ -190,6 +193,32 @@ final class BoardState
         $this->moodInPlay($cardId);
         unset($this->moodsInPlay[$cardId]);
         $this->deck[] = $cardId;
+        $this->cascadeMoodLeavingPlay($cardId);
+    }
+
+    /**
+     * Runs whenever $cardId itself (not just some other mood it suppressed
+     * or stole) leaves play: lifts any suppression it was the source of
+     * (see clearSuppressionsFrom()) and returns any mood tagged as "give
+     * this back if you still have it when I leave play" (Arrogance) to its
+     * original owner, provided the Arrogance player still actually holds
+     * it -- see ArrogranceEffect.
+     */
+    private function cascadeMoodLeavingPlay(int $cardId): void
+    {
+        $this->clearSuppressionsFrom($cardId);
+
+        foreach ($this->moodsInPlay as $mood) {
+            $stolen = $mood->effectState['returnsToOwnerIfCardLeavesPlay'] ?? null;
+            if ($stolen === null || $stolen['sourceCardId'] !== $cardId) {
+                continue;
+            }
+
+            $this->clearEffectState($mood->cardId, 'returnsToOwnerIfCardLeavesPlay');
+            if ($mood->ownerId === $stolen['heldByPlayerId']) {
+                $this->giveInPlayToPlayer($mood->cardId, $stolen['ownerId']);
+            }
+        }
     }
 
     public function moveHandToDiscard(int $playerId, int $cardId): void
@@ -623,7 +652,8 @@ final class BoardState
         return false;
     }
 
-    private function playerHasMoodInPlay(int $playerId, string $effectKey): bool
+    /** Whether $playerId currently has a mood with effect_key $effectKey in play (e.g. Melancholy, or GameService checking for Hope/Grace/Stubbornness at the start of a turn). */
+    public function playerHasMoodInPlay(int $playerId, string $effectKey): bool
     {
         foreach ($this->moodsOwnedBy($playerId) as $mood) {
             if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === $effectKey) {

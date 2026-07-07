@@ -10,6 +10,7 @@ use MoodSwings\Rules\Effects\AngerEffect;
 use MoodSwings\Rules\Effects\AngstEffect;
 use MoodSwings\Rules\Effects\AnimosityEffect;
 use MoodSwings\Rules\Effects\AnxietyEffect;
+use MoodSwings\Rules\Effects\ArroganceEffect;
 use MoodSwings\Rules\Effects\AvoidanceEffect;
 use MoodSwings\Rules\Effects\AweEffect;
 use MoodSwings\Rules\Effects\BashfulnessEffect;
@@ -44,7 +45,9 @@ use MoodSwings\Rules\Effects\FicklenessEffect;
 use MoodSwings\Rules\Effects\FondnessEffect;
 use MoodSwings\Rules\Effects\FriendlinessEffect;
 use MoodSwings\Rules\Effects\FuryEffect;
+use MoodSwings\Rules\Effects\GenerosityEffect;
 use MoodSwings\Rules\Effects\GluttonyEffect;
+use MoodSwings\Rules\Effects\GraceEffect;
 use MoodSwings\Rules\Effects\GriefEffect;
 use MoodSwings\Rules\Effects\GuileEffect;
 use MoodSwings\Rules\Effects\GuiltEffect;
@@ -54,12 +57,14 @@ use MoodSwings\Rules\Effects\HarmonyEffect;
 use MoodSwings\Rules\Effects\HateEffect;
 use MoodSwings\Rules\Effects\HesitationEffect;
 use MoodSwings\Rules\Effects\HonorEffect;
+use MoodSwings\Rules\Effects\HopeEffect;
 use MoodSwings\Rules\Effects\HostilityEffect;
 use MoodSwings\Rules\Effects\ImaginationEffect;
 use MoodSwings\Rules\Effects\IndecisivenessEffect;
 use MoodSwings\Rules\Effects\InfatuationEffect;
 use MoodSwings\Rules\Effects\InsecurityEffect;
 use MoodSwings\Rules\Effects\InstabilityEffect;
+use MoodSwings\Rules\Effects\JoyEffect;
 use MoodSwings\Rules\Effects\KindnessEffect;
 use MoodSwings\Rules\Effects\LoveEffect;
 use MoodSwings\Rules\Effects\MaliceEffect;
@@ -89,6 +94,7 @@ use MoodSwings\Rules\Effects\ShockEffect;
 use MoodSwings\Rules\Effects\SlothEffect;
 use MoodSwings\Rules\Effects\SneakinessEffect;
 use MoodSwings\Rules\Effects\SpiteEffect;
+use MoodSwings\Rules\Effects\StubbornnessEffect;
 use MoodSwings\Rules\Effects\SuperiorityEffect;
 use MoodSwings\Rules\Effects\SuspicionEffect;
 use MoodSwings\Rules\Effects\ThrillEffect;
@@ -153,10 +159,24 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * normal plays can draw from, special-cased by effect_key the same way
  * BoardState::colorOf() special-cases Imagination (Melancholy), and a
  * next-round-only color ban fed by the same 'playedInRound' tag (Doubt --
- * see BoardState::bannedColorsThisRound()) -- not full coverage. Cards
- * not registered here throw EffectNotImplementedException if their
- * ability is actually invoked; implementing the rest is incremental
- * follow-up work.
+ * see BoardState::bannedColorsThisRound()), a perpetual "every turn while
+ * in play" extra-play grant -- unconditional (Hope), restricted to a
+ * discard-sourced color match (Grace), or conditional on another
+ * player's mood count checked fresh each turn (Stubbornness) -- computed
+ * by GameService::computeFreshGrants() for every turn after the one the
+ * card is played (with the same-turn case granted directly by
+ * MoodPlayService, since Hope/Grace have no after-playing ability to
+ * hook), a one-shot "banked" extra play for a specific player's next
+ * turn however many turns from now that is (Generosity/Joy -- the same
+ * computeFreshGrants() consulting a 'banksExtraPlayForPlayerId' tag), and
+ * an opponent's own choice among their qualifying moods -- resolved the
+ * same random way as Instability's -- tied to a "give it back if you
+ * still have it" cascade that fires when the taking card itself leaves
+ * play, tracking who currently holds the taken mood so a later give-away
+ * doesn't wrongly trigger the return (Arrogance -- BoardState's
+ * cascadeMoodLeavingPlay()) -- not full coverage. Cards not registered
+ * here throw EffectNotImplementedException if their ability is actually
+ * invoked; implementing the rest is incremental follow-up work.
  */
 final class DefaultEffectRegistry
 {
@@ -256,6 +276,12 @@ final class DefaultEffectRegistry
         $registry->register('corruption', new CorruptionEffect());
         $registry->register('melancholy', new MelancholyEffect());
         $registry->register('doubt', new DoubtEffect());
+        $registry->register('hope', new HopeEffect());
+        $registry->register('grace', new GraceEffect());
+        $registry->register('stubbornness', new StubbornnessEffect());
+        $registry->register('generosity', new GenerosityEffect());
+        $registry->register('joy', new JoyEffect());
+        $registry->register('arrogance', new ArroganceEffect());
 
         $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
         $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));
