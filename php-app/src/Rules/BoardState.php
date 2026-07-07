@@ -39,7 +39,7 @@ final class BoardState
     private ?int $roundFirstPlayerId = null;
 
     /**
-     * @var array<int, ?array{type: string, values?: int[]}> one entry per
+     * @var array<int, ?array{type?: string, values?: int[], source?: string}> one entry per
      * outstanding "play an additional mood" grant this turn. null means
      * unconditional (e.g. Charity); a restriction array means the grant
      * only covers a card matching it (e.g. Benevolence's "if it doesn't
@@ -120,6 +120,11 @@ final class BoardState
         return $this->discard;
     }
 
+    public function isInDiscardPile(int $cardId): bool
+    {
+        return in_array($cardId, $this->discard, true);
+    }
+
     /** @return int[] */
     public function deck(): array
     {
@@ -136,6 +141,13 @@ final class BoardState
     public function moveHandToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromHand($playerId, $cardId);
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId);
+    }
+
+    /** Harmony/Grief/Angst: plays a mood "from the discard pile" instead of from hand -- see BoardState::$playGrants' 'source' key and MoodPlayService. */
+    public function moveDiscardToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
+    {
+        $this->removeFromDiscard($cardId);
         $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId);
     }
 
@@ -266,7 +278,7 @@ final class BoardState
         );
     }
 
-    /** @param array<int, ?array{type: string, values?: int[]}> $playGrants */
+    /** @param array<int, ?array{type?: string, values?: int[], source?: string}> $playGrants */
     public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId): void
     {
         $this->currentPlayerId = $currentPlayerId;
@@ -409,13 +421,34 @@ final class BoardState
     }
 
     /**
+     * Whoever should go first *next* round, per a currently-in-play mood
+     * that overrides the normal "round winner goes first" rule (e.g.
+     * Honor). Stored as a per-mood effectState key ('firstPlayerOverride')
+     * rather than a dedicated BoardState field, so it's automatically
+     * self-correcting if that mood later leaves play -- there's nothing
+     * separate to clean up. GameService checks this when starting a new
+     * round; the first override found wins (only one card grants this
+     * today, so there's no defined tie-break for multiple).
+     */
+    public function firstPlayerOverride(): ?int
+    {
+        foreach ($this->moodsInPlay as $mood) {
+            if (array_key_exists('firstPlayerOverride', $mood->effectState)) {
+                return $mood->effectState['firstPlayerOverride'];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Grants $count additional plays this turn. $restriction is null for
      * an unconditional grant (e.g. Charity); otherwise it's a descriptor
      * (see grantAllows()) that whatever card is played to use this grant
      * must satisfy -- e.g. Benevolence grants
      * ['type' => 'does_not_share_color_with_your_moods'].
      *
-     * @param ?array{type: string, values?: int[]} $restriction
+     * @param ?array{type?: string, values?: int[], source?: string} $restriction
      */
     public function grantExtraPlay(int $count = 1, ?array $restriction = null): void
     {
@@ -429,7 +462,7 @@ final class BoardState
         return count($this->playGrants);
     }
 
-    /** @return array<int, ?array{type: string, values?: int[]}> */
+    /** @return array<int, ?array{type?: string, values?: int[], source?: string}> */
     public function pendingPlayGrants(): array
     {
         return $this->playGrants;
@@ -468,10 +501,21 @@ final class BoardState
         }
     }
 
-    /** @param ?array{type: string, values?: int[]} $restriction */
+    /**
+     * @param ?array{type?: string, values?: int[], source?: string} $restriction
+     */
     private function grantAllows(?array $restriction, int $cardId, int $playerId): bool
     {
-        if ($restriction === null) {
+        // 'source' defaults to 'hand'; Harmony/Grief/Angst grant plays
+        // sourced from the discard pile instead, so a hand-sourced grant
+        // must not match a card that's actually sitting in the discard
+        // pile, and vice versa.
+        $source = $restriction['source'] ?? 'hand';
+        if (($source === 'discard') !== $this->isInDiscardPile($cardId)) {
+            return false;
+        }
+
+        if ($restriction === null || !isset($restriction['type'])) {
             return true;
         }
 
