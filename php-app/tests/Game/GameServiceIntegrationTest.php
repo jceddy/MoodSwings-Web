@@ -397,4 +397,39 @@ final class GameServiceIntegrationTest extends TestCase
         $zoneStmt->execute(['game_id' => $gameId]);
         self::assertSame('in_play', $zoneStmt->fetchColumn());
     }
+
+    /**
+     * Chivalry ("value is 5 if you didn't go first this round") reads
+     * game_rounds.first_game_player_id via BoardState::roundFirstPlayerId(),
+     * which -- like the restricted play grants above -- has to survive a
+     * database reload rather than living only in an in-memory BoardState.
+     */
+    public function testChivalryValueReflectsTheRoundsFirstPlayerAfterReload(): void
+    {
+        $u1 = $this->insertUser('chiv1');
+        $u2 = $this->insertUser('chiv2');
+        $u3 = $this->insertUser('chiv3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 4, 'hand', $p2); // Chivalry
+        // p1 went first; it's now p2's turn -- p2 is a middle turn (not
+        // the round's last), so the round stays in progress and
+        // first_game_player_id isn't disturbed by this play.
+        $this->insertGameRound($gameId, 1, $p1, $p2, 1);
+
+        $this->games->playMood($gameId, $p2, 4, []);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame(5, $state->valueOf(4)); // p2 didn't go first this round
+    }
 }

@@ -35,6 +35,9 @@ final class BoardState
 
     private ?int $currentPlayerId = null;
 
+    /** Whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- distinct from currentPlayerId, which changes every turn. */
+    private ?int $roundFirstPlayerId = null;
+
     /**
      * @var array<int, ?array{type: string, values?: int[]}> one entry per
      * outstanding "play an additional mood" grant this turn. null means
@@ -249,10 +252,11 @@ final class BoardState
     }
 
     /** @param array<int, ?array{type: string, values?: int[]}> $playGrants */
-    public function restoreTurnState(?int $currentPlayerId, array $playGrants): void
+    public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId): void
     {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
+        $this->roundFirstPlayerId = $roundFirstPlayerId;
     }
 
     // --- suppression ---
@@ -376,6 +380,17 @@ final class BoardState
     {
         $this->currentPlayerId = $playerId;
         $this->playGrants = array_fill(0, $hasHurtFeelings ? 2 : 1, null);
+    }
+
+    /** Marks $playerId as whoever took the first turn of the current round (e.g. for Chivalry/Triumph) -- called once per round, unlike startTurn() which happens every turn. */
+    public function startRound(int $playerId): void
+    {
+        $this->roundFirstPlayerId = $playerId;
+    }
+
+    public function roundFirstPlayerId(): ?int
+    {
+        return $this->roundFirstPlayerId;
     }
 
     /**

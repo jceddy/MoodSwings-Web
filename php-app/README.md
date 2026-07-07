@@ -107,25 +107,28 @@ account/friends layer above. The core pieces:
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-37 of the 133-card pool have a registered effect so far (see
+47 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
-engine needs: unconditional/conditional extra-play grants, one-time value
-overrides paid for by an optional cost, a global color override, a
-reusable parameterized effect covering ten similar cards, multi-target
-choices (a per-target ceiling, a combined-total ceiling, and player-scoped
-uniqueness), deck/hand manipulation across players (including handing a
-card directly from one player's hand to another's), mandatory "to play"
-costs paid from hand or from a player's own moods already in play, dynamic
-values keyed off an opponent's board state or the discard pile,
-source-tied and end-of-round suppression, "you may" effects with a fixed
-(or condition-filtered) target set rather than player-chosen ids, and
-*restricted* extra-play grants (Benevolence, Friendliness, Kindness,
-Eagerness) whose condition applies to whichever card is chosen to use the
-grant, not to the card that granted it -- see
-`BoardState::hasUsablePlayGrant()`/`useGrantFor()`, which check that
-restriction at the moment the bonus card is played rather than once when
-the grant is created. Not full coverage — implementing the rest is
-incremental follow-up work.
+engine needs: unconditional/conditional/restricted extra-play grants
+(Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
+to whichever card is chosen to use the grant, not to the card that granted
+it, checked at the moment the bonus card is played via
+`BoardState::hasUsablePlayGrant()`/`useGrantFor()` rather than once when
+the grant is created), one-time value overrides paid for by an optional
+cost, a global color override, a reusable parameterized effect covering
+ten similar cards, multi-target choices (a per-target ceiling, a
+combined-total ceiling, and player-scoped uniqueness), deck/hand
+manipulation across players (including handing a card directly from one
+player's hand to another's), mandatory "to play" costs paid from hand or
+from a player's own moods already in play, dynamic values keyed off an
+opponent's board state, the discard pile, or who went first this round
+(`BoardState::roundFirstPlayerId()`, distinct from whose turn it currently
+is), source-tied and end-of-round suppression, a modal single-vs-mass
+choice, a "most common color(s) among all moods" board computation, "you
+may" effects with a fixed (or condition-filtered) target set rather than
+player-chosen ids, and a mandatory effect resolved once per player across
+the whole table. Not full coverage — implementing the rest is incremental
+follow-up work.
 
 ## Game layer
 
@@ -143,9 +146,10 @@ request/response round trips with no process alive in between to hold a
   source id is resolved in a second pass after the main upsert, since it
   points at another row's surrogate id that doesn't exist until after
   that row's insert/update has run. Turn state includes
-  `game_rounds.pending_play_grants`, since a *restricted* extra-play grant
-  (see above) has to survive being reloaded fresh on the next request just
-  as much as whose turn it is does.
+  `game_rounds.pending_play_grants` and `first_game_player_id`, since a
+  *restricted* extra-play grant (see above) and who went first this round
+  (Chivalry/Triumph) both have to survive being reloaded fresh on the next
+  request just as much as whose turn it is does.
 - `GameService` — one method per player-facing action (`createGame`,
   `startGame`, `playMood`, `pass`), each loading state, delegating to the
   rules engine, persisting the result, and appending a `game_events` row,
