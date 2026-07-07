@@ -2957,4 +2957,139 @@ final class MoodPlayServiceTest extends TestCase
         self::assertFalse($state->isInPlay(28));
         self::assertFalse($state->isInPlay(53));
     }
+
+    public function testDuplicityGrantsAnExtraPlayWhenPlayed(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 5]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 37, new PlayerChoices([]));
+
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    public function testDuplicityRepeatsAnotherMoodsAfterPlayingEffectWithFreshChoices(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 8, 3, 7]]); // Duplicity, Dignity, Charity (value 1), Courage (value 1)
+        $state->startTurn(1);
+        $state->grantExtraPlay(1);
+        $this->plays->playMood($state, 1, 37, new PlayerChoices([]));
+
+        $this->plays->playMood($state, 1, 8, new PlayerChoices([
+            'discard_card_id' => 3,
+            'duplicity_repeat' => true,
+            'duplicity_repeat_choices' => ['discard_card_id' => 7],
+        ]));
+
+        self::assertSame(5, $state->valueOf(8));
+        self::assertContains(3, $state->discardPile());
+        self::assertContains(7, $state->discardPile());
+    }
+
+    public function testDuplicityDoesNotRepeatWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 8, 3]]);
+        $state->startTurn(1);
+        $state->grantExtraPlay(1);
+        $this->plays->playMood($state, 1, 37, new PlayerChoices([]));
+
+        $this->plays->playMood($state, 1, 8, new PlayerChoices(['discard_card_id' => 3]));
+
+        self::assertSame([3], $state->discardPile());
+    }
+
+    public function testDuplicityDoesNotReactToItsOwnPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [37]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 37, new PlayerChoices(['duplicity_repeat' => true]));
+
+        self::assertSame(1, $state->playsRemaining()); // only Duplicity's own single grant
+    }
+
+    public function testChaosReassignsOwnershipOfEveryMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [85], 2 => [3], 3 => [7]]);
+        $state->moveHandToInPlay(2, 3);
+        $state->moveHandToInPlay(3, 7);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 85, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(85));
+        self::assertTrue($state->isInPlay(3));
+        self::assertTrue($state->isInPlay(7));
+        foreach ([$state->ownerOf(85), $state->ownerOf(3), $state->ownerOf(7)] as $owner) {
+            self::assertContains($owner, [1, 2, 3]);
+        }
+    }
+
+    public function testChaosDealsDeterministicallyStartingWithTheActingPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [85], 2 => [3], 3 => [7]]);
+        $state->moveHandToInPlay(2, 3);
+        $state->moveHandToInPlay(3, 7);
+        $state->startTurn(1);
+
+        // Deterministic with this seed: shuffle([3, 7, 85]) -> [7, 85, 3],
+        // dealt starting with player 1 (turn order [1, 2, 3] unrotated).
+        mt_srand(7);
+        $this->plays->playMood($state, 1, 85, new PlayerChoices([]));
+
+        self::assertSame(1, $state->ownerOf(7));
+        self::assertSame(2, $state->ownerOf(85));
+        self::assertSame(3, $state->ownerOf(3));
+    }
+
+    public function testExhilarationRequiresDiscardingOneOfYourOwnMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [89]]);
+        $state->startTurn(1);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 89, new PlayerChoices([]));
+    }
+
+    public function testExhilarationDiscardsTheChosenMoodAsItsCost(): void
+    {
+        $state = $this->boardState(hands: [1 => [89, 3]]); // Exhilaration, Charity (already in play as its own cost target)
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 89, new PlayerChoices(['discard_mood_id' => 3]));
+
+        self::assertTrue($state->isInPlay(89));
+        self::assertContains(3, $state->discardPile());
+    }
+
+    public function testBlissRecordsTheDiscardedCardsColorAndDiscardsIt(): void
+    {
+        $state = $this->boardState(hands: [1 => [108, 3]]); // Bliss, Charity (white)
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 108, new PlayerChoices(['discard_card_id' => 3]));
+
+        self::assertTrue($state->isInPlay(108));
+        self::assertContains(3, $state->discardPile());
+        self::assertSame('white', $state->effectState(108, 'blissColor'));
+    }
+
+    public function testBlissCannotBePlayedWithNoOtherCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [108]]); // Bliss is the only card in hand
+        $state->startTurn(1);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 108, new PlayerChoices(['discard_card_id' => 108]));
+    }
+
+    public function testBlissRejectsDiscardingItselfToPayItsOwnCost(): void
+    {
+        $state = $this->boardState(hands: [1 => [108, 3]]); // Bliss, Charity -- another card is available
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 108, new PlayerChoices(['discard_card_id' => 108]));
+    }
 }

@@ -61,4 +61,18 @@ final class PlayerChoices
     {
         return (bool) ($this->values[$key] ?? false);
     }
+
+    /**
+     * A nested choices bag stored under $key -- e.g. Duplicity repeating
+     * another mood's after-playing effect needs to submit a *second* set
+     * of choices for that repeat within the same request/same flat
+     * top-level bag, since a card's own choices (like Dignity's specific
+     * card to discard) usually can't be reused verbatim a second time.
+     */
+    public function sub(string $key): self
+    {
+        $values = $this->values[$key] ?? [];
+
+        return new self(is_array($values) ? $values : []);
+    }
 }

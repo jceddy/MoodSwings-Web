@@ -948,4 +948,75 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(IllegalPlayException::class);
         $this->games->playMood($gameId, $p1, 5, []);
     }
+
+    /**
+     * Exhilaration's doubling isn't tied to its own value -- it has to
+     * survive a real load()/save() round trip and actually change the
+     * recorded game_round_scores row, not just BoardState's in-memory
+     * computation.
+     */
+    public function testExhilarationDoublesItsOwnersScoreThroughARealRoundTrip(): void
+    {
+        $u1 = $this->insertUser('exhil1');
+        $u2 = $this->insertUser('exhil2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 89, 'hand', $p1); // Exhilaration
+        $this->insertGameCard($gameId, 55, 'in_play', $p1); // Apathy, value 4 -- sacrificed for the cost
+        $this->insertGameCard($gameId, 106, 'in_play', $p1); // Zeal, value 3 -- survives, doubled
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 89, ['discard_mood_id' => 55]);
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+
+        $scoresStmt = $this->pdo->prepare(
+            "SELECT s.game_player_id, s.score FROM game_round_scores s
+             JOIN game_rounds r ON r.id = s.game_round_id
+             WHERE r.game_id = :game_id AND r.round_number = 1"
+        );
+        $scoresStmt->execute(['game_id' => $gameId]);
+        $scores = array_column($scoresStmt->fetchAll(), 'score', 'game_player_id');
+        self::assertSame(6, (int) $scores[$p1]); // (Exhilaration 0 + Zeal 3) doubled
+        self::assertSame(0, (int) $scores[$p2]);
+    }
+
+    public function testChaosReassignsOwnershipOfEveryMoodAfterReload(): void
+    {
+        $u1 = $this->insertUser('chaos1');
+        $u2 = $this->insertUser('chaos2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 85, 'hand', $p1); // Chaos
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 85, []);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertTrue($state->isInPlay(85));
+        self::assertTrue($state->isInPlay(3));
+        foreach ([$state->ownerOf(85), $state->ownerOf(3)] as $owner) {
+            self::assertContains($owner, [$p1, $p2]);
+        }
+    }
 }

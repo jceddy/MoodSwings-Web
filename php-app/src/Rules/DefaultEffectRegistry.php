@@ -17,8 +17,10 @@ use MoodSwings\Rules\Effects\BashfulnessEffect;
 use MoodSwings\Rules\Effects\BenevolenceEffect;
 use MoodSwings\Rules\Effects\BetrayalEffect;
 use MoodSwings\Rules\Effects\BitternessEffect;
+use MoodSwings\Rules\Effects\BlissEffect;
 use MoodSwings\Rules\Effects\BravadoEffect;
 use MoodSwings\Rules\Effects\CelebrationEffect;
+use MoodSwings\Rules\Effects\ChaosEffect;
 use MoodSwings\Rules\Effects\CharityEffect;
 use MoodSwings\Rules\Effects\ChivalryEffect;
 use MoodSwings\Rules\Effects\CompulsionEffect;
@@ -37,9 +39,12 @@ use MoodSwings\Rules\Effects\DignityEffect;
 use MoodSwings\Rules\Effects\DisillusionmentEffect;
 use MoodSwings\Rules\Effects\DisorientationEffect;
 use MoodSwings\Rules\Effects\DoubtEffect;
+use MoodSwings\Rules\Effects\DuplicityEffect;
 use MoodSwings\Rules\Effects\EagernessEffect;
+use MoodSwings\Rules\Effects\EnthusiasmEffect;
 use MoodSwings\Rules\Effects\EnvyEffect;
 use MoodSwings\Rules\Effects\EuphoriaEffect;
+use MoodSwings\Rules\Effects\ExhilarationEffect;
 use MoodSwings\Rules\Effects\FaithEffect;
 use MoodSwings\Rules\Effects\FascinationEffect;
 use MoodSwings\Rules\Effects\FearEffect;
@@ -80,6 +85,7 @@ use MoodSwings\Rules\Effects\PacifismEffect;
 use MoodSwings\Rules\Effects\PairedColorThresholdEffect;
 use MoodSwings\Rules\Effects\PanicEffect;
 use MoodSwings\Rules\Effects\ParanoiaEffect;
+use MoodSwings\Rules\Effects\PassionEffect;
 use MoodSwings\Rules\Effects\PlayedThisRoundValueEffect;
 use MoodSwings\Rules\Effects\PrideEffect;
 use MoodSwings\Rules\Effects\RageEffect;
@@ -186,17 +192,33 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * a conditional reaction to a low-valued play (Validation) -- dispatched
  * via MoodEffect::reactToAnotherPlay() using the same PlayerChoices
  * already submitted for the triggering play, since the reaction is the
- * same player's own decision made in the same request (Duplicity's
- * version of this -- repeating another mood's own after-playing effect
- * with fresh choices -- remains out of scope; see below), a mandatory
+ * same player's own decision made in the same request, a mandatory
  * hidden hand-card choice by another (non-acting) player resolved via a
  * genuine random pick, same rationale as Instability's public-info
  * one (Compulsion; Intimidation's optional version, whose resulting
  * grant is restricted to that one specific card via the
- * 'specific_card_ids' restriction type), and the same random-choice
+ * 'specific_card_ids' restriction type), the same random-choice
  * treatment applied per player at the whole table at once, discarding
  * every other mood matching any of the resulting colors regardless of
- * owner (Disillusionment) -- not full coverage. Cards not registered
+ * owner (Disillusionment), a genuine reshuffle-and-redeal of every mood
+ * in play (including the card causing it), reassigning ownership only
+ * and never re-triggering after-playing effects (Chaos), a repeat of
+ * another card's own after-playing effect with a *fresh*, nested
+ * sub-choices bag rather than reusing the triggering play's choices
+ * verbatim -- needed since e.g. a specific card already discarded once
+ * can't be discarded again -- handled directly by MoodPlayService since
+ * no MoodEffect implementation has access to the registry it needs to
+ * re-invoke another card's effect (Duplicity -- PlayerChoices::sub()),
+ * and a small cluster of "you may score X an extra time" scoring-time
+ * bonuses resolved unconditionally by RoundScorer::score() rather than
+ * through an interactive choice, since card values are never negative
+ * so taking the bonus is always at least as good as declining it --
+ * doubling the owner's whole total (Exhilaration), tripling the owner's
+ * moods sharing a color with whatever card paid its cost (Bliss, via a
+ * pre-play-staged effectState color captured before the card exists as
+ * a MoodInPlay -- see BoardState::stagePrePlayEffectState()), and adding
+ * the single highest-valued mood among the owner's own (Enthusiasm) or
+ * every opponent's (Passion) -- not full coverage. Cards not registered
  * here throw EffectNotImplementedException if their ability is actually
  * invoked; implementing the rest is incremental follow-up work.
  */
@@ -309,6 +331,12 @@ final class DefaultEffectRegistry
         $registry->register('compulsion', new CompulsionEffect());
         $registry->register('intimidation', new IntimidationEffect());
         $registry->register('disillusionment', new DisillusionmentEffect());
+        $registry->register('duplicity', new DuplicityEffect());
+        $registry->register('chaos', new ChaosEffect());
+        $registry->register('exhilaration', new ExhilarationEffect());
+        $registry->register('bliss', new BlissEffect());
+        $registry->register('enthusiasm', new EnthusiasmEffect());
+        $registry->register('passion', new PassionEffect());
 
         $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
         $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));

@@ -109,6 +109,24 @@ final class MoodPlayService
             $this->registry->for($effectiveEffectKey)->afterPlaying($state, $cardId, $playerId, $choices);
         }
 
+        // Duplicity: "each time you play another mood, you may have that
+        // mood's after-playing effect happen an additional time." This
+        // needs the registry (which no MoodEffect implementation has
+        // access to) to re-invoke the just-played card's own effect, so
+        // it's handled directly here rather than through
+        // reactToAnotherPlay() -- with a nested sub-choices bag, since
+        // the repeat is a fresh decision that usually can't reuse the
+        // same choices verbatim (e.g. a specific card already discarded
+        // once can't be discarded again).
+        if (
+            $effectiveRow['hasAfterPlaying']
+            && $effectiveEffectKey !== 'duplicity'
+            && $choices->bool('duplicity_repeat')
+            && $state->playerHasMoodInPlay($playerId, 'duplicity')
+        ) {
+            $this->registry->for($effectiveEffectKey)->afterPlaying($state, $cardId, $playerId, $choices->sub('duplicity_repeat_choices'));
+        }
+
         // Scorn/Validation's "each time you play another mood" reacts to
         // *this* player's own subsequent plays, using the same
         // PlayerChoices already submitted for this play -- see
