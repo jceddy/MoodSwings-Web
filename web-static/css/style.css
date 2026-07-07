@@ -30,6 +30,7 @@ body {
 }
 
 dialog#friends-dialog {
+    box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
     padding: 1.5rem;
