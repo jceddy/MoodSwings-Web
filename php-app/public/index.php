@@ -12,8 +12,15 @@ use MoodSwings\Auth\InvalidCredentialsException;
 use MoodSwings\Auth\InvalidVerificationTokenException;
 use MoodSwings\Config;
 use MoodSwings\Database\Connection;
+use MoodSwings\Friends\CannotFriendSelfException;
+use MoodSwings\Friends\FriendshipAlreadyExistsException;
+use MoodSwings\Friends\FriendshipNotFoundException;
+use MoodSwings\Friends\FriendshipService;
+use MoodSwings\Friends\NotAuthorizedToRespondException;
+use MoodSwings\Friends\UserNotFoundException;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Repository\EmailVerificationRepository;
+use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
 
@@ -106,6 +113,25 @@ function clearSessionCookie(): void
         'httponly' => true,
         'samesite' => 'Lax',
     ]);
+}
+
+/**
+ * Reads the session cookie, responding 401 if there's no valid session;
+ * otherwise refreshes the cookie's expiry (matching /me's behavior) and
+ * returns the current user.
+ */
+function requireAuth(AuthService $auth): array
+{
+    $token = $_COOKIE[AuthService::COOKIE_NAME] ?? null;
+    $result = $token !== null ? $auth->currentUser($token) : null;
+
+    if ($result === null) {
+        respond(401, ['status' => 'error', 'message' => 'Not authenticated']);
+    }
+
+    setSessionCookie($token, $result['expiresAt']);
+
+    return $result['user'];
 }
 
 /**
@@ -270,6 +296,62 @@ if ($path === '/me' && $method === 'GET') {
 
     setSessionCookie($token, $result['expiresAt']);
     respond(200, ['status' => 'ok', 'user' => $result['user']]);
+}
+
+$friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
+
+if ($path === '/friends' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'friends' => $friendships->listFriends((int) $currentUser['id'])]);
+}
+
+if ($path === '/friends/invites' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, [
+        'status' => 'ok',
+        'incoming' => $friendships->listIncomingInvites((int) $currentUser['id']),
+        'outgoing' => $friendships->listOutgoingInvites((int) $currentUser['id']),
+    ]);
+}
+
+if ($path === '/friends/invite' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $target = $friendships->sendInvite((int) $currentUser['id'], (string) ($body['username_or_email'] ?? ''));
+        respond(201, [
+            'status' => 'ok',
+            'message' => 'Friend request sent.',
+            'user' => ['id' => (int) $target['id'], 'username' => $target['username']],
+        ]);
+    } catch (UserNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (CannotFriendSelfException | FriendshipAlreadyExistsException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/friends/respond' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $action = (string) ($body['action'] ?? '');
+
+    try {
+        $friendships->respondToInvite((int) $currentUser['id'], (int) ($body['user_id'] ?? 0), $action);
+        respond(200, ['status' => 'ok', 'message' => match ($action) {
+            'accept' => 'Friend request accepted.',
+            'decline' => 'Friend request declined.',
+            'block' => 'User blocked.',
+            default => 'Done.',
+        }]);
+    } catch (FriendshipNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToRespondException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 respond(404, ['status' => 'error', 'message' => 'Not found']);

@@ -43,6 +43,7 @@ final class AuthIntegrationTest extends TestCase
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE email_verifications');
         $pdo->exec('TRUNCATE TABLE sessions');
+        $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
