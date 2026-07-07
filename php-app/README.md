@@ -82,6 +82,40 @@ which varies by host and isn't always what cPanel's error log page shows.
 that file isn't web-accessible; check it via cPanel's File Manager or FTP,
 not a browser.
 
+## Rules engine
+
+`src/Rules/` implements Mood Swings' actual gameplay -- resolving what a
+mood does when it's played, computing scores, and so on -- as a pure
+in-memory model with no database dependency, separate from the
+account/friends layer above. The core pieces:
+
+- `BoardState` — hands, deck, discard pile, and which moods are in play
+  (with their owner, color/value overrides, and suppression state).
+  Values are never cached: `valueOf()` always computes fresh from the
+  current state, which is what makes the Extended Rules' "apply while-in-play
+  effects, then after-playing effects" resolution order work without any
+  extra bookkeeping.
+- `MoodEffect` (+ `AbstractMoodEffect`) — the interface a card's behavior
+  implements, dispatched by `EffectRegistry` on the card's `effect_key`.
+  A card only overrides the ability timings it actually has (see
+  `cards.has_*_ability`); an unregistered ability throws
+  `EffectNotImplementedException` rather than silently doing nothing.
+- `MoodPlayService` — resolves playing one mood: pay its to-play cost (if
+  any), move it into play, resolve its after-playing effect (if any).
+- `RoundScorer` — sums each player's mood values and settles the win/Hurt
+  Feelings tie-breaks (opposite directions: ties for the win go to whoever
+  played *earliest* that round, Hurt Feelings ties go to whoever played
+  *latest*).
+
+Only a first slice of the 133-card pool has a registered effect so far
+(see `DefaultEffectRegistry`) — chosen to exercise the range of patterns
+the engine needs (unconditional/conditional grants, a global color
+override, a reusable parameterized effect covering ten similar cards,
+multi-target choices, and deck/hand manipulation across players), not
+full coverage. Implementing the rest, and the GameService that will load
+a `BoardState` from `game_cards`/`game_players` and persist it back, are
+incremental follow-up work.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises
