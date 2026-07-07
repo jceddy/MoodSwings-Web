@@ -88,16 +88,23 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, plays_remaining FROM game_rounds
+            "SELECT current_turn_game_player_id, plays_remaining, pending_play_grants FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
         $roundStmt->execute(['game_id' => $gameId]);
         $roundRow = $roundStmt->fetch();
         if ($roundRow !== false) {
+            // pending_play_grants may be absent on older rows (e.g. before
+            // any restricted grant existed this turn) -- in that case every
+            // outstanding play is unconditional.
+            $playGrants = $roundRow['pending_play_grants'] !== null
+                ? json_decode((string) $roundRow['pending_play_grants'], true)
+                : array_fill(0, (int) $roundRow['plays_remaining'], null);
+
             $state->restoreTurnState(
                 $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null,
-                (int) $roundRow['plays_remaining'],
+                $playGrants,
             );
         }
 

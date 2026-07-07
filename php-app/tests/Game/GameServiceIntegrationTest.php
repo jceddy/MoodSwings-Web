@@ -335,4 +335,66 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(IllegalPlayException::class);
         $this->games->playMood($gameId, $p2, 5, []);
     }
+
+    /**
+     * A restricted extra-play grant (e.g. Benevolence's "if it doesn't
+     * share a color with any of your moods") has to survive a full
+     * load()/save() round trip through game_rounds.pending_play_grants,
+     * since each play is its own request with no BoardState kept alive in
+     * memory between them -- this proves the restriction is still
+     * enforced after being persisted and reloaded, not just within a
+     * single in-memory BoardState (already covered by the Rules tests).
+     *
+     * @return array{gameId: int, p1: int}
+     */
+    private function buildBenevolenceFixture(): array
+    {
+        $u1 = $this->insertUser('bene1');
+        $u2 = $this->insertUser('bene2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence, white
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, white -- shares Benevolence's color
+        $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal, red -- doesn't share
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        return ['gameId' => $gameId, 'p1' => $p1];
+    }
+
+    public function testRestrictedExtraPlayGrantIsEnforcedAfterReloadingFromTheDatabase(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildBenevolenceFixture();
+
+        $this->games->playMood($gameId, $p1, 2, []); // Benevolence -- grants a restricted extra play
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame(1, (int) $round['plays_remaining']);
+        self::assertNotNull($round['pending_play_grants']);
+
+        // A fresh load() from the database (this is a brand new call, not
+        // reusing any in-memory state from the play above) must still
+        // reject Dignity as sharing Benevolence's color.
+        $this->expectException(IllegalPlayException::class);
+        $this->games->playMood($gameId, $p1, 8, []);
+    }
+
+    public function testRestrictedExtraPlayGrantAllowsAQualifyingCardAfterReload(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildBenevolenceFixture();
+
+        $this->games->playMood($gameId, $p1, 2, []); // Benevolence -- grants a restricted extra play
+        $this->games->playMood($gameId, $p1, 106, []); // Zeal, red -- doesn't share Benevolence's color
+
+        $zoneStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE game_id = :game_id AND card_id = 106');
+        $zoneStmt->execute(['game_id' => $gameId]);
+        self::assertSame('in_play', $zoneStmt->fetchColumn());
+    }
 }

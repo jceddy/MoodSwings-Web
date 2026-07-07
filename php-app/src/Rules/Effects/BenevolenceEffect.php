@@ -10,23 +10,17 @@ use MoodSwings\Rules\PlayerChoices;
 
 /**
  * Benevolence: "After playing this mood, you may play an additional mood
- * this turn if it doesn't share a color with any of your moods." Like
- * Charity, the grant itself has no cost, so it's given automatically
- * whenever the condition holds -- declining to use it just means not
- * playing another card.
+ * this turn if it doesn't share a color with any of your moods." Unlike
+ * Charity's unconditional grant, "it" refers to whichever mood is chosen
+ * for the additional play, not Benevolence itself -- so the grant is
+ * restricted, and BoardState checks the condition against the actual card
+ * chosen once that bonus play is attempted (see
+ * BoardState::hasUsablePlayGrant()/useGrantFor()).
  */
 final class BenevolenceEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $color = $state->colorOf($cardId);
-
-        foreach ($state->moodsOwnedBy($playerId) as $mood) {
-            if ($mood->cardId !== $cardId && $state->colorOf($mood->cardId) === $color) {
-                return;
-            }
-        }
-
-        $state->grantExtraPlay();
+        $state->grantExtraPlay(1, ['type' => 'does_not_share_color_with_your_moods']);
     }
 }

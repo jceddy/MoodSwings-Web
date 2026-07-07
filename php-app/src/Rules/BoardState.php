@@ -34,7 +34,15 @@ final class BoardState
     private array $moodsInPlay = [];
 
     private ?int $currentPlayerId = null;
-    private int $playsRemaining = 0;
+
+    /**
+     * @var array<int, ?array{type: string, values?: int[]}> one entry per
+     * outstanding "play an additional mood" grant this turn. null means
+     * unconditional (e.g. Charity); a restriction array means the grant
+     * only covers a card matching it (e.g. Benevolence's "if it doesn't
+     * share a color with any of your moods") -- see grantAllows().
+     */
+    private array $playGrants = [];
 
     /**
      * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog card id => catalog row
@@ -240,10 +248,11 @@ final class BoardState
         );
     }
 
-    public function restoreTurnState(?int $currentPlayerId, int $playsRemaining): void
+    /** @param array<int, ?array{type: string, values?: int[]}> $playGrants */
+    public function restoreTurnState(?int $currentPlayerId, array $playGrants): void
     {
         $this->currentPlayerId = $currentPlayerId;
-        $this->playsRemaining = $playsRemaining;
+        $this->playGrants = $playGrants;
     }
 
     // --- suppression ---
@@ -366,21 +375,93 @@ final class BoardState
     public function startTurn(int $playerId, bool $hasHurtFeelings = false): void
     {
         $this->currentPlayerId = $playerId;
-        $this->playsRemaining = $hasHurtFeelings ? 2 : 1;
+        $this->playGrants = array_fill(0, $hasHurtFeelings ? 2 : 1, null);
     }
 
-    public function grantExtraPlay(int $count = 1): void
+    /**
+     * Grants $count additional plays this turn. $restriction is null for
+     * an unconditional grant (e.g. Charity); otherwise it's a descriptor
+     * (see grantAllows()) that whatever card is played to use this grant
+     * must satisfy -- e.g. Benevolence grants
+     * ['type' => 'does_not_share_color_with_your_moods'].
+     *
+     * @param ?array{type: string, values?: int[]} $restriction
+     */
+    public function grantExtraPlay(int $count = 1, ?array $restriction = null): void
     {
-        $this->playsRemaining += $count;
+        for ($i = 0; $i < $count; $i++) {
+            $this->playGrants[] = $restriction;
+        }
     }
 
     public function playsRemaining(): int
     {
-        return $this->playsRemaining;
+        return count($this->playGrants);
     }
 
+    /** @return array<int, ?array{type: string, values?: int[]}> */
+    public function pendingPlayGrants(): array
+    {
+        return $this->playGrants;
+    }
+
+    /** Whether any outstanding grant this turn -- restricted or not -- would allow playing $cardId. */
+    public function hasUsablePlayGrant(int $cardId, int $playerId): bool
+    {
+        foreach ($this->playGrants as $restriction) {
+            if ($this->grantAllows($restriction, $cardId, $playerId)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Removes one outstanding grant that permits playing $cardId (see hasUsablePlayGrant()). */
+    public function useGrantFor(int $cardId, int $playerId): void
+    {
+        foreach ($this->playGrants as $index => $restriction) {
+            if ($this->grantAllows($restriction, $cardId, $playerId)) {
+                unset($this->playGrants[$index]);
+                $this->playGrants = array_values($this->playGrants);
+
+                return;
+            }
+        }
+    }
+
+    /** Consumes one grant regardless of restriction -- for tests/setup that don't care which. MoodPlayService uses useGrantFor() instead, since it must consume a grant that actually permits the card being played. */
     public function consumePlay(): void
     {
-        $this->playsRemaining = max(0, $this->playsRemaining - 1);
+        if ($this->playGrants !== []) {
+            array_shift($this->playGrants);
+        }
+    }
+
+    /** @param ?array{type: string, values?: int[]} $restriction */
+    private function grantAllows(?array $restriction, int $cardId, int $playerId): bool
+    {
+        if ($restriction === null) {
+            return true;
+        }
+
+        return match ($restriction['type']) {
+            'shares_color_with_your_moods' => $this->sharesColorWithOwnMoods($cardId, $playerId),
+            'does_not_share_color_with_your_moods' => !$this->sharesColorWithOwnMoods($cardId, $playerId),
+            'base_value_in' => in_array($this->catalogRow($cardId)['baseValue'], $restriction['values'], true),
+            default => throw new InvalidArgumentException("Unknown play grant restriction type '{$restriction['type']}'"),
+        };
+    }
+
+    private function sharesColorWithOwnMoods(int $cardId, int $playerId): bool
+    {
+        $color = $this->colorOf($cardId);
+        foreach ($this->moodsOwnedBy($playerId) as $mood) {
+            if ($this->colorOf($mood->cardId) === $color) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
