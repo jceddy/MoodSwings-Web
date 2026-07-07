@@ -204,6 +204,41 @@ final class BoardState
         $this->discard = array_values($this->discard);
     }
 
+    // --- persistence hydration ---
+    //
+    // These two methods exist for a GameService/repository to reconstruct
+    // a BoardState exactly as it was persisted, bypassing the normal
+    // hand-to-play or fresh-turn transitions (which don't apply when the
+    // mood is already in play, or the turn is already partway through, by
+    // the time a request loads the state back from the database).
+
+    /** @param array<string, mixed> $effectState */
+    public function restoreMoodInPlay(
+        int $cardId,
+        int $ownerId,
+        ?int $copiedCardId,
+        bool $isSuppressed,
+        ?string $suppressionExpiry,
+        ?int $suppressionSourceCardId,
+        array $effectState,
+    ): void {
+        $this->moodsInPlay[$cardId] = new MoodInPlay(
+            $cardId,
+            $ownerId,
+            $copiedCardId,
+            $isSuppressed,
+            $suppressionExpiry,
+            $suppressionSourceCardId,
+            $effectState,
+        );
+    }
+
+    public function restoreTurnState(?int $currentPlayerId, int $playsRemaining): void
+    {
+        $this->currentPlayerId = $currentPlayerId;
+        $this->playsRemaining = $playsRemaining;
+    }
+
     // --- suppression ---
 
     public function suppress(int $cardId, string $expiry, ?int $sourceCardId = null): void
