@@ -131,6 +131,44 @@ final class FriendshipIntegrationTest extends TestCase
         self::assertSame('alice', $bobFriends[0]['friend_username']);
     }
 
+    public function testRemoveFriendDeletesAcceptedFriendshipForBoth(): void
+    {
+        $aliceId = $this->createUser('alice');
+        $bobId = $this->createUser('bob');
+
+        $this->friendships->sendInvite($aliceId, 'bob');
+        $this->friendships->respondToInvite($bobId, $aliceId, 'accept');
+
+        $this->friendships->removeFriend($bobId, $aliceId);
+
+        self::assertCount(0, $this->friendships->listFriends($aliceId));
+        self::assertCount(0, $this->friendships->listFriends($bobId));
+
+        // Not punitive either -- a new invite should be allowed afterward.
+        $target = $this->friendships->sendInvite($aliceId, 'bob');
+        self::assertSame('bob', $target['username']);
+    }
+
+    public function testRemoveFriendFailsWhenNotFriends(): void
+    {
+        $aliceId = $this->createUser('alice');
+        $bobId = $this->createUser('bob');
+
+        $this->expectException(FriendshipNotFoundException::class);
+        $this->friendships->removeFriend($aliceId, $bobId);
+    }
+
+    public function testRemoveFriendFailsForPendingInviteNotYetAccepted(): void
+    {
+        $aliceId = $this->createUser('alice');
+        $bobId = $this->createUser('bob');
+
+        $this->friendships->sendInvite($aliceId, 'bob');
+
+        $this->expectException(FriendshipNotFoundException::class);
+        $this->friendships->removeFriend($aliceId, $bobId);
+    }
+
     public function testDeclineRemovesTheInviteAndAllowsReinviting(): void
     {
         $aliceId = $this->createUser('alice');
