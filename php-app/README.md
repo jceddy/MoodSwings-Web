@@ -107,7 +107,7 @@ account/friends layer above. The core pieces:
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-108 of the 133-card pool have a registered effect so far (see
+114 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
 engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
@@ -184,9 +184,27 @@ cased by `effect_key` inside `BoardState::grantAllows()` the same way
 `colorOf()` special-cases Imagination (Melancholy), and a color ban
 that applies to every player but only during the single round right
 after it's tagged (Doubt — `BoardState::bannedColorsThisRound()`,
-checked by `MoodPlayService` before any grant/zone check). Not full
-coverage — implementing the rest is incremental follow-up
-work.
+checked by `MoodPlayService` before any grant/zone check), a perpetual
+"every turn while in play" extra-play grant computed fresh at the start
+of each of the owner's turns rather than stored anywhere on the
+card itself — unconditional (Hope), restricted to a discard-sourced
+color match (Grace), or conditional on another player currently having
+more moods in play (Stubbornness) — with the turn the card is actually
+played on handled separately since Hope/Grace have no after-playing
+ability to hook (`GameService::computeFreshGrants()`, plus
+`MoodPlayService`'s same-turn special case), a one-shot "banked" extra
+play for a specific player's next turn — however many turns from now
+that turns out to be — for another player (Generosity) or yourself
+(Joy), consulted by that same `computeFreshGrants()`, and an opponent's
+own choice among their qualifying moods resolved the same random way as
+Instability's, tied to a "give it back if you still have it" cascade
+that fires only when the taking card itself leaves play and tracks who
+currently holds the taken mood so a later give-away doesn't wrongly
+trigger the return (Arrogance — `BoardState`'s `cascadeMoodLeavingPlay()`,
+which also finally wires up the long-dormant `clearSuppressionsFrom()`
+into every "leaves play" transition, automatically lifting Faith's
+suppression too). Not full coverage — implementing the rest is
+incremental follow-up work.
 
 ## Game layer
 
@@ -215,10 +233,13 @@ request/response round trips with no process alive in between to hold a
   all within a single request. Turn advancement, round scoring (via
   `RoundScorer`), Hurt Feelings assignment (3+ player games only), losers
   drawing a card, game completion once a player reaches `wins_needed`,
-  and the round-scoring hooks described above (score swaps, after-scoring
-  tags, Awe's skip-scoring branch, and Corruption's extra-win marker) are
-  all handled internally as one play or pass ripples through to the end
-  of a round if it's the last play of the game.
+  the round-scoring hooks described above (score swaps, after-scoring
+  tags, Awe's skip-scoring branch, and Corruption's extra-win marker),
+  and every fresh turn's play grants (`computeFreshGrants()`, layering
+  Hope/Grace/Stubbornness's perpetual grants and Generosity/Joy's banked
+  ones on top of the usual unconditional base) are all handled internally
+  as one play or pass ripples through to the end of a round if it's the
+  last play of the game.
 
 Known limitations: `GameService` takes `game_player` ids directly and
 assumes the caller has already authorized the action -- there's no

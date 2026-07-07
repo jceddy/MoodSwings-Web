@@ -92,6 +92,19 @@ final class MoodPlayService
             }
         }
 
+        // Hope/Grace's "you may play an additional mood during each of
+        // your turns, including the turn you play this mood" has no
+        // after-playing ability of its own to hook -- their whole ability
+        // is "while in play" -- so the same-turn half of it is granted
+        // here, the moment either card enters play. GameService's
+        // computeFreshGrants() covers every turn after this one, for as
+        // long as the card stays in play.
+        if ($effectiveEffectKey === 'hope') {
+            $state->grantExtraPlay(1);
+        } elseif ($effectiveEffectKey === 'grace') {
+            $state->grantExtraPlay(1, ['type' => 'shares_color_with_your_moods', 'source' => 'discard']);
+        }
+
         if ($effectiveRow['hasAfterPlaying']) {
             $this->registry->for($effectiveEffectKey)->afterPlaying($state, $cardId, $playerId, $choices);
         }

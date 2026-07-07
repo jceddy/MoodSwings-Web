@@ -26,7 +26,11 @@ use Throwable;
  * cards played earlier in the round -- see applyScoreSwaps() (Sneakiness),
  * applyAfterScoringHooks() (Bashfulness/Betrayal/Recklessness/Gluttony/
  * Insecurity), hasSkipScoringMarker()/skipScoringAndAdvance() (Awe), and
- * consumeExtraWinMarker() (Corruption).
+ * consumeExtraWinMarker() (Corruption). Every fresh turn's play grants
+ * also run through computeFreshGrants(), which layers in whatever
+ * perpetual (Hope/Grace/Stubbornness) or one-shot banked
+ * (Generosity/Joy) grants the upcoming player's board currently entitles
+ * them to, on top of the usual unconditional (Hurt Feelings-aware) base.
  *
  * Deliberately out of scope for now: any HTTP/auth layer -- this takes
  * game_player ids directly and treats them as already-authorized.
@@ -166,7 +170,7 @@ final class GameService
             return ['round_scored' => false, 'game_completed' => false];
         }
 
-        return $this->advanceTurn($gameId, $round);
+        return $this->advanceTurn($gameId, $round, $state);
     }
 
     /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
@@ -180,11 +184,11 @@ final class GameService
 
         $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'turn_passed', null, []);
 
-        return $this->advanceTurn($gameId, $round);
+        return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
     }
 
     /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
-    private function advanceTurn(int $gameId, array $round): array
+    private function advanceTurn(int $gameId, array $round, BoardState $state): array
     {
         $turnOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
         $currentIndex = array_search((int) $round['current_turn_game_player_id'], $turnOrder, true);
@@ -197,10 +201,11 @@ final class GameService
         $nextPlayerId = $turnOrder[$nextIndex];
         $hurtFeelingsHolder = $round['hurt_feelings_game_player_id'] !== null ? (int) $round['hurt_feelings_game_player_id'] : null;
 
-        // A fresh turn's plays are always unconditional grants -- any
-        // restriction from the previous player's cards only ever applied
-        // to their own turn.
-        $freshGrants = array_fill(0, $nextPlayerId === $hurtFeelingsHolder ? 2 : 1, null);
+        $freshGrants = $this->computeFreshGrants($state, $nextPlayerId, $nextPlayerId === $hurtFeelingsHolder ? 2 : 1);
+        // computeFreshGrants() may consume a banked Generosity/Joy tag,
+        // which has to be persisted even though this turn's own play
+        // didn't otherwise touch the board.
+        $this->boardStates->save($gameId, $state);
         $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants);
 
         return ['round_scored' => false, 'game_completed' => false];
@@ -245,6 +250,17 @@ final class GameService
                 }
             }
             $this->applyAfterScoringHooks($state, $winnerId);
+
+            // Hurt Feelings only exists in games of 3 or more players.
+            $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($scores, $turnOrder) : null;
+
+            // Honor overrides who goes first next round regardless of who
+            // won -- see BoardState::firstPlayerOverride(). Computed (and
+            // computeFreshGrants() run) even if the game is about to
+            // complete below and this ends up unused, so any banked grant
+            // it consumes is captured by the same save() call either way.
+            $nextFirstPlayer = $state->firstPlayerOverride() ?? $winnerId;
+            $nextRoundGrants = $this->computeFreshGrants($state, $nextFirstPlayer, $hurtFeelingsHolder === $nextFirstPlayer ? 2 : 1);
             $this->boardStates->save($gameId, $state);
 
             $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
@@ -266,14 +282,6 @@ final class GameService
                 return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
             }
 
-            // Hurt Feelings only exists in games of 3 or more players.
-            $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($scores, $turnOrder) : null;
-
-            // Honor overrides who goes first next round regardless of who
-            // won -- see BoardState::firstPlayerOverride().
-            $nextFirstPlayer = $state->firstPlayerOverride() ?? $winnerId;
-            $nextRoundPlaysRemaining = $hurtFeelingsHolder === $nextFirstPlayer ? 2 : 1;
-
             $insertRound = $pdo->prepare(
                 "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
                  VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
@@ -284,8 +292,8 @@ final class GameService
                 'first_player' => $nextFirstPlayer,
                 'hurt_feelings' => $hurtFeelingsHolder,
                 'first_player_turn' => $nextFirstPlayer,
-                'plays_remaining' => $nextRoundPlaysRemaining,
-                'pending_play_grants' => json_encode(array_fill(0, $nextRoundPlaysRemaining, null)),
+                'plays_remaining' => count($nextRoundGrants),
+                'pending_play_grants' => json_encode($nextRoundGrants),
             ]);
 
             $pdo->commit();
@@ -405,6 +413,57 @@ final class GameService
     }
 
     /**
+     * Computes the play grants for the start of $playerId's turn: $baseCount
+     * unconditional grants (1, or 2 with Hurt Feelings), plus whatever
+     * perpetual or banked grants their board currently entitles them to --
+     * Hope's unconditional extra play, Grace's discard-sourced
+     * color-matching one, Stubbornness's conditional one (only if another
+     * player currently has more moods in play), and one grant per
+     * still-outstanding Generosity/Joy 'banksExtraPlayForPlayerId' tag
+     * targeting this player, cleared here since each only ever covers a
+     * single turn. Hope/Grace's *same*-turn bonus (for the turn either
+     * card is actually played) is granted separately, in MoodPlayService,
+     * since it isn't tied to a turn boundary at all.
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string}>
+     */
+    private function computeFreshGrants(BoardState $state, int $playerId, int $baseCount): array
+    {
+        $grants = array_fill(0, $baseCount, null);
+
+        if ($state->playerHasMoodInPlay($playerId, 'hope')) {
+            $grants[] = null;
+        }
+        if ($state->playerHasMoodInPlay($playerId, 'grace')) {
+            $grants[] = ['type' => 'shares_color_with_your_moods', 'source' => 'discard'];
+        }
+        if ($state->playerHasMoodInPlay($playerId, 'stubbornness') && $this->anotherPlayerHasMoreMoods($state, $playerId)) {
+            $grants[] = null;
+        }
+
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'banksExtraPlayForPlayerId') === $playerId) {
+                $state->clearEffectState($mood->cardId, 'banksExtraPlayForPlayerId');
+                $grants[] = null;
+            }
+        }
+
+        return $grants;
+    }
+
+    private function anotherPlayerHasMoreMoods(BoardState $state, int $playerId): bool
+    {
+        $myCount = count($state->moodsOwnedBy($playerId));
+        foreach ($state->playerOrder() as $otherId) {
+            if ($otherId !== $playerId && count($state->moodsOwnedBy($otherId)) > $myCount) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Awe: "there is no scoring this round. No one wins or loses this
      * round... You choose which player goes first next round." No scores
      * are recorded, no one draws a card, there's no Hurt Feelings, and win
@@ -431,6 +490,8 @@ final class GameService
             }
         }
 
+        $nextRoundGrants = $this->computeFreshGrants($state, $nextFirstPlayer, 1);
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -446,14 +507,15 @@ final class GameService
 
             $insertRound = $pdo->prepare(
                 "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                 VALUES (:game_id, :round_number, :first_player, :first_player_turn, 1, :pending_play_grants, 'in_progress')"
+                 VALUES (:game_id, :round_number, :first_player, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
             );
             $insertRound->execute([
                 'game_id' => $gameId,
                 'round_number' => (int) $round['round_number'] + 1,
                 'first_player' => $nextFirstPlayer,
                 'first_player_turn' => $nextFirstPlayer,
-                'pending_play_grants' => json_encode([null]),
+                'plays_remaining' => count($nextRoundGrants),
+                'pending_play_grants' => json_encode($nextRoundGrants),
             ]);
 
             $pdo->commit();
