@@ -186,6 +186,13 @@ final class BoardState
         $this->hands[$playerId][] = $cardId;
     }
 
+    /** Altruism: shuffles the remainder of the discard pile onto the bottom of the deck. */
+    public function moveDiscardToBottomOfDeck(int $cardId): void
+    {
+        $this->removeFromDiscard($cardId);
+        $this->deck[] = $cardId;
+    }
+
     public function giveInPlayToPlayer(int $cardId, int $newOwnerId): void
     {
         $this->moodInPlay($cardId)->ownerId = $newOwnerId;
