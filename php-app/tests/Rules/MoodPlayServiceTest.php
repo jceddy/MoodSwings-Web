@@ -249,27 +249,97 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(3, $state->valueOf(32));
     }
 
-    public function testBenevolenceGrantsExtraPlayWhenNoColorMatch(): void
+    public function testBenevolenceAllowsABonusPlayOfADifferentColor(): void
     {
-        $state = $this->boardState(hands: [1 => [2, 106]]); // Benevolence (white), Zeal (red) as the extra card
+        $state = $this->boardState(hands: [1 => [2, 106]]); // Benevolence (white), Zeal (red)
         $state->startTurn(1);
 
         $this->plays->playMood($state, 1, 2, new PlayerChoices([]));
-
         self::assertSame(1, $state->playsRemaining());
+
         $this->plays->playMood($state, 1, 106, new PlayerChoices([]));
+
         self::assertTrue($state->isInPlay(106));
+        self::assertSame(0, $state->playsRemaining());
     }
 
-    public function testBenevolenceGrantsNoExtraPlayWhenItSharesAColor(): void
+    public function testBenevolenceRejectsABonusPlaySharingItsColor(): void
     {
+        // The restriction is checked against whichever card is chosen for
+        // the bonus play (here Dignity, also white), not Benevolence's own
+        // color evaluated once up front.
         $state = $this->boardState(hands: [1 => [2, 8]]); // Benevolence, Dignity -- both white
-        $state->moveHandToInPlay(1, 8);
         $state->startTurn(1);
-
         $this->plays->playMood($state, 1, 2, new PlayerChoices([]));
 
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 8, new PlayerChoices([]));
+    }
+
+    public function testFriendlinessGrantsExtraPlayUsableOnlyOnAnEvenValuedCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [13, 5]]); // Friendliness, Complacency (value 4, even)
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 13, new PlayerChoices([]));
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(5));
         self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testFriendlinessRejectsAnOddValuedCardForItsExtraPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [13, 3]]); // Friendliness, Charity (value 1, odd)
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 13, new PlayerChoices([]));
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 3, new PlayerChoices([]));
+    }
+
+    public function testKindnessGrantsExtraPlayUsableOnlyOnAnOddValuedCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [17, 7]]); // Kindness, Courage (value 1, odd)
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 17, new PlayerChoices([]));
+
+        $this->plays->playMood($state, 1, 7, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(7));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testKindnessRejectsAnEvenValuedCardForItsExtraPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [17, 5]]); // Kindness, Complacency (value 4, even)
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 17, new PlayerChoices([]));
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
+    }
+
+    public function testEagernessAllowsABonusPlaySharingItsColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [114, 118]]); // Eagerness, Fascination -- both green
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 114, new PlayerChoices([]));
+
+        $this->plays->playMood($state, 1, 118, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(118));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testEagernessRejectsABonusPlayOfADifferentColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [114, 55]]); // Eagerness (green), Apathy (black)
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 114, new PlayerChoices([]));
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 55, new PlayerChoices([]));
     }
 
     public function testFaithSuppressesTargetAndLinksItsSuppressionSourceToItself(): void
@@ -513,5 +583,194 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->expectException(IllegalPlayException::class);
         $this->plays->playMood($state, 1, 75, new PlayerChoices(['discard_mood_ids' => []]));
+    }
+
+    public function testMeeknessSuppressesEveryQualifyingMoodRegardlessOfOwner(): void
+    {
+        $state = $this->boardState(hands: [1 => [19, 3], 2 => [9], 3 => [120]]);
+        $state->moveHandToInPlay(1, 3); // Charity, value 1 -- too low to qualify
+        $state->moveHandToInPlay(2, 9); // Discipline, value 6
+        $state->moveHandToInPlay(3, 120); // Generosity, value 6
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 19, new PlayerChoices([]));
+
+        self::assertFalse($state->isSuppressed(3));
+        self::assertTrue($state->isSuppressed(9));
+        self::assertTrue($state->isSuppressed(120));
+        self::assertSame(0, $state->valueOf(9));
+    }
+
+    public function testPacifismSuppressesOneChosenMoodPerPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [9], 3 => [120]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(3, 120);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 20, new PlayerChoices(['target_mood_ids' => [9, 120]]));
+
+        self::assertTrue($state->isSuppressed(9));
+        self::assertTrue($state->isSuppressed(120));
+    }
+
+    public function testPacifismRejectsTwoTargetsFromTheSamePlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [9, 3]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(2, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 20, new PlayerChoices(['target_mood_ids' => [9, 3]]));
+    }
+
+    public function testPacifismRejectsMoreThanTwoTargets(): void
+    {
+        $state = $this->boardState(hands: [1 => [20, 3], 2 => [9], 3 => [120]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(3, 120);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 20, new PlayerChoices(['target_mood_ids' => [3, 9, 120]]));
+    }
+
+    public function testRepentanceSuppressesAllOtherMoodsWithTheChosenValueUntilEndOfRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [23], 2 => [3], 3 => [7]]);
+        $state->moveHandToInPlay(2, 3); // Charity, value 1
+        $state->moveHandToInPlay(3, 7); // Courage, value 1
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 23, new PlayerChoices(['value' => 1]));
+
+        self::assertTrue($state->isSuppressed(3));
+        self::assertTrue($state->isSuppressed(7));
+
+        $state->clearEndOfRoundSuppressions();
+        self::assertFalse($state->isSuppressed(3));
+        self::assertFalse($state->isSuppressed(7));
+    }
+
+    public function testRepentanceRejectsAnOutOfRangeValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [23]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 23, new PlayerChoices(['value' => 13]));
+    }
+
+    public function testRepentanceDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [23]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 23, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(23));
+    }
+
+    public function testHatePutsChosenMoodOnBottomOfDeckAndDrawsForTheActingPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [66], 2 => [9]], deck: [99]);
+        $state->moveHandToInPlay(2, 9);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 66, new PlayerChoices(['target_mood_id' => 9]));
+
+        self::assertFalse($state->isInPlay(9));
+        self::assertSame([9], $state->deck());
+        self::assertTrue($state->isInHand(1, 99)); // the acting player draws, not 9's former owner
+    }
+
+    public function testHateDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [66]], deck: [99]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 66, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(66));
+        self::assertSame([99], $state->deck());
+    }
+
+    public function testWrathDiscardsAllOtherMoodsWhenConfirmed(): void
+    {
+        $state = $this->boardState(hands: [1 => [105], 2 => [9], 3 => [120]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(3, 120);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 105, new PlayerChoices(['discard_all_other_moods' => true]));
+
+        self::assertTrue($state->isInPlay(105));
+        self::assertFalse($state->isInPlay(9));
+        self::assertFalse($state->isInPlay(120));
+        self::assertEqualsCanonicalizing([9, 120], $state->discardPile());
+    }
+
+    public function testWrathDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [105], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 105, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(9));
+        self::assertSame([], $state->discardPile());
+    }
+
+    public function testRageDiscardsOnlyLowValueMoodsWhenConfirmed(): void
+    {
+        $state = $this->boardState(hands: [1 => [98], 2 => [3], 3 => [9]]);
+        $state->moveHandToInPlay(2, 3); // Charity, value 1 -- qualifies
+        $state->moveHandToInPlay(3, 9); // Discipline, value 6 -- doesn't qualify
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 98, new PlayerChoices(['discard_qualifying_moods' => true]));
+
+        self::assertFalse($state->isInPlay(3));
+        self::assertTrue($state->isInPlay(9));
+        self::assertSame([3], $state->discardPile());
+    }
+
+    public function testRageDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [98], 2 => [3]]);
+        $state->moveHandToInPlay(2, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 98, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(3));
+    }
+
+    public function testAnxietyReturnsOddValuedTargetsToTheirOwnersHands(): void
+    {
+        $state = $this->boardState(hands: [1 => [28], 2 => [3], 3 => [7]]);
+        $state->moveHandToInPlay(2, 3); // Charity, value 1
+        $state->moveHandToInPlay(3, 7); // Courage, value 1
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 28, new PlayerChoices(['target_mood_ids' => [3, 7]]));
+
+        self::assertFalse($state->isInPlay(3));
+        self::assertFalse($state->isInPlay(7));
+        self::assertTrue($state->isInHand(2, 3));
+        self::assertTrue($state->isInHand(3, 7));
+    }
+
+    public function testAnxietyRejectsAnEvenValuedTarget(): void
+    {
+        $state = $this->boardState(hands: [1 => [28], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9); // Discipline, value 6
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 28, new PlayerChoices(['target_mood_ids' => [9]]));
     }
 }

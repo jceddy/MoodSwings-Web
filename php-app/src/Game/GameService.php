@@ -122,13 +122,14 @@ final class GameService
             $firstPlayerId = $playerIds[array_rand($playerIds)];
 
             $insertRound = $pdo->prepare(
-                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
-                 VALUES (:game_id, 1, :first_player, :first_player_turn, 1, 'in_progress')"
+                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+                 VALUES (:game_id, 1, :first_player, :first_player_turn, 1, :pending_play_grants, 'in_progress')"
             );
             $insertRound->execute([
                 'game_id' => $gameId,
                 'first_player' => $firstPlayerId,
                 'first_player_turn' => $firstPlayerId,
+                'pending_play_grants' => json_encode([null]),
             ]);
 
             $updateGame = $pdo->prepare("UPDATE games SET status = 'in_progress', started_at = NOW() WHERE id = :game_id");
@@ -156,7 +157,7 @@ final class GameService
         $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'mood_played', $cardId, $choices);
 
         if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $gamePlayerId, $state->playsRemaining());
+            $this->updateRoundTurnState((int) $round['id'], $gamePlayerId, $state->pendingPlayGrants());
 
             return ['round_scored' => false, 'game_completed' => false];
         }
@@ -192,7 +193,11 @@ final class GameService
         $nextPlayerId = $turnOrder[$nextIndex];
         $hurtFeelingsHolder = $round['hurt_feelings_game_player_id'] !== null ? (int) $round['hurt_feelings_game_player_id'] : null;
 
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $nextPlayerId === $hurtFeelingsHolder ? 2 : 1);
+        // A fresh turn's plays are always unconditional grants -- any
+        // restriction from the previous player's cards only ever applied
+        // to their own turn.
+        $freshGrants = array_fill(0, $nextPlayerId === $hurtFeelingsHolder ? 2 : 1, null);
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants);
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -253,9 +258,11 @@ final class GameService
             // Hurt Feelings only exists in games of 3 or more players.
             $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($scores, $turnOrder) : null;
 
+            $nextRoundPlaysRemaining = $hurtFeelingsHolder === $winnerId ? 2 : 1;
+
             $insertRound = $pdo->prepare(
-                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, status)
-                 VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, 'in_progress')"
+                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+                 VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
             );
             $insertRound->execute([
                 'game_id' => $gameId,
@@ -263,7 +270,8 @@ final class GameService
                 'first_player' => $winnerId,
                 'hurt_feelings' => $hurtFeelingsHolder,
                 'first_player_turn' => $winnerId,
-                'plays_remaining' => $hurtFeelingsHolder === $winnerId ? 2 : 1,
+                'plays_remaining' => $nextRoundPlaysRemaining,
+                'pending_play_grants' => json_encode(array_fill(0, $nextRoundPlaysRemaining, null)),
             ]);
 
             $pdo->commit();
@@ -335,12 +343,18 @@ final class GameService
         return array_merge(array_slice($playerIds, $startIndex), array_slice($playerIds, 0, $startIndex));
     }
 
-    private function updateRoundTurnState(int $roundId, int $playerId, int $playsRemaining): void
+    /** @param array<int, ?array{type: string, values?: int[]}> $playGrants */
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants): void
     {
         $stmt = Connection::get()->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants WHERE id = :round_id'
         );
-        $stmt->execute(['player_id' => $playerId, 'plays_remaining' => $playsRemaining, 'round_id' => $roundId]);
+        $stmt->execute([
+            'player_id' => $playerId,
+            'plays_remaining' => count($playGrants),
+            'pending_play_grants' => json_encode($playGrants),
+            'round_id' => $roundId,
+        ]);
     }
 
     /** @param array<string, mixed> $details */

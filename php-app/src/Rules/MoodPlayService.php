@@ -13,6 +13,15 @@ use MoodSwings\Rules\Exceptions\IllegalPlayException;
  * (if any). "While in play" effects aren't a separate step here -- they're
  * never cached (see BoardState::valueOf()), so they're always
  * automatically up to date without needing to be explicitly reapplied.
+ *
+ * Some "play an additional mood" grants are restricted to cards meeting
+ * some condition (e.g. Benevolence, Friendliness, Kindness, Eagerness),
+ * rather than unconditional like Charity's -- see
+ * BoardState::hasUsablePlayGrant()/useGrantFor(). Those checks (and the
+ * grant consumption itself) have to happen before the card is moved into
+ * play, since the restriction is evaluated against the board as it stood
+ * *before* this play (a card always "shares a color with itself", so
+ * checking after the move would make color-based restrictions meaningless).
  */
 final class MoodPlayService
 {
@@ -25,8 +34,8 @@ final class MoodPlayService
         if ($state->currentPlayerId() !== $playerId) {
             throw new IllegalPlayException("It is not player {$playerId}'s turn");
         }
-        if ($state->playsRemaining() <= 0) {
-            throw new IllegalPlayException("Player {$playerId} has no plays remaining this turn");
+        if (!$state->hasUsablePlayGrant($cardId, $playerId)) {
+            throw new IllegalPlayException("Player {$playerId} has no plays remaining this turn that allow playing card {$cardId}");
         }
         if (!$state->isInHand($playerId, $cardId)) {
             throw new IllegalPlayException("Card {$cardId} is not in player {$playerId}'s hand");
@@ -52,8 +61,8 @@ final class MoodPlayService
             $effect->payToPlayCost($state, $cardId, $playerId, $choices);
         }
 
+        $state->useGrantFor($cardId, $playerId);
         $state->moveHandToInPlay($playerId, $cardId, $copiedCardId);
-        $state->consumePlay();
 
         if ($effectiveRow['hasAfterPlaying']) {
             $this->registry->for($effectiveEffectKey)->afterPlaying($state, $cardId, $playerId, $choices);
