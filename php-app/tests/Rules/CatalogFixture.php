@@ -24,15 +24,23 @@ trait CatalogFixture
             7 => $this->row('white', 'common', 1, null, 'courage', false, false, true),
             8 => $this->row('white', 'common', 3, 5, 'dignity', false, false, true),
             9 => $this->row('white', 'common', 6, 3, 'discipline', false, true, false),
+            12 => $this->row('white', 'uncommon', 3, null, 'faith', false, false, true),
             27 => $this->row('blue', 'common', 6, 3, 'ambivalence', false, true, false),
             32 => $this->row('blue', 'rare', 0, null, 'creativity', false, false, false),
+            40 => $this->row('blue', 'mythic', 0, null, 'guile', true, false, true),
             42 => $this->row('blue', 'uncommon', 3, null, 'imagination', false, true, true),
             54 => $this->row('black', 'uncommon', 3, null, 'angst', false, false, true),
             55 => $this->row('black', 'common', 4, null, 'apathy', false, false, false),
             56 => $this->row('black', 'uncommon', 6, null, 'betrayal', false, false, true),
+            64 => $this->row('black', 'rare', 0, null, 'envy', true, true, false),
+            74 => $this->row('black', 'mythic', 0, null, 'sadness', false, true, false),
+            75 => $this->row('black', 'common', 6, null, 'self_loathing', true, false, false),
+            79 => $this->row('black', 'mythic', 0, null, 'vanity', false, true, false),
             80 => $this->row('red', 'uncommon', 0, null, 'anger', false, false, true),
             106 => $this->row('red', 'common', 3, null, 'zeal', false, false, true),
+            118 => $this->row('green', 'uncommon', 3, 7, 'fascination', false, false, true),
             120 => $this->row('green', 'common', 6, null, 'generosity', false, false, true),
+            133 => $this->row('green', 'mythic', 0, null, 'wonder', false, true, true),
         ];
     }
 

@@ -172,6 +172,13 @@ final class BoardState
         $this->moodInPlay($cardId)->ownerId = $newOwnerId;
     }
 
+    /** Fascination: hands a card directly from one player's hand to another's (e.g. "give it to another player"), rather than routing it through discard/deck. */
+    public function giveHandCardToPlayer(int $fromPlayerId, int $toPlayerId, int $cardId): void
+    {
+        $this->removeFromHand($fromPlayerId, $cardId);
+        $this->hands[$toPlayerId][] = $cardId;
+    }
+
     public function drawCard(int $playerId): ?int
     {
         $cardId = array_shift($this->deck);
