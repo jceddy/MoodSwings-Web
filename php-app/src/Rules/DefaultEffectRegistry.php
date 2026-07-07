@@ -5,19 +5,24 @@ declare(strict_types=1);
 namespace MoodSwings\Rules;
 
 use MoodSwings\Rules\Effects\AngerEffect;
+use MoodSwings\Rules\Effects\AnimosityEffect;
 use MoodSwings\Rules\Effects\AnxietyEffect;
 use MoodSwings\Rules\Effects\BenevolenceEffect;
 use MoodSwings\Rules\Effects\BitternessEffect;
 use MoodSwings\Rules\Effects\BravadoEffect;
+use MoodSwings\Rules\Effects\CelebrationEffect;
 use MoodSwings\Rules\Effects\CharityEffect;
 use MoodSwings\Rules\Effects\ChivalryEffect;
 use MoodSwings\Rules\Effects\ConvictionEffect;
 use MoodSwings\Rules\Effects\CourageEffect;
+use MoodSwings\Rules\Effects\DeterminationEffect;
 use MoodSwings\Rules\Effects\DignityEffect;
 use MoodSwings\Rules\Effects\EagernessEffect;
 use MoodSwings\Rules\Effects\EnvyEffect;
+use MoodSwings\Rules\Effects\EuphoriaEffect;
 use MoodSwings\Rules\Effects\FaithEffect;
 use MoodSwings\Rules\Effects\FascinationEffect;
+use MoodSwings\Rules\Effects\FondnessEffect;
 use MoodSwings\Rules\Effects\FriendlinessEffect;
 use MoodSwings\Rules\Effects\FuryEffect;
 use MoodSwings\Rules\Effects\GuileEffect;
@@ -25,6 +30,7 @@ use MoodSwings\Rules\Effects\GuiltEffect;
 use MoodSwings\Rules\Effects\HateEffect;
 use MoodSwings\Rules\Effects\ImaginationEffect;
 use MoodSwings\Rules\Effects\KindnessEffect;
+use MoodSwings\Rules\Effects\LoveEffect;
 use MoodSwings\Rules\Effects\MeeknessEffect;
 use MoodSwings\Rules\Effects\PacifismEffect;
 use MoodSwings\Rules\Effects\PairedColorThresholdEffect;
@@ -33,9 +39,13 @@ use MoodSwings\Rules\Effects\RebellionEffect;
 use MoodSwings\Rules\Effects\RepentanceEffect;
 use MoodSwings\Rules\Effects\SadnessEffect;
 use MoodSwings\Rules\Effects\SelfLoathingEffect;
+use MoodSwings\Rules\Effects\SerenityEffect;
 use MoodSwings\Rules\Effects\ShameEffect;
 use MoodSwings\Rules\Effects\ShockEffect;
+use MoodSwings\Rules\Effects\SlothEffect;
 use MoodSwings\Rules\Effects\SpiteEffect;
+use MoodSwings\Rules\Effects\SuperiorityEffect;
+use MoodSwings\Rules\Effects\TranquilityEffect;
 use MoodSwings\Rules\Effects\TriumphEffect;
 use MoodSwings\Rules\Effects\VanityEffect;
 use MoodSwings\Rules\Effects\WonderEffect;
@@ -53,10 +63,13 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * "to play" costs, dynamic values keyed off an opponent's board, the
  * discard pile, or who went first this round, source-tied and
  * end-of-round suppression, a modal single-vs-mass choice, a "most common
- * color(s)" board computation, and a mandatory effect touching every
- * player at once -- not full coverage. Cards not registered here throw
- * EffectNotImplementedException if their ability is actually invoked;
- * implementing the rest is incremental follow-up work.
+ * color(s)" board computation, a mandatory effect touching every player at
+ * once, and a range of pure while-in-play value formulas (self-vs-every-
+ * opponent comparisons, a universal or any-opponent threshold, a distinct
+ * color count, parity checks, and a five-color-presence check) -- not full
+ * coverage. Cards not registered here throw EffectNotImplementedException
+ * if their ability is actually invoked; implementing the rest is
+ * incremental follow-up work.
  */
 final class DefaultEffectRegistry
 {
@@ -100,6 +113,16 @@ final class DefaultEffectRegistry
         $registry->register('shock', new ShockEffect());
         $registry->register('fury', new FuryEffect());
         $registry->register('bravado', new BravadoEffect());
+        $registry->register('superiority', new SuperiorityEffect());
+        $registry->register('fondness', new FondnessEffect());
+        $registry->register('animosity', new AnimosityEffect());
+        $registry->register('celebration', new CelebrationEffect());
+        $registry->register('determination', new DeterminationEffect());
+        $registry->register('serenity', new SerenityEffect());
+        $registry->register('tranquility', new TranquilityEffect());
+        $registry->register('euphoria', new EuphoriaEffect());
+        $registry->register('sloth', new SlothEffect());
+        $registry->register('love', new LoveEffect());
 
         $registry->register('ambivalence', new PairedColorThresholdEffect('red', 'green'));
         $registry->register('discipline', new PairedColorThresholdEffect('black', 'red'));

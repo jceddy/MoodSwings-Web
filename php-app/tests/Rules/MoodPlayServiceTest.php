@@ -1013,4 +1013,213 @@ final class MoodPlayServiceTest extends TestCase
         $this->expectException(InvalidChoiceException::class);
         $this->plays->playMood($state, 1, 84, new PlayerChoices(['discard_mood_id' => 84]));
     }
+
+    public function testSuperiorityValueIs7WhenOwnerHasMoreMoodsThanEveryOtherPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [77, 3], 2 => [9], 3 => [7]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(3, 7);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 77, new PlayerChoices([]));
+
+        self::assertSame(7, $state->valueOf(77));
+    }
+
+    public function testSuperiorityValueIsBaseWhenATiedOrHigherOpponentExists(): void
+    {
+        $state = $this->boardState(hands: [1 => [77], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 77, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(77));
+    }
+
+    public function testFondnessValueIs7WhenEveryPlayerHasAtLeastThreeMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [119, 3, 7], 2 => [9, 55, 56], 3 => [80, 106, 8]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 7);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(2, 55);
+        $state->moveHandToInPlay(2, 56);
+        $state->moveHandToInPlay(3, 80);
+        $state->moveHandToInPlay(3, 106);
+        $state->moveHandToInPlay(3, 8);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 119, new PlayerChoices([]));
+
+        self::assertSame(7, $state->valueOf(119));
+    }
+
+    public function testFondnessValueIsBaseWhenAnyPlayerHasFewerThanThreeMoods(): void
+    {
+        $state = $this->boardState(hands: [1 => [119]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 119, new PlayerChoices([]));
+
+        self::assertSame(0, $state->valueOf(119));
+    }
+
+    public function testAnimosityValueIs5WhenAnOpponentHasThreeOrMoreCardsInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [81], 2 => [9, 55, 56]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 81, new PlayerChoices([]));
+
+        self::assertSame(5, $state->valueOf(81));
+    }
+
+    public function testAnimosityValueIsBaseWhenNoOpponentQualifies(): void
+    {
+        $state = $this->boardState(hands: [1 => [81], 2 => [9]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 81, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(81));
+    }
+
+    public function testCelebrationValueIs7WhenOwnerHasMoreDistinctColorsThanEveryOtherPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [109, 3], 2 => [9]]);
+        $state->moveHandToInPlay(1, 3); // Charity, white -- owner now has green + white
+        $state->moveHandToInPlay(2, 9); // Discipline, white -- opponent has only 1 color
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 109, new PlayerChoices([]));
+
+        self::assertSame(7, $state->valueOf(109));
+    }
+
+    public function testCelebrationValueIsBaseWhenATiedOrHigherOpponentExists(): void
+    {
+        $state = $this->boardState(hands: [1 => [109], 2 => [9, 3]]);
+        $state->moveHandToInPlay(2, 9); // Discipline, white
+        $state->moveHandToInPlay(2, 3); // Charity, white -- still only 1 distinct color, but ties owner's 1
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 109, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(109));
+    }
+
+    public function testDeterminationValueIs6WhenThreeMoodsShareAColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [112], 2 => [118], 3 => [133]]); // all green
+        $state->moveHandToInPlay(2, 118);
+        $state->moveHandToInPlay(3, 133);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 112, new PlayerChoices([]));
+
+        self::assertSame(6, $state->valueOf(112));
+    }
+
+    public function testDeterminationValueIsBaseWhenNoColorReachesTheThreshold(): void
+    {
+        $state = $this->boardState(hands: [1 => [112], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 112, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(112));
+    }
+
+    public function testSerenityValueIs6WithAnEvenMoodCount(): void
+    {
+        $state = $this->boardState(hands: [1 => [129, 3]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 129, new PlayerChoices([]));
+
+        self::assertSame(6, $state->valueOf(129));
+    }
+
+    public function testSerenityValueIsBaseWithAnOddMoodCount(): void
+    {
+        $state = $this->boardState(hands: [1 => [129]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 129, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(129));
+    }
+
+    public function testTranquilityValueIs6WithAnOddMoodCount(): void
+    {
+        $state = $this->boardState(hands: [1 => [131]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 131, new PlayerChoices([]));
+
+        self::assertSame(6, $state->valueOf(131));
+    }
+
+    public function testTranquilityValueIsBaseWithAnEvenMoodCount(): void
+    {
+        $state = $this->boardState(hands: [1 => [131, 3]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 131, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(131));
+    }
+
+    public function testEuphoriaValueScalesWithTotalMoodsInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [117], 2 => [9], 3 => [7]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(3, 7);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 117, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(117)); // base 0 + 1 * 3 moods in play
+    }
+
+    public function testSlothValueScalesWithOwnersHandSize(): void
+    {
+        $state = $this->boardState(hands: [1 => [130, 3, 7]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 130, new PlayerChoices([]));
+
+        self::assertSame([3, 7], $state->hand(1));
+        self::assertSame(5, $state->valueOf(130)); // base 3 + 1 * 2 remaining hand cards
+    }
+
+    public function testLoveValueIs12WhenAllFiveColorsArePresent(): void
+    {
+        $state = $this->boardState(hands: [1 => [127], 2 => [3, 42, 56], 3 => [106]]);
+        $state->moveHandToInPlay(2, 3); // white
+        $state->moveHandToInPlay(2, 42); // blue
+        $state->moveHandToInPlay(2, 56); // black
+        $state->moveHandToInPlay(3, 106); // red
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 127, new PlayerChoices([])); // green
+
+        self::assertSame(12, $state->valueOf(127));
+    }
+
+    public function testLoveValueIsBaseWhenAColorIsMissing(): void
+    {
+        $state = $this->boardState(hands: [1 => [127], 2 => [3]]);
+        $state->moveHandToInPlay(2, 3); // white only -- blue/black/red missing
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 127, new PlayerChoices([]));
+
+        self::assertSame(4, $state->valueOf(127));
+    }
 }
