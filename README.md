@@ -19,6 +19,12 @@ See each project's own README for setup and details.
 files serve from the domain root, and the PHP app is reachable under `/app`
 (e.g. `/app/health`) via `php-app/public/.htaccess`'s rewrite rule.
 
+Every `<script src="...">`/`<link href="...">` referencing a `.js`/`.css`
+file gets `?v=<short commit SHA>` appended during the build, so browsers
+that already cached an old version of a script (from before a page's
+markup last changed) reliably fetch the new one instead of silently
+keeping the stale cached copy.
+
 ### One-time setup
 
 1. In cPanel, create (or reuse) an FTP account for deploys and note its
