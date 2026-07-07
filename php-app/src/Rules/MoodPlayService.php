@@ -70,11 +70,20 @@ final class MoodPlayService
             $effect->payToPlayCost($state, $cardId, $playerId, $choices);
         }
 
-        $state->useGrantFor($cardId, $playerId);
+        $consumedGrant = $state->useGrantFor($cardId, $playerId);
         if ($fromDiscard) {
             $state->moveDiscardToInPlay($playerId, $cardId, $copiedCardId);
         } else {
             $state->moveHandToInPlay($playerId, $cardId, $copiedCardId);
+        }
+
+        // Gluttony/Insecurity tag whichever specific card ends up consuming
+        // their granted extra play with effectState (e.g. "discard it after
+        // scoring") -- see BoardState's 'onUseEffectState' restriction key.
+        if ($consumedGrant !== null && isset($consumedGrant['onUseEffectState'])) {
+            foreach ($consumedGrant['onUseEffectState'] as $key => $value) {
+                $state->setEffectState($cardId, $key, $value);
+            }
         }
 
         if ($effectiveRow['hasAfterPlaying']) {

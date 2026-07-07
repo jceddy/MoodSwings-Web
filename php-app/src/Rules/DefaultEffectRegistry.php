@@ -11,7 +11,10 @@ use MoodSwings\Rules\Effects\AngstEffect;
 use MoodSwings\Rules\Effects\AnimosityEffect;
 use MoodSwings\Rules\Effects\AnxietyEffect;
 use MoodSwings\Rules\Effects\AvoidanceEffect;
+use MoodSwings\Rules\Effects\AweEffect;
+use MoodSwings\Rules\Effects\BashfulnessEffect;
 use MoodSwings\Rules\Effects\BenevolenceEffect;
+use MoodSwings\Rules\Effects\BetrayalEffect;
 use MoodSwings\Rules\Effects\BitternessEffect;
 use MoodSwings\Rules\Effects\BravadoEffect;
 use MoodSwings\Rules\Effects\CelebrationEffect;
@@ -39,6 +42,7 @@ use MoodSwings\Rules\Effects\FicklenessEffect;
 use MoodSwings\Rules\Effects\FondnessEffect;
 use MoodSwings\Rules\Effects\FriendlinessEffect;
 use MoodSwings\Rules\Effects\FuryEffect;
+use MoodSwings\Rules\Effects\GluttonyEffect;
 use MoodSwings\Rules\Effects\GriefEffect;
 use MoodSwings\Rules\Effects\GuileEffect;
 use MoodSwings\Rules\Effects\GuiltEffect;
@@ -52,6 +56,7 @@ use MoodSwings\Rules\Effects\HostilityEffect;
 use MoodSwings\Rules\Effects\ImaginationEffect;
 use MoodSwings\Rules\Effects\IndecisivenessEffect;
 use MoodSwings\Rules\Effects\InfatuationEffect;
+use MoodSwings\Rules\Effects\InsecurityEffect;
 use MoodSwings\Rules\Effects\InstabilityEffect;
 use MoodSwings\Rules\Effects\KindnessEffect;
 use MoodSwings\Rules\Effects\LoveEffect;
@@ -67,6 +72,7 @@ use MoodSwings\Rules\Effects\ParanoiaEffect;
 use MoodSwings\Rules\Effects\RageEffect;
 use MoodSwings\Rules\Effects\RationalizationEffect;
 use MoodSwings\Rules\Effects\RebellionEffect;
+use MoodSwings\Rules\Effects\RecklessnessEffect;
 use MoodSwings\Rules\Effects\RegretEffect;
 use MoodSwings\Rules\Effects\RejectionEffect;
 use MoodSwings\Rules\Effects\RepentanceEffect;
@@ -76,6 +82,7 @@ use MoodSwings\Rules\Effects\SerenityEffect;
 use MoodSwings\Rules\Effects\ShameEffect;
 use MoodSwings\Rules\Effects\ShockEffect;
 use MoodSwings\Rules\Effects\SlothEffect;
+use MoodSwings\Rules\Effects\SneakinessEffect;
 use MoodSwings\Rules\Effects\SpiteEffect;
 use MoodSwings\Rules\Effects\SuperiorityEffect;
 use MoodSwings\Rules\Effects\SuspicionEffect;
@@ -116,12 +123,23 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * sourced from the discard pile instead of hand (Harmony/Grief/Angst --
  * see BoardState::isInDiscardPile()/moveDiscardToInPlay()), a persistent
  * "who goes first next round" override consulted by GameService instead
- * of the round winner (Honor -- see BoardState::firstPlayerOverride()),
- * and a direction-based simultaneous exchange with every player at the
- * table (Avoidance/Confusion/Rationalization) -- not full coverage. Cards
- * not registered here throw EffectNotImplementedException if their
- * ability is actually invoked; implementing the rest is incremental
- * follow-up work.
+ * of the round winner (Honor -- see BoardState::firstPlayerOverride()), a
+ * direction-based simultaneous exchange with every player at the table
+ * (Avoidance/Confusion/Rationalization), and a family of round-scoring
+ * hooks resolved by GameService after a round's scores are computed --
+ * a one-shot "after scoring, do X to this mood" tag (Bashfulness's
+ * conditional-on-winning bottom-of-deck-and-draw; Recklessness's
+ * unconditional one; Gluttony/Insecurity's version applied to whichever
+ * specific card ends up consuming their granted extra play, via the
+ * grant's own 'onUseEffectState' key rather than the mood that granted
+ * it), a "give this mood away, it returns to you after scoring if still
+ * in play" tag (Betrayal; Recklessness's taken mood), a score swap
+ * between two players applied before the round's winner is determined
+ * (Sneakiness), and a "skip scoring entirely this round" marker paired
+ * with Honor's firstPlayerOverride key to choose next round's first
+ * player instead (Awe) -- not full coverage. Cards not registered here
+ * throw EffectNotImplementedException if their ability is actually
+ * invoked; implementing the rest is incremental follow-up work.
  */
 final class DefaultEffectRegistry
 {
@@ -210,6 +228,13 @@ final class DefaultEffectRegistry
         $registry->register('confusion', new ConfusionEffect());
         $registry->register('rationalization', new RationalizationEffect());
         $registry->register('instability', new InstabilityEffect());
+        $registry->register('bashfulness', new BashfulnessEffect());
+        $registry->register('betrayal', new BetrayalEffect());
+        $registry->register('sneakiness', new SneakinessEffect());
+        $registry->register('awe', new AweEffect());
+        $registry->register('recklessness', new RecklessnessEffect());
+        $registry->register('gluttony', new GluttonyEffect());
+        $registry->register('insecurity', new InsecurityEffect());
 
         $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
         $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));
