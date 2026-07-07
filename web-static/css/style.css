@@ -28,3 +28,37 @@ body {
 .success {
     color: #0a7a2e;
 }
+
+dialog#friends-dialog {
+    max-width: 30rem;
+    width: 90%;
+    padding: 1.5rem;
+    border: 1px solid #ccc;
+    border-radius: 0.5rem;
+}
+
+dialog#friends-dialog section {
+    margin-bottom: 1.5rem;
+}
+
+dialog#friends-dialog ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+dialog#friends-dialog li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid #eee;
+}
+
+dialog#friends-dialog li button {
+    margin-left: auto;
+}
+
+dialog#friends-dialog li button + button {
+    margin-left: 0.25rem;
+}

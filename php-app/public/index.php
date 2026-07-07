@@ -354,4 +354,16 @@ if ($path === '/friends/respond' && $method === 'POST') {
     }
 }
 
+if ($path === '/friends/remove' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $friendships->removeFriend((int) $currentUser['id'], (int) ($body['user_id'] ?? 0));
+        respond(200, ['status' => 'ok', 'message' => 'Friend removed.']);
+    } catch (FriendshipNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 respond(404, ['status' => 'error', 'message' => 'Not found']);

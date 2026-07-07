@@ -71,6 +71,17 @@ final class FriendshipService
         };
     }
 
+    public function removeFriend(int $userId, int $otherUserId): void
+    {
+        $friendship = $this->friendships->findByPair($userId, $otherUserId);
+
+        if ($friendship === null || $friendship['status'] !== 'accepted') {
+            throw new FriendshipNotFoundException('You are not friends with that user.');
+        }
+
+        $this->friendships->delete((int) $friendship['id']);
+    }
+
     public function listFriends(int $userId): array
     {
         return $this->friendships->listAcceptedForUser($userId);

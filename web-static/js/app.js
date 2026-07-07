@@ -42,3 +42,32 @@ function register(username, email, password, phoneNumber) {
 function logout() {
     return apiRequest('/logout', { method: 'POST' });
 }
+
+function listFriends() {
+    return apiRequest('/friends');
+}
+
+function listFriendInvites() {
+    return apiRequest('/friends/invites');
+}
+
+function sendFriendInvite(usernameOrEmail) {
+    return apiRequest('/friends/invite', {
+        method: 'POST',
+        body: JSON.stringify({ username_or_email: usernameOrEmail }),
+    });
+}
+
+function respondToFriendInvite(userId, action) {
+    return apiRequest('/friends/respond', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId, action }),
+    });
+}
+
+function removeFriend(userId) {
+    return apiRequest('/friends/remove', {
+        method: 'POST',
+        body: JSON.stringify({ user_id: userId }),
+    });
+}

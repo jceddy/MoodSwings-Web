@@ -10,8 +10,44 @@
     <main id="game-main" hidden>
         <h1>MoodSwings-Web</h1>
         <p>Welcome, <span id="username"></span>.</p>
+        <button id="friends-button" type="button">Friends</button>
         <button id="logout-button">Log out</button>
     </main>
+
+    <dialog id="friends-dialog">
+        <h2>Friends</h2>
+
+        <section>
+            <h3>Add a friend</h3>
+            <form id="friend-invite-form">
+                <input type="text" id="friend-invite-input" placeholder="Username or email" required>
+                <button type="submit">Send request</button>
+            </form>
+            <p id="friend-invite-error" class="error" hidden></p>
+            <p id="friend-invite-success" class="success" hidden></p>
+        </section>
+
+        <section>
+            <h3>Friend requests</h3>
+            <ul id="incoming-invites-list"></ul>
+            <p id="incoming-invites-empty" hidden>No pending requests.</p>
+        </section>
+
+        <section>
+            <h3>Sent requests</h3>
+            <ul id="outgoing-invites-list"></ul>
+            <p id="outgoing-invites-empty" hidden>No sent requests.</p>
+        </section>
+
+        <section>
+            <h3>Your friends</h3>
+            <ul id="friends-list"></ul>
+            <p id="friends-empty" hidden>No friends yet.</p>
+        </section>
+
+        <button id="friends-close-button" type="button">Close</button>
+    </dialog>
+
     <script src="../js/app.js"></script>
     <script src="../js/game.js"></script>
 </body>

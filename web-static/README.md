@@ -15,7 +15,10 @@ routed to the PHP app).
   email for the verification link (login is blocked until verified).
 - `game/index.html` (`/game/`) — Placeholder for the actual game. Redirects
   to `/` if there's no active session; otherwise shows the logged-in
-  username and a logout button.
+  username, a logout button, and a "Friends" button that opens a `<dialog>`
+  for managing friends: send a request by username/email, accept/decline/
+  block incoming requests, view sent (outgoing) requests, and remove
+  existing friends. All of it talks to the `/friends/*` endpoints.
 
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
