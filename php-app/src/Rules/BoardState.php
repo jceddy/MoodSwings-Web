@@ -153,6 +153,14 @@ final class BoardState
         $this->hands[$owner][] = $cardId;
     }
 
+    /** Regret: takes a mood directly into $newOwnerId's hand regardless of who actually owns it -- distinct from moveInPlayToHand(), which always returns a mood to its own owner's hand. */
+    public function moveInPlayToPlayersHand(int $cardId, int $newOwnerId): void
+    {
+        $this->moodInPlay($cardId);
+        unset($this->moodsInPlay[$cardId]);
+        $this->hands[$newOwnerId][] = $cardId;
+    }
+
     public function moveInPlayToBottomOfDeck(int $cardId): void
     {
         $this->moodInPlay($cardId);

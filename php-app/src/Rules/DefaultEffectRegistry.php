@@ -13,10 +13,14 @@ use MoodSwings\Rules\Effects\BravadoEffect;
 use MoodSwings\Rules\Effects\CelebrationEffect;
 use MoodSwings\Rules\Effects\CharityEffect;
 use MoodSwings\Rules\Effects\ChivalryEffect;
+use MoodSwings\Rules\Effects\ContemptEffect;
 use MoodSwings\Rules\Effects\ConvictionEffect;
 use MoodSwings\Rules\Effects\CourageEffect;
+use MoodSwings\Rules\Effects\CrueltyEffect;
+use MoodSwings\Rules\Effects\DenialEffect;
 use MoodSwings\Rules\Effects\DeterminationEffect;
 use MoodSwings\Rules\Effects\DignityEffect;
+use MoodSwings\Rules\Effects\DisorientationEffect;
 use MoodSwings\Rules\Effects\EagernessEffect;
 use MoodSwings\Rules\Effects\EnvyEffect;
 use MoodSwings\Rules\Effects\EuphoriaEffect;
@@ -29,13 +33,18 @@ use MoodSwings\Rules\Effects\GuileEffect;
 use MoodSwings\Rules\Effects\GuiltEffect;
 use MoodSwings\Rules\Effects\HateEffect;
 use MoodSwings\Rules\Effects\ImaginationEffect;
+use MoodSwings\Rules\Effects\IndecisivenessEffect;
 use MoodSwings\Rules\Effects\KindnessEffect;
 use MoodSwings\Rules\Effects\LoveEffect;
 use MoodSwings\Rules\Effects\MeeknessEffect;
+use MoodSwings\Rules\Effects\NeurosisEffect;
 use MoodSwings\Rules\Effects\PacifismEffect;
 use MoodSwings\Rules\Effects\PairedColorThresholdEffect;
+use MoodSwings\Rules\Effects\PanicEffect;
 use MoodSwings\Rules\Effects\RageEffect;
 use MoodSwings\Rules\Effects\RebellionEffect;
+use MoodSwings\Rules\Effects\RegretEffect;
+use MoodSwings\Rules\Effects\RejectionEffect;
 use MoodSwings\Rules\Effects\RepentanceEffect;
 use MoodSwings\Rules\Effects\SadnessEffect;
 use MoodSwings\Rules\Effects\SelfLoathingEffect;
@@ -49,6 +58,7 @@ use MoodSwings\Rules\Effects\TranquilityEffect;
 use MoodSwings\Rules\Effects\TriumphEffect;
 use MoodSwings\Rules\Effects\VanityEffect;
 use MoodSwings\Rules\Effects\WonderEffect;
+use MoodSwings\Rules\Effects\WorryEffect;
 use MoodSwings\Rules\Effects\WrathEffect;
 use MoodSwings\Rules\Effects\ZealEffect;
 
@@ -59,17 +69,21 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * grants, one-time value overrides paid for by optional costs, a global
  * color override with a per-mood stored choice, a reusable parameterized
  * effect covering ten cards at once, multi-target choices validated
- * against live values, deck/hand manipulation across players, mandatory
- * "to play" costs, dynamic values keyed off an opponent's board, the
- * discard pile, or who went first this round, source-tied and
- * end-of-round suppression, a modal single-vs-mass choice, a "most common
+ * against live values, deck/hand manipulation across players (including
+ * stealing a mood directly into the acting player's own hand, distinct
+ * from returning it to its owner's), mandatory "to play" costs, dynamic
+ * values keyed off an opponent's board, the discard pile, or who went
+ * first this round, source-tied and end-of-round suppression, modal
+ * single-vs-mass choices (mandatory and optional), a "most common
  * color(s)" board computation, a mandatory effect touching every player at
- * once, and a range of pure while-in-play value formulas (self-vs-every-
+ * once, a range of pure while-in-play value formulas (self-vs-every-
  * opponent comparisons, a universal or any-opponent threshold, a distinct
- * color count, parity checks, and a five-color-presence check) -- not full
- * coverage. Cards not registered here throw EffectNotImplementedException
- * if their ability is actually invoked; implementing the rest is
- * incremental follow-up work.
+ * color count, parity checks, and a five-color-presence check), a
+ * genuinely-random target (rather than another player's informed choice),
+ * a pairwise qualifying condition across two chosen targets, and a
+ * two-stage optional effect -- not full coverage. Cards not registered
+ * here throw EffectNotImplementedException if their ability is actually
+ * invoked; implementing the rest is incremental follow-up work.
  */
 final class DefaultEffectRegistry
 {
@@ -123,6 +137,16 @@ final class DefaultEffectRegistry
         $registry->register('euphoria', new EuphoriaEffect());
         $registry->register('sloth', new SlothEffect());
         $registry->register('love', new LoveEffect());
+        $registry->register('neurosis', new NeurosisEffect());
+        $registry->register('regret', new RegretEffect());
+        $registry->register('cruelty', new CrueltyEffect());
+        $registry->register('indecisiveness', new IndecisivenessEffect());
+        $registry->register('rejection', new RejectionEffect());
+        $registry->register('denial', new DenialEffect());
+        $registry->register('disorientation', new DisorientationEffect());
+        $registry->register('panic', new PanicEffect());
+        $registry->register('worry', new WorryEffect());
+        $registry->register('contempt', new ContemptEffect());
 
         $registry->register('ambivalence', new PairedColorThresholdEffect('red', 'green'));
         $registry->register('discipline', new PairedColorThresholdEffect('black', 'red'));

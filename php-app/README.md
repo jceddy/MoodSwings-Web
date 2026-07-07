@@ -107,7 +107,7 @@ account/friends layer above. The core pieces:
   played *earliest* that round, Hurt Feelings ties go to whoever played
   *latest*).
 
-57 of the 133-card pool have a registered effect so far (see
+67 of the 133-card pool have a registered effect so far (see
 `DefaultEffectRegistry`) — chosen to exercise the range of patterns the
 engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
@@ -127,9 +127,14 @@ is), source-tied and end-of-round suppression, a modal single-vs-mass
 choice, a "most common color(s) among all moods" board computation, "you
 may" effects with a fixed (or condition-filtered) target set rather than
 player-chosen ids, a mandatory effect resolved once per player across the
-whole table, and a range of pure while-in-play value formulas (self-vs-
-every-opponent comparisons, a universal or any-opponent threshold, a
-distinct color count, parity checks, and a five-color-presence check).
+whole table, a range of pure while-in-play value formulas (self-vs-every-
+opponent comparisons, a universal or any-opponent threshold, a distinct
+color count, parity checks, and a five-color-presence check), a genuinely
+random target (rather than another player's informed choice, which the
+engine doesn't support resolving mid-play), a pairwise qualifying
+condition across two chosen targets, a two-stage optional effect, and
+stealing a mood directly into the acting player's own hand rather than
+returning it to its owner's (`BoardState::moveInPlayToPlayersHand()`).
 Not full coverage — implementing the rest is incremental follow-up work.
 
 ## Game layer
