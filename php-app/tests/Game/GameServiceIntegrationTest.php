@@ -446,6 +446,128 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'validation_extra_play'));
     }
 
+    public function testGetStateAppendsDuplicityRepeatFieldsForAHandCardWithItsOwnAfterPlayingField(): void
+    {
+        $u1 = $this->insertUser('duplicity1');
+        $u2 = $this->insertUser('duplicity2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity -- has its own afterPlaying choice
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $dignity = self::findByCardId($hand, 8);
+
+        $repeat = self::findFieldByKey($dignity['choice_fields'], 'duplicity_repeat');
+        self::assertNotNull($repeat, 'expected a duplicity_repeat field on Dignity while Duplicity is in play');
+        self::assertSame('bool', $repeat['type']);
+
+        $nested = self::findFieldByKey($dignity['choice_fields'], 'duplicity_repeat_choices');
+        self::assertNotNull($nested);
+        self::assertSame('nested', $nested['type']);
+        self::assertCount(1, $nested['fields']);
+        self::assertSame('discard_card_id', $nested['fields'][0]['key']);
+    }
+
+    public function testGetStateOmitsDuplicityFieldsWhenViewerHasNoDuplicityInPlay(): void
+    {
+        $u1 = $this->insertUser('noduplicity1');
+        $u2 = $this->insertUser('noduplicity2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, no Duplicity anywhere in play
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+
+        self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'duplicity_repeat'));
+        self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'duplicity_repeat_choices'));
+    }
+
+    public function testGetStateOmitsDuplicityFieldsForCreativitySinceItsRawHasAfterPlayingIsFalse(): void
+    {
+        $u1 = $this->insertUser('creativitydup1');
+        $u2 = $this->insertUser('creativitydup2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity -- raw hasAfterPlaying is false
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $creativity = self::findByCardId($hand, 32);
+
+        self::assertNull(self::findFieldByKey($creativity['choice_fields'], 'duplicity_repeat'));
+        $copyField = self::findFieldByKey($creativity['choice_fields'], 'copy_card_id');
+        self::assertNotNull($copyField);
+        self::assertSame('mood', $copyField['type']);
+        self::assertSame('any', $copyField['scope']);
+    }
+
+    public function testGetStatesDuplicityNestedChoicesExcludeGuilesCostFieldButKeepItsTargetField(): void
+    {
+        $u1 = $this->insertUser('guiledup1');
+        $u2 = $this->insertUser('guiledup2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile -- discard cost + afterPlaying target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $guile = self::findByCardId($hand, 40);
+
+        $nested = self::findFieldByKey($guile['choice_fields'], 'duplicity_repeat_choices');
+        self::assertNotNull($nested);
+        self::assertCount(1, $nested['fields']);
+        self::assertSame('target_mood_id', $nested['fields'][0]['key']);
+    }
+
+    /** @param array<int, array<string, mixed>> $cards */
+    private static function findByCardId(array $cards, int $cardId): array
+    {
+        foreach ($cards as $card) {
+            if ($card['card_id'] === $cardId) {
+                return $card;
+            }
+        }
+
+        self::fail("no card with card_id {$cardId} found");
+    }
+
     /** @param array<int, array<string, mixed>> $fields */
     private static function findFieldByKey(array $fields, string $key): ?array
     {

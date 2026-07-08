@@ -367,4 +367,48 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertNull(CardChoiceSchema::reactionTemplate('compulsion'));
         self::assertNull(CardChoiceSchema::reactionTemplate('nonexistent'));
     }
+
+    public function testCopyCardIdFieldForCreativityTargetsAnyMoodInPlay(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('creativity');
+
+        self::assertCount(1, $fields);
+        self::assertSame('copy_card_id', $fields[0]['key']);
+        self::assertSame('mood', $fields[0]['type']);
+        self::assertSame('any', $fields[0]['scope']);
+        self::assertFalse($fields[0]['required']);
+    }
+
+    public function testReactionTemplateForDuplicityMatchesDuplicitysRepeatKey(): void
+    {
+        $template = CardChoiceSchema::reactionTemplate('duplicity');
+
+        self::assertSame('duplicity_repeat', $template['key']);
+        self::assertSame('bool', $template['type']);
+        self::assertFalse($template['required']);
+    }
+
+    public function testAfterPlayingFieldsExcludesGuilesCostFieldButKeepsItsTargetField(): void
+    {
+        $fields = CardChoiceSchema::afterPlayingFields('guile');
+
+        self::assertCount(1, $fields);
+        self::assertSame('target_mood_id', $fields[0]['key']);
+    }
+
+    public function testAfterPlayingFieldsExcludesRegretsCostFieldButKeepsItsTargetField(): void
+    {
+        $fields = CardChoiceSchema::afterPlayingFields('regret');
+
+        self::assertCount(1, $fields);
+        self::assertSame('target_mood_id', $fields[0]['key']);
+    }
+
+    public function testAfterPlayingFieldsMatchesForEffectKeyForCardsWithNoCostField(): void
+    {
+        // Most cards have no 'stage' => 'cost' field at all, so
+        // afterPlayingFields() should be a no-op filter for them.
+        self::assertSame(CardChoiceSchema::forEffectKey('betrayal'), CardChoiceSchema::afterPlayingFields('betrayal'));
+        self::assertSame([], CardChoiceSchema::afterPlayingFields('charity'));
+    }
 }

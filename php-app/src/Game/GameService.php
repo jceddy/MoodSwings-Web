@@ -779,7 +779,11 @@ final class GameService
 
         $choiceFields = CardChoiceSchema::forEffectKey($catalog['effectKey']);
         if ($reactingViewerId !== null) {
-            $choiceFields = [...$choiceFields, ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue)];
+            $choiceFields = [
+                ...$choiceFields,
+                ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue),
+                ...$this->duplicityFields($state, $reactingViewerId, $catalog),
+            ];
         }
 
         return [
@@ -822,6 +826,43 @@ final class GameService
         }
 
         return $fields;
+    }
+
+    /**
+     * Duplicity's repeat-with-fresh-choices fields, appended for *this
+     * specific card* when the viewer has Duplicity in play. Gated on
+     * $catalog['hasAfterPlaying'] -- the card's own *raw* (non-Creativity-
+     * copy-aware) flag, deliberately: MoodPlayService gates the real
+     * repeat on the *effective* (copy-aware) row, but since Creativity's
+     * copy_card_id is only known once the play is actually submitted, this
+     * can't precompute the right nested fields for a Creativity play here
+     * -- so Creativity (whose own raw hasAfterPlaying is false) simply
+     * never gets a repeat option, rather than offering a wrong one. See
+     * CardChoiceSchema's docblock for the same note.
+     *
+     * @param array{effectKey:string,hasAfterPlaying:bool} $catalog
+     * @return array<int, array<string, mixed>>
+     */
+    private function duplicityFields(BoardState $state, int $viewerId, array $catalog): array
+    {
+        if (
+            !$catalog['hasAfterPlaying']
+            || $catalog['effectKey'] === 'duplicity'
+            || !$state->playerHasMoodInPlay($viewerId, 'duplicity')
+        ) {
+            return [];
+        }
+
+        return [
+            CardChoiceSchema::reactionTemplate('duplicity'),
+            [
+                'key' => 'duplicity_repeat_choices',
+                'type' => 'nested',
+                'required' => false,
+                'label' => 'Choices for the repeat (only used if repeating above)',
+                'fields' => CardChoiceSchema::afterPlayingFields($catalog['effectKey']),
+            ],
+        ];
     }
 
     /** @return array<int, string> card_id => name */

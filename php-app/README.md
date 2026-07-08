@@ -305,9 +305,42 @@ from the possibly-different live `value` a card in play might have) for
 exactly this kind of client-side reasoning, and for display in the
 frontend's card detail dialog.
 
-The one remaining gap: Duplicity's nested repeat-with-fresh-choices
-mechanic isn't covered — omitting it just means that optional input is
-never sent, which was already a legal (declining) choice.
+Duplicity's nested repeat-with-fresh-choices mechanic (`MoodPlayService`:
+after any card's own `afterPlaying()` resolves, if the acting player has
+Duplicity in play, they may have that same `afterPlaying()` run a *second*
+time with a fresh, independent set of choices — e.g. a card discarded once
+can't be discarded again on the repeat) is exposed via a fixed
+`duplicity_repeat` boolean template (`CardChoiceSchema::reactionTemplate('duplicity')`,
+same mechanism as Scorn/Validation's reactions) plus a `type: 'nested'`
+field, `duplicity_repeat_choices`, whose own `fields` are the played card's
+`afterPlayingFields()` — `forEffectKey()` with any `stage: 'cost'` field
+filtered out, since a repeat only re-invokes `afterPlaying()`, never
+`payToPlayCost()` (Guile's/Regret's mandatory discard is a cost, so it's
+excluded from their repeat form; their `target_mood_id` isn't).
+`GameService::serializeCard()`'s `duplicityFields()` appends both only when
+the *viewer* has Duplicity in play and the card being offered isn't
+Duplicity itself, gated on that card's own raw (not Creativity-copy-aware)
+`hasAfterPlaying` flag.
+
+Creativity's "play as a copy of any mood" choice (`copy_card_id`, read from
+the top-level choices, resolved entirely server-side in `MoodPlayService`)
+means any mood currently *in play* — visible on the table, not any of the
+133 printed card designs in the abstract — so it's exposed as an ordinary
+`type: 'mood'`, `scope: 'any'` field (the same shape Conviction uses),
+whose options are naturally already scoped to `BoardState::moodsInPlay()`
+like every other `mood` field. `MoodPlayService::playMood()` enforces the
+same restriction server-side with `BoardState::isInPlay($copiedCardId)`,
+throwing `InvalidChoiceException` for a `copy_card_id` that isn't
+currently on the table.
+
+One remaining known gap, intentionally out of scope: Creativity's
+`copy_card_id` is resolved client-side in the same request as the rest of
+a play, so a Duplicity repeat or a Scorn/Validation reaction to a
+Creativity play can't be computed against the *copied* card's fields here
+— only Creativity's own (ability-less) ones. Gating Duplicity's repeat
+field on a card's raw `hasAfterPlaying` (false for Creativity) means
+Creativity simply never offers a repeat option, rather than offering a
+wrong one.
 
 ## Game layer
 

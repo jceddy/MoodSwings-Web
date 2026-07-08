@@ -136,3 +136,9 @@ dialog#card-detail-dialog {
 #choices-panel input[type="checkbox"] {
     margin-left: 0.5rem;
 }
+
+.choice-field-nested {
+    margin-left: 1.5rem;
+    border-left: 2px solid #ccc;
+    padding-left: 0.75rem;
+}

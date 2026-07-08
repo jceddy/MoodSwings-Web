@@ -44,7 +44,22 @@ routed to the PHP app).
     suppress-target, narrowed to moods sharing the card-to-be-played's own
     color; Validation's extra-play checkbox, only offered when that card's
     base value is 0 or 1) — both submitted in the same play request,
-    since that's how the rules engine resolves them. Polls
+    since that's how the rules engine resolves them. If you have Duplicity
+    in play, every other card that has its own after-playing effect
+    (including a zero-field one like Charity) also gets a "repeat this
+    mood's own effect" checkbox plus an indented, nested copy of that
+    card's own after-playing fields (its `duplicity_repeat_choices`) for a
+    second, independent set of choices — e.g. repeating Dignity offers a
+    second, separately-filtered card-to-discard dropdown, since the same
+    card can't be discarded twice. Guile's and Regret's mandatory discard
+    cost is excluded from their nested repeat form (a repeat only re-runs
+    the after-playing effect, not the cost to play), leaving just their
+    target-mood field. Creativity's panel instead shows a dropdown to play
+    it as an exact copy of any mood currently in play (any player's) —
+    left blank, it's just a blue card worth 0; because that choice
+    resolves server-side in the same request, Creativity never offers a
+    Duplicity repeat option of its own (see `php-app/README.md` for the
+    same gap noted from the server side). Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
     moves. Every mood in play and every card in the discard pile is also
     clickable, opening a read-only detail view (name, base value, alt

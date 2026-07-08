@@ -18,13 +18,15 @@ namespace MoodSwings\Rules;
  *
  * Field shape: array{
  *     key: string,          // exact PlayerChoices key the effect reads
- *     type: string,         // player|mood|hand_card|discard_card|mode|value|bool
+ *     type: string,         // player|mood|hand_card|discard_card|mode|value|bool|nested
  *     label: string,
  *     required: bool,       // true only for requireInt/requireString or a mandatory to-play cost
  *     multi?: bool,         // true for ints()-backed (possibly multiple) fields
  *     scope?: string,       // player: any|other -- mood: own|other|any
  *     options?: string[],   // mode only
  *     min?: int, max?: int, // value only
+ *     fields?: array,       // nested only: this field's own sub-fields, same shape as this array --
+ *                           // one level deep only (see Duplicity below)
  *     filter?: array{       // narrows a dropdown to choices the effect will actually accept,
  *         colors?: string[],             // mood/hand_card: candidate's color must be one of these
  *         values?: int[],                // hand_card: candidate's (base) value must be one of these
@@ -50,27 +52,37 @@ namespace MoodSwings\Rules;
  *         type: 'same_color_or_value'|'same_owner'|'distinct_owners'|'max_total_value',
  *         max?: int,             // max_total_value only
  *     },
+ *     stage?: 'cost',        // marks a field as belonging to payToPlayCost() rather than
+ *                            // afterPlaying() -- only Guile's discard_card_ids and Regret's
+ *                            // hand_mood_ids mix the two; afterPlayingFields() below excludes
+ *                            // these when building Duplicity's repeat sub-form, since a repeat
+ *                            // only ever re-invokes afterPlaying(), never the cost again.
  * }
  *
- * Scorn's and Validation's reactToAnotherPlay() choices don't fit the
- * per-effect_key SCHEMA above -- they fire while playing a *different*
- * card, triggered by a mood the acting player already has in play (see
- * MoodPlayService::playMood(), which calls reactToAnotherPlay() on every
- * one of the player's other in-play moods using the same PlayerChoices
- * already submitted for that play). reactionTemplates() below holds their
- * field shape; GameService::serializeCard() is the one that actually
- * decides, per hand card, whether to append them -- it knows the viewer's
- * own in-play moods (playerHasMoodInPlay()) and the specific card being
- * offered, which is exactly what's needed to fill in Scorn's color filter
- * (must match *this* card's color) and gate Validation's field on *this*
- * card's base value being 0 or 1, per each effect's own check.
+ * Scorn's and Validation's reactToAnotherPlay() choices, and Duplicity's
+ * repeat-with-fresh-choices mechanic, don't fit the per-effect_key SCHEMA
+ * above -- all three fire while playing a *different* card, triggered by a
+ * mood the acting player already has in play (see
+ * MoodPlayService::playMood(): the reactToAnotherPlay() loop for Scorn/
+ * Validation, and the dedicated 'duplicity_repeat'/'duplicity_repeat_choices'
+ * block -- using PlayerChoices::sub() -- for Duplicity). REACTIONS below
+ * holds their fixed field shape; GameService::serializeCard() decides, per
+ * hand card, whether to append them -- it knows the viewer's own in-play
+ * moods (playerHasMoodInPlay()) and the specific card being offered, which
+ * is exactly what's needed to fill in Scorn's color filter (must match
+ * *this* card's color), gate Validation's field on *this* card's base
+ * value being 0 or 1, and build Duplicity's nested repeat sub-form from
+ * *this* card's own afterPlayingFields().
  *
- * One remaining known gap, intentionally out of scope here: Duplicity's
- * nested PlayerChoices::sub() repeat-with-fresh-choices mechanic (handled
- * directly by MoodPlayService, not any MoodEffect, since repeating a
- * card's own effect needs the registry no MoodEffect has access to).
- * Omitting it just means that optional input is never sent, which was
- * already a legal (declining) choice.
+ * One remaining known gap, intentionally out of scope: Creativity's
+ * copy_card_id choice (see the 'creativity' entry below) is resolved
+ * client-side in the same request as the rest of a play, so a Duplicity
+ * repeat or a Scorn/Validation reaction to a Creativity play can't be
+ * computed against the *copied* card's fields here -- only Creativity's
+ * own (ability-less) ones. GameService gates Duplicity's repeat field on a
+ * card's raw (non-copy-aware) hasAfterPlaying, which is false for
+ * Creativity, so Creativity never offers a repeat option at all rather
+ * than offering a wrong one.
  *
  * Cards with no printed ability, and cards whose effect never reads
  * PlayerChoices at all (pure computeValue() formulas; unconditional
@@ -104,7 +116,7 @@ final class CardChoiceSchema
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (required if discarding a card above)'],
         ],
         'guile' => [
-            ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 cards to discard (cost to play this card)', 'count' => ['min' => 2, 'max' => 2]],
+            ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 cards to discard (cost to play this card)', 'count' => ['min' => 2, 'max' => 2], 'stage' => 'cost'],
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to take"],
         ],
         'envy' => [
@@ -164,7 +176,7 @@ final class CardChoiceSchema
             ['key' => 'hand_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => true, 'label' => 'Your mood(s) to return to hand (cost to play this card, one or more)', 'count' => ['min' => 1]],
         ],
         'regret' => [
-            ['key' => 'hand_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 of your moods to return to hand (cost to play this card)', 'count' => ['min' => 2, 'max' => 2]],
+            ['key' => 'hand_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 of your moods to return to hand (cost to play this card)', 'count' => ['min' => 2, 'max' => 2], 'stage' => 'cost'],
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to steal into your hand"],
         ],
         'cruelty' => [
@@ -312,6 +324,9 @@ final class CardChoiceSchema
         'delight' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 1, 3, or 5; boosts this mood\'s value to 5)', 'filter' => ['values' => [1, 3, 5]]],
         ],
+        'creativity' => [
+            ['key' => 'copy_card_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => "Play as a copy of a mood currently in play (optional -- otherwise it's just a blue card worth 0)"],
+        ],
     ];
 
     /**
@@ -337,6 +352,12 @@ final class CardChoiceSchema
             'required' => false,
             'label' => "Validation's reaction: play an additional mood this turn",
         ],
+        'duplicity' => [
+            'key' => 'duplicity_repeat',
+            'type' => 'bool',
+            'required' => false,
+            'label' => "Duplicity's reaction: repeat this mood's own effect with a fresh set of choices",
+        ],
     ];
 
     /** @return array<int, array<string, mixed>> */
@@ -347,6 +368,21 @@ final class CardChoiceSchema
         }
 
         return self::SCHEMA[$effectKey] ?? [];
+    }
+
+    /**
+     * forEffectKey() minus any 'cost' stage field -- what Duplicity's
+     * repeat re-invokes is only ever afterPlaying(), never the to-play
+     * cost (already paid once, when the card was originally played).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public static function afterPlayingFields(string $effectKey): array
+    {
+        return array_values(array_filter(
+            self::forEffectKey($effectKey),
+            static fn (array $field): bool => ($field['stage'] ?? null) !== 'cost'
+        ));
     }
 
     /** @return ?array<string, mixed> */
