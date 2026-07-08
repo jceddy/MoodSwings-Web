@@ -21,13 +21,14 @@ routed to the PHP app).
     friends (via `GET /friends`) plus a format, then calls `POST /games`.
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
     deck count, and your hand (via `GET /games/state`). Playing a card
-    opens a generic choices panel — since each of the ~127 cards' `choices`
-    payload has its own shape (see `php-app/src/Rules/PlayerChoices.php`),
-    the panel offers the common choice kinds (target player, target mood
-    in play, a card to discard, cards to reveal, a mode string) rather
-    than a bespoke prompt per card; `POST /games/play` only reads the keys
-    the played card actually asks for, and rejects the rest with a
-    human-readable message if something required is still missing. Polls
+    with no ability worth asking about (roughly half the 127-card pool)
+    plays immediately; otherwise a choices panel opens showing only the
+    fields that specific card needs (a target player, a mood in play, a
+    card to discard, a mode string, etc.), driven by each card's
+    `choice_fields` in the state response (see `CardChoiceSchema` in
+    `php-app/README.md`) rather than one form covering every card. If a
+    filled-in choice is still rejected, the rules engine's own
+    human-readable message explains what's missing. Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
     moves.
   - A "Friends" button opens a `<dialog>` for managing friends: send a

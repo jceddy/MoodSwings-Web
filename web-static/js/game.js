@@ -299,7 +299,7 @@
         const canAct = state.game.status === 'in_progress' && state.you.is_your_turn;
         renderList(document.getElementById('hand-list'), { hidden: true }, state.you.hand || [], (card) => {
             const li = document.createElement('li');
-            li.appendChild(actionButton(cardLabel(card), () => openChoicesPanel(card)));
+            li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
             li.lastChild.disabled = !canAct;
             return li;
         });
@@ -341,18 +341,104 @@
         }
     }
 
-    // -- Choices panel ---------------------------------------------------
+    // -- Choices panel -----------------------------------------------------
+    //
+    // Each card's choice_fields (from GET /games/state, sourced from
+    // CardChoiceSchema on the server -- see php-app/src/Rules/
+    // CardChoiceSchema.php) describes exactly which PlayerChoices keys that
+    // specific card reads, so the panel only ever asks for what the card
+    // being played actually needs, instead of one form covering all ~127
+    // cards' possible fields. Cards with no fields at all (roughly half the
+    // pool -- pure value formulas, unconditional grants) skip the panel
+    // entirely and play immediately on click.
 
     let selectedCard = null;
 
-    function populateSelect(selectEl, items, labelFor, valueFor) {
-        selectEl.innerHTML = '<option value="">(none)</option>';
-        for (const item of items) {
-            const option = document.createElement('option');
-            option.value = valueFor(item);
-            option.textContent = labelFor(item);
-            selectEl.appendChild(option);
+    async function handleHandCardClick(card) {
+        if (!card.choice_fields || card.choice_fields.length === 0) {
+            await submitPlay(card, {});
+            return;
         }
+        openChoicesPanel(card);
+    }
+
+    function fieldOptions(field, card) {
+        switch (field.type) {
+            case 'player':
+                return currentState.players
+                    .filter((p) => field.scope !== 'other' || p.game_player_id !== currentState.you.game_player_id)
+                    .map((p) => ({ value: p.game_player_id, label: p.username }));
+            case 'mood':
+                return currentState.in_play
+                    .filter((c) => c.card_id !== card.card_id)
+                    .filter((c) => {
+                        if (field.scope === 'own') return c.owner_game_player_id === currentState.you.game_player_id;
+                        if (field.scope === 'other') return c.owner_game_player_id !== currentState.you.game_player_id;
+                        return true;
+                    })
+                    .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+            case 'hand_card':
+                return currentState.you.hand
+                    .filter((c) => c.card_id !== card.card_id)
+                    .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+            case 'discard_card':
+                return currentState.discard_pile.map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+            default:
+                return [];
+        }
+    }
+
+    function capitalize(word) {
+        return word.charAt(0).toUpperCase() + word.slice(1);
+    }
+
+    function buildFieldWidget(field, card) {
+        if (field.type === 'bool') {
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.id = 'choice-field-' + field.key;
+            return checkbox;
+        }
+
+        if (field.type === 'value') {
+            const select = document.createElement('select');
+            select.id = 'choice-field-' + field.key;
+            select.appendChild(new Option('(none)', ''));
+            for (let value = field.min; value <= field.max; value++) {
+                select.appendChild(new Option(String(value), String(value)));
+            }
+            return select;
+        }
+
+        const select = document.createElement('select');
+        select.id = 'choice-field-' + field.key;
+        if (field.multi) {
+            select.multiple = true;
+        } else {
+            select.appendChild(new Option('(none)', ''));
+        }
+
+        const options = field.type === 'mode'
+            ? field.options.map((value) => ({ value, label: capitalize(value).replace(/_/g, ' ') }))
+            : fieldOptions(field, card);
+        for (const option of options) {
+            select.appendChild(new Option(option.label, option.value));
+        }
+        return select;
+    }
+
+    function fieldHasValue(widget, field) {
+        if (field.type === 'bool') return true; // a checkbox always has a value (checked or not)
+        if (field.multi) return widget.selectedOptions.length > 0;
+        return widget.value !== '';
+    }
+
+    function updatePlayButtonEnabled() {
+        const playButton = document.getElementById('play-card-button');
+        const allRequiredFilled = selectedCard.choice_fields
+            .filter((field) => field.required)
+            .every((field) => fieldHasValue(document.getElementById('choice-field-' + field.key), field));
+        playButton.disabled = !allRequiredFilled;
     }
 
     function openChoicesPanel(card) {
@@ -361,35 +447,19 @@
         document.getElementById('choices-card-name').textContent = cardLabel(card);
         document.getElementById('choices-card-rules').textContent = card.rules_text;
 
-        populateSelect(
-            document.getElementById('choice-target-player'),
-            currentState.players,
-            (p) => p.username,
-            (p) => p.game_player_id
-        );
-        populateSelect(
-            document.getElementById('choice-target-mood'),
-            currentState.in_play,
-            (c) => cardLabel(c),
-            (c) => c.card_id
-        );
-        const otherHandCards = currentState.you.hand.filter((c) => c.card_id !== card.card_id);
-        populateSelect(
-            document.getElementById('choice-discard-card'),
-            otherHandCards,
-            (c) => cardLabel(c),
-            (c) => c.card_id
-        );
-        const revealSelect = document.getElementById('choice-reveal-cards');
-        revealSelect.innerHTML = '';
-        for (const c of otherHandCards) {
-            const option = document.createElement('option');
-            option.value = c.card_id;
-            option.textContent = cardLabel(c);
-            revealSelect.appendChild(option);
+        const fieldsContainer = document.getElementById('choices-fields');
+        fieldsContainer.innerHTML = '';
+        for (const field of card.choice_fields) {
+            const label = document.createElement('label');
+            label.className = 'choice-field';
+            label.append(field.label + (field.required ? ' (required)' : '') + ' ');
+            const widget = buildFieldWidget(field, card);
+            widget.addEventListener('change', updatePlayButtonEnabled);
+            label.appendChild(widget);
+            fieldsContainer.appendChild(label);
         }
-        document.getElementById('choice-mode').value = '';
 
+        updatePlayButtonEnabled();
         choicesPanel.hidden = false;
     }
 
@@ -398,36 +468,11 @@
         choicesPanel.hidden = true;
     });
 
-    document.getElementById('play-card-button').addEventListener('click', async () => {
+    async function submitPlay(card, choices) {
         boardError.hidden = true;
         boardMessage.hidden = true;
 
-        const choices = {};
-        const targetPlayer = document.getElementById('choice-target-player').value;
-        if (targetPlayer) {
-            choices.target_player_id = Number(targetPlayer);
-            choices.opponent_player_id = Number(targetPlayer);
-        }
-        const targetMood = document.getElementById('choice-target-mood').value;
-        if (targetMood) {
-            choices.target_mood_id = Number(targetMood);
-        }
-        const discardCard = document.getElementById('choice-discard-card').value;
-        if (discardCard) {
-            choices.discard_card_id = Number(discardCard);
-            choices.discard_mood_id = Number(discardCard);
-        }
-        const revealCards = Array.from(document.getElementById('choice-reveal-cards').selectedOptions)
-            .map((option) => Number(option.value));
-        if (revealCards.length > 0) {
-            choices.reveal_card_ids = revealCards;
-        }
-        const mode = document.getElementById('choice-mode').value.trim();
-        if (mode) {
-            choices.mode = mode;
-        }
-
-        const { ok, body } = await playCard(currentGameId, selectedCard.card_id, choices);
+        const { ok, body } = await playCard(currentGameId, card.card_id, choices);
 
         if (!ok) {
             boardError.textContent = body.message || 'Could not play that card.';
@@ -439,6 +484,25 @@
         choicesPanel.hidden = true;
         announceOutcome(body);
         await refreshBoard();
+    }
+
+    document.getElementById('play-card-button').addEventListener('click', async () => {
+        const choices = {};
+        for (const field of selectedCard.choice_fields) {
+            const widget = document.getElementById('choice-field-' + field.key);
+            if (field.type === 'bool') {
+                if (widget.checked) choices[field.key] = true;
+            } else if (field.multi) {
+                const values = Array.from(widget.selectedOptions).map((option) => option.value);
+                if (values.length > 0) {
+                    choices[field.key] = field.type === 'mode' ? values : values.map(Number);
+                }
+            } else if (widget.value !== '') {
+                choices[field.key] = field.type === 'mode' ? widget.value : Number(widget.value);
+            }
+        }
+
+        await submitPlay(selectedCard, choices);
     });
 
     document.getElementById('friends-button').addEventListener('click', async () => {

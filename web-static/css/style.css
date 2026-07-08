@@ -124,10 +124,14 @@ dialog#new-game-dialog {
 }
 
 #choices-panel select,
-#choices-panel input {
+#choices-panel input:not([type="checkbox"]) {
     display: block;
     width: 100%;
     box-sizing: border-box;
     padding: 0.4rem;
     margin-top: 0.25rem;
+}
+
+#choices-panel input[type="checkbox"] {
+    margin-left: 0.5rem;
 }

@@ -7,6 +7,7 @@ namespace MoodSwings\Game;
 use MoodSwings\Database\Connection;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Rules\BoardState;
+use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\RoundScorer;
@@ -753,7 +754,7 @@ final class GameService
      * card sitting in a hand or the discard pile there's no live effect to
      * apply, so its printed catalog color/base value is what's shown.
      *
-     * @return array{card_id:int,name:string,color:string,value:int,effect_key:string,rules_text:string}
+     * @return array{card_id:int,name:string,color:string,value:int,effect_key:string,rules_text:string,choice_fields:array<int,array<string,mixed>>}
      */
     private function serializeCard(BoardState $state, int $cardId): array
     {
@@ -768,6 +769,7 @@ final class GameService
             'value' => $inPlay ? $state->valueOf($cardId) : $catalog['baseValue'],
             'effect_key' => $catalog['effectKey'],
             'rules_text' => $catalog['rulesText'],
+            'choice_fields' => CardChoiceSchema::forEffectKey($catalog['effectKey']),
         ];
     }
 
