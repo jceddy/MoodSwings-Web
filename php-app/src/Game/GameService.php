@@ -754,13 +754,19 @@ final class GameService
      * card sitting in a hand or the discard pile there's no live effect to
      * apply, so its printed catalog color/base value is what's shown.
      *
-     * @return array{card_id:int,name:string,color:string,value:int,effect_key:string,rules_text:string,choice_fields:array<int,array<string,mixed>>}
+     * @return array{card_id:int,name:string,color:string,value:int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>}
      */
     private function serializeCard(BoardState $state, int $cardId): array
     {
         $catalog = $state->catalogRow($cardId);
         $names = $this->cardCatalogNames();
         $inPlay = $state->isInPlay($cardId);
+
+        // A Creativity copy's dice value (like its color/value) comes from
+        // whatever card it's currently copying, not from Creativity's own
+        // (dice-less) catalog row -- see EncouragementEffect, which checks
+        // the same effectiveCardId() for exactly this reason.
+        $diceValueCatalog = $inPlay ? $state->catalogRow($state->effectiveCardId($cardId)) : $catalog;
 
         return [
             'card_id' => $cardId,
@@ -769,6 +775,7 @@ final class GameService
             'value' => $inPlay ? $state->valueOf($cardId) : $catalog['baseValue'],
             'effect_key' => $catalog['effectKey'],
             'rules_text' => $catalog['rulesText'],
+            'has_dice_value' => $diceValueCatalog['altValue'] !== null,
             'choice_fields' => CardChoiceSchema::forEffectKey($catalog['effectKey']),
         ];
     }

@@ -25,6 +25,18 @@ namespace MoodSwings\Rules;
  *     scope?: string,       // player: any|other -- mood: own|other|any
  *     options?: string[],   // mode only
  *     min?: int, max?: int, // value only
+ *     filter?: array{       // narrows a dropdown to choices the effect will actually accept,
+ *         colors?: string[],             // mood/hand_card: candidate's color must be one of these
+ *         values?: int[],                // hand_card: candidate's (base) value must be one of these
+ *         min_value?: int, max_value?: int, // mood: candidate's (live) value must fall in this range
+ *         parity?: 'odd'|'even',          // mood: candidate's (live) value must have this parity
+ *         has_dice_value?: bool,          // mood: candidate must have a printed dice/alt value
+ *         min_hand_count?: int,           // player: candidate must hold at least this many hand cards
+ *         min_mood_count?: int,           // player: candidate must own at least this many moods in play
+ *         more_moods_than_viewer?: bool,  // player: candidate must own more moods than you once this card is in play
+ *     },                    // mirrors each effect class's own InvalidChoiceException checks exactly --
+ *                           // see CardChoiceSchemaTest for the source cross-references. A field with
+ *                           // no filter key has no such narrowing (every scope-eligible candidate is legal).
  * }
  *
  * Two known gaps, both intentionally out of scope here: Scorn's and
@@ -48,13 +60,13 @@ final class CardChoiceSchema
     /** @var array<string, array<int, array<string, mixed>>> */
     private const SCHEMA = [
         'dignity' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (boosts this mood\'s value to 5)'],
+            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (boosts this mood\'s value to 5)', 'filter' => ['values' => [0, 1, 2, 3]]],
         ],
         'imagination' => [
             ['key' => 'color', 'type' => 'mode', 'required' => true, 'options' => self::FIVE_COLORS, 'label' => 'Color to declare for every mood in play'],
         ],
         'courage' => [
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to discard (value 5+, up to 2, one per player)'],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to discard (value 5+, up to 2, one per player)', 'filter' => ['min_value' => 5]],
         ],
         'conviction' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => true, 'label' => 'Mood to move to the bottom of the deck'],
@@ -74,7 +86,7 @@ final class CardChoiceSchema
             ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => true, 'label' => 'Your mood to discard (cost to play this card)'],
         ],
         'fascination' => [
-            ['key' => 'give_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to give away (must be blue or black)'],
+            ['key' => 'give_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to give away (must be blue or black)', 'filter' => ['colors' => ['blue', 'black']]],
             ['key' => 'recipient_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Player to give it to (required if giving a card)'],
         ],
         'wonder' => [
@@ -102,23 +114,23 @@ final class CardChoiceSchema
             ['key' => 'discard_qualifying_moods', 'type' => 'bool', 'required' => false, 'label' => 'Discard every mood valued 3 or less'],
         ],
         'anxiety' => [
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Odd-valued moods to return to hand (up to 2, one per player)'],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Odd-valued moods to return to hand (up to 2, one per player)', 'filter' => ['parity' => 'odd']],
         ],
         'guilt' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['single', 'all'], 'label' => 'Suppress one qualifying mood, or all of them'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (black or red; required if mode is single)'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (black or red; required if mode is single)', 'filter' => ['colors' => ['black', 'red']]],
         ],
         'shame' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => "Card to discard (suppresses other moods sharing its color)"],
         ],
         'spite' => [
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Even-valued moods to discard (up to 2, one per player)'],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Even-valued moods to discard (up to 2, one per player)', 'filter' => ['parity' => 'even']],
         ],
         'rebellion' => [
             ['key' => 'value', 'type' => 'value', 'required' => true, 'min' => 0, 'max' => 3, 'label' => 'Value to discard (every mood showing it)'],
         ],
         'shock' => [
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to discard (value 3 or less, up to 2, one per player)'],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to discard (value 3 or less, up to 2, one per player)', 'filter' => ['max_value' => 3]],
         ],
         'bravado' => [
             ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Another of your moods to discard (unlocks an extra play)'],
@@ -131,10 +143,10 @@ final class CardChoiceSchema
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to steal into your hand"],
         ],
         'cruelty' => [
-            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)'],
+            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
         ],
         'indecisiveness' => [
-            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)'],
+            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
         ],
         'rejection' => [
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => '2 moods to discard (must share a color or value)'],
@@ -149,12 +161,12 @@ final class CardChoiceSchema
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to return to hand (up to 2, one per player)'],
         ],
         'worry' => [
-            ['key' => 'hand_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your white or black mood to return to hand'],
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to return to hand (value 3 or less, up to 2; only if you returned a mood above)'],
+            ['key' => 'hand_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your white or black mood to return to hand', 'filter' => ['colors' => ['white', 'black']]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to return to hand (value 3 or less, up to 2; only if you returned a mood above)', 'filter' => ['max_value' => 3]],
         ],
         'contempt' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['single', 'all'], 'label' => 'Suppress one qualifying mood, or all of them'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (green or white; required if mode is single)'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (green or white; required if mode is single)', 'filter' => ['colors' => ['green', 'white']]],
         ],
         'ambition' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (unlocks an extra play)'],
@@ -166,13 +178,13 @@ final class CardChoiceSchema
             ['key' => 'hand_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your mood to return to hand'],
         ],
         'paranoia' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player to target (must have cards in hand)'],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player to target (must have cards in hand)', 'filter' => ['min_hand_count' => 1]],
         ],
         'suspicion' => [
-            ['key' => 'player_ids', 'type' => 'player', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Players to target'],
+            ['key' => 'player_ids', 'type' => 'player', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Players to target', 'filter' => ['min_hand_count' => 1]],
         ],
         'curiosity' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player whose hand to reveal a card from'],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player whose hand to reveal a card from', 'filter' => ['min_hand_count' => 1]],
         ],
         'condescension' => [
             ['key' => 'give_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to give away'],
@@ -186,21 +198,21 @@ final class CardChoiceSchema
             ['key' => 'discard_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => false, 'label' => '2 of your other moods to discard'],
         ],
         'hostility' => [
-            ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your black or green mood to discard'],
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to discard (value 3 or less, up to 2; only if you discarded a mood above)'],
+            ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your black or green mood to discard', 'filter' => ['colors' => ['black', 'green']]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to discard (value 3 or less, up to 2; only if you discarded a mood above)', 'filter' => ['max_value' => 3]],
         ],
         'malice' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player to target (must have 2+ moods)'],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player to target (must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
         ],
         'hesitation' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['single', 'all'], 'label' => 'Discard one qualifying mood, or all of them'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to discard (red or green; required if mode is single)'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to discard (red or green; required if mode is single)', 'filter' => ['colors' => ['red', 'green']]],
         ],
         'nostalgia' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to take into your hand'],
         ],
         'angst' => [
-            ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your blue or red mood to discard'],
+            ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your blue or red mood to discard', 'filter' => ['colors' => ['blue', 'red']]],
         ],
         'honor' => [
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => true, 'label' => 'Player who goes first every round from now on'],
@@ -233,7 +245,7 @@ final class CardChoiceSchema
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood to take (returns to them after scoring if you still hold it)"],
         ],
         'pride' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Player with more moods in play than you'],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Player with more moods in play than you', 'filter' => ['more_moods_than_viewer' => true]],
         ],
         'corruption' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['cycle', 'double_win'], 'label' => 'Double your next win, or cycle discard-pile cards to the bottom of the deck'],
@@ -264,16 +276,16 @@ final class CardChoiceSchema
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => true, 'label' => "Card to discard (cost to play this card; its color decides your scoring bonus)"],
         ],
         'encouragement' => [
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to apply its dice value to (must have one printed)'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to apply its dice value to (must have one printed)', 'filter' => ['has_dice_value' => true]],
         ],
         'embarrassment' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 4, 5, or 6; boosts this mood\'s value to 5)'],
+            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 4, 5, or 6; boosts this mood\'s value to 5)', 'filter' => ['values' => [4, 5, 6]]],
         ],
         'cheer' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 0, 2, 4, or 6; boosts this mood\'s value to 5)'],
+            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 0, 2, 4, or 6; boosts this mood\'s value to 5)', 'filter' => ['values' => [0, 2, 4, 6]]],
         ],
         'delight' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 1, 3, or 5; boosts this mood\'s value to 5)'],
+            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 1, 3, or 5; boosts this mood\'s value to 5)', 'filter' => ['values' => [1, 3, 5]]],
         ],
     ];
 
