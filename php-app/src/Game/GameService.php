@@ -45,6 +45,8 @@ final class GameService
 {
     private const STARTING_HAND_SIZE = 5;
     private const TOTAL_CARDS = 133;
+    private const MIN_PLAYERS = 2;
+    private const MAX_PLAYERS = 4;
 
     public function __construct(
         private readonly BoardStateRepository $boardStates,
@@ -56,6 +58,10 @@ final class GameService
     /** @param int[] $userIds seat order follows array order */
     public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3): int
     {
+        if (count($userIds) > self::MAX_PLAYERS) {
+            throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
+        }
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -95,8 +101,8 @@ final class GameService
         }
 
         $playerIds = $this->seatOrder($gameId);
-        if (count($playerIds) < 2) {
-            throw new GameStateException("Game {$gameId} needs at least 2 players to start");
+        if (count($playerIds) < self::MIN_PLAYERS) {
+            throw new GameStateException("Game {$gameId} needs at least " . self::MIN_PLAYERS . ' players to start');
         }
 
         $cardIds = range(1, self::TOTAL_CARDS);

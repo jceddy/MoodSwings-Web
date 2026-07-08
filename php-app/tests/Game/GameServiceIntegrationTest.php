@@ -195,6 +195,33 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->startGame($gameId);
     }
 
+    public function testCreateGameAllowsFourPlayers(): void
+    {
+        $creator = $this->insertUser('alice4');
+        $bob = $this->insertUser('bob4');
+        $carol = $this->insertUser('carol4');
+        $dave = $this->insertUser('dave4');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob, $carol, $dave]);
+        $this->games->startGame($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testCreateGameRejectsMoreThanFourPlayers(): void
+    {
+        $creator = $this->insertUser('alice5');
+        $others = [
+            $this->insertUser('bob5'),
+            $this->insertUser('carol5'),
+            $this->insertUser('dave5'),
+            $this->insertUser('erin5'),
+        ];
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($creator, [$creator, ...$others]);
+    }
+
     /**
      * Builds a fully deterministic 3-player, wins-needed-2 game by
      * inserting fixture rows directly (bypassing createGame/startGame's
