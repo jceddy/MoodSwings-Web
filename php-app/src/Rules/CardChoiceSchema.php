@@ -265,7 +265,7 @@ final class CardChoiceSchema
             ['key' => 'direction', 'type' => 'mode', 'required' => false, 'options' => ['left', 'right'], 'label' => 'Direction to rotate (required if mode is rotate)'],
         ],
         'instability' => [
-            ['key' => 'candidate_mood_ids', 'type' => 'mood', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => "2 of one opponent's moods (the engine picks one at random)", 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_owner']],
+            ['key' => 'candidate_mood_ids', 'type' => 'mood', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => "2 of one opponent's moods (they choose which one to give up)", 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_owner']],
             ['key' => 'given_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your mood to give in exchange (required if targeting an opponent above)'],
         ],
         'betrayal' => [

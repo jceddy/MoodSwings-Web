@@ -56,10 +56,11 @@ instead.
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
 | POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?}`        | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`). `400` if that's more than 4 players or an opponent id doesn't exist. Returns `{"game_id"}`. |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in, most recently active first, each with `players` (`user_id`/`username`/`seat_order`) and `is_your_turn`. |
-| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
+| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
-| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`. |
-| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn. Same return shape as `/games/play`. |
+| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
+| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
+| POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -212,14 +213,15 @@ ability to hook (`GameService::computeFreshGrants()`, plus
 play for a specific player's next turn — however many turns from now
 that turns out to be — for another player (Generosity) or yourself
 (Joy), consulted by that same `computeFreshGrants()`, and an opponent's
-own choice among their qualifying moods resolved the same random way as
-Instability's, tied to a "give it back if you still have it" cascade
-that fires only when the taking card itself leaves play and tracks who
-currently holds the taken mood so a later give-away doesn't wrongly
-trigger the return (Arrogance — `BoardState`'s `cascadeMoodLeavingPlay()`,
-which also finally wires up the long-dormant `clearSuppressionsFrom()`
-into every "leaves play" transition, automatically lifting Faith's
-suppression too), a fourth ability timing for the handful of cards whose
+own choice among their qualifying moods — a genuine mid-play pause for
+that other player's own answer, see `RequiresOpponentDecision` below —
+tied to a "give it back if you still have it" cascade that fires only
+when the taking card itself leaves play and tracks who currently holds
+the taken mood so a later give-away doesn't wrongly trigger the return
+(Arrogance — `BoardState`'s `cascadeMoodLeavingPlay()`, which also
+finally wires up the long-dormant `clearSuppressionsFrom()` into every
+"leaves play" transition, automatically lifting Faith's suppression
+too), a fourth ability timing for the handful of cards whose
 "while in play" ability is actually "each time you play another mood,
 ..." — a mandatory suppression paired with an optional color-matched
 reaction (Scorn) and an unconditional grant paired with a conditional
@@ -232,13 +234,19 @@ choices, since a repeat usually can't reuse the same choices verbatim,
 e.g. a card already discarded once can't be discarded again — is
 resolved the same way but reads from a nested `PlayerChoices::sub('duplicity_repeat_choices')`
 sub-bag instead of the flat top-level one), a mandatory hidden
-hand-card choice by another player resolved via a genuine random pick,
-same rationale as Instability's public-info one (Compulsion;
-Intimidation's optional version, whose resulting grant is restricted to
-that one specific card via a new `specific_card_ids` restriction type),
-and that same random-choice treatment applied per player at the whole
-table at once, discarding every other mood matching any of the
-resulting colors regardless of owner (Disillusionment), a genuine
+hand-card choice by another player -- their own real answer, paused for
+mid-play the same way as Arrogance's (Compulsion; Intimidation's
+optional version, whose resulting grant is restricted to that one
+specific card via a new `specific_card_ids` restriction type), that same
+own-decision treatment applied to a mandatory discard from each of any
+number of chosen players' hands, each queued as its own independent
+decision with no shared post-processing (Suspicion), again applied
+per player at the whole table at once, each player's own chosen color
+then discarding every other mood matching any of the resulting colors
+regardless of owner (Disillusionment), and once more for a *pair* of
+moods rather than a single card -- the one case in this group whose
+answer is a multi-select, not a single value (Malice) -- see
+`RequiresOpponentDecision` below for all of these -- a genuine
 reshuffle-and-redeal of every mood in play (including the card causing
 it), reassigning ownership only and never re-triggering after-playing
 effects (Chaos), a repeat of another card's own after-playing effect
@@ -263,6 +271,44 @@ round" flag rather than anything tied to a specific mood's
 persisted on `game_rounds` alongside `pending_play_grants` (Vulnerability
 — `BoardState::discardedThisRound()`). Every card in the pool with a
 printed ability is now implemented.
+
+Seven cards' printed text hands a real decision to a player *other* than
+the one whose turn it is (Arrogance, Compulsion, Disillusionment,
+Instability, Intimidation, Malice, Suspicion — see above). Since a play
+resolves within one HTTP request from the acting player alone, these
+implement the optional `RequiresOpponentDecision` interface (deliberately
+not part of `MoodEffect` itself — only these seven implement it) instead
+of `afterPlaying()`: `pendingDecisionsFor()` is the same pre-decision
+validation/candidate-computation code as before, but returns a queue of
+`PendingDecisionRequest`s (one per player who needs to answer — more than
+one for Suspicion/Disillusionment's per-player queues) instead of picking
+randomly; `resolveDecisions()` is the old post-decision mutation code,
+reading each answer by its own request key instead of `array_rand()`.
+`MoodPlayService::playMood()` returns a `PlayResult` rather than `void`:
+`isPending: true` the moment any decision is outstanding, at which point
+the played card is already fully in play (cost paid, grant spent) but
+nothing past that point has happened yet — nothing in any of the seven
+mutates before its own decision point, so there's never a partial
+mutation to unwind. `GameService::respondToDecision()` (`POST
+/games/respond`) is the resume entry point: it records one target's
+answer, and once a batch's last row is in, calls the new
+`MoodPlayService::resolvePendingDecisions()`, persisted across the pause
+in two new tables (`game_pending_decision_batches`/
+`game_pending_decisions`, migration `0010`). While any decision is
+outstanding the whole round is frozen — `playMood()`/`pass()` both check
+for one first and reject with `409` — nobody, including the acting
+player, can play or pass until the targeted player answers; there's no
+timeout or escape hatch, matching a casual game's existing tolerance for
+an idle match. Each target's own prompt reuses the *same* field shapes
+`CardChoiceSchema` already defines for the acting player's own choices
+(a `mood`/`hand_card`/`mode` field, evaluated from the responder's own
+perspective) — the one new shape is `candidate_card_ids` (Instability),
+an explicit pre-computed option list rather than a scope/filter
+derivation, since the two candidates come from another player's live
+choice, not a rule. `GameService::getState()` exposes the active
+decision as `round.pending_decision`, including the actual prompt
+(`field`) only to its target — the same hidden-hand-information scoping
+opponents' hands already get.
 
 `CardChoiceSchema::forEffectKey()` describes, per `effect_key`, exactly
 which `PlayerChoices` keys a card's effect reads (a target player, a mood

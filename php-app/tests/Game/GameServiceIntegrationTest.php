@@ -1350,7 +1350,9 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, white
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 82, ['opponent_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, 82, ['opponent_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_id' => 8]);
 
         $registry = DefaultEffectRegistry::build();
         $repository = new BoardStateRepository($registry);
@@ -1533,10 +1535,206 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 3, 'hand', $p2); // p2's only card -- guaranteed to be the one revealed
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 67, ['target_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, 67, ['target_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+        $this->games->respondToDecision($gameId, $p2, ['revealed_card_id' => 3]);
 
         $this->expectException(IllegalPlayException::class);
         $this->games->playMood($gameId, $p1, 5, []);
+    }
+
+    public function testInstabilityPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
+    {
+        $u1 = $this->insertUser('instab1');
+        $u2 = $this->insertUser('instab2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 96, 'hand', $p1); // Instability
+        $this->insertGameCard($gameId, 9, 'in_play', $p1); // given in exchange
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // candidate
+        $this->insertGameCard($gameId, 7, 'in_play', $p2); // candidate
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, 96, [
+            'candidate_mood_ids' => [3, 7],
+            'given_mood_id' => 9,
+        ]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame($p2, $state->ownerOf(3)); // not taken yet
+        self::assertSame($p2, $state->ownerOf(7));
+
+        $respondResult = $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => 7]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame($p1, $state->ownerOf(7));
+        self::assertSame($p2, $state->ownerOf(3)); // the other candidate is untouched
+        self::assertSame($p2, $state->ownerOf(9));
+    }
+
+    /**
+     * Suspicion's queue has two independent targets -- the round has to
+     * stay frozen after the first one answers (p3 hasn't gone yet) and
+     * only actually finish once the last one in the queue responds.
+     */
+    public function testSuspicionQueuesEachChosenPlayerAndOnlyCompletesAfterTheLastResponds(): void
+    {
+        $u1 = $this->insertUser('susp1');
+        $u2 = $this->insertUser('susp2');
+        $u3 = $this->insertUser('susp3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $this->insertGameCard($gameId, 9, 'hand', $p2);
+        $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $this->insertGameCard($gameId, 106, 'hand', $p3);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, 78, ['player_ids' => [$p2, $p3]]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        // p3 hasn't answered yet -- responding out of turn is rejected.
+        try {
+            $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => 106]);
+            self::fail('Expected p3 to have no decision pending until p2 answers first');
+        } catch (GameStateException) {
+            // expected
+        }
+
+        $firstRespondResult = $this->games->respondToDecision($gameId, $p2, ['discarded_card_id_' . $p2 => 9]);
+        self::assertTrue($firstRespondResult['pending_decision'] ?? false);
+
+        // The whole batch resolves together only once its last row is
+        // answered -- p2's discard hasn't actually happened yet either.
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame([3, 9], $state->hand($p2));
+        self::assertSame([106], $state->hand($p3));
+
+        $finalRespondResult = $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => 106]);
+        self::assertArrayNotHasKey('pending_decision', $finalRespondResult);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame([3], $state->hand($p2));
+        self::assertSame([], $state->hand($p3));
+        self::assertCount(2, $state->discardPile());
+    }
+
+    /**
+     * Disillusionment's queue asks every player at the table, including
+     * the acting player themselves, starting with the next player in
+     * turn order and wrapping around -- the round stays frozen through
+     * all three responses.
+     */
+    public function testDisillusionmentQueuesEveryPlayerIncludingTheActorAndOnlyCompletesAfterTheLastResponds(): void
+    {
+        $u1 = $this->insertUser('disil1');
+        $u2 = $this->insertUser('disil2');
+        $u3 = $this->insertUser('disil3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
+        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
+        $this->insertGameCard($gameId, 53, 'in_play', $p2); // Ambition, black
+        $this->insertGameCard($gameId, 28, 'in_play', $p3); // Anxiety, blue
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, 10, []);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $result1 = $this->games->respondToDecision($gameId, $p2, ['chosen_color_' . $p2 => 'black']);
+        self::assertTrue($result1['pending_decision'] ?? false);
+
+        $result2 = $this->games->respondToDecision($gameId, $p3, ['chosen_color_' . $p3 => 'blue']);
+        self::assertTrue($result2['pending_decision'] ?? false);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInPlay(9)); // nothing discarded until the queue's last player answers
+        self::assertTrue($state->isInPlay(53));
+        self::assertTrue($state->isInPlay(28));
+
+        $result3 = $this->games->respondToDecision($gameId, $p1, ['chosen_color_' . $p1 => 'black']);
+        self::assertArrayNotHasKey('pending_decision', $result3);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInPlay(10));
+        self::assertTrue($state->isInPlay(9)); // white, not chosen by anyone
+        self::assertFalse($state->isInPlay(53)); // black
+        self::assertFalse($state->isInPlay(28)); // blue
+    }
+
+    /**
+     * Malice's answer is a pair of mood ids, not a single value -- this
+     * exercises the multi-select answer shape through the real HTTP-
+     * service-layer respondToDecision() round trip.
+     */
+    public function testMalicePausesForTheTargetsOwnTwoMoodChoiceThenDiscardsMatchingColors(): void
+    {
+        $u1 = $this->insertUser('mal1');
+        $u2 = $this->insertUser('mal2');
+        $u3 = $this->insertUser('mal3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
+        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white
+        $this->insertGameCard($gameId, 8, 'in_play', $p3); // Dignity, white
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, 68, ['target_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInPlay(9)); // not discarded yet
+        self::assertTrue($state->isInPlay(3));
+
+        $respondResult = $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [9, 3]]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertFalse($state->isInPlay(9));
+        self::assertFalse($state->isInPlay(3));
+        self::assertFalse($state->isInPlay(8)); // shares white with the two chosen moods
     }
 
     /**

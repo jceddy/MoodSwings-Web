@@ -475,6 +475,11 @@
                     .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
             case 'mood':
+                if (field.candidate_card_ids) {
+                    return currentState.in_play
+                        .filter((c) => field.candidate_card_ids.includes(c.card_id))
+                        .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+                }
                 return currentState.in_play
                     .filter((c) => c.card_id !== card.card_id)
                     .filter((c) => {

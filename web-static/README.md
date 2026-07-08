@@ -81,7 +81,22 @@ routed to the PHP app).
     indicator naming the suppressing mood, if the game tracks one, and
     whether the suppression lasts as long as that mood stays in play or
     just until the end of the current round) so an unfamiliar card can be
-    checked before deciding how to respond to it.
+    checked before deciding how to respond to it. Seven cards (Arrogance,
+    Compulsion, Disillusionment, Instability, Intimidation, Malice,
+    Suspicion) hand part of their effect to a player other than whoever's
+    turn it is — playing one of these pauses the whole round (Play/Pass
+    both disabled for everyone, a banner names who's being waited on) via
+    `round.pending_decision` in the state response. The one player it's
+    actually waiting on sees a response panel instead of the banner,
+    reusing the exact same field-rendering code as the regular choices
+    panel (including multi-select validation for Malice's two moods and
+    the `mode` dropdown for Disillusionment's color) — answered via `POST
+    /games/respond`. Suspicion and Disillusionment queue one decision per
+    player (Disillusionment's queue starts with the next player in turn
+    order and wraps around to the acting player themselves last); only
+    the one player currently up in the queue is prompted at a time, and
+    the round only unfreezes once the last one has answered. There's no
+    timeout — if a targeted player goes AFK the round just stays paused.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
