@@ -315,6 +315,8 @@ final class GameServiceIntegrationTest extends TestCase
             self::assertArrayHasKey('name', $card);
             self::assertArrayHasKey('color', $card);
             self::assertArrayHasKey('value', $card);
+            self::assertArrayHasKey('choice_fields', $card);
+            self::assertIsArray($card['choice_fields']);
         }
     }
 

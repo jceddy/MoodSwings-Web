@@ -45,25 +45,9 @@
 
                 <div id="choices-panel" hidden>
                     <h4>Play <span id="choices-card-name"></span></h4>
-                    <p>Fill in only what this card asks for (see its rules text below) and press Play. If you get
-                        the choice wrong, the error message will say what's expected &mdash; adjust and retry.</p>
                     <p id="choices-card-rules"></p>
 
-                    <label>Target player
-                        <select id="choice-target-player"><option value="">(none)</option></select>
-                    </label>
-                    <label>Target mood in play
-                        <select id="choice-target-mood"><option value="">(none)</option></select>
-                    </label>
-                    <label>Discard from your hand
-                        <select id="choice-discard-card"><option value="">(none)</option></select>
-                    </label>
-                    <label>Reveal/select from your hand (multiple)
-                        <select id="choice-reveal-cards" multiple></select>
-                    </label>
-                    <label>Mode
-                        <input type="text" id="choice-mode" placeholder="e.g. double_win">
-                    </label>
+                    <div id="choices-fields"></div>
 
                     <button id="play-card-button" type="button">Play card</button>
                     <button id="cancel-choice-button" type="button">Cancel</button>
