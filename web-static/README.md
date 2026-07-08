@@ -43,11 +43,11 @@ routed to the PHP app).
     every other hand card's panel also gets that reaction's field (Scorn's
     suppress-target, narrowed to moods sharing the card-to-be-played's own
     color; Validation's extra-play checkbox, only offered when that card's
-    printed value is 0 or 1) — both submitted in the same play request,
+    base value is 0 or 1) — both submitted in the same play request,
     since that's how the rules engine resolves them. Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
     moves. Every mood in play and every card in the discard pile is also
-    clickable, opening a read-only detail view (name, printed value, alt
+    clickable, opening a read-only detail view (name, base value, alt
     value if it has one, current value if a while-in-play effect has
     changed it, owner, rules text) so an unfamiliar card can be checked
     before deciding how to respond to it.

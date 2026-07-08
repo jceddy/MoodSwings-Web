@@ -230,7 +230,7 @@
     function openCardDetail(card, ownerLabel) {
         document.getElementById('card-detail-name').textContent = card.name;
 
-        let meta = card.color + ', printed value ' + card.base_value;
+        let meta = card.color + ', base value ' + card.base_value;
         if (card.alt_value !== null && card.alt_value !== undefined) {
             meta += ' (alt value: ' + card.alt_value + ')';
         }
