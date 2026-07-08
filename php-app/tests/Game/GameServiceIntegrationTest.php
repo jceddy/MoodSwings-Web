@@ -319,7 +319,143 @@ final class GameServiceIntegrationTest extends TestCase
             self::assertIsArray($card['choice_fields']);
             self::assertArrayHasKey('has_dice_value', $card);
             self::assertIsBool($card['has_dice_value']);
+            self::assertArrayHasKey('base_value', $card);
+            self::assertIsInt($card['base_value']);
+            self::assertArrayHasKey('alt_value', $card);
+            self::assertSame($card['alt_value'] !== null, $card['has_dice_value']);
         }
+    }
+
+    public function testGetStateExposesBaseValueAndAltValueDistinctFromLiveValue(): void
+    {
+        $u1 = $this->insertUser('printedvalues1');
+        $u2 = $this->insertUser('printedvalues2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity: base 3, dice/alt 5
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity: base 1, no dice value
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $byCardId = [];
+        foreach ($hand as $card) {
+            $byCardId[$card['card_id']] = $card;
+        }
+
+        self::assertSame(3, $byCardId[8]['base_value']);
+        self::assertSame(5, $byCardId[8]['alt_value']);
+        self::assertTrue($byCardId[8]['has_dice_value']);
+        self::assertSame(3, $byCardId[8]['value']); // not in play yet -- value equals base_value
+
+        self::assertSame(1, $byCardId[3]['base_value']);
+        self::assertNull($byCardId[3]['alt_value']);
+        self::assertFalse($byCardId[3]['has_dice_value']);
+    }
+
+    public function testGetStateAppendsScornsReactionFieldFilteredByEachHandCardsOwnColor(): void
+    {
+        $u1 = $this->insertUser('scornreact1');
+        $u2 = $this->insertUser('scornreact2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn, white
+        $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white
+        $this->insertGameCard($gameId, 28, 'hand', $p1); // Anxiety, blue
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $byCardId = [];
+        foreach ($hand as $card) {
+            $byCardId[$card['card_id']] = $card;
+        }
+
+        $courageReaction = self::findFieldByKey($byCardId[7]['choice_fields'], 'scorn_suppress_target');
+        self::assertNotNull($courageReaction, 'expected a Scorn reaction field on the white Courage card');
+        self::assertSame(['white'], $courageReaction['filter']['colors']);
+
+        $anxietyReaction = self::findFieldByKey($byCardId[28]['choice_fields'], 'scorn_suppress_target');
+        self::assertNotNull($anxietyReaction, 'expected a Scorn reaction field on the blue Anxiety card');
+        self::assertSame(['blue'], $anxietyReaction['filter']['colors']);
+    }
+
+    public function testGetStateAppendsValidationsReactionFieldOnlyForZeroOrOneValueCards(): void
+    {
+        $u1 = $this->insertUser('validationreact1');
+        $u2 = $this->insertUser('validationreact2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1 -- qualifies
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, base value 3 -- doesn't qualify
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $byCardId = [];
+        foreach ($hand as $card) {
+            $byCardId[$card['card_id']] = $card;
+        }
+
+        self::assertNotNull(self::findFieldByKey($byCardId[3]['choice_fields'], 'validation_extra_play'));
+        self::assertNull(self::findFieldByKey($byCardId[8]['choice_fields'], 'validation_extra_play'));
+    }
+
+    public function testGetStateOmitsReactionFieldsWhenViewerHasNoReactorInPlay(): void
+    {
+        $u1 = $this->insertUser('noreactor1');
+        $u2 = $this->insertUser('noreactor2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1 -- would qualify for Validation's reaction, but no reactor is in play
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+
+        self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'scorn_suppress_target'));
+        self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'validation_extra_play'));
+    }
+
+    /** @param array<int, array<string, mixed>> $fields */
+    private static function findFieldByKey(array $fields, string $key): ?array
+    {
+        foreach ($fields as $field) {
+            if ($field['key'] === $key) {
+                return $field;
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -52,13 +52,25 @@ namespace MoodSwings\Rules;
  *     },
  * }
  *
- * Two known gaps, both intentionally out of scope here: Scorn's and
- * Validation's reactToAnotherPlay() choices (they fire while playing a
- * *different* card, not the schema for the card being played) and
- * Duplicity's nested PlayerChoices::sub() repeat-with-fresh-choices
- * mechanic (handled directly by MoodPlayService, not any MoodEffect).
- * Omitting a choice here just means that optional input is never sent,
- * which was already a legal (declining) choice for all of them.
+ * Scorn's and Validation's reactToAnotherPlay() choices don't fit the
+ * per-effect_key SCHEMA above -- they fire while playing a *different*
+ * card, triggered by a mood the acting player already has in play (see
+ * MoodPlayService::playMood(), which calls reactToAnotherPlay() on every
+ * one of the player's other in-play moods using the same PlayerChoices
+ * already submitted for that play). reactionTemplates() below holds their
+ * field shape; GameService::serializeCard() is the one that actually
+ * decides, per hand card, whether to append them -- it knows the viewer's
+ * own in-play moods (playerHasMoodInPlay()) and the specific card being
+ * offered, which is exactly what's needed to fill in Scorn's color filter
+ * (must match *this* card's color) and gate Validation's field on *this*
+ * card's base value being 0 or 1, per each effect's own check.
+ *
+ * One remaining known gap, intentionally out of scope here: Duplicity's
+ * nested PlayerChoices::sub() repeat-with-fresh-choices mechanic (handled
+ * directly by MoodPlayService, not any MoodEffect, since repeating a
+ * card's own effect needs the registry no MoodEffect has access to).
+ * Omitting it just means that optional input is never sent, which was
+ * already a legal (declining) choice.
  *
  * Cards with no printed ability, and cards whose effect never reads
  * PlayerChoices at all (pure computeValue() formulas; unconditional
@@ -302,6 +314,31 @@ final class CardChoiceSchema
         ],
     ];
 
+    /**
+     * Templates for reactToAnotherPlay() fields, keyed by the *reacting*
+     * card's effect_key -- GameService::serializeCard() fills in the
+     * per-played-card specifics (Scorn's color filter, Validation's
+     * value-gated inclusion) before appending these to a hand card's own
+     * choice_fields.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    private const REACTIONS = [
+        'scorn' => [
+            'key' => 'scorn_suppress_target',
+            'type' => 'mood',
+            'scope' => 'any',
+            'required' => false,
+            'label' => "Scorn's reaction: mood to suppress until end of round (must share this card's color)",
+        ],
+        'validation' => [
+            'key' => 'validation_extra_play',
+            'type' => 'bool',
+            'required' => false,
+            'label' => "Validation's reaction: play an additional mood this turn",
+        ],
+    ];
+
     /** @return array<int, array<string, mixed>> */
     public static function forEffectKey(?string $effectKey): array
     {
@@ -310,5 +347,11 @@ final class CardChoiceSchema
         }
 
         return self::SCHEMA[$effectKey] ?? [];
+    }
+
+    /** @return ?array<string, mixed> */
+    public static function reactionTemplate(string $reactorEffectKey): ?array
+    {
+        return self::REACTIONS[$reactorEffectKey] ?? null;
     }
 }

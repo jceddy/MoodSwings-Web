@@ -339,4 +339,32 @@ final class CardChoiceSchemaTest extends TestCase
             self::assertArrayNotHasKey('constraint', $field, "{$effectKey} constraint");
         }
     }
+
+    public function testReactionTemplateForScornMatchesScornEffectsOwnKey(): void
+    {
+        $template = CardChoiceSchema::reactionTemplate('scorn');
+
+        self::assertSame('scorn_suppress_target', $template['key']);
+        self::assertSame('mood', $template['type']);
+        self::assertFalse($template['required']);
+        // The template has no filter of its own -- GameService fills one
+        // in per played card, since "must share a color" only makes sense
+        // once a specific card's color is known.
+        self::assertArrayNotHasKey('filter', $template);
+    }
+
+    public function testReactionTemplateForValidationMatchesValidationEffectsOwnKey(): void
+    {
+        $template = CardChoiceSchema::reactionTemplate('validation');
+
+        self::assertSame('validation_extra_play', $template['key']);
+        self::assertSame('bool', $template['type']);
+        self::assertFalse($template['required']);
+    }
+
+    public function testReactionTemplateIsNullForAnyOtherEffectKey(): void
+    {
+        self::assertNull(CardChoiceSchema::reactionTemplate('compulsion'));
+        self::assertNull(CardChoiceSchema::reactionTemplate('nonexistent'));
+    }
 }
