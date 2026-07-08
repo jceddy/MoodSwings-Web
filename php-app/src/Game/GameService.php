@@ -726,7 +726,7 @@ final class GameService
         }
 
         $response['you']['hand'] = array_map(
-            fn (int $cardId) => $this->serializeCard($state, $cardId),
+            fn (int $cardId) => $this->serializeCard($state, $cardId, $viewerGamePlayerId),
             $state->hand($viewerGamePlayerId)
         );
 
@@ -754,9 +754,16 @@ final class GameService
      * card sitting in a hand or the discard pile there's no live effect to
      * apply, so its printed catalog color/base value is what's shown.
      *
-     * @return array{card_id:int,name:string,color:string,value:int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>}
+     * $reactingViewerId is only passed for a card in the *viewer's own
+     * hand* -- it's what lets this method decide whether to append Scorn's/
+     * Validation's reactToAnotherPlay() fields (see CardChoiceSchema's
+     * docblock): both react to the viewer's own subsequent plays, so they
+     * only ever apply to a card the viewer might actually play, never to
+     * an in-play or discard-pile card being merely displayed.
+     *
+     * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>}
      */
-    private function serializeCard(BoardState $state, int $cardId): array
+    private function serializeCard(BoardState $state, int $cardId, ?int $reactingViewerId = null): array
     {
         $catalog = $state->catalogRow($cardId);
         $names = $this->cardCatalogNames();
@@ -767,17 +774,54 @@ final class GameService
         // (dice-less) catalog row -- see EncouragementEffect, which checks
         // the same effectiveCardId() for exactly this reason.
         $diceValueCatalog = $inPlay ? $state->catalogRow($state->effectiveCardId($cardId)) : $catalog;
+        $color = $inPlay ? $state->colorOf($cardId) : $catalog['color'];
+        $baseValue = $diceValueCatalog['baseValue'];
+
+        $choiceFields = CardChoiceSchema::forEffectKey($catalog['effectKey']);
+        if ($reactingViewerId !== null) {
+            $choiceFields = [...$choiceFields, ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue)];
+        }
 
         return [
             'card_id' => $cardId,
             'name' => $names[$cardId] ?? $catalog['effectKey'],
-            'color' => $inPlay ? $state->colorOf($cardId) : $catalog['color'],
+            'color' => $color,
             'value' => $inPlay ? $state->valueOf($cardId) : $catalog['baseValue'],
+            'base_value' => $baseValue,
+            'alt_value' => $diceValueCatalog['altValue'],
             'effect_key' => $catalog['effectKey'],
             'rules_text' => $catalog['rulesText'],
             'has_dice_value' => $diceValueCatalog['altValue'] !== null,
-            'choice_fields' => CardChoiceSchema::forEffectKey($catalog['effectKey']),
+            'choice_fields' => $choiceFields,
         ];
+    }
+
+    /**
+     * Scorn's and Validation's reactToAnotherPlay() choices, filled in for
+     * *this specific card* (see CardChoiceSchema::reactionTemplate()):
+     * Scorn's suppress-target is narrowed to $color (matching the played
+     * card's color, mirroring ScornEffect's own check); Validation's field
+     * is included at all only when $baseValue is 0 or 1, since
+     * ValidationEffect's reaction is a no-op for any other value.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function reactionFields(BoardState $state, int $viewerId, string $color, int $baseValue): array
+    {
+        $fields = [];
+
+        if ($state->playerHasMoodInPlay($viewerId, 'scorn')) {
+            $fields[] = [
+                ...CardChoiceSchema::reactionTemplate('scorn'),
+                'filter' => ['colors' => [$color]],
+            ];
+        }
+
+        if (in_array($baseValue, [0, 1], true) && $state->playerHasMoodInPlay($viewerId, 'validation')) {
+            $fields[] = CardChoiceSchema::reactionTemplate('validation');
+        }
+
+        return $fields;
     }
 
     /** @return array<int, string> card_id => name */

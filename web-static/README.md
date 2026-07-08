@@ -39,11 +39,18 @@ routed to the PHP app).
     disabled with an inline message until the selection is actually legal,
     without a round trip to find out. If a filled-in choice is still
     rejected regardless, the rules engine's own human-readable message
-    explains what's missing. Polls `GET /games/state` every 4 seconds while
-    open to pick up opponents' moves. Every mood in play and every card in
-    the discard pile is also clickable, opening a read-only detail view
-    (name, color/value/owner, rules text) so an unfamiliar card can be
-    checked before deciding how to respond to it.
+    explains what's missing. If you have Scorn and/or Validation in play,
+    every other hand card's panel also gets that reaction's field (Scorn's
+    suppress-target, narrowed to moods sharing the card-to-be-played's own
+    color; Validation's extra-play checkbox, only offered when that card's
+    base value is 0 or 1) — both submitted in the same play request,
+    since that's how the rules engine resolves them. Polls
+    `GET /games/state` every 4 seconds while open to pick up opponents'
+    moves. Every mood in play and every card in the discard pile is also
+    clickable, opening a read-only detail view (name, base value, alt
+    value if it has one, current value if a while-in-play effect has
+    changed it, owner, rules text) so an unfamiliar card can be checked
+    before deciding how to respond to it.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

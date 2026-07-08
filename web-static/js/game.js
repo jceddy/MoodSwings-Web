@@ -229,9 +229,22 @@
     // in-play/discard-pile cards can't be acted on anyway.
     function openCardDetail(card, ownerLabel) {
         document.getElementById('card-detail-name').textContent = card.name;
-        document.getElementById('card-detail-meta').textContent =
-            card.color + ', value ' + card.value + (ownerLabel ? ' — ' + ownerLabel : '') +
-            (card.is_suppressed ? ' (suppressed)' : '');
+
+        let meta = card.color + ', base value ' + card.base_value;
+        if (card.alt_value !== null && card.alt_value !== undefined) {
+            meta += ' (alt value: ' + card.alt_value + ')';
+        }
+        if (card.value !== card.base_value) {
+            meta += ', current value ' + card.value;
+        }
+        if (ownerLabel) {
+            meta += ' — ' + ownerLabel;
+        }
+        if (card.is_suppressed) {
+            meta += ' (suppressed)';
+        }
+        document.getElementById('card-detail-meta').textContent = meta;
+
         document.getElementById('card-detail-rules').textContent = card.rules_text || 'No ability.';
         cardDetailDialog.showModal();
     }

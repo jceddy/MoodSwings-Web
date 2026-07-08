@@ -286,12 +286,28 @@ chosen player"), or `max_total_value` (Anger) — each mirroring that
 effect's own cross-candidate `InvalidChoiceException` check so a client can
 validate a selection before ever submitting it. `GameService::serializeCard()`
 attaches each card's `choice_fields` (plus `has_dice_value`, needed for
-Encouragement's filter) to the JSON returned by `GET /games/state`. Two cards' reaction-time choices (Scorn's
-`scorn_suppress_target`, Validation's `validation_extra_play`, both fired
-via `reactToAnotherPlay()` while playing a *different* card) and
-Duplicity's nested repeat-with-fresh-choices mechanic aren't covered —
-omitting them just means those optional inputs are never sent, which was
-already a legal (declining) choice.
+Encouragement's filter) to the JSON returned by `GET /games/state`.
+
+Scorn's and Validation's `reactToAnotherPlay()` choices (`scorn_suppress_target`,
+`validation_extra_play`) don't fit that per-card schema, since they fire
+while playing a *different* card, triggered by a mood the acting player
+already has in play — `CardChoiceSchema::reactionTemplate()` holds their
+field shape, and `GameService::serializeCard()` appends the applicable one
+to each of the *viewer's own* hand cards when `BoardState::playerHasMoodInPlay()`
+says the viewer has that reactor in play, filling in the one detail each
+needs to know about the specific card being offered: Scorn's filter is
+narrowed to that card's own color (mirroring `ScornEffect`'s "shares a
+color with the just-played card" check), and Validation's field is
+included at all only when that card's base value is 0 or 1 (mirroring
+`ValidationEffect`'s own no-op-otherwise check). Every serialized card also
+carries `base_value` and `alt_value` (the printed/dice values, distinct
+from the possibly-different live `value` a card in play might have) for
+exactly this kind of client-side reasoning, and for display in the
+frontend's card detail dialog.
+
+The one remaining gap: Duplicity's nested repeat-with-fresh-choices
+mechanic isn't covered — omitting it just means that optional input is
+never sent, which was already a legal (declining) choice.
 
 ## Game layer
 
