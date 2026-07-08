@@ -228,8 +228,10 @@ reaction to a low-valued play (Validation) — dispatched via
 submitted for the triggering play, since the reaction is the same
 player's own decision made in the same request (Duplicity's version of
 this — repeating another mood's own after-playing effect with *fresh*
-choices — remains out of scope, since there's no way to submit separate
-choices for a repeat within one flat choices bag), a mandatory hidden
+choices, since a repeat usually can't reuse the same choices verbatim,
+e.g. a card already discarded once can't be discarded again — is
+resolved the same way but reads from a nested `PlayerChoices::sub('duplicity_repeat_choices')`
+sub-bag instead of the flat top-level one), a mandatory hidden
 hand-card choice by another player resolved via a genuine random pick,
 same rationale as Instability's public-info one (Compulsion;
 Intimidation's optional version, whose resulting grant is restricted to
