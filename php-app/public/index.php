@@ -18,11 +18,20 @@ use MoodSwings\Friends\FriendshipNotFoundException;
 use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Friends\NotAuthorizedToRespondException;
 use MoodSwings\Friends\UserNotFoundException;
+use MoodSwings\Game\BoardStateRepository;
+use MoodSwings\Game\Exceptions\GameStateException;
+use MoodSwings\Game\GameService;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
+use MoodSwings\Rules\DefaultEffectRegistry;
+use MoodSwings\Rules\Exceptions\EffectNotImplementedException;
+use MoodSwings\Rules\Exceptions\IllegalPlayException;
+use MoodSwings\Rules\Exceptions\InvalidChoiceException;
+use MoodSwings\Rules\MoodPlayService;
+use MoodSwings\Rules\RoundScorer;
 
 header('Content-Type: application/json');
 
@@ -363,6 +372,108 @@ if ($path === '/friends/remove' && $method === 'POST') {
         respond(200, ['status' => 'ok', 'message' => 'Friend removed.']);
     } catch (FriendshipNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+$gameRegistry = DefaultEffectRegistry::build();
+$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer());
+
+/**
+ * Resolves the authenticated user's game_players.id for $gameId, responding
+ * 403 (without confirming or denying the game's existence) if they aren't
+ * seated in it.
+ */
+function requireGamePlayer(GameService $games, int $gameId, int $userId): int
+{
+    $gamePlayerId = $games->gamePlayerIdFor($gameId, $userId);
+    if ($gamePlayerId === null) {
+        respond(403, ['status' => 'error', 'message' => 'You are not a player in this game.']);
+    }
+
+    return $gamePlayerId;
+}
+
+if ($path === '/games' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $currentUserId = (int) $currentUser['id'];
+
+    $opponentUserIds = array_map(intval(...), (array) ($body['opponent_user_ids'] ?? []));
+    $userIds = array_values(array_unique([$currentUserId, ...$opponentUserIds]));
+    $format = (string) ($body['format'] ?? 'standard');
+    $winsNeeded = isset($body['wins_needed']) ? (int) $body['wins_needed'] : 3;
+
+    try {
+        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded);
+        respond(201, ['status' => 'ok', 'game_id' => $gameId]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\PDOException $e) {
+        respond(400, ['status' => 'error', 'message' => 'One or more opponents could not be found.']);
+    }
+}
+
+if ($path === '/games' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'games' => $games->listGamesForUser((int) $currentUser['id'])]);
+}
+
+if ($path === '/games/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
+}
+
+if ($path === '/games/start' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->startGame($gameId);
+        respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/play' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardId = (int) ($body['card_id'] ?? 0);
+    $choices = is_array($body['choices'] ?? null) ? $body['choices'] : [];
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->playMood($gameId, $gamePlayerId, $cardId, $choices);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (InvalidChoiceException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (EffectNotImplementedException $e) {
+        respond(500, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/pass' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->pass($gameId, $gamePlayerId);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 

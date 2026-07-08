@@ -6,13 +6,95 @@
     <title>Play - MoodSwings-Web</title>
     <link rel="stylesheet" href="../css/style.css">
 </head>
-<body>
+<body class="game-page">
     <main id="game-main" hidden>
         <h1>MoodSwings-Web</h1>
         <p>Welcome, <span id="username"></span>.</p>
         <button id="friends-button" type="button">Friends</button>
         <button id="logout-button">Log out</button>
+
+        <section id="lobby-view">
+            <h2>Your games</h2>
+            <button id="new-game-button" type="button">New game</button>
+            <ul id="games-list"></ul>
+            <p id="games-empty" hidden>No games yet &mdash; start one!</p>
+        </section>
+
+        <section id="board-view" hidden>
+            <button id="back-to-lobby-button" type="button">&larr; Back to your games</button>
+            <h2 id="board-title"></h2>
+            <p id="board-round-status"></p>
+            <p id="board-message" class="success" hidden></p>
+            <p id="board-error" class="error" hidden></p>
+
+            <button id="start-game-button" type="button" hidden>Start game</button>
+
+            <h3>Players</h3>
+            <ul id="players-list"></ul>
+
+            <div id="in-progress-area" hidden>
+                <h3>In play</h3>
+                <ul id="in-play-list"></ul>
+                <p id="in-play-empty" hidden>Nothing in play yet.</p>
+
+                <h3>Discard pile (<span id="discard-count">0</span>) &middot; Deck: <span id="deck-count">0</span> cards left</h3>
+                <ul id="discard-list"></ul>
+
+                <h3>Your hand</h3>
+                <ul id="hand-list"></ul>
+
+                <div id="choices-panel" hidden>
+                    <h4>Play <span id="choices-card-name"></span></h4>
+                    <p>Fill in only what this card asks for (see its rules text below) and press Play. If you get
+                        the choice wrong, the error message will say what's expected &mdash; adjust and retry.</p>
+                    <p id="choices-card-rules"></p>
+
+                    <label>Target player
+                        <select id="choice-target-player"><option value="">(none)</option></select>
+                    </label>
+                    <label>Target mood in play
+                        <select id="choice-target-mood"><option value="">(none)</option></select>
+                    </label>
+                    <label>Discard from your hand
+                        <select id="choice-discard-card"><option value="">(none)</option></select>
+                    </label>
+                    <label>Reveal/select from your hand (multiple)
+                        <select id="choice-reveal-cards" multiple></select>
+                    </label>
+                    <label>Mode
+                        <input type="text" id="choice-mode" placeholder="e.g. double_win">
+                    </label>
+
+                    <button id="play-card-button" type="button">Play card</button>
+                    <button id="cancel-choice-button" type="button">Cancel</button>
+                </div>
+
+                <button id="pass-button" type="button">Pass</button>
+            </div>
+        </section>
     </main>
+
+    <dialog id="new-game-dialog">
+        <h2>New game</h2>
+        <form id="new-game-form">
+            <p>Choose 1-3 friends to play against (games are 2-4 players):</p>
+            <div id="opponent-checkboxes"></div>
+            <p id="opponent-checkboxes-empty" hidden>
+                You don't have any friends yet &mdash; add some from the Friends dialog first.
+            </p>
+
+            <label>Format
+                <select id="new-game-format">
+                    <option value="standard">Standard</option>
+                    <option value="duel">Duel</option>
+                </select>
+            </label>
+
+            <button type="submit">Create game</button>
+        </form>
+        <p id="new-game-error" class="error" hidden></p>
+        <button id="new-game-close-button" type="button">Close</button>
+    </dialog>
 
     <dialog id="friends-dialog">
         <h2>Friends</h2>
