@@ -347,12 +347,19 @@
         renderList(document.getElementById('hand-list'), { hidden: true }, state.you.hand || [], (card) => {
             const li = document.createElement('li');
             li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
+            li.lastChild.disabled = !canAct;
             // is_playable reflects whether some outstanding play grant this
             // turn actually covers this specific card (e.g. Intimidation's
             // grant only covers the one card it revealed) and, if the card
             // has a "to play" cost, whether that cost is payable at all --
-            // see MoodPlayService::isPlayable().
-            li.lastChild.disabled = !canAct || !card.is_playable;
+            // see MoodPlayService::isPlayable(). The hand button itself
+            // stays clickable either way, so the card's rules text can
+            // still be inspected -- only the panel's own Play button
+            // (see updatePlayButtonEnabled()) is actually gated on this.
+            if (canAct && !card.is_playable) {
+                li.lastChild.classList.add('not-playable');
+                li.lastChild.title = "This card can't be played right now";
+            }
             return li;
         });
 
@@ -648,6 +655,17 @@
     function updatePlayButtonEnabled() {
         const playButton = document.getElementById('play-card-button');
         const validationMessage = document.getElementById('choices-validation');
+
+        // is_playable covers everything that isn't a per-field choice
+        // mistake -- whose turn it is, a play-grant restriction (e.g.
+        // Intimidation), an unpayable "to play" cost -- so it overrides
+        // whatever the field-level checks below would otherwise say.
+        if (!selectedCard.is_playable) {
+            validationMessage.textContent = "This card can't be played right now.";
+            validationMessage.hidden = false;
+            playButton.disabled = true;
+            return;
+        }
 
         const allRequiredFilled = selectedCard.choice_fields
             .filter((field) => field.required)

@@ -97,6 +97,11 @@ body.game-page {
     list-style: none;
 }
 
+#hand-list button.not-playable {
+    opacity: 0.5;
+    border-style: dashed;
+}
+
 dialog#new-game-dialog,
 dialog#card-detail-dialog {
     box-sizing: border-box;

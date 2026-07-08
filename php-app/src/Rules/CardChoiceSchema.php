@@ -112,7 +112,7 @@ final class CardChoiceSchema
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to bottom-deck and redraw'],
         ],
         'faith' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (must be green or blue)'],
+            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (must be green or blue)', 'filter' => ['colors' => ['green', 'blue']]],
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (required if discarding a card above)'],
         ],
         'guile' => [

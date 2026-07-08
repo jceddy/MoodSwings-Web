@@ -59,15 +59,20 @@ routed to the PHP app).
     left blank, it's just a blue card worth 0; because that choice
     resolves server-side in the same request, Creativity never offers a
     Duplicity repeat option of its own (see `php-app/README.md` for the
-    same gap noted from the server side). Each hand card's button is
-    disabled unless that specific card is currently legal to play (its
-    `is_playable` flag) — not just whether it's your turn at all, but
-    whether some outstanding play grant this turn actually covers *that*
-    card (e.g. after Intimidation bounces a revealed card into your hand,
-    that's the only card with an enabled button until some other grant
-    makes more of your hand playable) and, for a card with a "to play"
-    cost, whether that cost could be paid at all right now (e.g. Guile
-    with fewer than two other cards in hand). Polls
+    same gap noted from the server side). Each card's `is_playable` flag
+    reflects whether that *specific* card is currently legal to play — not
+    just whether it's your turn at all, but whether some outstanding play
+    grant this turn actually covers it (e.g. after Intimidation bounces a
+    revealed card into your hand, that's the only card covered until some
+    other grant makes more of your hand playable) and, for a card with a
+    "to play" cost, whether that cost could be paid at all right now (e.g.
+    Guile with fewer than two other cards in hand). The hand button itself
+    always stays clickable when it's your turn, so an unplayable card's
+    rules text can still be inspected -- it's just given a dashed,
+    lower-opacity look and a tooltip as a heads-up, and its panel opens
+    with Play already disabled and an inline "This card can't be played
+    right now" message instead of the usual field-by-field validation.
+    Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
     moves. Every mood in play and every card in the discard pile is also
     clickable, opening a read-only detail view (name, base value, alt
