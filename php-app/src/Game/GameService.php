@@ -730,11 +730,17 @@ final class GameService
             $state->hand($viewerGamePlayerId)
         );
 
+        $names = $this->cardCatalogNames();
         foreach ($state->moodsInPlay() as $cardId => $mood) {
             $response['in_play'][] = [
                 ...$this->serializeCard($state, $cardId),
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
+                'suppression_expiry' => $mood->suppressionExpiry,
+                'suppressed_by_card_id' => $mood->suppressionSourceCardId,
+                'suppressed_by_name' => $mood->suppressionSourceCardId !== null
+                    ? ($names[$mood->suppressionSourceCardId] ?? null)
+                    : null,
             ];
         }
 
@@ -759,9 +765,12 @@ final class GameService
      * Validation's reactToAnotherPlay() fields (see CardChoiceSchema's
      * docblock): both react to the viewer's own subsequent plays, so they
      * only ever apply to a card the viewer might actually play, never to
-     * an in-play or discard-pile card being merely displayed.
+     * an in-play or discard-pile card being merely displayed. The same
+     * flag gates 'is_playable' (MoodPlayService::isPlayable()) -- true by
+     * default for an in-play/discard-pile card being merely displayed,
+     * since nothing there ever reads it.
      *
-     * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>}
+     * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool}
      */
     private function serializeCard(BoardState $state, int $cardId, ?int $reactingViewerId = null): array
     {
@@ -797,6 +806,7 @@ final class GameService
             'rules_text' => $catalog['rulesText'],
             'has_dice_value' => $diceValueCatalog['altValue'] !== null,
             'choice_fields' => $choiceFields,
+            'is_playable' => $reactingViewerId === null || $this->plays->isPlayable($state, $reactingViewerId, $cardId),
         ];
     }
 

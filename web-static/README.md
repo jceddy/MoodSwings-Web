@@ -59,13 +59,24 @@ routed to the PHP app).
     left blank, it's just a blue card worth 0; because that choice
     resolves server-side in the same request, Creativity never offers a
     Duplicity repeat option of its own (see `php-app/README.md` for the
-    same gap noted from the server side). Polls
+    same gap noted from the server side). Each hand card's button is
+    disabled unless that specific card is currently legal to play (its
+    `is_playable` flag) — not just whether it's your turn at all, but
+    whether some outstanding play grant this turn actually covers *that*
+    card (e.g. after Intimidation bounces a revealed card into your hand,
+    that's the only card with an enabled button until some other grant
+    makes more of your hand playable) and, for a card with a "to play"
+    cost, whether that cost could be paid at all right now (e.g. Guile
+    with fewer than two other cards in hand). Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
     moves. Every mood in play and every card in the discard pile is also
     clickable, opening a read-only detail view (name, base value, alt
     value if it has one, current value if a while-in-play effect has
-    changed it, owner, rules text) so an unfamiliar card can be checked
-    before deciding how to respond to it.
+    changed it, owner, rules text, and — if it's currently suppressed — an
+    indicator naming the suppressing mood, if the game tracks one, and
+    whether the suppression lasts as long as that mood stays in play or
+    just until the end of the current round) so an unfamiliar card can be
+    checked before deciding how to respond to it.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

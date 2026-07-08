@@ -107,6 +107,11 @@ dialog#card-detail-dialog {
     border-radius: 0.5rem;
 }
 
+#card-detail-suppression {
+    font-style: italic;
+    color: #b00020;
+}
+
 #opponent-checkboxes label {
     display: block;
     margin-bottom: 0.25rem;

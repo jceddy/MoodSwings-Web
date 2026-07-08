@@ -3209,4 +3209,68 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertSame(7, $state->valueOf(132));
     }
+
+    public function testIsPlayableIsFalseWhenItIsNotThePlayersTurn(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(2);
+
+        self::assertFalse($this->plays->isPlayable($state, 1, 3));
+    }
+
+    public function testIsPlayableIsFalseForABannedColor(): void
+    {
+        // Reuses Doubt's own mechanics (see testDoubtBlocksPlayingABannedColorDuringTheFollowingRound)
+        // rather than reaching into effectState directly, so this stays
+        // accurate if that mechanism ever changes.
+        $state = $this->boardState(hands: [1 => [36, 8], 2 => [7]]); // Doubt; Dignity (white); Courage (white)
+        $state->startRound(1, 3);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 36, new PlayerChoices(['reveal_card_ids' => [8]]));
+
+        $state->startRound(2, 4);
+        $state->startTurn(2);
+
+        self::assertFalse($this->plays->isPlayable($state, 2, 7));
+    }
+
+    public function testIsPlayableIsTrueForAnUnconditionalCardWithAnUnrestrictedGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(1);
+
+        self::assertTrue($this->plays->isPlayable($state, 1, 3));
+    }
+
+    public function testIsPlayableRespectsARestrictedGrantLikeIntimidations(): void
+    {
+        // Mirrors IntimidationEffect's 'specific_card_ids' grant directly
+        // rather than playing Intimidation itself, since only the
+        // restriction's effect on isPlayable() is under test here.
+        $state = $this->boardState(hands: [1 => [3, 7]]); // Charity, Courage
+        $state->startTurn(1);
+        $state->consumePlay(); // use up the unconditional grant from startTurn()
+        $state->grantExtraPlay(1, ['type' => 'specific_card_ids', 'values' => [3]]);
+
+        self::assertTrue($this->plays->isPlayable($state, 1, 3));
+        self::assertFalse($this->plays->isPlayable($state, 1, 7));
+    }
+
+    public function testIsPlayableIsFalseWhenAToPlayCostCannotBePaid(): void
+    {
+        // Guile needs two *other* hand cards to discard -- with none, it
+        // can't be played at all, matching GuileEffect::canPayToPlayCost().
+        $state = $this->boardState(hands: [1 => [40]]);
+        $state->startTurn(1);
+
+        self::assertFalse($this->plays->isPlayable($state, 1, 40));
+    }
+
+    public function testIsPlayableIsTrueWhenAToPlayCostCanBePaid(): void
+    {
+        $state = $this->boardState(hands: [1 => [40, 3, 7]]); // Guile, Charity, Courage
+        $state->startTurn(1);
+
+        self::assertTrue($this->plays->isPlayable($state, 1, 40));
+    }
 }

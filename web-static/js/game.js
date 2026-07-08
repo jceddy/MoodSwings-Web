@@ -240,10 +240,24 @@
         if (ownerLabel) {
             meta += ' — ' + ownerLabel;
         }
-        if (card.is_suppressed) {
-            meta += ' (suppressed)';
-        }
         document.getElementById('card-detail-meta').textContent = meta;
+
+        const suppressionEl = document.getElementById('card-detail-suppression');
+        if (card.is_suppressed) {
+            let text = 'Suppressed';
+            if (card.suppressed_by_name) {
+                text += ' by ' + card.suppressed_by_name;
+            }
+            if (card.suppression_expiry === 'while_source_in_play') {
+                text += ' — lasts as long as that mood stays in play.';
+            } else if (card.suppression_expiry === 'end_of_round') {
+                text += ' — lasts until the end of this round.';
+            }
+            suppressionEl.textContent = text;
+            suppressionEl.hidden = false;
+        } else {
+            suppressionEl.hidden = true;
+        }
 
         document.getElementById('card-detail-rules').textContent = card.rules_text || 'No ability.';
         cardDetailDialog.showModal();
@@ -333,7 +347,12 @@
         renderList(document.getElementById('hand-list'), { hidden: true }, state.you.hand || [], (card) => {
             const li = document.createElement('li');
             li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
-            li.lastChild.disabled = !canAct;
+            // is_playable reflects whether some outstanding play grant this
+            // turn actually covers this specific card (e.g. Intimidation's
+            // grant only covers the one card it revealed) and, if the card
+            // has a "to play" cost, whether that cost is payable at all --
+            // see MoodPlayService::isPlayable().
+            li.lastChild.disabled = !canAct || !card.is_playable;
             return li;
         });
 
