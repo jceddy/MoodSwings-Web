@@ -48,6 +48,9 @@ final class GameService
     private const MIN_PLAYERS = 2;
     private const MAX_PLAYERS = 4;
 
+    /** @var ?array<int, string> card_id => name, memoized per instance by cardCatalogNames() */
+    private ?array $cardNames = null;
+
     public function __construct(
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
@@ -543,6 +546,243 @@ final class GameService
         }
 
         return ['round_scored' => true, 'game_completed' => false];
+    }
+
+    public function gamePlayerIdFor(int $gameId, int $userId): ?int
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT id FROM game_players WHERE game_id = :game_id AND user_id = :user_id'
+        );
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $userId]);
+        $id = $stmt->fetchColumn();
+
+        return $id !== false ? (int) $id : null;
+    }
+
+    /** @return array<int, array{id:int,format:string,status:string,wins_needed:int,created_at:string,started_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool}> */
+    public function listGamesForUser(int $userId): array
+    {
+        $pdo = Connection::get();
+
+        $gameIdsStmt = $pdo->prepare(
+            'SELECT g.id FROM games g
+             JOIN game_players gp ON gp.game_id = g.id
+             WHERE gp.user_id = :user_id
+             ORDER BY COALESCE(g.started_at, g.created_at) DESC, g.id DESC'
+        );
+        $gameIdsStmt->execute(['user_id' => $userId]);
+        $gameIds = array_map(intval(...), $gameIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $games = [];
+        foreach ($gameIds as $gameId) {
+            $game = $this->fetchGame($gameId);
+
+            $playersStmt = $pdo->prepare(
+                'SELECT gp.id, gp.user_id, gp.seat_order, u.username FROM game_players gp
+                 JOIN users u ON u.id = gp.user_id
+                 WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
+            );
+            $playersStmt->execute(['game_id' => $gameId]);
+            $playerRows = $playersStmt->fetchAll();
+
+            $yourGamePlayerId = null;
+            $players = [];
+            foreach ($playerRows as $row) {
+                if ((int) $row['user_id'] === $userId) {
+                    $yourGamePlayerId = (int) $row['id'];
+                }
+                $players[] = [
+                    'user_id' => (int) $row['user_id'],
+                    'username' => $row['username'],
+                    'seat_order' => (int) $row['seat_order'],
+                ];
+            }
+
+            $currentTurnGamePlayerId = null;
+            if ($game['status'] === 'in_progress') {
+                $roundStmt = $pdo->prepare(
+                    "SELECT current_turn_game_player_id FROM game_rounds
+                     WHERE game_id = :game_id AND status = 'in_progress'
+                     ORDER BY round_number DESC LIMIT 1"
+                );
+                $roundStmt->execute(['game_id' => $gameId]);
+                $currentTurnGamePlayerId = $roundStmt->fetchColumn();
+                $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
+            }
+
+            $games[] = [
+                'id' => $gameId,
+                'format' => $game['format'],
+                'status' => $game['status'],
+                'wins_needed' => (int) $game['wins_needed'],
+                'created_at' => $game['created_at'],
+                'started_at' => $game['started_at'],
+                'players' => $players,
+                'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
+            ];
+        }
+
+        return $games;
+    }
+
+    /** @return array<string, mixed> */
+    public function getState(int $gameId, int $viewerUserId): array
+    {
+        $viewerGamePlayerId = $this->gamePlayerIdFor($gameId, $viewerUserId);
+        if ($viewerGamePlayerId === null) {
+            throw new GameStateException("User {$viewerUserId} is not seated in game {$gameId}");
+        }
+
+        $game = $this->fetchGame($gameId);
+        $pdo = Connection::get();
+
+        $playersStmt = $pdo->prepare(
+            'SELECT gp.id, gp.user_id, gp.seat_order, u.username FROM game_players gp
+             JOIN users u ON u.id = gp.user_id
+             WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
+        );
+        $playersStmt->execute(['game_id' => $gameId]);
+        $playerRows = $playersStmt->fetchAll();
+
+        $handCounts = [];
+        if ($game['status'] === 'in_progress' || $game['status'] === 'completed') {
+            $handCountStmt = $pdo->prepare(
+                "SELECT owner_game_player_id, COUNT(*) AS n FROM game_cards
+                 WHERE game_id = :game_id AND zone = 'hand'
+                 GROUP BY owner_game_player_id"
+            );
+            $handCountStmt->execute(['game_id' => $gameId]);
+            foreach ($handCountStmt->fetchAll() as $row) {
+                $handCounts[(int) $row['owner_game_player_id']] = (int) $row['n'];
+            }
+        }
+
+        $players = [];
+        foreach ($playerRows as $row) {
+            $players[] = [
+                'game_player_id' => (int) $row['id'],
+                'user_id' => (int) $row['user_id'],
+                'username' => $row['username'],
+                'seat_order' => (int) $row['seat_order'],
+                'hand_count' => $handCounts[(int) $row['id']] ?? 0,
+                'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
+            ];
+        }
+
+        $winnerUsername = null;
+        if ($game['winner_game_player_id'] !== null) {
+            foreach ($players as $player) {
+                if ($player['game_player_id'] === (int) $game['winner_game_player_id']) {
+                    $winnerUsername = $player['username'];
+                }
+            }
+        }
+
+        $response = [
+            'game' => [
+                'id' => $gameId,
+                'format' => $game['format'],
+                'status' => $game['status'],
+                'wins_needed' => (int) $game['wins_needed'],
+                'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
+                'winner_username' => $winnerUsername,
+            ],
+            'players' => $players,
+            'you' => ['game_player_id' => $viewerGamePlayerId],
+            'round' => null,
+            'in_play' => [],
+            'discard_pile' => [],
+            'deck_count' => 0,
+        ];
+
+        if ($game['status'] !== 'in_progress' && $game['status'] !== 'completed') {
+            return $response;
+        }
+
+        $roundStmt = $pdo->prepare(
+            'SELECT * FROM game_rounds WHERE game_id = :game_id ORDER BY round_number DESC LIMIT 1'
+        );
+        $roundStmt->execute(['game_id' => $gameId]);
+        $roundRow = $roundStmt->fetch();
+
+        $state = $this->boardStates->load($gameId);
+
+        $cardIds = array_keys($this->cardCatalogNames());
+
+        if ($roundRow !== false) {
+            $currentTurnGamePlayerId = $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null;
+            $response['round'] = [
+                'round_number' => (int) $roundRow['round_number'],
+                'status' => $roundRow['status'],
+                'current_turn_game_player_id' => $currentTurnGamePlayerId,
+                'plays_remaining' => (int) $roundRow['plays_remaining'],
+                'first_game_player_id' => (int) $roundRow['first_game_player_id'],
+                'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
+                'banned_colors' => $state->bannedColorsThisRound(),
+                'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
+            ];
+            $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
+        }
+
+        $response['you']['hand'] = array_map(
+            fn (int $cardId) => $this->serializeCard($state, $cardId),
+            $state->hand($viewerGamePlayerId)
+        );
+
+        foreach ($state->moodsInPlay() as $cardId => $mood) {
+            $response['in_play'][] = [
+                ...$this->serializeCard($state, $cardId),
+                'owner_game_player_id' => $mood->ownerId,
+                'is_suppressed' => $mood->isSuppressed,
+            ];
+        }
+
+        $response['discard_pile'] = array_map(
+            fn (int $cardId) => $this->serializeCard($state, $cardId),
+            $state->discardPile()
+        );
+
+        $response['deck_count'] = count($state->deck());
+
+        return $response;
+    }
+
+    /**
+     * colorOf()/valueOf() reflect live "while in play" effects (Imagination,
+     * suppression, etc.) and only work for cards currently in play -- for a
+     * card sitting in a hand or the discard pile there's no live effect to
+     * apply, so its printed catalog color/base value is what's shown.
+     *
+     * @return array{card_id:int,name:string,color:string,value:int,effect_key:string,rules_text:string}
+     */
+    private function serializeCard(BoardState $state, int $cardId): array
+    {
+        $catalog = $state->catalogRow($cardId);
+        $names = $this->cardCatalogNames();
+        $inPlay = $state->isInPlay($cardId);
+
+        return [
+            'card_id' => $cardId,
+            'name' => $names[$cardId] ?? $catalog['effectKey'],
+            'color' => $inPlay ? $state->colorOf($cardId) : $catalog['color'],
+            'value' => $inPlay ? $state->valueOf($cardId) : $catalog['baseValue'],
+            'effect_key' => $catalog['effectKey'],
+            'rules_text' => $catalog['rulesText'],
+        ];
+    }
+
+    /** @return array<int, string> card_id => name */
+    private function cardCatalogNames(): array
+    {
+        if ($this->cardNames === null) {
+            $stmt = Connection::get()->query('SELECT id, name FROM cards');
+            $this->cardNames = [];
+            foreach ($stmt->fetchAll() as $row) {
+                $this->cardNames[(int) $row['id']] = $row['name'];
+            }
+        }
+
+        return $this->cardNames;
     }
 
     private function totalWinsFor(int $gameId, int $playerId): int

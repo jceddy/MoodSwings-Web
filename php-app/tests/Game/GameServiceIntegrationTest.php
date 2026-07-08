@@ -222,6 +222,102 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->createGame($creator, [$creator, ...$others]);
     }
 
+    public function testGamePlayerIdForReturnsSeatedPlayersIdAndNullOtherwise(): void
+    {
+        $creator = $this->insertUser('seat-alice');
+        $bob = $this->insertUser('seat-bob');
+        $stranger = $this->insertUser('seat-stranger');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+
+        $stmt = $this->pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $creator]);
+        $expectedGamePlayerId = (int) $stmt->fetchColumn();
+
+        self::assertSame($expectedGamePlayerId, $this->games->gamePlayerIdFor($gameId, $creator));
+        self::assertNull($this->games->gamePlayerIdFor($gameId, $stranger));
+    }
+
+    public function testListGamesForUserReturnsSummariesAndYourTurnFlag(): void
+    {
+        $creator = $this->insertUser('list-alice');
+        $bob = $this->insertUser('list-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+
+        $creatorGames = $this->games->listGamesForUser($creator);
+        $bobGames = $this->games->listGamesForUser($bob);
+
+        self::assertCount(1, $creatorGames);
+        $summary = $creatorGames[0];
+        self::assertSame($gameId, $summary['id']);
+        self::assertSame('in_progress', $summary['status']);
+        self::assertCount(2, $summary['players']);
+
+        // Exactly one of the two players is on turn; the flag should
+        // disagree between their two lists.
+        self::assertNotSame($creatorGames[0]['is_your_turn'], $bobGames[0]['is_your_turn']);
+    }
+
+    public function testGetStateRejectsAViewerWhoIsNotSeated(): void
+    {
+        $creator = $this->insertUser('state-alice');
+        $bob = $this->insertUser('state-bob');
+        $stranger = $this->insertUser('state-stranger');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+
+        $this->expectException(GameStateException::class);
+        $this->games->getState($gameId, $stranger);
+    }
+
+    public function testGetStateForWaitingGameOmitsRoundAndHand(): void
+    {
+        $creator = $this->insertUser('waiting-alice');
+        $bob = $this->insertUser('waiting-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+
+        $state = $this->games->getState($gameId, $creator);
+
+        self::assertSame('waiting', $state['game']['status']);
+        self::assertNull($state['round']);
+        self::assertArrayNotHasKey('hand', $state['you']);
+        self::assertCount(2, $state['players']);
+    }
+
+    public function testGetStateForInProgressGameExposesYourHandAndHidesOpponentsHand(): void
+    {
+        $creator = $this->insertUser('board-alice');
+        $bob = $this->insertUser('board-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+
+        $creatorGamePlayerId = $this->games->gamePlayerIdFor($gameId, $creator);
+        $state = $this->games->getState($gameId, $creator);
+
+        self::assertSame('in_progress', $state['game']['status']);
+        self::assertNotNull($state['round']);
+        self::assertCount(5, $state['you']['hand']);
+        self::assertSame($creatorGamePlayerId, $state['you']['game_player_id']);
+
+        foreach ($state['players'] as $player) {
+            self::assertSame(5, $player['hand_count']);
+        }
+
+        self::assertSame(133 - 5 * 2, $state['deck_count']);
+        self::assertSame([], $state['discard_pile']);
+        self::assertSame([], $state['in_play']);
+
+        foreach ($state['you']['hand'] as $card) {
+            self::assertArrayHasKey('name', $card);
+            self::assertArrayHasKey('color', $card);
+            self::assertArrayHasKey('value', $card);
+        }
+    }
+
     /**
      * Builds a fully deterministic 3-player, wins-needed-2 game by
      * inserting fixture rows directly (bypassing createGame/startGame's

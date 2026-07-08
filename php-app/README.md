@@ -54,6 +54,12 @@ instead.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?}`        | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`). `400` if that's more than 4 players or an opponent id doesn't exist. Returns `{"game_id"}`. |
+| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in, most recently active first, each with `players` (`user_id`/`username`/`seat_order`) and `is_your_turn`. |
+| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). |
+| POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
+| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php`. `400` on an invalid/missing choice for that card, `409` if it's not your turn or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`. |
+| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn. Same return shape as `/games/play`. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -293,9 +299,14 @@ request/response round trips with no process alive in between to hold a
   as one play or pass ripples through to the end of a round if it's the
   last play of the game.
 
-Known limitations: `GameService` takes `game_player` ids directly and
-assumes the caller has already authorized the action -- there's no
-HTTP/API endpoint layer in front of it yet.
+The `/games*` routes above are the HTTP layer in front of this: they
+resolve the authenticated user to their `game_player_id` for a given game
+(`GameService::gamePlayerIdFor()`) before ever calling `playMood`/`pass`/
+`startGame`, and `GameService::getState()` curates a `BoardState` into
+JSON for rendering -- hiding opponents' hands (only `hand_count` is
+exposed) and the deck's order (only `deck_count` is), while leaving the
+discard pile fully visible since it's public information in the physical
+game too.
 
 ## Tests
 

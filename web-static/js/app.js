@@ -71,3 +71,39 @@ function removeFriend(userId) {
         body: JSON.stringify({ user_id: userId }),
     });
 }
+
+function listGames() {
+    return apiRequest('/games');
+}
+
+function createGame(opponentUserIds, format, winsNeeded) {
+    return apiRequest('/games', {
+        method: 'POST',
+        body: JSON.stringify({ opponent_user_ids: opponentUserIds, format, wins_needed: winsNeeded }),
+    });
+}
+
+function getGameState(gameId) {
+    return apiRequest('/games/state?game_id=' + encodeURIComponent(gameId));
+}
+
+function startGame(gameId) {
+    return apiRequest('/games/start', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
+function playCard(gameId, cardId, choices) {
+    return apiRequest('/games/play', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, card_id: cardId, choices: choices || {} }),
+    });
+}
+
+function passTurn(gameId) {
+    return apiRequest('/games/pass', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
