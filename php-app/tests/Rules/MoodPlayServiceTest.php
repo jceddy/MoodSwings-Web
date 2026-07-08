@@ -2868,19 +2868,43 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
-    public function testCompulsionTakesARandomCardFromTheTargetsHand(): void
+    public function testCompulsionPausesForTheTargetsOwnChoiceThenResolvesTheTransfer(): void
     {
         $state = $this->boardState(hands: [1 => [86], 2 => [3, 7]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 86, new PlayerChoices(['target_player_id' => 2]));
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 86, $choices);
 
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        $decision = $result->pendingDecisions[0];
+        self::assertSame('given_card_id', $decision->key);
+        self::assertSame(2, $decision->targetPlayerId);
+        self::assertSame('compulsion_give_card', $decision->decisionType);
+        self::assertSame('hand_card', $decision->field['type']);
+        // Compulsion itself is already in play (its own cost/grant already
+        // resolved before the pause); nothing has been transferred yet --
+        // still waiting on player 2's own answer.
+        self::assertTrue($state->isInPlay(86));
+        self::assertSame([], $state->hand(1));
+        self::assertSame([3, 7], $state->hand(2));
+
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state,
+            86,
+            1,
+            $choices,
+            $choices,
+            0,
+            ['given_card_id' => new PlayerChoices(['given_card_id' => 3])],
+        );
+
+        self::assertFalse($finalResult->isPending);
         $p1Hand = $state->hand(1);
         $p2Hand = $state->hand(2);
-        self::assertCount(1, $p1Hand);
-        self::assertCount(1, $p2Hand);
-        self::assertContains($p1Hand[0], [3, 7]);
-        self::assertNotSame($p1Hand[0], $p2Hand[0]);
+        self::assertSame([3], $p1Hand);
+        self::assertSame([7], $p2Hand);
     }
 
     public function testCompulsionDoesNothingWhenTargetHasNoCards(): void

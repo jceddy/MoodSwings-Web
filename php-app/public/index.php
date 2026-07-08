@@ -477,4 +477,24 @@ if ($path === '/games/pass' && $method === 'POST') {
     }
 }
 
+if ($path === '/games/respond' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $choices = is_array($body['choices'] ?? null) ? $body['choices'] : [];
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->respondToDecision($gameId, $gamePlayerId, $choices);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (InvalidChoiceException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (EffectNotImplementedException $e) {
+        respond(500, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 respond(404, ['status' => 'error', 'message' => 'Not found']);

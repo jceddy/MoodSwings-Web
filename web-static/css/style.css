@@ -122,20 +122,24 @@ dialog#card-detail-dialog {
     margin-bottom: 0.25rem;
 }
 
-#choices-panel {
+#choices-panel,
+#pending-decision-panel {
     border: 1px solid #ccc;
     border-radius: 0.5rem;
     padding: 1rem;
     margin: 1rem 0;
 }
 
-#choices-panel label {
+#choices-panel label,
+#pending-decision-panel label {
     display: block;
     margin-bottom: 0.75rem;
 }
 
 #choices-panel select,
-#choices-panel input:not([type="checkbox"]) {
+#choices-panel input:not([type="checkbox"]),
+#pending-decision-panel select,
+#pending-decision-panel input:not([type="checkbox"]) {
     display: block;
     width: 100%;
     box-sizing: border-box;
@@ -143,7 +147,8 @@ dialog#card-detail-dialog {
     margin-top: 0.25rem;
 }
 
-#choices-panel input[type="checkbox"] {
+#choices-panel input[type="checkbox"],
+#pending-decision-panel input[type="checkbox"] {
     margin-left: 0.5rem;
 }
 
@@ -151,4 +156,9 @@ dialog#card-detail-dialog {
     margin-left: 1.5rem;
     border-left: 2px solid #ccc;
     padding-left: 0.75rem;
+}
+
+#pending-decision-banner {
+    font-weight: bold;
+    color: #7a5b00;
 }

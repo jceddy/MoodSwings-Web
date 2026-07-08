@@ -41,6 +41,8 @@ final class GameServiceIntegrationTest extends TestCase
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE game_events');
+        $pdo->exec('TRUNCATE TABLE game_pending_decisions');
+        $pdo->exec('TRUNCATE TABLE game_pending_decision_batches');
         $pdo->exec('TRUNCATE TABLE game_round_scores');
         $pdo->exec('TRUNCATE TABLE game_cards');
         $pdo->exec('TRUNCATE TABLE game_rounds');
@@ -1403,7 +1405,7 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($state->isSuppressed(24));
     }
 
-    public function testCompulsionTakesACardFromTheTargetsHandAfterReload(): void
+    public function testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
     {
         $u1 = $this->insertUser('comp1');
         $u2 = $this->insertUser('comp2');
@@ -1422,16 +1424,94 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 7, 'hand', $p2);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 86, ['target_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, 86, ['target_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInPlay(86)); // cost/grant already resolved -- only the target's answer is outstanding
+        self::assertSame([3, 7], $state->hand($p2));
 
+        // The whole round is frozen -- not even the acting player can pass.
+        try {
+            $this->games->pass($gameId, $p1);
+            self::fail('Expected passing while a decision is pending to be rejected');
+        } catch (GameStateException) {
+            // expected
+        }
+
+        $respondResult = $this->games->respondToDecision($gameId, $p2, ['given_card_id' => 3]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
         $p1Hand = $state->hand($p1);
         $p2Hand = $state->hand($p2);
-        self::assertCount(1, $p1Hand);
-        self::assertCount(1, $p2Hand);
-        self::assertContains($p1Hand[0], [3, 7]);
+        self::assertSame([3], $p1Hand);
+        self::assertSame([7], $p2Hand);
+    }
+
+    public function testRespondToDecisionRejectsAPlayerWithNoDecisionPending(): void
+    {
+        $u1 = $this->insertUser('nodecision1');
+        $u2 = $this->insertUser('nodecision2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, no decision needed
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->expectException(GameStateException::class);
+        $this->games->respondToDecision($gameId, $p2, ['given_card_id' => 1]);
+    }
+
+    public function testGetStateExposesThePendingDecisionsFieldOnlyToItsTargetNotBystanders(): void
+    {
+        $u1 = $this->insertUser('pendingstate1');
+        $u2 = $this->insertUser('pendingstate2');
+        $u3 = $this->insertUser('pendingstate3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $beforePlay = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertNull($beforePlay);
+
+        $this->games->playMood($gameId, $p1, 86, ['target_player_id' => $p2]);
+
+        $targetView = $this->games->getState($gameId, $u2)['round']['pending_decision'];
+        self::assertSame($p1, $targetView['initiating_game_player_id']);
+        self::assertSame(86, $targetView['played_card_id']);
+        self::assertSame('Compulsion', $targetView['played_card_name']);
+        self::assertSame('compulsion_give_card', $targetView['decision_type']);
+        self::assertSame($p2, $targetView['target_game_player_id']);
+        self::assertTrue($targetView['is_you']);
+        self::assertSame('hand_card', $targetView['field']['type']);
+
+        $initiatorView = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertFalse($initiatorView['is_you']);
+        self::assertArrayNotHasKey('field', $initiatorView);
+
+        $bystanderView = $this->games->getState($gameId, $u3)['round']['pending_decision'];
+        self::assertFalse($bystanderView['is_you']);
+        self::assertArrayNotHasKey('field', $bystanderView);
     }
 
     public function testIntimidationsGrantSurvivesReloadAndOnlyAllowsTheRevealedCard(): void

@@ -107,3 +107,10 @@ function passTurn(gameId) {
         body: JSON.stringify({ game_id: gameId }),
     });
 }
+
+function respondToDecision(gameId, choices) {
+    return apiRequest('/games/respond', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, choices: choices || {} }),
+    });
+}

@@ -75,4 +75,17 @@ final class PlayerChoices
 
         return new self(is_array($values) ? $values : []);
     }
+
+    /**
+     * The raw underlying values -- used to persist a bag across a pause in
+     * resolution (see GameService's pending-decision batches), since a
+     * paused play's choices have to survive being JSON-encoded into the
+     * database and reconstructed via the constructor in a later request.
+     *
+     * @return array<string, mixed>
+     */
+    public function toArray(): array
+    {
+        return $this->values;
+    }
 }

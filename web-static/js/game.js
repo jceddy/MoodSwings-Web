@@ -104,6 +104,8 @@
     const boardError = document.getElementById('board-error');
     const boardMessage = document.getElementById('board-message');
     const choicesPanel = document.getElementById('choices-panel');
+    const pendingDecisionBanner = document.getElementById('pending-decision-banner');
+    const pendingDecisionPanel = document.getElementById('pending-decision-panel');
     const cardDetailDialog = document.getElementById('card-detail-dialog');
 
     let currentGameId = null;
@@ -131,7 +133,7 @@
             clearInterval(pollTimer);
         }
         pollTimer = setInterval(() => {
-            if (choicesPanel.hidden) {
+            if (choicesPanel.hidden && pendingDecisionPanel.hidden) {
                 refreshBoard();
             }
         }, 4000);
@@ -222,6 +224,11 @@
 
     function cardLabel(card) {
         return card.name + ' (' + card.color + ', ' + card.value + ')';
+    }
+
+    function playerLabelFor(gamePlayerId) {
+        const player = currentState.players.find((p) => p.game_player_id === gamePlayerId);
+        return player ? player.username : '?';
     }
 
     // Lets a player double-check a card they don't recognize -- whether
@@ -319,6 +326,9 @@
                 (state.you.is_your_turn ? ' — your turn' : ' — waiting on another player');
         }
 
+        const pendingDecision = state.round && state.round.pending_decision;
+        renderPendingDecision(pendingDecision);
+
         renderList(
             document.getElementById('in-play-list'),
             document.getElementById('in-play-empty'),
@@ -343,7 +353,10 @@
             return li;
         });
 
-        const canAct = state.game.status === 'in_progress' && state.you.is_your_turn;
+        // A pending decision freezes the whole round -- nobody, including
+        // the player whose turn it nominally is, can play or pass until
+        // the targeted player has answered it.
+        const canAct = state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
         renderList(document.getElementById('hand-list'), { hidden: true }, state.you.hand || [], (card) => {
             const li = document.createElement('li');
             li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
@@ -534,8 +547,9 @@
     // choice-field-duplicity_repeat_choices.target_mood_id. Only one level
     // of nesting is ever produced (Duplicity is excluded from repeating
     // itself server-side, so a nested field's own fields are never nested).
-    function buildFieldRow(field, card, path) {
+    function buildFieldRow(field, card, path, onChange) {
         path = path || field.key;
+        onChange = onChange || updatePlayButtonEnabled;
 
         const label = document.createElement('label');
         label.className = 'choice-field';
@@ -545,14 +559,14 @@
             const nestedContainer = document.createElement('div');
             nestedContainer.className = 'choice-field-nested';
             for (const subField of field.fields) {
-                nestedContainer.appendChild(buildFieldRow(subField, card, path + '.' + subField.key));
+                nestedContainer.appendChild(buildFieldRow(subField, card, path + '.' + subField.key, onChange));
             }
             label.appendChild(nestedContainer);
             return label;
         }
 
         const widget = buildFieldWidget(field, card, path);
-        widget.addEventListener('change', updatePlayButtonEnabled);
+        widget.addEventListener('change', onChange);
         label.appendChild(widget);
         return label;
     }
@@ -704,6 +718,106 @@
     document.getElementById('cancel-choice-button').addEventListener('click', () => {
         selectedCard = null;
         choicesPanel.hidden = true;
+    });
+
+    // -- Pending decisions ---------------------------------------------
+    //
+    // A handful of cards (Compulsion, Instability, Arrogance, ...) give
+    // the real decision to a player OTHER than the one whose turn it is --
+    // e.g. Compulsion's target chooses which hand card to give up. The
+    // play pauses until that player answers here; state.round.
+    // pending_decision (from GET /games/state) is null when nothing's
+    // pending, otherwise identifies who's waiting on whom and, only for
+    // the targeted player themselves, the actual field to answer
+    // (pending_decision.field, shaped exactly like a choice_fields entry,
+    // so it's rendered with the same buildFieldRow()/fieldOptions() the
+    // regular choices panel uses rather than needing its own logic).
+
+    let activePendingDecision = null;
+
+    // fieldOptions()'s 'mood'/'hand_card' cases exclude a "card being
+    // played" id from their own candidates -- meaningless here, since the
+    // responder isn't playing anything, so a placeholder with an id no
+    // real card ever has keeps that exclusion a harmless no-op.
+    const PENDING_DECISION_PLACEHOLDER_CARD = { card_id: -1 };
+
+    function renderPendingDecision(pendingDecision) {
+        if (!pendingDecision) {
+            pendingDecisionBanner.hidden = true;
+            pendingDecisionPanel.hidden = true;
+            activePendingDecision = null;
+            return;
+        }
+
+        if (!pendingDecision.is_you) {
+            pendingDecisionBanner.textContent = 'Waiting on ' + playerLabelFor(pendingDecision.target_game_player_id) +
+                ' to respond to ' + (pendingDecision.played_card_name || 'a mood') + '.';
+            pendingDecisionBanner.hidden = false;
+            pendingDecisionPanel.hidden = true;
+            activePendingDecision = null;
+            return;
+        }
+
+        pendingDecisionBanner.hidden = true;
+
+        // Only (re)build the panel once per decision -- polling is
+        // suspended while it's open (see showBoard()'s pollTimer), so
+        // this only ever runs once per decision, the same way
+        // openChoicesPanel() only ever gets called once per selection.
+        if (activePendingDecision && !pendingDecisionPanel.hidden) {
+            return;
+        }
+
+        activePendingDecision = pendingDecision;
+        document.getElementById('pending-decision-title').textContent =
+            'Respond to ' + (pendingDecision.played_card_name || 'a mood');
+
+        const fieldContainer = document.getElementById('pending-decision-field');
+        fieldContainer.innerHTML = '';
+        fieldContainer.appendChild(buildFieldRow(
+            pendingDecision.field,
+            PENDING_DECISION_PLACEHOLDER_CARD,
+            pendingDecision.field.key,
+            updateRespondButtonEnabled
+        ));
+
+        updateRespondButtonEnabled();
+        pendingDecisionPanel.hidden = false;
+    }
+
+    function updateRespondButtonEnabled() {
+        const respondButton = document.getElementById('respond-decision-button');
+        if (!activePendingDecision) {
+            respondButton.disabled = true;
+            return;
+        }
+
+        const field = activePendingDecision.field;
+        const widget = document.getElementById('choice-field-' + field.key);
+        respondButton.disabled = !fieldHasValue(widget, field) || !!fieldValidationMessage(field, widget);
+    }
+
+    document.getElementById('respond-decision-button').addEventListener('click', async () => {
+        if (!activePendingDecision) {
+            return;
+        }
+
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+
+        const choices = buildChoicesFromFields([activePendingDecision.field]);
+        const { ok, body } = await respondToDecision(currentGameId, choices);
+
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit your response.';
+            boardError.hidden = false;
+            return;
+        }
+
+        activePendingDecision = null;
+        pendingDecisionPanel.hidden = true;
+        announceOutcome(body);
+        await refreshBoard();
     });
 
     async function submitPlay(card, choices) {

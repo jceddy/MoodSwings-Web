@@ -33,7 +33,7 @@ final class MoodPlayService
     {
     }
 
-    public function playMood(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices): void
+    public function playMood(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices): PlayResult
     {
         if ($state->currentPlayerId() !== $playerId) {
             throw new IllegalPlayException("It is not player {$playerId}'s turn");
@@ -112,44 +112,147 @@ final class MoodPlayService
             $state->grantExtraPlay(1, ['type' => 'shares_color_with_your_moods', 'source' => 'discard']);
         }
 
-        if ($effectiveRow['hasAfterPlaying']) {
-            $this->registry->for($effectiveEffectKey)->afterPlaying($state, $cardId, $playerId, $choices);
+        return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $choices, $choices, 0);
+    }
+
+    /**
+     * Resolves (or pauses) one afterPlaying() invocation -- either the
+     * played card's own, or one of its Duplicity repeats -- and, once
+     * that invocation's mutations are fully applied, chains into whatever
+     * comes next (another Duplicity repeat, or the final reaction loop).
+     * See continueAfterPlayingChain()/finishAfterPlayingChain() below.
+     *
+     * $topLevelChoices is always the original request's own choices bag
+     * (needed later for the reaction loop, which per MoodEffect's own
+     * contract always reads it, never an invocation's own bag).
+     * $invocationChoices is THIS invocation's own bag -- identical to
+     * $topLevelChoices for the card's own afterPlaying(), or the
+     * duplicity_repeat_choices sub-bag for a repeat.
+     */
+    private function resolveAfterPlayingChain(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        PlayerChoices $invocationChoices,
+        int $invocationSeq,
+    ): PlayResult {
+        $effectiveRow = $state->catalogRow($state->effectiveCardId($cardId));
+        if (!$effectiveRow['hasAfterPlaying']) {
+            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);
         }
 
-        // Duplicity: "each time you play another mood, you may have that
-        // mood's after-playing effect happen an additional time." This
-        // needs the registry (which no MoodEffect implementation has
-        // access to) to re-invoke the just-played card's own effect, so
-        // it's handled directly here rather than through
-        // reactToAnotherPlay() -- with a nested sub-choices bag, since
-        // the repeat is a fresh decision that usually can't reuse the
-        // same choices verbatim (e.g. a specific card already discarded
-        // once can't be discarded again).
+        $effectiveEffectKey = $effectiveRow['effectKey'];
+        $effect = $this->registry->for($effectiveEffectKey);
+
+        if ($effect instanceof RequiresOpponentDecision) {
+            $pendingDecisions = $effect->pendingDecisionsFor($state, $cardId, $playerId, $invocationChoices);
+            if ($pendingDecisions !== []) {
+                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq);
+            }
+            // Nothing to ask for this specific play (e.g. declined, or no
+            // qualifying target/candidate) -- same as an ordinary no-op
+            // afterPlaying().
+            $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, []);
+        } else {
+            $effect->afterPlaying($state, $cardId, $playerId, $invocationChoices);
+        }
+
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq);
+    }
+
+    /**
+     * Resumes a play that paused in resolveAfterPlayingChain() once every
+     * PendingDecisionRequest from that invocation has an answer -- called
+     * by GameService::respondToDecision() once a batch's last row
+     * resolves. $answers is keyed by each PendingDecisionRequest's own
+     * $key, one PlayerChoices per answer.
+     *
+     * @param array<string, PlayerChoices> $answers
+     */
+    public function resolvePendingDecisions(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        PlayerChoices $invocationChoices,
+        int $invocationSeq,
+        array $answers,
+    ): PlayResult {
+        $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $effect = $this->registry->for($effectiveEffectKey);
+        if (!$effect instanceof RequiresOpponentDecision) {
+            throw new IllegalPlayException("Effect '{$effectiveEffectKey}' has no pending decisions to resolve");
+        }
+
+        $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, $answers);
+
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq);
+    }
+
+    /**
+     * Duplicity: "each time you play another mood, you may have that
+     * mood's after-playing effect happen an additional time." This needs
+     * the registry (which no MoodEffect implementation has access to) to
+     * re-invoke the just-played card's own effect, so it's handled
+     * directly here rather than through reactToAnotherPlay() -- with a
+     * nested sub-choices bag, since the repeat is a fresh decision that
+     * usually can't reuse the same choices verbatim (e.g. a specific card
+     * already discarded once can't be discarded again). Only the played
+     * card's own (invocationSeq 0) afterPlaying() can be repeated once --
+     * a repeat of a repeat was never offered by the choices schema either.
+     */
+    private function continueAfterPlayingChain(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        int $invocationSeq,
+    ): PlayResult {
+        $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+
         if (
-            $effectiveRow['hasAfterPlaying']
+            $invocationSeq === 0
             && $effectiveEffectKey !== 'duplicity'
-            && $choices->bool('duplicity_repeat')
+            && $topLevelChoices->bool('duplicity_repeat')
             && $state->playerHasMoodInPlay($playerId, 'duplicity')
         ) {
-            $this->registry->for($effectiveEffectKey)->afterPlaying($state, $cardId, $playerId, $choices->sub('duplicity_repeat_choices'));
+            return $this->resolveAfterPlayingChain(
+                $state,
+                $cardId,
+                $playerId,
+                $topLevelChoices,
+                $topLevelChoices->sub('duplicity_repeat_choices'),
+                $invocationSeq + 1,
+            );
         }
 
-        // Scorn/Validation's "each time you play another mood" reacts to
-        // *this* player's own subsequent plays, using the same
-        // PlayerChoices already submitted for this play -- see
-        // MoodEffect::reactToAnotherPlay(). registry->has() guards against
-        // an as-yet-unimplemented card the player happens to also own;
-        // for every other (registered) mood this is a no-op inherited
-        // from AbstractMoodEffect.
+        return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);
+    }
+
+    /**
+     * Scorn/Validation's "each time you play another mood" reacts to
+     * *this* player's own subsequent plays, using the same top-level
+     * PlayerChoices submitted for this play -- see
+     * MoodEffect::reactToAnotherPlay(). registry->has() guards against an
+     * as-yet-unimplemented card the player happens to also own; for every
+     * other (registered) mood this is a no-op inherited from
+     * AbstractMoodEffect. Never itself needs another player's input --
+     * always the last step once nothing else is pending.
+     */
+    private function finishAfterPlayingChain(BoardState $state, int $cardId, int $playerId, PlayerChoices $topLevelChoices): PlayResult
+    {
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
             if ($mood->cardId === $cardId) {
                 continue;
             }
             $reactorEffectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
             if ($this->registry->has($reactorEffectKey)) {
-                $this->registry->for($reactorEffectKey)->reactToAnotherPlay($state, $mood->cardId, $cardId, $playerId, $choices);
+                $this->registry->for($reactorEffectKey)->reactToAnotherPlay($state, $mood->cardId, $cardId, $playerId, $topLevelChoices);
             }
         }
+
+        return PlayResult::complete();
     }
 
     /**
