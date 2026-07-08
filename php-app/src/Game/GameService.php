@@ -749,6 +749,35 @@ final class GameService
     }
 
     /**
+     * The full 133-card catalog -- static reference data, the same for
+     * every game, so it's deliberately not folded into getState() (which
+     * is polled every few seconds while a board is open). Used for
+     * Creativity's copy_card_id choice, whose options aren't scoped to any
+     * particular game's hand/in-play/discard state the way every other
+     * field's are -- "play as a copy of any mood" really does mean any of
+     * the 133, not just ones currently visible somewhere in this game.
+     *
+     * @return array<int, array{card_id:int,name:string,color:string,base_value:int,alt_value:?int}>
+     */
+    public function catalog(): array
+    {
+        $stmt = Connection::get()->query(
+            'SELECT id, name, color, base_value, alt_value FROM cards ORDER BY id'
+        );
+
+        return array_map(
+            static fn (array $row): array => [
+                'card_id' => (int) $row['id'],
+                'name' => $row['name'],
+                'color' => $row['color'],
+                'base_value' => (int) $row['base_value'],
+                'alt_value' => $row['alt_value'] !== null ? (int) $row['alt_value'] : null,
+            ],
+            $stmt->fetchAll()
+        );
+    }
+
+    /**
      * colorOf()/valueOf() reflect live "while in play" effects (Imagination,
      * suppression, etc.) and only work for cards currently in play -- for a
      * card sitting in a hand or the discard pile there's no live effect to
@@ -779,7 +808,11 @@ final class GameService
 
         $choiceFields = CardChoiceSchema::forEffectKey($catalog['effectKey']);
         if ($reactingViewerId !== null) {
-            $choiceFields = [...$choiceFields, ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue)];
+            $choiceFields = [
+                ...$choiceFields,
+                ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue),
+                ...$this->duplicityFields($state, $reactingViewerId, $catalog),
+            ];
         }
 
         return [
@@ -822,6 +855,43 @@ final class GameService
         }
 
         return $fields;
+    }
+
+    /**
+     * Duplicity's repeat-with-fresh-choices fields, appended for *this
+     * specific card* when the viewer has Duplicity in play. Gated on
+     * $catalog['hasAfterPlaying'] -- the card's own *raw* (non-Creativity-
+     * copy-aware) flag, deliberately: MoodPlayService gates the real
+     * repeat on the *effective* (copy-aware) row, but since Creativity's
+     * copy_card_id is only known once the play is actually submitted, this
+     * can't precompute the right nested fields for a Creativity play here
+     * -- so Creativity (whose own raw hasAfterPlaying is false) simply
+     * never gets a repeat option, rather than offering a wrong one. See
+     * CardChoiceSchema's docblock for the same note.
+     *
+     * @param array{effectKey:string,hasAfterPlaying:bool} $catalog
+     * @return array<int, array<string, mixed>>
+     */
+    private function duplicityFields(BoardState $state, int $viewerId, array $catalog): array
+    {
+        if (
+            !$catalog['hasAfterPlaying']
+            || $catalog['effectKey'] === 'duplicity'
+            || !$state->playerHasMoodInPlay($viewerId, 'duplicity')
+        ) {
+            return [];
+        }
+
+        return [
+            CardChoiceSchema::reactionTemplate('duplicity'),
+            [
+                'key' => 'duplicity_repeat_choices',
+                'type' => 'nested',
+                'required' => false,
+                'label' => 'Choices for the repeat (only used if repeating above)',
+                'fields' => CardChoiceSchema::afterPlayingFields($catalog['effectKey']),
+            ],
+        ];
     }
 
     /** @return array<int, string> card_id => name */

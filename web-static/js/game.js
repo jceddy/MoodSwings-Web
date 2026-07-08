@@ -8,6 +8,17 @@
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
 
+    // The full 133-card catalog, needed for Creativity's copy_card_id field
+    // (the only field whose options aren't scoped to the current game's
+    // hand/in-play/discard state). Small and static -- fetched once here
+    // rather than on every 4s board poll.
+    let catalog = [];
+    getCatalog().then(({ ok, body }) => {
+        if (ok) {
+            catalog = body.catalog;
+        }
+    });
+
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
         window.location.replace('/');
@@ -454,6 +465,12 @@
                 return currentState.discard_pile
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+            case 'catalog_card':
+                return catalog.map((c) => ({
+                    value: c.card_id,
+                    label: c.name + ' (' + c.color + ', ' + c.base_value +
+                        (c.alt_value !== null ? '/' + c.alt_value : '') + ')',
+                }));
             default:
                 return [];
         }
@@ -463,17 +480,19 @@
         return word.charAt(0).toUpperCase() + word.slice(1);
     }
 
-    function buildFieldWidget(field, card) {
+    function buildFieldWidget(field, card, path) {
+        path = path || field.key;
+
         if (field.type === 'bool') {
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
-            checkbox.id = 'choice-field-' + field.key;
+            checkbox.id = 'choice-field-' + path;
             return checkbox;
         }
 
         if (field.type === 'value') {
             const select = document.createElement('select');
-            select.id = 'choice-field-' + field.key;
+            select.id = 'choice-field-' + path;
             select.appendChild(new Option('(none)', ''));
             for (let value = field.min; value <= field.max; value++) {
                 select.appendChild(new Option(String(value), String(value)));
@@ -482,7 +501,7 @@
         }
 
         const select = document.createElement('select');
-        select.id = 'choice-field-' + field.key;
+        select.id = 'choice-field-' + path;
         if (field.multi) {
             select.multiple = true;
         } else {
@@ -496,6 +515,59 @@
             select.appendChild(new Option(option.label, option.value));
         }
         return select;
+    }
+
+    // Builds one <label> per field for the choices panel. Most fields are a
+    // label wrapping a single widget (DOM id choice-field-<path>). A
+    // type: 'nested' field (Duplicity's repeat-with-fresh-choices form) is a
+    // label wrapping an indented container of its own sub-fields instead,
+    // each one's path prefixed with the nested field's own key -- e.g.
+    // choice-field-duplicity_repeat_choices.target_mood_id. Only one level
+    // of nesting is ever produced (Duplicity is excluded from repeating
+    // itself server-side, so a nested field's own fields are never nested).
+    function buildFieldRow(field, card, path) {
+        path = path || field.key;
+
+        const label = document.createElement('label');
+        label.className = 'choice-field';
+        label.append(field.label + (field.required ? ' (required)' : '') + ' ');
+
+        if (field.type === 'nested') {
+            const nestedContainer = document.createElement('div');
+            nestedContainer.className = 'choice-field-nested';
+            for (const subField of field.fields) {
+                nestedContainer.appendChild(buildFieldRow(subField, card, path + '.' + subField.key));
+            }
+            label.appendChild(nestedContainer);
+            return label;
+        }
+
+        const widget = buildFieldWidget(field, card, path);
+        widget.addEventListener('change', updatePlayButtonEnabled);
+        label.appendChild(widget);
+        return label;
+    }
+
+    // Flattens choice_fields for validation purposes, descending into a
+    // nested field's own .fields with a dotted path so a repeated
+    // multi-select (e.g. repeating Courage) still gets its count/constraint
+    // checked. Top-level required-ness is checked separately in
+    // updatePlayButtonEnabled without recursing: a nested field's own
+    // sub-fields may carry `required: true` from their original card
+    // schema, but whether that requirement actually applies here depends on
+    // the sibling duplicity_repeat checkbox, so it's left informational
+    // only (not enforced client-side) for this pass.
+    function collectValidatableFields(fields, prefix) {
+        const result = [];
+        for (const field of fields) {
+            const path = prefix ? prefix + '.' + field.key : field.key;
+            if (field.type === 'nested') {
+                result.push(...collectValidatableFields(field.fields, path));
+            } else {
+                result.push({ field, path });
+            }
+        }
+        return result;
     }
 
     function fieldHasValue(widget, field) {
@@ -580,8 +652,8 @@
             .every((field) => fieldHasValue(document.getElementById('choice-field-' + field.key), field));
 
         let firstError = null;
-        for (const field of selectedCard.choice_fields) {
-            const widget = document.getElementById('choice-field-' + field.key);
+        for (const { field, path } of collectValidatableFields(selectedCard.choice_fields)) {
+            const widget = document.getElementById('choice-field-' + path);
             const message = fieldValidationMessage(field, widget);
             if (message && !firstError) {
                 firstError = message;
@@ -602,13 +674,7 @@
         const fieldsContainer = document.getElementById('choices-fields');
         fieldsContainer.innerHTML = '';
         for (const field of card.choice_fields) {
-            const label = document.createElement('label');
-            label.className = 'choice-field';
-            label.append(field.label + (field.required ? ' (required)' : '') + ' ');
-            const widget = buildFieldWidget(field, card);
-            widget.addEventListener('change', updatePlayButtonEnabled);
-            label.appendChild(widget);
-            fieldsContainer.appendChild(label);
+            fieldsContainer.appendChild(buildFieldRow(field, card, field.key));
         }
 
         updatePlayButtonEnabled();
@@ -638,10 +704,26 @@
         await refreshBoard();
     }
 
-    document.getElementById('play-card-button').addEventListener('click', async () => {
+    // Builds the choices payload, descending into a nested field's own
+    // .fields with a dotted path (matching buildFieldRow's widget ids) to
+    // produce a sub-object -- e.g. { duplicity_repeat: true,
+    // duplicity_repeat_choices: { target_mood_id: 12 } }. A nested field is
+    // only included if its sub-object ended up non-empty, so submitting
+    // without touching the repeat leaves the payload as if it weren't there.
+    function buildChoicesFromFields(fields, prefix) {
         const choices = {};
-        for (const field of selectedCard.choice_fields) {
-            const widget = document.getElementById('choice-field-' + field.key);
+        for (const field of fields) {
+            const path = prefix ? prefix + '.' + field.key : field.key;
+
+            if (field.type === 'nested') {
+                const subChoices = buildChoicesFromFields(field.fields, path);
+                if (Object.keys(subChoices).length > 0) {
+                    choices[field.key] = subChoices;
+                }
+                continue;
+            }
+
+            const widget = document.getElementById('choice-field-' + path);
             if (field.type === 'bool') {
                 if (widget.checked) choices[field.key] = true;
             } else if (field.multi) {
@@ -653,7 +735,11 @@
                 choices[field.key] = field.type === 'mode' ? widget.value : Number(widget.value);
             }
         }
+        return choices;
+    }
 
+    document.getElementById('play-card-button').addEventListener('click', async () => {
+        const choices = buildChoicesFromFields(selectedCard.choice_fields);
         await submitPlay(selectedCard, choices);
     });
 
