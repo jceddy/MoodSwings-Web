@@ -55,9 +55,8 @@ routed to the PHP app).
     cost is excluded from their nested repeat form (a repeat only re-runs
     the after-playing effect, not the cost to play), leaving just their
     target-mood field. Creativity's panel instead shows a dropdown to play
-    it as an exact copy of any of the full 133-card catalog (fetched once
-    via `GET /catalog` and cached client-side, rather than on every 4-second
-    poll) — left blank, it's just a blue card worth 0; because that choice
+    it as an exact copy of any mood currently in play (any player's) —
+    left blank, it's just a blue card worth 0; because that choice
     resolves server-side in the same request, Creativity never offers a
     Duplicity repeat option of its own (see `php-app/README.md` for the
     same gap noted from the server side). Polls

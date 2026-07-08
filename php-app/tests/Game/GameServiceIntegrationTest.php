@@ -523,7 +523,10 @@ final class GameServiceIntegrationTest extends TestCase
         $creativity = self::findByCardId($hand, 32);
 
         self::assertNull(self::findFieldByKey($creativity['choice_fields'], 'duplicity_repeat'));
-        self::assertNotNull(self::findFieldByKey($creativity['choice_fields'], 'copy_card_id'));
+        $copyField = self::findFieldByKey($creativity['choice_fields'], 'copy_card_id');
+        self::assertNotNull($copyField);
+        self::assertSame('mood', $copyField['type']);
+        self::assertSame('any', $copyField['scope']);
     }
 
     public function testGetStatesDuplicityNestedChoicesExcludeGuilesCostFieldButKeepItsTargetField(): void
@@ -551,22 +554,6 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNotNull($nested);
         self::assertCount(1, $nested['fields']);
         self::assertSame('target_mood_id', $nested['fields'][0]['key']);
-    }
-
-    public function testCatalogReturnsAllOneHundredThirtyThreeCardsWithTheExpectedShape(): void
-    {
-        $catalog = $this->games->catalog();
-
-        self::assertCount(133, $catalog);
-
-        $dignity = self::findByCardId($catalog, 8);
-        self::assertSame('Dignity', $dignity['name']);
-        self::assertSame('white', $dignity['color']);
-        self::assertSame(3, $dignity['base_value']);
-        self::assertSame(5, $dignity['alt_value']);
-
-        $charity = self::findByCardId($catalog, 3);
-        self::assertNull($charity['alt_value']);
     }
 
     /** @param array<int, array<string, mixed>> $cards */

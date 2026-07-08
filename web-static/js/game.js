@@ -8,17 +8,6 @@
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
 
-    // The full 133-card catalog, needed for Creativity's copy_card_id field
-    // (the only field whose options aren't scoped to the current game's
-    // hand/in-play/discard state). Small and static -- fetched once here
-    // rather than on every 4s board poll.
-    let catalog = [];
-    getCatalog().then(({ ok, body }) => {
-        if (ok) {
-            catalog = body.catalog;
-        }
-    });
-
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
         window.location.replace('/');
@@ -465,12 +454,6 @@
                 return currentState.discard_pile
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
-            case 'catalog_card':
-                return catalog.map((c) => ({
-                    value: c.card_id,
-                    label: c.name + ' (' + c.color + ', ' + c.base_value +
-                        (c.alt_value !== null ? '/' + c.alt_value : '') + ')',
-                }));
             default:
                 return [];
         }

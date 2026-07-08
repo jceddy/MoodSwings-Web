@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Rules;
 
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
+use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 
 /**
  * Resolves playing a single mood from a player's hand (or, for a grant
@@ -64,7 +65,13 @@ final class MoodPlayService
         // abilities" -- so a Creativity-copy pays the copied card's to-play
         // cost and resolves its after-playing effect too, not Creativity's
         // own (nonexistent) ones. Every other card is always just itself.
+        // "Any mood" means any mood currently in play (on the table, in
+        // front of any player) -- not any of the 133 printed card designs
+        // in the abstract -- so the target has to already be in play.
         $copiedCardId = $row['effectKey'] === 'creativity' ? $choices->int('copy_card_id') : null;
+        if ($copiedCardId !== null && !$state->isInPlay($copiedCardId)) {
+            throw new InvalidChoiceException("Card {$copiedCardId} is not currently in play, so Creativity can't copy it");
+        }
         $effectiveRow = $copiedCardId !== null ? $state->catalogRow($copiedCardId) : $row;
         $effectiveEffectKey = $effectiveRow['effectKey'];
 

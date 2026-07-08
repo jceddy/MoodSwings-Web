@@ -749,35 +749,6 @@ final class GameService
     }
 
     /**
-     * The full 133-card catalog -- static reference data, the same for
-     * every game, so it's deliberately not folded into getState() (which
-     * is polled every few seconds while a board is open). Used for
-     * Creativity's copy_card_id choice, whose options aren't scoped to any
-     * particular game's hand/in-play/discard state the way every other
-     * field's are -- "play as a copy of any mood" really does mean any of
-     * the 133, not just ones currently visible somewhere in this game.
-     *
-     * @return array<int, array{card_id:int,name:string,color:string,base_value:int,alt_value:?int}>
-     */
-    public function catalog(): array
-    {
-        $stmt = Connection::get()->query(
-            'SELECT id, name, color, base_value, alt_value FROM cards ORDER BY id'
-        );
-
-        return array_map(
-            static fn (array $row): array => [
-                'card_id' => (int) $row['id'],
-                'name' => $row['name'],
-                'color' => $row['color'],
-                'base_value' => (int) $row['base_value'],
-                'alt_value' => $row['alt_value'] !== null ? (int) $row['alt_value'] : null,
-            ],
-            $stmt->fetchAll()
-        );
-    }
-
-    /**
      * colorOf()/valueOf() reflect live "while in play" effects (Imagination,
      * suppression, etc.) and only work for cards currently in play -- for a
      * card sitting in a hand or the discard pile there's no live effect to

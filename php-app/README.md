@@ -56,7 +56,6 @@ instead.
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
 | POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?}`        | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`). `400` if that's more than 4 players or an opponent id doesn't exist. Returns `{"game_id"}`. |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in, most recently active first, each with `players` (`user_id`/`username`/`seat_order`) and `is_your_turn`. |
-| GET    | `/catalog`      | —                                                                 | Requires auth. Returns `{"catalog": [{"card_id", "name", "color", "base_value", "alt_value"}, ...]}` for all 133 cards, ordered by id — static reference data, identical for every game, used by Creativity's `copy_card_id` choice (see below) rather than being folded into `GET /games/state`. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`. |
@@ -325,14 +324,14 @@ Duplicity itself, gated on that card's own raw (not Creativity-copy-aware)
 
 Creativity's "play as a copy of any mood" choice (`copy_card_id`, read from
 the top-level choices, resolved entirely server-side in `MoodPlayService`)
-is exposed as a `type: 'catalog_card'` field whose options are the full
-133-card catalog rather than anything scoped to the current game's
-hand/in-play/discard state — the only field type where that's true. Since
-`GET /games/state` never otherwise exposes cards outside those zones, a
-separate `GET /catalog` endpoint (`GameService::catalog()`, a plain,
-registry-free `SELECT` — this is static reference data, identical for
-every game) serves it once rather than bloating the `GET /games/state`
-response that's polled every few seconds while a board is open.
+means any mood currently *in play* — visible on the table, not any of the
+133 printed card designs in the abstract — so it's exposed as an ordinary
+`type: 'mood'`, `scope: 'any'` field (the same shape Conviction uses),
+whose options are naturally already scoped to `BoardState::moodsInPlay()`
+like every other `mood` field. `MoodPlayService::playMood()` enforces the
+same restriction server-side with `BoardState::isInPlay($copiedCardId)`,
+throwing `InvalidChoiceException` for a `copy_card_id` that isn't
+currently on the table.
 
 One remaining known gap, intentionally out of scope: Creativity's
 `copy_card_id` is resolved client-side in the same request as the rest of

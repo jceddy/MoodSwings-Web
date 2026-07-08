@@ -368,13 +368,14 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertNull(CardChoiceSchema::reactionTemplate('nonexistent'));
     }
 
-    public function testCopyCardIdFieldForCreativity(): void
+    public function testCopyCardIdFieldForCreativityTargetsAnyMoodInPlay(): void
     {
         $fields = CardChoiceSchema::forEffectKey('creativity');
 
         self::assertCount(1, $fields);
         self::assertSame('copy_card_id', $fields[0]['key']);
-        self::assertSame('catalog_card', $fields[0]['type']);
+        self::assertSame('mood', $fields[0]['type']);
+        self::assertSame('any', $fields[0]['scope']);
         self::assertFalse($fields[0]['required']);
     }
 

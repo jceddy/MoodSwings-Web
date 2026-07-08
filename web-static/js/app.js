@@ -76,10 +76,6 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function getCatalog() {
-    return apiRequest('/catalog');
-}
-
 function createGame(opponentUserIds, format, winsNeeded) {
     return apiRequest('/games', {
         method: 'POST',

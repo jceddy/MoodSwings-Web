@@ -223,10 +223,16 @@ final class MoodPlayServiceTest extends TestCase
 
     public function testCreativityCopyingAnAfterPlayingCardTriggersThatEffect(): void
     {
-        $state = $this->boardState(hands: [1 => [32, 7]]); // Creativity, Charity extra card
-        $state->startTurn(1);
+        // "Any mood" means any mood currently in play, not any of the 133
+        // printed card designs in the abstract -- so Charity has to already
+        // be on the table (here, another player's) before Creativity can
+        // copy it.
+        $state = $this->boardState(hands: [1 => [32, 7], 2 => [3]]);
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 3, new PlayerChoices([])); // Charity, now in play
 
-        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 3])); // copy Charity
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 3])); // copy the in-play Charity
 
         self::assertSame(3, $state->effectiveCardId(32));
         self::assertSame(1, $state->valueOf(32));
@@ -239,14 +245,27 @@ final class MoodPlayServiceTest extends TestCase
         // Discipline itself is printed white, so copying it doesn't make
         // the copy count toward its own "black and/or red" threshold --
         // two *other* black moods are needed to push it to its alt value.
-        $state = $this->boardState(hands: [1 => [32, 56, 54]]);
-        $state->startTurn(1);
+        $state = $this->boardState(hands: [1 => [32, 56, 54], 2 => [9]]);
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 9, new PlayerChoices([])); // Discipline, now in play
 
-        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 9])); // copy Discipline
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 9])); // copy the in-play Discipline
         $state->moveHandToInPlay(1, 56); // Betrayal, black
         $state->moveHandToInPlay(1, 54); // Angst, black
 
         self::assertSame(3, $state->valueOf(32));
+    }
+
+    public function testCreativityCannotCopyAMoodThatIsNotCurrentlyInPlay(): void
+    {
+        // Charity (3) is only ever referenced by its catalog id here --
+        // never actually played -- so it isn't a legal copy target.
+        $state = $this->boardState(hands: [1 => [32]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 3]));
     }
 
     public function testBenevolenceAllowsABonusPlayOfADifferentColor(): void

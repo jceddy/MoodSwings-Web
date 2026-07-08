@@ -18,7 +18,7 @@ namespace MoodSwings\Rules;
  *
  * Field shape: array{
  *     key: string,          // exact PlayerChoices key the effect reads
- *     type: string,         // player|mood|hand_card|discard_card|mode|value|bool|catalog_card|nested
+ *     type: string,         // player|mood|hand_card|discard_card|mode|value|bool|nested
  *     label: string,
  *     required: bool,       // true only for requireInt/requireString or a mandatory to-play cost
  *     multi?: bool,         // true for ints()-backed (possibly multiple) fields
@@ -26,9 +26,7 @@ namespace MoodSwings\Rules;
  *     options?: string[],   // mode only
  *     min?: int, max?: int, // value only
  *     fields?: array,       // nested only: this field's own sub-fields, same shape as this array --
- *                           // one level deep only (see Duplicity below); catalog_card has no
- *                           // per-candidate options here at all -- its choices are the *entire*
- *                           // 133-card catalog (GET /catalog), not anything scoped to game state
+ *                           // one level deep only (see Duplicity below)
  *     filter?: array{       // narrows a dropdown to choices the effect will actually accept,
  *         colors?: string[],             // mood/hand_card: candidate's color must be one of these
  *         values?: int[],                // hand_card: candidate's (base) value must be one of these
@@ -327,7 +325,7 @@ final class CardChoiceSchema
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (base value 1, 3, or 5; boosts this mood\'s value to 5)', 'filter' => ['values' => [1, 3, 5]]],
         ],
         'creativity' => [
-            ['key' => 'copy_card_id', 'type' => 'catalog_card', 'required' => false, 'label' => "Play as a copy of (optional -- otherwise it's just a blue card worth 0)"],
+            ['key' => 'copy_card_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => "Play as a copy of a mood currently in play (optional -- otherwise it's just a blue card worth 0)"],
         ],
     ];
 

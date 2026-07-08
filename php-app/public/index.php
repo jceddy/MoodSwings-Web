@@ -418,11 +418,6 @@ if ($path === '/games' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'games' => $games->listGamesForUser((int) $currentUser['id'])]);
 }
 
-if ($path === '/catalog' && $method === 'GET') {
-    requireAuth($auth);
-    respond(200, ['status' => 'ok', 'catalog' => $games->catalog()]);
-}
-
 if ($path === '/games/state' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $gameId = (int) ($_GET['game_id'] ?? 0);
