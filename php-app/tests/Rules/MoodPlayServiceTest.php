@@ -1726,14 +1726,32 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInPlay(71));
     }
 
-    public function testSuspicionDiscardsARandomCardFromEachChosenPlayersHand(): void
+    public function testSuspicionPausesForEachChosenPlayersOwnChoiceThenDiscardsThem(): void
     {
         $state = $this->boardState(hands: [1 => [78], 2 => [9, 3], 3 => [106]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 78, new PlayerChoices(['player_ids' => [2, 3]]));
+        $choices = new PlayerChoices(['player_ids' => [2, 3]]);
+        $result = $this->plays->playMood($state, 1, 78, $choices);
 
-        self::assertCount(1, $state->hand(2));
+        self::assertTrue($result->isPending);
+        self::assertCount(2, $result->pendingDecisions);
+        self::assertSame('discarded_card_id_2', $result->pendingDecisions[0]->key);
+        self::assertSame(2, $result->pendingDecisions[0]->targetPlayerId);
+        self::assertSame('discarded_card_id_3', $result->pendingDecisions[1]->key);
+        self::assertSame(3, $result->pendingDecisions[1]->targetPlayerId);
+        self::assertCount(2, $state->hand(2)); // not discarded yet
+        self::assertCount(1, $state->hand(3));
+
+        $this->plays->resolvePendingDecisions(
+            $state, 78, 1, $choices, $choices, 0,
+            [
+                'discarded_card_id_2' => new PlayerChoices(['discarded_card_id_2' => 9]),
+                'discarded_card_id_3' => new PlayerChoices(['discarded_card_id_3' => 106]),
+            ],
+        );
+
+        self::assertSame([3], $state->hand(2));
         self::assertCount(0, $state->hand(3));
         self::assertCount(2, $state->discardPile());
     }
@@ -1930,17 +1948,31 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 94, new PlayerChoices(['discard_mood_id' => 3]));
     }
 
-    public function testMaliceDiscardsTwoRandomMoodsAndAllOthersSharingTheirColors(): void
+    public function testMalicePausesForTheTargetsOwnTwoMoodChoiceThenDiscardsMatchingColors(): void
     {
-        // Player 2 has exactly two moods, so both are deterministically
-        // "randomly" chosen regardless of which two array_rand happens to pick.
         $state = $this->boardState(hands: [1 => [68], 2 => [9, 3], 3 => [8]]);
         $state->moveHandToInPlay(2, 9); // Discipline, white
         $state->moveHandToInPlay(2, 3); // Charity, white
         $state->moveHandToInPlay(3, 8); // Dignity, white
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 68, new PlayerChoices(['target_player_id' => 2]));
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 68, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        $decision = $result->pendingDecisions[0];
+        self::assertSame('chosen_mood_ids', $decision->key);
+        self::assertSame(2, $decision->targetPlayerId);
+        self::assertSame('malice_choose_moods', $decision->decisionType);
+        self::assertTrue($decision->field['multi']);
+        self::assertTrue($state->isInPlay(9)); // not discarded yet
+        self::assertTrue($state->isInPlay(3));
+
+        $this->plays->resolvePendingDecisions(
+            $state, 68, 1, $choices, $choices, 0,
+            ['chosen_mood_ids' => new PlayerChoices(['chosen_mood_ids' => [9, 3]])],
+        );
 
         self::assertFalse($state->isInPlay(9));
         self::assertFalse($state->isInPlay(3));
@@ -1962,8 +1994,9 @@ final class MoodPlayServiceTest extends TestCase
         $state = $this->boardState(hands: [1 => [68]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 68, new PlayerChoices([]));
+        $result = $this->plays->playMood($state, 1, 68, new PlayerChoices([]));
 
+        self::assertFalse($result->isPending);
         self::assertTrue($state->isInPlay(68));
     }
 
@@ -2208,7 +2241,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 49, new PlayerChoices(['mode' => 'bogus']));
     }
 
-    public function testInstabilityTakesOneOfTwoCandidatesAndGivesBackOneOfYourOwn(): void
+    public function testInstabilityPausesForTheOpponentsOwnChoiceThenGivesBackOneOfYourOwn(): void
     {
         $state = $this->boardState(hands: [1 => [96, 9], 2 => [3, 7]]);
         $state->moveHandToInPlay(1, 9);
@@ -2216,11 +2249,26 @@ final class MoodPlayServiceTest extends TestCase
         $state->moveHandToInPlay(2, 7);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 96, new PlayerChoices(['candidate_mood_ids' => [3, 7], 'given_mood_id' => 9]));
+        $choices = new PlayerChoices(['candidate_mood_ids' => [3, 7], 'given_mood_id' => 9]);
+        $result = $this->plays->playMood($state, 1, 96, $choices);
 
-        $takenIsThree = $state->ownerOf(3) === 1;
-        $takenIsSeven = $state->ownerOf(7) === 1;
-        self::assertTrue($takenIsThree xor $takenIsSeven);
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        $decision = $result->pendingDecisions[0];
+        self::assertSame('taken_mood_id', $decision->key);
+        self::assertSame(2, $decision->targetPlayerId);
+        self::assertSame('instability_choose_mood', $decision->decisionType);
+        self::assertSame([3, 7], $decision->field['candidate_card_ids']);
+        self::assertSame(2, $state->ownerOf(3)); // not taken yet
+        self::assertSame(2, $state->ownerOf(7));
+
+        $this->plays->resolvePendingDecisions(
+            $state, 96, 1, $choices, $choices, 0,
+            ['taken_mood_id' => new PlayerChoices(['taken_mood_id' => 7])],
+        );
+
+        self::assertSame(1, $state->ownerOf(7));
+        self::assertSame(2, $state->ownerOf(3)); // the other candidate is untouched
         self::assertSame(2, $state->ownerOf(9));
     }
 
@@ -2240,8 +2288,9 @@ final class MoodPlayServiceTest extends TestCase
         $state = $this->boardState(hands: [1 => [96]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 96, new PlayerChoices([]));
+        $result = $this->plays->playMood($state, 1, 96, new PlayerChoices([]));
 
+        self::assertFalse($result->isPending);
         self::assertTrue($state->isInPlay(96));
     }
 
@@ -2694,13 +2743,24 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(1, $state->effectState(125, 'banksExtraPlayForPlayerId'));
     }
 
-    public function testArroganceTakesARandomQualifyingMoodAndTagsItToReturn(): void
+    public function testArrogancePausesForTheOpponentsOwnChoiceThenTagsItToReturn(): void
     {
         $state = $this->boardState(hands: [1 => [82], 2 => [8]]); // Arrogance; Dignity (white) for p2
         $state->moveHandToInPlay(2, 8);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 2]));
+        $choices = new PlayerChoices(['opponent_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 82, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        self::assertSame(2, $result->pendingDecisions[0]->targetPlayerId);
+        self::assertSame(2, $state->ownerOf(8)); // not taken yet
+
+        $this->plays->resolvePendingDecisions(
+            $state, 82, 1, $choices, $choices, 0,
+            ['chosen_mood_id' => new PlayerChoices(['chosen_mood_id' => 8])],
+        );
 
         self::assertSame(1, $state->ownerOf(8));
         self::assertSame(
@@ -2744,7 +2804,12 @@ final class MoodPlayServiceTest extends TestCase
         $state = $this->boardState(hands: [1 => [82], 2 => [8]]);
         $state->moveHandToInPlay(2, 8);
         $state->startTurn(1);
-        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 2]));
+        $choices = new PlayerChoices(['opponent_player_id' => 2]);
+        $this->plays->playMood($state, 1, 82, $choices);
+        $this->plays->resolvePendingDecisions(
+            $state, 82, 1, $choices, $choices, 0,
+            ['chosen_mood_id' => new PlayerChoices(['chosen_mood_id' => 8])],
+        );
         self::assertSame(1, $state->ownerOf(8));
 
         $state->moveInPlayToDiscard(82);
@@ -2759,7 +2824,12 @@ final class MoodPlayServiceTest extends TestCase
         $state = $this->boardState(hands: [1 => [82], 2 => [8]]);
         $state->moveHandToInPlay(2, 8);
         $state->startTurn(1);
-        $this->plays->playMood($state, 1, 82, new PlayerChoices(['opponent_player_id' => 2]));
+        $choices = new PlayerChoices(['opponent_player_id' => 2]);
+        $this->plays->playMood($state, 1, 82, $choices);
+        $this->plays->resolvePendingDecisions(
+            $state, 82, 1, $choices, $choices, 0,
+            ['chosen_mood_id' => new PlayerChoices(['chosen_mood_id' => 8])],
+        );
         self::assertSame(1, $state->ownerOf(8));
 
         $state->giveInPlayToPlayer(8, 3); // player1 gives it away before Arrogance leaves play
@@ -2868,19 +2938,43 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
-    public function testCompulsionTakesARandomCardFromTheTargetsHand(): void
+    public function testCompulsionPausesForTheTargetsOwnChoiceThenResolvesTheTransfer(): void
     {
         $state = $this->boardState(hands: [1 => [86], 2 => [3, 7]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 86, new PlayerChoices(['target_player_id' => 2]));
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 86, $choices);
 
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        $decision = $result->pendingDecisions[0];
+        self::assertSame('given_card_id', $decision->key);
+        self::assertSame(2, $decision->targetPlayerId);
+        self::assertSame('compulsion_give_card', $decision->decisionType);
+        self::assertSame('hand_card', $decision->field['type']);
+        // Compulsion itself is already in play (its own cost/grant already
+        // resolved before the pause); nothing has been transferred yet --
+        // still waiting on player 2's own answer.
+        self::assertTrue($state->isInPlay(86));
+        self::assertSame([], $state->hand(1));
+        self::assertSame([3, 7], $state->hand(2));
+
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state,
+            86,
+            1,
+            $choices,
+            $choices,
+            0,
+            ['given_card_id' => new PlayerChoices(['given_card_id' => 3])],
+        );
+
+        self::assertFalse($finalResult->isPending);
         $p1Hand = $state->hand(1);
         $p2Hand = $state->hand(2);
-        self::assertCount(1, $p1Hand);
-        self::assertCount(1, $p2Hand);
-        self::assertContains($p1Hand[0], [3, 7]);
-        self::assertNotSame($p1Hand[0], $p2Hand[0]);
+        self::assertSame([3], $p1Hand);
+        self::assertSame([7], $p2Hand);
     }
 
     public function testCompulsionDoesNothingWhenTargetHasNoCards(): void
@@ -2902,12 +2996,26 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 86, new PlayerChoices(['target_player_id' => 1]));
     }
 
-    public function testIntimidationRevealsARandomCardAndGrantsItAsAnExtraPlay(): void
+    public function testIntimidationPausesForTheTargetsOwnChoiceThenGrantsItAsAnExtraPlay(): void
     {
         $state = $this->boardState(hands: [1 => [67], 2 => [3]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 67, new PlayerChoices(['target_player_id' => 2]));
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 67, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        $decision = $result->pendingDecisions[0];
+        self::assertSame('revealed_card_id', $decision->key);
+        self::assertSame(2, $decision->targetPlayerId);
+        self::assertSame('intimidation_reveal_card', $decision->decisionType);
+        self::assertSame([3], $state->hand(2)); // not revealed yet
+
+        $this->plays->resolvePendingDecisions(
+            $state, 67, 1, $choices, $choices, 0,
+            ['revealed_card_id' => new PlayerChoices(['revealed_card_id' => 3])],
+        );
 
         self::assertContains(3, $state->hand(1));
         self::assertSame(1, $state->playsRemaining());
@@ -2921,7 +3029,12 @@ final class MoodPlayServiceTest extends TestCase
     {
         $state = $this->boardState(hands: [1 => [67, 5], 2 => [3]]);
         $state->startTurn(1);
-        $this->plays->playMood($state, 1, 67, new PlayerChoices(['target_player_id' => 2]));
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $this->plays->playMood($state, 1, 67, $choices);
+        $this->plays->resolvePendingDecisions(
+            $state, 67, 1, $choices, $choices, 0,
+            ['revealed_card_id' => new PlayerChoices(['revealed_card_id' => 3])],
+        );
 
         $this->expectException(IllegalPlayException::class);
         $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
@@ -2932,8 +3045,9 @@ final class MoodPlayServiceTest extends TestCase
         $state = $this->boardState(hands: [1 => [67]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 67, new PlayerChoices([]));
+        $result = $this->plays->playMood($state, 1, 67, new PlayerChoices([]));
 
+        self::assertFalse($result->isPending);
         self::assertTrue($state->isInPlay(67));
         self::assertSame(0, $state->playsRemaining());
     }
@@ -2943,8 +3057,9 @@ final class MoodPlayServiceTest extends TestCase
         $state = $this->boardState(hands: [1 => [67], 2 => []]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 67, new PlayerChoices(['target_player_id' => 2]));
+        $result = $this->plays->playMood($state, 1, 67, new PlayerChoices(['target_player_id' => 2]));
 
+        self::assertFalse($result->isPending);
         self::assertSame([], $state->hand(1));
         self::assertSame(0, $state->playsRemaining());
     }
@@ -2954,12 +3069,23 @@ final class MoodPlayServiceTest extends TestCase
         $state = $this->boardState(hands: [1 => [10]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 10, new PlayerChoices([]));
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 10, $choices);
+        self::assertTrue($result->isPending);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 10, 1, $choices, $choices, 0,
+            [
+                'chosen_color_2' => new PlayerChoices(['chosen_color_2' => 'white']),
+                'chosen_color_3' => new PlayerChoices(['chosen_color_3' => 'white']),
+                'chosen_color_1' => new PlayerChoices(['chosen_color_1' => 'white']),
+            ],
+        );
 
         self::assertTrue($state->isInPlay(10));
     }
 
-    public function testDisillusionmentDiscardsMoodsMatchingRandomlyChosenColors(): void
+    public function testDisillusionmentPausesForEveryPlayersOwnColorChoiceThenDiscardsMatches(): void
     {
         $state = $this->boardState(hands: [1 => [10], 2 => [9, 28, 53]]);
         $state->moveHandToInPlay(2, 9); // Discipline, white
@@ -2967,14 +3093,35 @@ final class MoodPlayServiceTest extends TestCase
         $state->moveHandToInPlay(2, 53); // Ambition, black
         $state->startTurn(1);
 
-        // Deterministic with this seed: 3 players -> picks black, black, blue.
-        mt_srand(42);
-        $this->plays->playMood($state, 1, 10, new PlayerChoices([]));
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 10, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(3, $result->pendingDecisions);
+        // Starts with the next player in turn order (2, 3), wraps around to
+        // end with the acting player themselves (1) -- every player at the
+        // table is asked, matching the original random implementation's
+        // unconditional per-player loop.
+        self::assertSame('chosen_color_2', $result->pendingDecisions[0]->key);
+        self::assertSame(2, $result->pendingDecisions[0]->targetPlayerId);
+        self::assertSame('chosen_color_3', $result->pendingDecisions[1]->key);
+        self::assertSame(3, $result->pendingDecisions[1]->targetPlayerId);
+        self::assertSame('chosen_color_1', $result->pendingDecisions[2]->key);
+        self::assertSame(1, $result->pendingDecisions[2]->targetPlayerId);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 10, 1, $choices, $choices, 0,
+            [
+                'chosen_color_2' => new PlayerChoices(['chosen_color_2' => 'black']),
+                'chosen_color_3' => new PlayerChoices(['chosen_color_3' => 'blue']),
+                'chosen_color_1' => new PlayerChoices(['chosen_color_1' => 'black']),
+            ],
+        );
 
         self::assertTrue($state->isInPlay(10));
-        self::assertTrue($state->isInPlay(9));
-        self::assertFalse($state->isInPlay(28));
-        self::assertFalse($state->isInPlay(53));
+        self::assertTrue($state->isInPlay(9)); // white, not chosen by anyone -- survives
+        self::assertFalse($state->isInPlay(28)); // blue
+        self::assertFalse($state->isInPlay(53)); // black
     }
 
     public function testDuplicityGrantsAnExtraPlayWhenPlayed(): void

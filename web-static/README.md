@@ -59,15 +59,20 @@ routed to the PHP app).
     left blank, it's just a blue card worth 0; because that choice
     resolves server-side in the same request, Creativity never offers a
     Duplicity repeat option of its own (see `php-app/README.md` for the
-    same gap noted from the server side). Each hand card's button is
-    disabled unless that specific card is currently legal to play (its
-    `is_playable` flag) — not just whether it's your turn at all, but
-    whether some outstanding play grant this turn actually covers *that*
-    card (e.g. after Intimidation bounces a revealed card into your hand,
-    that's the only card with an enabled button until some other grant
-    makes more of your hand playable) and, for a card with a "to play"
-    cost, whether that cost could be paid at all right now (e.g. Guile
-    with fewer than two other cards in hand). Polls
+    same gap noted from the server side). Each card's `is_playable` flag
+    reflects whether that *specific* card is currently legal to play — not
+    just whether it's your turn at all, but whether some outstanding play
+    grant this turn actually covers it (e.g. after Intimidation bounces a
+    revealed card into your hand, that's the only card covered until some
+    other grant makes more of your hand playable) and, for a card with a
+    "to play" cost, whether that cost could be paid at all right now (e.g.
+    Guile with fewer than two other cards in hand). The hand button itself
+    always stays clickable when it's your turn, so an unplayable card's
+    rules text can still be inspected -- it's just given a dashed,
+    lower-opacity look and a tooltip as a heads-up, and its panel opens
+    with Play already disabled and an inline "This card can't be played
+    right now" message instead of the usual field-by-field validation.
+    Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
     moves. Every mood in play and every card in the discard pile is also
     clickable, opening a read-only detail view (name, base value, alt
@@ -76,7 +81,22 @@ routed to the PHP app).
     indicator naming the suppressing mood, if the game tracks one, and
     whether the suppression lasts as long as that mood stays in play or
     just until the end of the current round) so an unfamiliar card can be
-    checked before deciding how to respond to it.
+    checked before deciding how to respond to it. Seven cards (Arrogance,
+    Compulsion, Disillusionment, Instability, Intimidation, Malice,
+    Suspicion) hand part of their effect to a player other than whoever's
+    turn it is — playing one of these pauses the whole round (Play/Pass
+    both disabled for everyone, a banner names who's being waited on) via
+    `round.pending_decision` in the state response. The one player it's
+    actually waiting on sees a response panel instead of the banner,
+    reusing the exact same field-rendering code as the regular choices
+    panel (including multi-select validation for Malice's two moods and
+    the `mode` dropdown for Disillusionment's color) — answered via `POST
+    /games/respond`. Suspicion and Disillusionment queue one decision per
+    player (Disillusionment's queue starts with the next player in turn
+    order and wraps around to the acting player themselves last); only
+    the one player currently up in the queue is prompted at a time, and
+    the round only unfreezes once the last one has answered. There's no
+    timeout — if a targeted player goes AFK the round just stays paused.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

@@ -10,6 +10,7 @@ use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\PlayerChoices;
+use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
 use PDO;
 use Throwable;
@@ -168,31 +169,47 @@ final class GameService
 
     /**
      * @param array<string, mixed> $choices
-     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
     public function playMood(int $gameId, int $gamePlayerId, int $cardId, array $choices): array
     {
         $round = $this->currentRound($gameId);
+        $roundId = (int) $round['id'];
+        $this->assertNoPendingDecision($roundId);
+
         $state = $this->boardStates->load($gameId);
+        $playerChoices = new PlayerChoices($choices);
+        $result = $this->plays->playMood($state, $gamePlayerId, $cardId, $playerChoices);
 
-        $this->plays->playMood($state, $gamePlayerId, $cardId, new PlayerChoices($choices));
+        if ($result->isPending) {
+            $pdo = Connection::get();
+            $pdo->beginTransaction();
 
-        $this->boardStates->save($gameId, $state);
-        $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'mood_played', $cardId, $choices);
+            try {
+                $this->boardStates->save($gameId, $state);
+                $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $playerChoices, $result);
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $choices);
 
-        if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                $pdo->commit();
+            } catch (Throwable $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
 
-            return ['round_scored' => false, 'game_completed' => false];
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
         }
 
-        return $this->advanceTurn($gameId, $round, $state);
+        $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $choices);
+
+        return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
     }
 
     /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
     public function pass(int $gameId, int $gamePlayerId): array
     {
         $round = $this->currentRound($gameId);
+        $this->assertNoPendingDecision((int) $round['id']);
 
         if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
             throw new GameStateException("It is not player {$gamePlayerId}'s turn");
@@ -201,6 +218,134 @@ final class GameService
         $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'turn_passed', null, []);
 
         return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
+    }
+
+    /**
+     * The second player's own request, resolving one row of an outstanding
+     * pending-decision batch (see MoodPlayService::playMood()'s
+     * RequiresOpponentDecision handling) -- e.g. Compulsion's target
+     * choosing which hand card to hand over. $choices is a flat
+     * `{fieldKey: value}` bag matching the one field the caller was shown
+     * (GameService::getState()'s pending_decision.field).
+     *
+     * @param array<string, mixed> $choices
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
+     */
+    public function respondToDecision(int $gameId, int $gamePlayerId, array $choices): array
+    {
+        $round = $this->currentRound($gameId);
+        $roundId = (int) $round['id'];
+
+        $batchRow = $this->activePendingBatch($roundId);
+        if ($batchRow === null) {
+            throw new GameStateException("Game {$gameId} has no decision pending");
+        }
+
+        $decisionRow = $this->activePendingDecision((int) $batchRow['id']);
+        if ($decisionRow === null || (int) $decisionRow['target_game_player_id'] !== $gamePlayerId) {
+            throw new GameStateException("Player {$gamePlayerId} has no decision pending in game {$gameId}");
+        }
+
+        $field = json_decode((string) $decisionRow['field'], true);
+        $answerKey = $field['key'];
+
+        $pdo = Connection::get();
+        $pdo->beginTransaction();
+
+        try {
+            $pdo->prepare('UPDATE game_pending_decisions SET answer = :answer, resolved_at = NOW() WHERE id = :id')
+                ->execute([
+                    'answer' => json_encode([$answerKey => $choices[$answerKey] ?? null]),
+                    'id' => $decisionRow['id'],
+                ]);
+
+            $remainingStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL'
+            );
+            $remainingStmt->execute(['batch_id' => $batchRow['id']]);
+
+            if (((int) $remainingStmt->fetchColumn()) > 0) {
+                // Other targets in this batch (e.g. Disillusionment's/
+                // Suspicion's remaining players) still haven't answered.
+                $pdo->commit();
+
+                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+            }
+
+            $answers = $this->collectAnswers((int) $batchRow['id']);
+            $state = $this->boardStates->load($gameId);
+            $topLevelChoices = new PlayerChoices((array) json_decode((string) $batchRow['top_level_choices'], true));
+            $invocationChoices = new PlayerChoices((array) json_decode((string) $batchRow['invocation_choices'], true));
+            $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
+            $playedCardId = (int) $batchRow['played_card_id'];
+            $invocationSeq = (int) $batchRow['invocation_seq'];
+
+            $result = $this->plays->resolvePendingDecisions(
+                $state,
+                $playedCardId,
+                $initiatingPlayerId,
+                $topLevelChoices,
+                $invocationChoices,
+                $invocationSeq,
+                $answers,
+            );
+
+            $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
+                ->execute(['id' => $batchRow['id']]);
+            $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
+
+            if ($result->isPending) {
+                // A Duplicity repeat of this same card also needs a real
+                // opponent decision -- persist the next batch the same way
+                // the original play did, carrying top_level_choices
+                // forward unchanged. Already inside this method's own
+                // transaction, so this just writes rows -- no nested
+                // beginTransaction().
+                $this->boardStates->save($gameId, $state);
+                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $topLevelChoices->sub('duplicity_repeat_choices'), $result);
+                $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, []);
+
+                $pdo->commit();
+
+                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+            }
+
+            $pdo->commit();
+        } catch (Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+
+        $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $topLevelChoices->toArray());
+
+        return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
+    }
+
+    /**
+     * The shared tail of a fully-resolved play (whether that play just
+     * completed in one request, or completed across a pending-decision
+     * pause and response) -- saves $state's mutations, then either the
+     * same player gets to play again (plays_remaining > 0) or the turn
+     * passes on. Always saves first (rather than trusting each caller to
+     * have already done so), since it's the one place both callers'
+     * "fully resolved" paths converge. $actingGamePlayerId is whoever
+     * actually made the play (the original initiator for a resumed
+     * pending decision, not the responder who just answered it).
+     *
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     */
+    private function finishPlay(int $gameId, array $round, int $actingGamePlayerId, BoardState $state): array
+    {
+        $this->boardStates->save($gameId, $state);
+
+        if ($state->playsRemaining() > 0) {
+            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+
+            return ['round_scored' => false, 'game_completed' => false];
+        }
+
+        return $this->advanceTurn($gameId, $round, $state);
     }
 
     /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
@@ -721,6 +866,7 @@ final class GameService
                 'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
                 'banned_colors' => $state->bannedColorsThisRound(),
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
+                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId),
             ];
             $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
         }
@@ -962,6 +1108,161 @@ final class GameService
             'discarded_this_round' => $discardedThisRound ? 1 : 0,
             'round_id' => $roundId,
         ]);
+    }
+
+    private function assertNoPendingDecision(int $roundId): void
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT 1 FROM game_pending_decision_batches WHERE game_round_id = :round_id AND resolved_at IS NULL LIMIT 1'
+        );
+        $stmt->execute(['round_id' => $roundId]);
+
+        if ($stmt->fetchColumn() !== false) {
+            throw new GameStateException("Round {$roundId} has a decision still pending -- no one can play or pass until it's answered");
+        }
+    }
+
+    /** @return array<string, mixed>|null */
+    private function activePendingBatch(int $roundId): ?array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT * FROM game_pending_decision_batches WHERE game_round_id = :round_id AND resolved_at IS NULL LIMIT 1'
+        );
+        $stmt->execute(['round_id' => $roundId]);
+        $row = $stmt->fetch();
+
+        return $row !== false ? $row : null;
+    }
+
+    /**
+     * The one decision currently awaiting a response within $batchId --
+     * the lowest step_index still unresolved -- even if the batch has
+     * several queued targets (e.g. Disillusionment/Suspicion), only this
+     * one is ever actively shown to anyone.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function activePendingDecision(int $batchId): ?array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT * FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL ORDER BY step_index ASC LIMIT 1'
+        );
+        $stmt->execute(['batch_id' => $batchId]);
+        $row = $stmt->fetch();
+
+        return $row !== false ? $row : null;
+    }
+
+    /**
+     * GET /games/state's view of the round's outstanding decision (if any)
+     * from $viewerGamePlayerId's own perspective -- every viewer sees who
+     * initiated it, which card, and who it's waiting on, but the actual
+     * prompt (`field`, e.g. Compulsion's target's own hand-card options)
+     * is only ever included for the targeted player themselves, the same
+     * way an opponent's hand is never exposed to anyone else.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function serializePendingDecision(int $roundId, int $viewerGamePlayerId): ?array
+    {
+        $batchRow = $this->activePendingBatch($roundId);
+        if ($batchRow === null) {
+            return null;
+        }
+
+        $decisionRow = $this->activePendingDecision((int) $batchRow['id']);
+        if ($decisionRow === null) {
+            return null;
+        }
+
+        $targetGamePlayerId = (int) $decisionRow['target_game_player_id'];
+        $isYou = $targetGamePlayerId === $viewerGamePlayerId;
+        $playedCardId = (int) $batchRow['played_card_id'];
+
+        $result = [
+            'initiating_game_player_id' => (int) $batchRow['initiating_game_player_id'],
+            'played_card_id' => $playedCardId,
+            'played_card_name' => $this->cardCatalogNames()[$playedCardId] ?? null,
+            'decision_type' => $decisionRow['decision_type'],
+            'target_game_player_id' => $targetGamePlayerId,
+            'is_you' => $isYou,
+        ];
+
+        if ($isYou) {
+            $result['field'] = json_decode((string) $decisionRow['field'], true);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Every row in $batchId, reconstructed as PlayerChoices keyed by each
+     * row's own field key -- see RequiresOpponentDecision::
+     * resolveDecisions()'s $answers parameter.
+     *
+     * @return array<string, PlayerChoices>
+     */
+    private function collectAnswers(int $batchId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT field, answer FROM game_pending_decisions WHERE batch_id = :batch_id ORDER BY step_index ASC'
+        );
+        $stmt->execute(['batch_id' => $batchId]);
+
+        $answers = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $field = json_decode((string) $row['field'], true);
+            $answers[$field['key']] = new PlayerChoices((array) json_decode((string) $row['answer'], true));
+        }
+
+        return $answers;
+    }
+
+    /**
+     * Writes one new pending-decision batch and its rows -- assumes the
+     * caller already holds an open transaction (playMood()/
+     * respondToDecision() both do), so this does no transaction management
+     * of its own.
+     */
+    private function writePendingBatch(
+        int $gameId,
+        int $roundId,
+        int $initiatingPlayerId,
+        PlayerChoices $topLevelChoices,
+        PlayerChoices $invocationChoices,
+        PlayResult $result,
+    ): void {
+        $pdo = Connection::get();
+
+        $insertBatch = $pdo->prepare(
+            'INSERT INTO game_pending_decision_batches
+                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices)
+             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices)'
+        );
+        $insertBatch->execute([
+            'game_id' => $gameId,
+            'round_id' => $roundId,
+            'played_card_id' => $result->playedCardId,
+            'invocation_seq' => $result->invocationSeq,
+            'initiator' => $initiatingPlayerId,
+            'top_level_choices' => json_encode($topLevelChoices->toArray()),
+            'invocation_choices' => json_encode($invocationChoices->toArray()),
+        ]);
+        $batchId = (int) $pdo->lastInsertId();
+
+        $insertDecision = $pdo->prepare(
+            'INSERT INTO game_pending_decisions (batch_id, step_index, target_game_player_id, decision_type, field)
+             VALUES (:batch_id, :step_index, :target_player_id, :decision_type, :field)'
+        );
+        foreach ($result->pendingDecisions as $stepIndex => $decision) {
+            $insertDecision->execute([
+                'batch_id' => $batchId,
+                'step_index' => $stepIndex,
+                'target_player_id' => $decision->targetPlayerId,
+                'decision_type' => $decision->decisionType,
+                'field' => json_encode($decision->field),
+            ]);
+        }
     }
 
     /** @param array<string, mixed> $details */

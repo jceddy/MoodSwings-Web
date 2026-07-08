@@ -26,6 +26,7 @@
             <p id="board-round-status"></p>
             <p id="board-message" class="success" hidden></p>
             <p id="board-error" class="error" hidden></p>
+            <p id="pending-decision-banner" hidden></p>
 
             <button id="start-game-button" type="button" hidden>Start game</button>
 
@@ -52,6 +53,12 @@
 
                     <button id="play-card-button" type="button">Play card</button>
                     <button id="cancel-choice-button" type="button">Cancel</button>
+                </div>
+
+                <div id="pending-decision-panel" hidden>
+                    <h4 id="pending-decision-title"></h4>
+                    <div id="pending-decision-field"></div>
+                    <button id="respond-decision-button" type="button">Respond</button>
                 </div>
 
                 <button id="pass-button" type="button">Pass</button>

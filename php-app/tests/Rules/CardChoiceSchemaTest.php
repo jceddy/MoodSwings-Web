@@ -162,6 +162,13 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertSame(['black', 'red'], $fields[1]['filter']['colors']);
     }
 
+    public function testColorFilterForFaithMatchesFaithEffectsOwnCheck(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('faith');
+
+        self::assertSame(['green', 'blue'], $fields[0]['filter']['colors']);
+    }
+
     public function testMinValueFilterForCourageMatchesCourageEffectsOwnCheck(): void
     {
         $fields = CardChoiceSchema::forEffectKey('courage');
