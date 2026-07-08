@@ -115,9 +115,11 @@ account/friends layer above. The core pieces:
   bonus is always at least as good as declining it (Exhilaration, Bliss,
   Enthusiasm, Passion — see below).
 
-125 of the 133-card pool have a registered effect so far (see
-`DefaultEffectRegistry`) — chosen to exercise the range of patterns the
-engine needs: unconditional/conditional/restricted extra-play grants
+All 127 cards in the 133-card pool with a printed ability have a
+registered effect (see `DefaultEffectRegistry`) — the other 6 have no
+ability at all (a flat value card, like Complacency), so there's nothing
+for them to register. Chosen along the way to exercise the range of
+patterns the engine needs: unconditional/conditional/restricted extra-play grants
 (Benevolence, Friendliness, Kindness, Eagerness -- whose condition applies
 to whichever card is chosen to use the grant, not to the card that granted
 it, checked at the moment the bonus card is played via
@@ -241,8 +243,18 @@ registry it needs to re-invoke another card's effect (Duplicity —
 described above (Exhilaration, Bliss — whose color is captured via
 `BoardState::stagePrePlayEffectState()` before the card exists as a
 `MoodInPlay` to attach `effectState` to normally, since its cost runs
-first — Enthusiasm, Passion). Not full coverage — implementing the rest
-is incremental follow-up work.
+first — Enthusiasm, Passion), a "dice" value — a card's `alt_value`,
+used as an alternative to its `base_value` rather than a conditional
+override — that replaces a mood's value entirely for as long as it's
+tagged, on any one chosen mood in play regardless of owner
+(Encouragement) or blanketing every mood its owner controls (Idealism),
+resolved directly in `BoardState::valueOf()` rather than through
+`computeValue()`, and a single round-wide "was any card discarded this
+round" flag rather than anything tied to a specific mood's
+`effectState`, since it has to reflect a discard by *any* player,
+persisted on `game_rounds` alongside `pending_play_grants` (Vulnerability
+— `BoardState::discardedThisRound()`). Every card in the pool with a
+printed ability is now implemented.
 
 ## Game layer
 
@@ -260,11 +272,13 @@ request/response round trips with no process alive in between to hold a
   source id is resolved in a second pass after the main upsert, since it
   points at another row's surrogate id that doesn't exist until after
   that row's insert/update has run. Turn state includes
-  `game_rounds.pending_play_grants`, `first_game_player_id`, and
-  `round_number`, since a *restricted* extra-play grant (see above), who
-  went first this round (Chivalry/Triumph), and which round a mood was
-  played in (Patience/Glee/Doubt) all have to survive being reloaded
-  fresh on the next request just as much as whose turn it is does.
+  `game_rounds.pending_play_grants`, `first_game_player_id`,
+  `round_number`, and `discarded_this_round`, since a *restricted*
+  extra-play grant (see above), who went first this round
+  (Chivalry/Triumph), which round a mood was played in
+  (Patience/Glee/Doubt), and whether any card has been discarded this
+  round yet (Vulnerability) all have to survive being reloaded fresh on
+  the next request just as much as whose turn it is does.
 - `GameService` — one method per player-facing action (`createGame`,
   `startGame`, `playMood`, `pass`), each loading state, delegating to the
   rules engine, persisting the result, and appending a `game_events` row,

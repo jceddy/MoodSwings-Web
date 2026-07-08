@@ -41,6 +41,7 @@ use MoodSwings\Rules\Effects\DisorientationEffect;
 use MoodSwings\Rules\Effects\DoubtEffect;
 use MoodSwings\Rules\Effects\DuplicityEffect;
 use MoodSwings\Rules\Effects\EagernessEffect;
+use MoodSwings\Rules\Effects\EncouragementEffect;
 use MoodSwings\Rules\Effects\EnthusiasmEffect;
 use MoodSwings\Rules\Effects\EnvyEffect;
 use MoodSwings\Rules\Effects\EuphoriaEffect;
@@ -66,6 +67,7 @@ use MoodSwings\Rules\Effects\HesitationEffect;
 use MoodSwings\Rules\Effects\HonorEffect;
 use MoodSwings\Rules\Effects\HopeEffect;
 use MoodSwings\Rules\Effects\HostilityEffect;
+use MoodSwings\Rules\Effects\IdealismEffect;
 use MoodSwings\Rules\Effects\ImaginationEffect;
 use MoodSwings\Rules\Effects\IndecisivenessEffect;
 use MoodSwings\Rules\Effects\InfatuationEffect;
@@ -112,14 +114,15 @@ use MoodSwings\Rules\Effects\TranquilityEffect;
 use MoodSwings\Rules\Effects\TriumphEffect;
 use MoodSwings\Rules\Effects\ValidationEffect;
 use MoodSwings\Rules\Effects\VanityEffect;
+use MoodSwings\Rules\Effects\VulnerabilityEffect;
 use MoodSwings\Rules\Effects\WonderEffect;
 use MoodSwings\Rules\Effects\WorryEffect;
 use MoodSwings\Rules\Effects\WrathEffect;
 use MoodSwings\Rules\Effects\ZealEffect;
 
 /**
- * Wires up every MoodEffect implemented so far. This is a growing slice of
- * the full 133-card pool, chosen to exercise the range of patterns the
+ * Wires up every MoodEffect for the full 133-card pool -- every card with
+ * a printed ability now has one, exercising the range of patterns the
  * engine needs to support (unconditional/conditional/restricted extra-play
  * grants, one-time value overrides paid for by optional costs (including a
  * reusable parameterized class for the "discard a qualifying hand card ->
@@ -218,9 +221,24 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * pre-play-staged effectState color captured before the card exists as
  * a MoodInPlay -- see BoardState::stagePrePlayEffectState()), and adding
  * the single highest-valued mood among the owner's own (Enthusiasm) or
- * every opponent's (Passion) -- not full coverage. Cards not registered
- * here throw EffectNotImplementedException if their ability is actually
- * invoked; implementing the rest is incremental follow-up work.
+ * every opponent's (Passion), a "dice" value (a card's alt_value, used as
+ * an alternative to its base_value rather than a conditional override)
+ * that overrides a mood's value entirely for as long as it's tagged --
+ * on any one chosen mood, not just the acting player's own
+ * (Encouragement), or blanketing every mood its owner controls
+ * (Idealism) -- see BoardState::valueOf()'s dice-value handling, and a
+ * single round-wide "was any card discarded this round" flag (rather
+ * than anything tied to a specific mood's effectState, since it has to
+ * reflect a discard by *any* player) persisted alongside
+ * pending_play_grants (Vulnerability -- BoardState::discardedThisRound(),
+ * game_rounds.discarded_this_round).
+ *
+ * This is every card in the 133-card pool that has a printed ability --
+ * the only ones left unregistered have no ability at all (a flat value
+ * card, like Complacency), so there's nothing for EffectRegistry to
+ * dispatch. registry->for() throws EffectNotImplementedException if an
+ * unregistered effect_key is ever actually invoked, which would only
+ * happen for a genuinely new/mistyped effect_key at this point.
  */
 final class DefaultEffectRegistry
 {
@@ -337,6 +355,9 @@ final class DefaultEffectRegistry
         $registry->register('bliss', new BlissEffect());
         $registry->register('enthusiasm', new EnthusiasmEffect());
         $registry->register('passion', new PassionEffect());
+        $registry->register('encouragement', new EncouragementEffect());
+        $registry->register('idealism', new IdealismEffect());
+        $registry->register('vulnerability', new VulnerabilityEffect());
 
         $registry->register('embarrassment', new HandDiscardValueBoostEffect([4, 5, 6], 5));
         $registry->register('cheer', new HandDiscardValueBoostEffect([0, 2, 4, 6], 5));

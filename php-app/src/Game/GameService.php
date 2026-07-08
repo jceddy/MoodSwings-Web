@@ -31,6 +31,12 @@ use Throwable;
  * perpetual (Hope/Grace/Stubbornness) or one-shot banked
  * (Generosity/Joy) grants the upcoming player's board currently entitles
  * them to, on top of the usual unconditional (Hurt Feelings-aware) base.
+ * updateRoundTurnState() also carries forward Vulnerability's
+ * discardedThisRound flag every time turn state is written, the same way
+ * it does pending_play_grants -- and scoreRoundAndAdvance() takes the
+ * already-loaded BoardState from whichever play/pass ended the round
+ * rather than reloading, since that flag only lives in memory until
+ * these writes persist it.
  *
  * Deliberately out of scope for now: any HTTP/auth layer -- this takes
  * game_player ids directly and treats them as already-authorized.
@@ -165,7 +171,7 @@ final class GameService
         $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'mood_played', $cardId, $choices);
 
         if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $gamePlayerId, $state->pendingPlayGrants());
+            $this->updateRoundTurnState((int) $round['id'], $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
 
             return ['round_scored' => false, 'game_completed' => false];
         }
@@ -195,7 +201,7 @@ final class GameService
         $nextIndex = $currentIndex + 1;
 
         if ($nextIndex >= count($turnOrder)) {
-            return $this->scoreRoundAndAdvance($gameId, $round, $turnOrder);
+            return $this->scoreRoundAndAdvance($gameId, $round, $turnOrder, $state);
         }
 
         $nextPlayerId = $turnOrder[$nextIndex];
@@ -206,19 +212,25 @@ final class GameService
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants);
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound());
 
         return ['round_scored' => false, 'game_completed' => false];
     }
 
     /**
+     * $state is the same instance the triggering play/pass already
+     * loaded (and, if it was a play, already saved game_cards for) --
+     * reused here rather than reloaded, since a round-wide flag like
+     * Vulnerability's discardedThisRound only lives in memory on this
+     * object until the writes below persist it, and reloading fresh would
+     * silently lose whatever the round's very last play just set.
+     *
      * @param int[] $turnOrder the order players took their turns this round, earliest first
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
      */
-    private function scoreRoundAndAdvance(int $gameId, array $round, array $turnOrder): array
+    private function scoreRoundAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state): array
     {
         $roundId = (int) $round['id'];
-        $state = $this->boardStates->load($gameId);
 
         if ($this->hasSkipScoringMarker($state)) {
             return $this->skipScoringAndAdvance($gameId, $round, $state);
@@ -588,15 +600,16 @@ final class GameService
     }
 
     /** @param array<int, ?array{type: string, values?: int[]}> $playGrants */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants): void
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound): void
     {
         $stmt = Connection::get()->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round WHERE id = :round_id'
         );
         $stmt->execute([
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
             'pending_play_grants' => json_encode($playGrants),
+            'discarded_this_round' => $discardedThisRound ? 1 : 0,
             'round_id' => $roundId,
         ]);
     }

@@ -3092,4 +3092,102 @@ final class MoodPlayServiceTest extends TestCase
         $this->expectException(InvalidChoiceException::class);
         $this->plays->playMood($state, 1, 108, new PlayerChoices(['discard_card_id' => 108]));
     }
+
+    public function testEncouragementUsesTheHigherOfBaseAndDiceValueForTheChosenMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [11, 9]]); // Encouragement, Discipline (base 6, dice 3 -- base is higher)
+        $state->moveHandToInPlay(1, 9);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 11, new PlayerChoices(['target_mood_id' => 9]));
+
+        self::assertSame(6, $state->valueOf(9));
+    }
+
+    public function testEncouragementCanTargetAnOpponentsMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [11], 2 => [8]]); // Encouragement; Dignity (base 3, dice 5) for p2
+        $state->moveHandToInPlay(2, 8);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 11, new PlayerChoices(['target_mood_id' => 8]));
+
+        self::assertSame(5, $state->valueOf(8));
+    }
+
+    public function testEncouragementRejectsAMoodWithoutDice(): void
+    {
+        $state = $this->boardState(hands: [1 => [11, 3]]); // Encouragement, Charity (no dice value)
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 11, new PlayerChoices(['target_mood_id' => 3]));
+    }
+
+    public function testEncouragementDoesNothingWhenDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [11, 9]]);
+        $state->moveHandToInPlay(1, 9);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 11, new PlayerChoices([]));
+
+        self::assertSame(6, $state->valueOf(9)); // Discipline's own base value, unaffected
+    }
+
+    public function testIdealismGrantsAnExtraPlayWhenPlayed(): void
+    {
+        $state = $this->boardState(hands: [1 => [16, 5]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 16, new PlayerChoices([]));
+
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    public function testIdealismBoostsEveryOwnedMoodWithDiceButNotOpponents(): void
+    {
+        $state = $this->boardState(hands: [1 => [16, 9], 2 => [8]]); // Idealism; Discipline (base 6, dice 3) for p1; Dignity (base 3, dice 5) for p2
+        $state->moveHandToInPlay(1, 9);
+        $state->moveHandToInPlay(2, 8);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 16, new PlayerChoices([]));
+
+        self::assertSame(6, $state->valueOf(9)); // higher of base(6)/dice(3) -- p1's own mood
+        self::assertSame(3, $state->valueOf(8)); // unaffected -- belongs to p2
+    }
+
+    public function testIdealismDoesNotAffectItsOwnValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [16]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 16, new PlayerChoices([]));
+
+        self::assertSame(0, $state->valueOf(16)); // Idealism itself has no dice value
+    }
+
+    public function testVulnerabilityValueIsBaseWithNoDiscardThisRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [132]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 132, new PlayerChoices([]));
+
+        self::assertSame(1, $state->valueOf(132));
+    }
+
+    public function testVulnerabilityValueBecomesDiceAfterAnyCardIsDiscardedThisRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [132], 2 => [3]]);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 132, new PlayerChoices([]));
+        self::assertSame(1, $state->valueOf(132));
+
+        $state->moveHandToDiscard(2, 3); // a discard by any player counts, not just Vulnerability's owner
+
+        self::assertSame(7, $state->valueOf(132));
+    }
 }
