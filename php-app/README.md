@@ -270,9 +270,16 @@ specific card being played rather than one form covering every card's
 possible fields. It's keyed by `effect_key` rather than by the raw key
 name on purpose — the same key (`discard_card_id`) means a *hand* card for
 Dignity/Bliss/Cheer but a *discard-pile* card for Nostalgia/Cynicism, so a
-key-name-only scheme would conflate the two. `GameService::serializeCard()`
-attaches each card's `choice_fields` to the JSON returned by
-`GET /games/state`. Two cards' reaction-time choices (Scorn's
+key-name-only scheme would conflate the two. Each field can also carry a
+`filter` (colors, a value range/parity, a fixed set of qualifying values, a
+required dice/alt value, or a minimum hand/mood count on a candidate
+player) narrowing a dropdown to choices the effect will actually accept —
+mirroring that effect class's own `InvalidChoiceException` checks exactly
+(e.g. Guilt's `filter: {colors: [black, red]}` matches
+`GuiltEffect::QUALIFYING_COLORS`). A field with no `filter` has no such
+narrowing. `GameService::serializeCard()` attaches each card's
+`choice_fields` (plus `has_dice_value`, needed for Encouragement's filter)
+to the JSON returned by `GET /games/state`. Two cards' reaction-time choices (Scorn's
 `scorn_suppress_target`, Validation's `validation_extra_play`, both fired
 via `reactToAnotherPlay()` while playing a *different* card) and
 Duplicity's nested repeat-with-fresh-choices mechanic aren't covered —

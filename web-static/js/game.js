@@ -354,12 +354,45 @@
 
     let selectedCard = null;
 
-    async function handleHandCardClick(card) {
-        if (!card.choice_fields || card.choice_fields.length === 0) {
-            await submitPlay(card, {});
-            return;
-        }
+    function handleHandCardClick(card) {
         openChoicesPanel(card);
+    }
+
+    // field.filter narrows a dropdown to candidates the server will actually
+    // accept -- mirroring each effect class's own InvalidChoiceException
+    // checks (see php-app/src/Rules/CardChoiceSchema.php's docblock for the
+    // exact correspondence). A field with no filter has no such narrowing.
+
+    function moodCountFor(gamePlayerId) {
+        return currentState.in_play.filter((c) => c.owner_game_player_id === gamePlayerId).length;
+    }
+
+    function matchesCardFilter(card, filter) {
+        if (!filter) return true;
+        if (filter.colors && !filter.colors.includes(card.color)) return false;
+        if (filter.values && !filter.values.includes(card.value)) return false;
+        if (filter.min_value !== undefined && card.value < filter.min_value) return false;
+        if (filter.max_value !== undefined && card.value > filter.max_value) return false;
+        if (filter.parity === 'odd' && card.value % 2 === 0) return false;
+        if (filter.parity === 'even' && card.value % 2 !== 0) return false;
+        if (filter.has_dice_value && !card.has_dice_value) return false;
+        return true;
+    }
+
+    function matchesPlayerFilter(player, filter) {
+        if (!filter) return true;
+        if (filter.min_hand_count !== undefined && player.hand_count < filter.min_hand_count) return false;
+        if (filter.min_mood_count !== undefined && moodCountFor(player.game_player_id) < filter.min_mood_count) return false;
+        if (filter.more_moods_than_viewer) {
+            // The card being played will itself already be in play by the
+            // time the server checks this (afterPlaying always runs once
+            // this card is in play -- see PrideEffect), so the viewer's
+            // live count needs a +1 to match what the server compares
+            // against.
+            const viewerCountAfterThisPlay = moodCountFor(currentState.you.game_player_id) + 1;
+            if (moodCountFor(player.game_player_id) <= viewerCountAfterThisPlay) return false;
+        }
+        return true;
     }
 
     function fieldOptions(field, card) {
@@ -367,6 +400,7 @@
             case 'player':
                 return currentState.players
                     .filter((p) => field.scope !== 'other' || p.game_player_id !== currentState.you.game_player_id)
+                    .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
             case 'mood':
                 return currentState.in_play
@@ -376,13 +410,17 @@
                         if (field.scope === 'other') return c.owner_game_player_id !== currentState.you.game_player_id;
                         return true;
                     })
+                    .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
             case 'hand_card':
                 return currentState.you.hand
                     .filter((c) => c.card_id !== card.card_id)
+                    .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
             case 'discard_card':
-                return currentState.discard_pile.map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+                return currentState.discard_pile
+                    .filter((c) => matchesCardFilter(c, field.filter))
+                    .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
             default:
                 return [];
         }

@@ -20,17 +20,21 @@ routed to the PHP app).
     status, and whether it's your turn; a "New game" dialog picks 1-3
     friends (via `GET /friends`) plus a format, then calls `POST /games`.
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
-    deck count, and your hand (via `GET /games/state`). Playing a card
-    with no ability worth asking about (roughly half the 127-card pool)
-    plays immediately; otherwise a choices panel opens showing only the
-    fields that specific card needs (a target player, a mood in play, a
+    deck count, and your hand (via `GET /games/state`). Clicking any hand
+    card opens a panel showing its name and rules text plus Play/Cancel, so
+    it doubles as a quick way to inspect a card you don't recognize yet;
+    cards with no ability worth asking about (roughly half the 127-card
+    pool) show that panel with no extra fields, everything else adds only
+    the fields that specific card needs (a target player, a mood in play, a
     card to discard, a mode string, etc.), driven by each card's
     `choice_fields` in the state response (see `CardChoiceSchema` in
-    `php-app/README.md`) rather than one form covering every card. If a
-    filled-in choice is still rejected, the rules engine's own
-    human-readable message explains what's missing. Polls
-    `GET /games/state` every 4 seconds while open to pick up opponents'
-    moves.
+    `php-app/README.md`) rather than one form covering every card. Each
+    dropdown is further narrowed to choices the card will actually accept
+    (e.g. Guilt only lists black/red moods, Encouragement only lists moods
+    with a dice value) via that same field's `filter`. If a filled-in
+    choice is still rejected, the rules engine's own human-readable message
+    explains what's missing. Polls `GET /games/state` every 4 seconds while
+    open to pick up opponents' moves.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
