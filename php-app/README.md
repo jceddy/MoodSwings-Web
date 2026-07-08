@@ -344,6 +344,38 @@ field on a card's raw `hasAfterPlaying` (false for Creativity) means
 Creativity simply never offers a repeat option, rather than offering a
 wrong one.
 
+Each of the viewer's own hand cards also carries `is_playable`
+(`MoodPlayService::isPlayable()`), so a client can grey out cards that
+can't legally be played *right now* without having to reimplement the
+rules engine's own play-legality checks: it mirrors `playMood()`'s guard
+clauses that run before any effect-specific choice is even asked for —
+whose turn it is, whether the card's color is banned this round
+(`BoardState::bannedColorsThisRound()`), and whether any outstanding play
+grant actually covers this *specific* card (e.g. Intimidation's grant
+only covers the one card it revealed — every other hand card correctly
+comes back `false` while that grant is outstanding). If the card has a
+"to play" cost, that cost also has to be payable in principle — every
+`canPayToPlayCost()` implementation only checks board-state feasibility
+(e.g. Guile needs two *other* hand cards to discard), never the specific
+choices passed to it, so probing with an empty `PlayerChoices` is safe.
+Creativity is a documented exception here too: its own raw `hasToPlay` is
+always `false`, so `is_playable` can't account for whatever cost a copied
+card might turn out to have — the same "resolved client-side in the same
+request" gap as above. A doomed Creativity-copy attempt still surfaces
+the usual server-side rejection at submit time.
+
+Every in-play mood also carries `is_suppressed` plus, when suppressed,
+`suppression_expiry` (`'while_source_in_play'` or `'end_of_round'`) and
+`suppressed_by_card_id`/`suppressed_by_name` — the suppressing mood's id
+and name, resolved from `BoardState`'s `suppressionSourceCardId`/
+`cardCatalogNames()`. A source is only ever present for a
+`'while_source_in_play'` suppression (Faith/Guilt/Meekness/Pacifism/Shame,
+and Scorn's own version, which uses `'end_of_round'` *with* a source);
+Repentance's blanket `'end_of_round'` suppression never tracks one, since
+the suppression doesn't need to watch for anything leaving play to know
+when to lift — it just expires at the round boundary regardless
+(`BoardState::clearEndOfRoundSuppressions()`).
+
 ## Game layer
 
 `src/Game/` wires the pure rules engine above to the

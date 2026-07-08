@@ -556,6 +556,131 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('target_mood_id', $nested['fields'][0]['key']);
     }
 
+    public function testGetStateMarksOnlyTheCardARestrictedGrantCoversAsPlayable(): void
+    {
+        $u1 = $this->insertUser('restrictedgrant1');
+        $u2 = $this->insertUser('restrictedgrant2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- the one card the grant below covers
+        $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage -- not covered
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Mirrors the grant IntimidationEffect hands out, restricted to one
+        // specific revealed card -- see BoardState::grantAllows()'s
+        // 'specific_card_ids' case.
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')
+            ->execute(['grants' => json_encode([['type' => 'specific_card_ids', 'values' => [3]]]), 'id' => $roundId]);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+
+        self::assertTrue(self::findByCardId($hand, 3)['is_playable']);
+        self::assertFalse(self::findByCardId($hand, 7)['is_playable']);
+    }
+
+    public function testGetStateMarksAnUnaffordableToPlayCostCardUnplayable(): void
+    {
+        $u1 = $this->insertUser('unaffordablecost1');
+        $u2 = $this->insertUser('unaffordablecost2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile, alone -- needs 2 *other* hand cards to discard
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+
+        self::assertFalse(self::findByCardId($hand, 40)['is_playable']);
+    }
+
+    public function testGetStateMarksHandCardsUnplayableWhenItIsNotTheViewersTurn(): void
+    {
+        $u1 = $this->insertUser('notyourturn1');
+        $u2 = $this->insertUser('notyourturn2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- otherwise unconditionally playable
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1); // p2's turn, not p1's
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+
+        self::assertFalse(self::findByCardId($hand, 3)['is_playable']);
+    }
+
+    public function testGetStateExposesSuppressionSourceAndExpiryForAnInPlayMood(): void
+    {
+        $u1 = $this->insertUser('suppressionsrc1');
+        $u2 = $this->insertUser('suppressionsrc2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 12, 'in_play', $p1); // Faith
+        $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by Faith, for as long as Faith is in play
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- suppressed until the end of the round, no tracked source (mirrors Repentance)
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $faithGameCardId = (int) $this->pdo->query(
+            "SELECT id FROM game_cards WHERE game_id = {$gameId} AND card_id = 12"
+        )->fetchColumn();
+
+        $this->pdo->prepare(
+            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'while_source_in_play', suppression_source_game_card_id = :source
+             WHERE game_id = :game_id AND card_id = 7"
+        )->execute(['source' => $faithGameCardId, 'game_id' => $gameId]);
+
+        $this->pdo->prepare(
+            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'end_of_round'
+             WHERE game_id = :game_id AND card_id = 8"
+        )->execute(['game_id' => $gameId]);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+
+        $courage = self::findByCardId($inPlay, 7);
+        self::assertTrue($courage['is_suppressed']);
+        self::assertSame('while_source_in_play', $courage['suppression_expiry']);
+        self::assertSame(12, $courage['suppressed_by_card_id']);
+        self::assertSame('Faith', $courage['suppressed_by_name']);
+
+        $dignity = self::findByCardId($inPlay, 8);
+        self::assertTrue($dignity['is_suppressed']);
+        self::assertSame('end_of_round', $dignity['suppression_expiry']);
+        self::assertNull($dignity['suppressed_by_card_id']);
+        self::assertNull($dignity['suppressed_by_name']);
+
+        $faith = self::findByCardId($inPlay, 12);
+        self::assertFalse($faith['is_suppressed']);
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {

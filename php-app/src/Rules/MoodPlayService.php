@@ -151,4 +151,50 @@ final class MoodPlayService
             }
         }
     }
+
+    /**
+     * Whether $cardId, sitting in $playerId's hand right now, could
+     * legally be played this instant -- the same guard clauses
+     * playMood() checks before any effect-specific choice is even asked
+     * for, without actually playing anything. GameService uses this to
+     * tell the client which hand cards are worth offering a Play button
+     * for at all: e.g. Intimidation's grant only covers the one specific
+     * card it revealed (BoardState::hasUsablePlayGrant()), so every other
+     * hand card correctly comes back false while that grant is
+     * outstanding.
+     *
+     * If the card has a "to play" cost, that cost also has to be payable
+     * in principle: every canPayToPlayCost() implementation only checks
+     * board-state feasibility (e.g. Guile needs two *other* hand cards to
+     * discard), never the specific choices passed to it, so probing with
+     * an empty PlayerChoices is safe here.
+     *
+     * Creativity is a documented exception: its own raw hasToPlay is
+     * always false (it has no printed cost of its own), so this can't
+     * account for whatever cost a copied card might turn out to have --
+     * copy_card_id is only chosen once the play is actually submitted,
+     * the same "resolved client-side in the same request" gap noted on
+     * Duplicity's repeat field and Scorn/Validation's reactions (see
+     * CardChoiceSchema's docblock). A doomed Creativity-copy attempt
+     * still surfaces the usual server-side rejection at submit time.
+     */
+    public function isPlayable(BoardState $state, int $playerId, int $cardId): bool
+    {
+        if ($state->currentPlayerId() !== $playerId) {
+            return false;
+        }
+        if (in_array($state->colorOf($cardId), $state->bannedColorsThisRound(), true)) {
+            return false;
+        }
+        if (!$state->hasUsablePlayGrant($cardId, $playerId)) {
+            return false;
+        }
+
+        $row = $state->catalogRow($cardId);
+        if ($row['hasToPlay'] && !$this->registry->for($row['effectKey'])->canPayToPlayCost($state, $cardId, $playerId, new PlayerChoices([]))) {
+            return false;
+        }
+
+        return true;
+    }
 }
