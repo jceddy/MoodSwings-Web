@@ -47,7 +47,7 @@ routed to the PHP app).
     since that's how the rules engine resolves them. Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
     moves. Every mood in play and every card in the discard pile is also
-    clickable, opening a read-only detail view (name, printed value, dice
+    clickable, opening a read-only detail view (name, printed value, alt
     value if it has one, current value if a while-in-play effect has
     changed it, owner, rules text) so an unfamiliar card can be checked
     before deciding how to respond to it.

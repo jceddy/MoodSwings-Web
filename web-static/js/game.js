@@ -232,7 +232,7 @@
 
         let meta = card.color + ', printed value ' + card.base_value;
         if (card.alt_value !== null && card.alt_value !== undefined) {
-            meta += ' (dice: ' + card.alt_value + ')';
+            meta += ' (alt value: ' + card.alt_value + ')';
         }
         if (card.value !== card.base_value) {
             meta += ', current value ' + card.value;
