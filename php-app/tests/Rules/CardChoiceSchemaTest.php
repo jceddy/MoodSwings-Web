@@ -240,4 +240,103 @@ final class CardChoiceSchemaTest extends TestCase
 
         self::assertArrayNotHasKey('filter', $fields[0]);
     }
+
+    public function testExactCountForGuileMatchesItsMandatoryTwoCardCost(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('guile');
+
+        self::assertSame(['min' => 2, 'max' => 2], $fields[0]['count']);
+    }
+
+    public function testOpenEndedMinimumCountForSelfLoathingAndNeurosis(): void
+    {
+        // "One or more" -- a minimum with no upper bound.
+        self::assertSame(['min' => 1], CardChoiceSchema::forEffectKey('self_loathing')[0]['count']);
+        self::assertSame(['min' => 1], CardChoiceSchema::forEffectKey('neurosis')[0]['count']);
+    }
+
+    public function testZeroOrExactlyTwoCountForRejectionDenialAndInstability(): void
+    {
+        // These are optional effects that either do nothing (0 chosen) or
+        // require exactly 2 -- never 1 -- matching each effect's own
+        // "if ($targets === []) return; if (count($targets) !== 2) throw".
+        foreach (['rejection', 'denial', 'instability'] as $effectKey) {
+            $field = CardChoiceSchema::forEffectKey($effectKey)[0];
+            self::assertSame(2, $field['count']['min'], "{$effectKey} min");
+            self::assertSame(2, $field['count']['max'], "{$effectKey} max");
+            self::assertTrue($field['count']['zero_ok'], "{$effectKey} zero_ok");
+        }
+    }
+
+    public function testUpToTwoCountForCourageFamilyCards(): void
+    {
+        // "Choose up to two players" cards -- 0, 1, or 2 selections, all legal.
+        foreach (['courage', 'anxiety', 'spite', 'shock', 'pacifism', 'panic'] as $effectKey) {
+            $field = CardChoiceSchema::forEffectKey($effectKey)[0];
+            self::assertSame(['max' => 2], $field['count'], "{$effectKey} count");
+        }
+    }
+
+    public function testDistinctOwnersConstraintForTheCourageFamily(): void
+    {
+        // Each of these explicitly tracks $affectedOwners and throws "can
+        // only affect one mood per chosen player" -- Panic included, even
+        // though its rules text doesn't spell out the per-player limit as
+        // plainly as the others.
+        foreach (['courage', 'anxiety', 'spite', 'shock', 'pacifism', 'panic'] as $effectKey) {
+            $field = CardChoiceSchema::forEffectKey($effectKey)[0];
+            self::assertSame(['type' => 'distinct_owners'], $field['constraint'], "{$effectKey} constraint");
+        }
+    }
+
+    public function testHostilityAndWorrySecondStageHaveNoDistinctOwnersConstraint(): void
+    {
+        // Unlike Courage/Anxiety/etc., Hostility's and Worry's secondary
+        // target_mood_ids never track $affectedOwners -- only a max count.
+        $hostility = CardChoiceSchema::forEffectKey('hostility')[1];
+        $worry = CardChoiceSchema::forEffectKey('worry')[1];
+
+        self::assertSame(['max' => 2], $hostility['count']);
+        self::assertArrayNotHasKey('constraint', $hostility);
+        self::assertSame(['max' => 2], $worry['count']);
+        self::assertArrayNotHasKey('constraint', $worry);
+    }
+
+    public function testSameColorOrValueConstraintForRejectionAndDenial(): void
+    {
+        self::assertSame(
+            ['type' => 'same_color_or_value'],
+            CardChoiceSchema::forEffectKey('rejection')[0]['constraint']
+        );
+        self::assertSame(
+            ['type' => 'same_color_or_value'],
+            CardChoiceSchema::forEffectKey('denial')[0]['constraint']
+        );
+    }
+
+    public function testSameOwnerConstraintForInstability(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('instability');
+
+        self::assertSame(['type' => 'same_owner'], $fields[0]['constraint']);
+    }
+
+    public function testMaxTotalValueConstraintForAnger(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('anger');
+
+        self::assertSame(['type' => 'max_total_value', 'max' => 5], $fields[0]['constraint']);
+        // No count cap -- Anger allows any number of moods, bounded only
+        // by their combined value, unlike the Courage family's flat max of 2.
+        self::assertArrayNotHasKey('count', $fields[0]);
+    }
+
+    public function testCrueltyIndecisivenessAndSuspicionHaveNoCountOrConstraintSinceTheyAllowAnyNumber(): void
+    {
+        foreach (['cruelty', 'indecisiveness', 'suspicion', 'doubt', 'thrill'] as $effectKey) {
+            $field = CardChoiceSchema::forEffectKey($effectKey)[0];
+            self::assertArrayNotHasKey('count', $field, "{$effectKey} count");
+            self::assertArrayNotHasKey('constraint', $field, "{$effectKey} constraint");
+        }
+    }
 }

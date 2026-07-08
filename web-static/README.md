@@ -31,10 +31,19 @@ routed to the PHP app).
     `php-app/README.md`) rather than one form covering every card. Each
     dropdown is further narrowed to choices the card will actually accept
     (e.g. Guilt only lists black/red moods, Encouragement only lists moods
-    with a dice value) via that same field's `filter`. If a filled-in
-    choice is still rejected, the rules engine's own human-readable message
+    with a dice value) via that same field's `filter`. Multi-select fields
+    also get live client-side validation from the field's `count`
+    (exact/minimum/maximum selection counts) and `constraint` (e.g. Denial's
+    two chosen moods must share a color or value, Courage's must belong to
+    different players, Anger's combined value can't exceed 5) — Play stays
+    disabled with an inline message until the selection is actually legal,
+    without a round trip to find out. If a filled-in choice is still
+    rejected regardless, the rules engine's own human-readable message
     explains what's missing. Polls `GET /games/state` every 4 seconds while
-    open to pick up opponents' moves.
+    open to pick up opponents' moves. Every mood in play and every card in
+    the discard pile is also clickable, opening a read-only detail view
+    (name, color/value/owner, rules text) so an unfamiliar card can be
+    checked before deciding how to respond to it.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
