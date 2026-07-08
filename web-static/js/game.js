@@ -104,6 +104,7 @@
     const boardError = document.getElementById('board-error');
     const boardMessage = document.getElementById('board-message');
     const choicesPanel = document.getElementById('choices-panel');
+    const cardDetailDialog = document.getElementById('card-detail-dialog');
 
     let currentGameId = null;
     let currentState = null;
@@ -223,6 +224,22 @@
         return card.name + ' (' + card.color + ', ' + card.value + ')';
     }
 
+    // Lets a player double-check a card they don't recognize -- whether
+    // it's their own or an opponent's -- without it affecting play, since
+    // in-play/discard-pile cards can't be acted on anyway.
+    function openCardDetail(card, ownerLabel) {
+        document.getElementById('card-detail-name').textContent = card.name;
+        document.getElementById('card-detail-meta').textContent =
+            card.color + ', value ' + card.value + (ownerLabel ? ' — ' + ownerLabel : '') +
+            (card.is_suppressed ? ' (suppressed)' : '');
+        document.getElementById('card-detail-rules').textContent = card.rules_text || 'No ability.';
+        cardDetailDialog.showModal();
+    }
+
+    document.getElementById('card-detail-close-button').addEventListener('click', () => {
+        cardDetailDialog.close();
+    });
+
     async function refreshBoard() {
         const { ok, body } = await getGameState(currentGameId);
         if (!ok) {
@@ -281,9 +298,12 @@
             state.in_play,
             (card) => {
                 const owner = state.players.find((p) => p.game_player_id === card.owner_game_player_id);
+                const ownerLabel = owner ? owner.username : '?';
                 const li = document.createElement('li');
-                li.textContent = cardLabel(card) + ' — ' + (owner ? owner.username : '?') +
-                    (card.is_suppressed ? ' (suppressed)' : '');
+                li.appendChild(actionButton(
+                    cardLabel(card) + ' — ' + ownerLabel + (card.is_suppressed ? ' (suppressed)' : ''),
+                    () => openCardDetail(card, ownerLabel)
+                ));
                 return li;
             }
         );
@@ -292,7 +312,7 @@
         document.getElementById('deck-count').textContent = state.deck_count;
         renderList(document.getElementById('discard-list'), { hidden: true }, state.discard_pile, (card) => {
             const li = document.createElement('li');
-            li.textContent = cardLabel(card);
+            li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
             return li;
         });
 
@@ -471,12 +491,93 @@
         return widget.value !== '';
     }
 
+    // field.count/field.constraint mirror a card's own cross-candidate
+    // InvalidChoiceException checks (exact/bounded selection counts, "must
+    // share a color or value," "must be the same opponent," "one per
+    // player," a combined value ceiling) -- see CardChoiceSchema's docblock
+    // for the exact correspondence. Checked client-side purely so the
+    // player doesn't have to submit to discover a count/pairing mistake;
+    // the server re-validates the same rules regardless.
+
+    function selectedCandidates(field, widget) {
+        const ids = Array.from(widget.selectedOptions)
+            .filter((option) => option.value !== '')
+            .map((option) => Number(option.value));
+        const source = field.type === 'mood' ? currentState.in_play
+            : field.type === 'hand_card' ? currentState.you.hand
+            : field.type === 'discard_card' ? currentState.discard_pile
+            : field.type === 'player' ? currentState.players
+            : [];
+        if (field.type === 'player') {
+            return ids.map((id) => source.find((p) => p.game_player_id === id)).filter(Boolean);
+        }
+        return ids.map((id) => source.find((c) => c.card_id === id)).filter(Boolean);
+    }
+
+    function countMessage(count, selectedCount) {
+        if (!count) return null;
+        if (count.zero_ok && selectedCount === 0) return null;
+        if (count.min !== undefined && count.max !== undefined && count.min === count.max && selectedCount !== count.min) {
+            return `Choose exactly ${count.min}`;
+        }
+        if (count.min !== undefined && selectedCount < count.min) {
+            return `Choose at least ${count.min}`;
+        }
+        if (count.max !== undefined && selectedCount > count.max) {
+            return `Choose at most ${count.max}`;
+        }
+        return null;
+    }
+
+    function constraintMessage(constraint, candidates) {
+        if (!constraint) return null;
+        if (constraint.type === 'max_total_value') {
+            const total = candidates.reduce((sum, c) => sum + c.value, 0);
+            return total > constraint.max ? `The combined value of the chosen moods cannot exceed ${constraint.max}` : null;
+        }
+        if (candidates.length < 2) return null; // the rest only make sense once 2+ are chosen
+        if (constraint.type === 'same_color_or_value') {
+            const [a, b] = candidates;
+            return a.color !== b.color && a.value !== b.value
+                ? 'The two chosen moods must share a color or have the same value' : null;
+        }
+        if (constraint.type === 'same_owner') {
+            const [a, b] = candidates;
+            return a.owner_game_player_id !== b.owner_game_player_id ? 'Both moods must belong to the same opponent' : null;
+        }
+        if (constraint.type === 'distinct_owners') {
+            const owners = candidates.map((c) => c.owner_game_player_id);
+            return new Set(owners).size !== owners.length ? 'You can only choose one mood per player' : null;
+        }
+        return null;
+    }
+
+    function fieldValidationMessage(field, widget) {
+        if (!field.multi) return null;
+        const candidates = selectedCandidates(field, widget);
+        return countMessage(field.count, candidates.length) || constraintMessage(field.constraint, candidates);
+    }
+
     function updatePlayButtonEnabled() {
         const playButton = document.getElementById('play-card-button');
+        const validationMessage = document.getElementById('choices-validation');
+
         const allRequiredFilled = selectedCard.choice_fields
             .filter((field) => field.required)
             .every((field) => fieldHasValue(document.getElementById('choice-field-' + field.key), field));
-        playButton.disabled = !allRequiredFilled;
+
+        let firstError = null;
+        for (const field of selectedCard.choice_fields) {
+            const widget = document.getElementById('choice-field-' + field.key);
+            const message = fieldValidationMessage(field, widget);
+            if (message && !firstError) {
+                firstError = message;
+            }
+        }
+
+        validationMessage.textContent = firstError || '';
+        validationMessage.hidden = !firstError;
+        playButton.disabled = !allRequiredFilled || !!firstError;
     }
 
     function openChoicesPanel(card) {

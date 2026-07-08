@@ -97,7 +97,8 @@ body.game-page {
     list-style: none;
 }
 
-dialog#new-game-dialog {
+dialog#new-game-dialog,
+dialog#card-detail-dialog {
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;

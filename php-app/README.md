@@ -277,9 +277,16 @@ player) narrowing a dropdown to choices the effect will actually accept —
 mirroring that effect class's own `InvalidChoiceException` checks exactly
 (e.g. Guilt's `filter: {colors: [black, red]}` matches
 `GuiltEffect::QUALIFYING_COLORS`). A field with no `filter` has no such
-narrowing. `GameService::serializeCard()` attaches each card's
-`choice_fields` (plus `has_dice_value`, needed for Encouragement's filter)
-to the JSON returned by `GET /games/state`. Two cards' reaction-time choices (Scorn's
+narrowing. Multi-select fields (`ints()`-backed) can also carry a `count`
+(min/max/an optional `zero_ok` for effects that are legal empty but
+otherwise need an exact number) and a `constraint` — `same_color_or_value`
+(Denial/Rejection), `same_owner` (Instability's two candidate moods),
+`distinct_owners` (Courage/Anxiety/Spite/Shock/Pacifism/Panic's "one per
+chosen player"), or `max_total_value` (Anger) — each mirroring that
+effect's own cross-candidate `InvalidChoiceException` check so a client can
+validate a selection before ever submitting it. `GameService::serializeCard()`
+attaches each card's `choice_fields` (plus `has_dice_value`, needed for
+Encouragement's filter) to the JSON returned by `GET /games/state`. Two cards' reaction-time choices (Scorn's
 `scorn_suppress_target`, Validation's `validation_extra_play`, both fired
 via `reactToAnotherPlay()` while playing a *different* card) and
 Duplicity's nested repeat-with-fresh-choices mechanic aren't covered —

@@ -48,6 +48,7 @@
                     <p id="choices-card-rules"></p>
 
                     <div id="choices-fields"></div>
+                    <p id="choices-validation" class="error" hidden></p>
 
                     <button id="play-card-button" type="button">Play card</button>
                     <button id="cancel-choice-button" type="button">Cancel</button>
@@ -78,6 +79,13 @@
         </form>
         <p id="new-game-error" class="error" hidden></p>
         <button id="new-game-close-button" type="button">Close</button>
+    </dialog>
+
+    <dialog id="card-detail-dialog">
+        <h3 id="card-detail-name"></h3>
+        <p id="card-detail-meta"></p>
+        <p id="card-detail-rules"></p>
+        <button id="card-detail-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="friends-dialog">
