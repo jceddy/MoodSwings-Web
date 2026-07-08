@@ -41,6 +41,9 @@ final class BoardState
     /** The current round's number (game_rounds.round_number), used to stamp newly-played moods with when they were played -- see moveHandToInPlay()/moveDiscardToInPlay() and the 'playedInRound' effectState key (Patience, Glee, Doubt). */
     private ?int $currentRoundNumber = null;
 
+    /** Vulnerability: "this mood's value is 7 if a card was put into the discard pile this round." A single round-wide flag rather than anything card-specific, since it has to reflect any discard by any player -- see moveHandToDiscard()/moveInPlayToDiscard() and discardedThisRound(). */
+    private bool $discardedThisRound = false;
+
     /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
     private array $pendingEffectState = [];
 
@@ -201,6 +204,7 @@ final class BoardState
         $this->moodInPlay($cardId);
         unset($this->moodsInPlay[$cardId]);
         $this->discard[] = $cardId;
+        $this->discardedThisRound = true;
         $this->cascadeMoodLeavingPlay($cardId);
     }
 
@@ -258,6 +262,7 @@ final class BoardState
     {
         $this->removeFromHand($playerId, $cardId);
         $this->discard[] = $cardId;
+        $this->discardedThisRound = true;
     }
 
     public function moveHandToBottomOfDeck(int $playerId, int $cardId): void
@@ -353,12 +358,19 @@ final class BoardState
     }
 
     /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> $playGrants */
-    public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId, ?int $currentRoundNumber = null): void
+    public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId, ?int $currentRoundNumber = null, bool $discardedThisRound = false): void
     {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
         $this->roundFirstPlayerId = $roundFirstPlayerId;
         $this->currentRoundNumber = $currentRoundNumber;
+        $this->discardedThisRound = $discardedThisRound;
+    }
+
+    /** Vulnerability: whether any card has been put into the discard pile so far this round -- see moveHandToDiscard()/moveInPlayToDiscard(). */
+    public function discardedThisRound(): bool
+    {
+        return $this->discardedThisRound;
     }
 
     // --- suppression ---
@@ -470,11 +482,43 @@ final class BoardState
         }
 
         $row = $this->catalogRow($this->effectiveCardId($cardId));
+
+        // Encouragement/Idealism: "uses the dice total in its top right
+        // corner or lower left corner, whichever is higher, to determine
+        // its value" -- alt_value is the printed "dice" number, so this
+        // overrides the card's own computed value entirely (rather than
+        // just adding to it) for as long as either card applies.
+        if ($row['altValue'] !== null && $this->diceValueApplies($cardId, $mood->ownerId)) {
+            return max($row['baseValue'], $row['altValue']);
+        }
+
         if ($row['hasWhileInPlay']) {
             return $this->registry->for($row['effectKey'])->computeValue($this, $cardId);
         }
 
         return $row['baseValue'];
+    }
+
+    /**
+     * Encouragement tags one specific chosen mood (its 'boostedMoodId'
+     * effectState key); Idealism blankets every mood its owner controls.
+     * A mood without a printed alt_value ("dice") is never affected by
+     * either, regardless of whether it's targeted/owned -- see valueOf(),
+     * which only calls this once it's already confirmed $cardId has one.
+     */
+    private function diceValueApplies(int $cardId, int $ownerId): bool
+    {
+        foreach ($this->moodsInPlay as $mood) {
+            $effectKey = $this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'];
+            if ($effectKey === 'encouragement' && ($mood->effectState['boostedMoodId'] ?? null) === $cardId) {
+                return true;
+            }
+            if ($effectKey === 'idealism' && $mood->ownerId === $ownerId) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // --- turn / plays-remaining ---

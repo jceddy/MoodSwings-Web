@@ -1019,4 +1019,81 @@ final class GameServiceIntegrationTest extends TestCase
             self::assertContains($owner, [$p1, $p2]);
         }
     }
+
+    /**
+     * Vulnerability's discardedThisRound flag lives on game_rounds, not
+     * game_cards, so it needs its own persistence path
+     * (updateRoundTurnState()) distinct from BoardStateRepository::save()
+     * -- this proves a discard by a *different* player, in a separate
+     * request, is reflected the moment it's reloaded (before the round
+     * even ends), and that a fresh round resets it back to false.
+     */
+    public function testVulnerabilityPersistsAcrossATurnBoundaryThenResetsNextRound(): void
+    {
+        $u1 = $this->insertUser('vuln1');
+        $u2 = $this->insertUser('vuln2');
+        $u3 = $this->insertUser('vuln3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 132, 'hand', $p1); // Vulnerability, base 1 / dice 7
+        $this->insertGameCard($gameId, 8, 'hand', $p2); // Dignity
+        $this->insertGameCard($gameId, 3, 'hand', $p2); // Charity, value 1 -- discarded to pay Dignity's cost
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 132, []);
+
+        $registry = DefaultEffectRegistry::build();
+        $repository = new BoardStateRepository($registry);
+        self::assertSame(1, $repository->load($gameId)->valueOf(132)); // nothing discarded yet
+
+        $this->games->playMood($gameId, $p2, 8, ['discard_card_id' => 3]);
+
+        // p2's discard, from a separate request, has to survive the reload
+        // for p1's Vulnerability to reflect it -- the round isn't over yet
+        // (p3 hasn't gone), so this can be observed directly.
+        self::assertSame(7, $repository->load($gameId)->valueOf(132));
+
+        $result = $this->games->pass($gameId, $p3);
+        self::assertTrue($result['round_scored']);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame(0, (int) $round2['discarded_this_round']);
+        self::assertSame(1, $repository->load($gameId)->valueOf(132)); // reset for the new round
+    }
+
+    public function testEncouragementsBoostSurvivesReload(): void
+    {
+        $u1 = $this->insertUser('enc1');
+        $u2 = $this->insertUser('enc2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
+        $this->insertGameCard($gameId, 9, 'in_play', $p1); // Discipline, base 6 / dice 3
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 11, ['target_mood_id' => 9]);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertSame(6, $state->valueOf(9)); // higher of base(6)/dice(3)
+    }
 }

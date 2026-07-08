@@ -27,10 +27,12 @@ trait CatalogFixture
             8 => $this->row('white', 'common', 3, 5, 'dignity', false, false, true),
             9 => $this->row('white', 'common', 6, 3, 'discipline', false, true, false),
             10 => $this->row('white', 'rare', 2, null, 'disillusionment', false, false, true),
+            11 => $this->row('white', 'uncommon', 3, null, 'encouragement', false, true, true),
             12 => $this->row('white', 'uncommon', 3, null, 'faith', false, false, true),
             13 => $this->row('white', 'uncommon', 2, null, 'friendliness', false, false, true),
             14 => $this->row('white', 'uncommon', 2, null, 'guilt', false, false, true),
             15 => $this->row('white', 'rare', 3, null, 'honor', false, true, true),
+            16 => $this->row('white', 'mythic', 0, null, 'idealism', false, true, true),
             17 => $this->row('white', 'uncommon', 2, null, 'kindness', false, false, true),
             19 => $this->row('white', 'rare', 1, null, 'meekness', false, false, true),
             20 => $this->row('white', 'common', 1, null, 'pacifism', false, false, true),
@@ -135,6 +137,7 @@ trait CatalogFixture
             129 => $this->row('green', 'uncommon', 3, 6, 'serenity', false, true, false),
             130 => $this->row('green', 'rare', 3, null, 'sloth', false, true, false),
             131 => $this->row('green', 'uncommon', 3, 6, 'tranquility', false, true, false),
+            132 => $this->row('green', 'rare', 1, 7, 'vulnerability', false, true, false),
             133 => $this->row('green', 'mythic', 0, null, 'wonder', false, true, true),
         ];
     }
