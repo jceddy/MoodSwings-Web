@@ -9,6 +9,7 @@ use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
+use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
 use PDO;
@@ -2193,5 +2194,267 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(PDOException::class);
         $this->expectExceptionCode('23000');
         $insertOpenBatch(); // the "loser" -- must be rejected, not silently succeed
+    }
+
+    /**
+     * Enthusiasm's bonus ("you may score one of your moods an extra
+     * time") is no longer applied automatically -- see RoundScorer's own
+     * docblock for why. Both passes end round 1 (a 2-player round needs
+     * no actual plays), which should pause for p1's own decision instead
+     * of scoring immediately.
+     */
+    public function testEnthusiasmPausesForItsOwnersScoringDecisionThenAppliesTheChosenBonus(): void
+    {
+        $u1 = $this->insertUser('enth1');
+        $u2 = $this->insertUser('enth2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm, value 0
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, base value 3
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $passResult1 = $this->games->pass($gameId, $p1);
+        self::assertArrayNotHasKey('pending_decision', $passResult1); // just advances the turn to p2
+
+        $passResult2 = $this->games->pass($gameId, $p2);
+        self::assertTrue($passResult2['pending_decision'] ?? false, 'ending the round should pause for Enthusiasm\'s own decision');
+
+        $state = $this->games->getState($gameId, $u1);
+        self::assertTrue($state['round']['pending_decision']['is_you']);
+        self::assertSame('enthusiasm_extra_score', $state['round']['pending_decision']['decision_type']);
+        self::assertSame(116, $state['round']['pending_decision']['played_card_id']);
+        self::assertSame([$p1 => 3, $p2 => 0], $state['round']['scoring_preview']['scores']); // undecided reads as declined
+
+        $result = $this->games->respondToDecision($gameId, $p1, ['take_bonus' => true]);
+        self::assertTrue($result['round_scored']);
+
+        $scoreStmt = $this->pdo->prepare(
+            'SELECT game_player_id, score FROM game_round_scores gs
+             JOIN game_rounds gr ON gr.id = gs.game_round_id
+             WHERE gr.game_id = :game_id AND gr.round_number = 1'
+        );
+        $scoreStmt->execute(['game_id' => $gameId]);
+        $scores = [];
+        foreach ($scoreStmt->fetchAll() as $row) {
+            $scores[(int) $row['game_player_id']] = (int) $row['score'];
+        }
+        self::assertSame([$p1 => 6, $p2 => 0], $scores); // base 3 + Enthusiasm's own bonus (3)
+    }
+
+    public function testEnthusiasmAddsNoBonusWhenDeclined(): void
+    {
+        $u1 = $this->insertUser('enth3');
+        $u2 = $this->insertUser('enth4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 116, 'in_play', $p1);
+        $this->insertGameCard($gameId, 8, 'in_play', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+        $this->games->respondToDecision($gameId, $p1, ['take_bonus' => false]);
+
+        $scoreStmt = $this->pdo->prepare(
+            'SELECT score FROM game_round_scores gs JOIN game_rounds gr ON gr.id = gs.game_round_id
+             WHERE gr.game_id = :game_id AND gr.round_number = 1 AND gs.game_player_id = :player_id'
+        );
+        $scoreStmt->execute(['game_id' => $gameId, 'player_id' => $p1]);
+        self::assertSame(3, (int) $scoreStmt->fetchColumn()); // base only, no bonus
+    }
+
+    /**
+     * Passion's bonus is a genuine choice of *which* opponent mood, not
+     * just take-or-decline -- picking the lower-valued one is a valid,
+     * deliberate answer (e.g. to avoid tipping off exactly how strong
+     * a hand is, or simply because the player wants to), and the engine
+     * shouldn't second-guess it.
+     */
+    public function testPassionScoresTheSpecificOpponentMoodChosenNotNecessarilyTheHighest(): void
+    {
+        $u1 = $this->insertUser('pass1');
+        $u2 = $this->insertUser('pass2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // Passion, value 0
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, value 1
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $result = $this->games->pass($gameId, $p2);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        $finalResult = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 3]); // Charity (1), not the higher Dignity (3)
+        self::assertTrue($finalResult['round_scored']);
+
+        $scoreStmt = $this->pdo->prepare(
+            'SELECT game_player_id, score FROM game_round_scores gs JOIN game_rounds gr ON gr.id = gs.game_round_id
+             WHERE gr.game_id = :game_id AND gr.round_number = 1'
+        );
+        $scoreStmt->execute(['game_id' => $gameId]);
+        $scores = [];
+        foreach ($scoreStmt->fetchAll() as $row) {
+            $scores[(int) $row['game_player_id']] = (int) $row['score'];
+        }
+        self::assertSame([$p1 => 1, $p2 => 4], $scores); // p1: 0 + Charity's 1 (not Dignity's 3); p2 keeps both
+    }
+
+    public function testPassionRejectsAnInvalidTargetMood(): void
+    {
+        $u1 = $this->insertUser('pass3');
+        $u2 = $this->insertUser('pass4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // Passion
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- p1's OWN mood, not a valid Passion target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 8]); // p1's own mood, not an opponent's
+    }
+
+    /**
+     * Two different players each have their own scoring decision this
+     * round -- queued and answered one at a time, the round only
+     * completing once both are in, the same one-at-a-time pattern
+     * Disillusionment/Suspicion already use for their own multi-target
+     * queues.
+     */
+    public function testMultipleScoringDecisionsAreQueuedOnePlayerAtATime(): void
+    {
+        $u1 = $this->insertUser('multi1');
+        $u2 = $this->insertUser('multi2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // p1's Enthusiasm
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, base 3
+        $this->insertGameCard($gameId, 97, 'in_play', $p2); // p2's Passion
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $result = $this->games->pass($gameId, $p2);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        $firstDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame($p1, $firstDecision['target_game_player_id']); // turn order starts with p1
+
+        $afterFirst = $this->games->respondToDecision($gameId, $p1, ['take_bonus' => true]);
+        self::assertTrue($afterFirst['pending_decision'] ?? false, 'p2 still has their own Passion decision outstanding');
+
+        $secondDecision = $this->games->getState($gameId, $u2)['round']['pending_decision'];
+        self::assertSame($p2, $secondDecision['target_game_player_id']);
+        self::assertSame('passion_score_opponent_mood', $secondDecision['decision_type']);
+
+        $afterSecond = $this->games->respondToDecision($gameId, $p2, []); // decline -- no valid opponent mood to take anyway
+        self::assertTrue($afterSecond['round_scored']);
+    }
+
+    /**
+     * The whole point of this feature: Sneakiness swaps its owner's final
+     * score with a chosen opponent's *without touching the opponent's own
+     * total*, so p1's own post-swap score (p2's original total) is
+     * completely unaffected by whether p1 takes Passion's bonus -- what
+     * changes is p2's post-swap score, which becomes p1's own pre-swap
+     * total. Inflating that via Passion only hands p2 a bigger score once
+     * the swap lands, which is never in p1's interest. Before this fix,
+     * Passion always auto-took the highest opponent mood, which would
+     * have been actively wrong here (needlessly boosting the very score
+     * about to become the swap target's).
+     */
+    public function testDecliningPassionIsCorrectWhenSneakinessIsAboutToSwapTheScoreAway(): void
+    {
+        $u1 = $this->insertUser('sneak1');
+        $u2 = $this->insertUser('sneak2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // p1's Passion, value 0
+        $this->insertGameCard($gameId, 51, 'in_play', $p1); // p1's Sneakiness, base value 5 -- tags a swap with p2 below
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity (3), a juicy Passion target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Sneakiness's own target is chosen at play time -- tag it directly
+        // via raw SQL the same way BoardState::setEffectState() would,
+        // since this test only needs it already resolved, not re-played.
+        $this->pdo->prepare(
+            "UPDATE game_cards SET effect_state = '{\"swapScoreWithPlayerId\":" . $p2 . '}\' WHERE game_id = :game_id AND card_id = 51'
+        )->execute(['game_id' => $gameId]);
+
+        $this->games->pass($gameId, $p1);
+        $result = $this->games->pass($gameId, $p2);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        $preview = $this->games->getState($gameId, $u1)['round']['scoring_preview'];
+        self::assertSame([['game_player_id' => $p1, 'swaps_with_game_player_id' => $p2]], $preview['sneakiness_swaps']);
+        self::assertSame([$p1 => 5, $p2 => 3], $preview['scores']); // undecided Passion reads as declined
+
+        // Declining Passion: p1's pre-swap total stays at Sneakiness's own
+        // 5 (Passion contributes 0), so after the swap p1 ends up with
+        // p2's original 3 and p2 ends up with p1's original 5 -- not the
+        // 8 they'd have gotten if p1 had also taken Dignity's 3.
+        $finalResult = $this->games->respondToDecision($gameId, $p1, []); // decline
+        self::assertTrue($finalResult['round_scored']);
+
+        $scoreStmt = $this->pdo->prepare(
+            'SELECT game_player_id, score FROM game_round_scores gs JOIN game_rounds gr ON gr.id = gs.game_round_id
+             WHERE gr.game_id = :game_id AND gr.round_number = 1'
+        );
+        $scoreStmt->execute(['game_id' => $gameId]);
+        $scores = [];
+        foreach ($scoreStmt->fetchAll() as $row) {
+            $scores[(int) $row['game_player_id']] = (int) $row['score'];
+        }
+        self::assertSame([$p1 => 3, $p2 => 5], $scores);
     }
 }

@@ -116,11 +116,12 @@ account/friends layer above. The core pieces:
 - `RoundScorer` — sums each player's mood values and settles the win/Hurt
   Feelings tie-breaks (opposite directions: ties for the win go to whoever
   played *earliest* that round, Hurt Feelings ties go to whoever played
-  *latest*). Also resolves a small cluster of "you may score X an extra
-  time" cards unconditionally, rather than through an interactive
-  scoring-time choice -- since card values are never negative, taking the
-  bonus is always at least as good as declining it (Exhilaration, Bliss,
-  Enthusiasm, Passion — see below).
+  *latest*). Also resolves a small cluster of cards whose "while in play"
+  ability multiplies how much of the board counts toward their owner's
+  total: two are printed with no "may" at all (Exhilaration, Bliss) and
+  stay unconditional, but two are printed as "you may" (Enthusiasm,
+  Passion) and, unlike the other two, aren't always correct to take even
+  at their best value -- see below.
 
 All 127 cards in the 133-card pool with a printed ability have a
 registered effect (see `DefaultEffectRegistry`) — the other 6 have no
@@ -402,6 +403,35 @@ serialization at all — the old `duplicityFields()` is gone; a card's
 `choice_fields` describe only its own play, and any repeat offer arrives
 later via `round.pending_decision`, exactly like Compulsion's or
 Arrogance's.
+
+Enthusiasm's and Passion's own "you may" scoring-time bonuses (see
+`RoundScorer` above) reuse this same pause-and-respond mechanism too, but
+triggered from round-end rather than mid-play: `GameService::
+scoreRoundAndAdvance()` checks, before computing a final score, whether
+any in-play Enthusiasm/Passion owner hasn't yet answered this round's
+decision for it (`nextUnresolvedScoringDecision()`, derived fresh from
+live board state plus whatever `game_pending_decision_batches` rows are
+already resolved this round rather than a persisted queue) and, if so,
+pauses for that one player exactly like a mid-play decision — one batch
+per card, each with a single self-targeted row, chained the same way a
+Duplicity repeat chains into its next one. Unlike Exhilaration/Bliss
+(printed with no "may" at all, so always applied automatically),
+declining Enthusiasm/Passion can be genuinely correct: Sneakiness swaps
+its owner's *entire* final score with a chosen opponent's without
+touching the opponent's own total, so accepting a scoring bonus you're
+about to hand to someone else via that swap only helps them, never you.
+`RoundScorer::score()`'s `$scoringDecisions` parameter (`cardId =>`
+resolved bonus, defaulting to 0 for anything not yet answered) is what
+lets the *same* method serve as both the final score and a live preview
+while decisions are still outstanding — exposed as `round.scoring_preview`
+(scores-so-far plus any active Sneakiness swap targets, visible to every
+viewer since final scores aren't hidden information) so answering
+"should I take this bonus" is never a guess. `finishScoringAndAdvance()`
+holds the actual score/persist/advance logic with no transaction
+management of its own, callable either from `scoreRoundAndAdvance()`'s
+own transaction (the common case, no decision needed) or directly inside
+`respondToDecision()`'s already-open one once the last outstanding
+scoring decision resolves.
 
 Creativity's "play as a copy of any mood" choice (`copy_card_id`, read from
 the top-level choices, resolved entirely server-side in `MoodPlayService`)

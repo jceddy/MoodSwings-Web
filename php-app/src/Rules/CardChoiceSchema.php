@@ -339,16 +339,23 @@ final class CardChoiceSchema
     ];
 
     /**
-     * Templates for reactToAnotherPlay() fields (Scorn/Validation) and for
-     * Duplicity's repeat offer, keyed by the *reacting* card's effect_key.
-     * Scorn's and Validation's templates are filled in by
-     * GameService::serializeCard() (color filter, value-gated inclusion)
-     * before being appended to a hand card's own choice_fields -- both fire
-     * as part of the *triggering* play's own request. Duplicity's is
-     * instead used by MoodPlayService::duplicityRepeatOfferRequest() to
-     * label a post-play PendingDecisionRequest offered to the acting
-     * player themselves, since a repeat is no longer decided as part of
-     * the original play request at all.
+     * Templates for reactToAnotherPlay() fields (Scorn/Validation), for
+     * Duplicity's repeat offer, and for Enthusiasm's/Passion's scoring-time
+     * decisions, keyed by the *reacting* card's effect_key. Scorn's and
+     * Validation's templates are filled in by GameService::serializeCard()
+     * (color filter, value-gated inclusion) before being appended to a
+     * hand card's own choice_fields -- both fire as part of the
+     * *triggering* play's own request. Duplicity's is instead used by
+     * MoodPlayService::duplicityRepeatOfferRequest() to label a post-play
+     * PendingDecisionRequest offered to the acting player themselves,
+     * since a repeat is no longer decided as part of the original play
+     * request at all. Enthusiasm's and Passion's are used the same way by
+     * GameService::scoringDecisionRequest(), but at round-end rather than
+     * mid-play -- unlike Exhilaration/Bliss (printed with no "may" at
+     * all, so always applied automatically), these two are genuinely
+     * optional and not always correct to take (see RoundScorer's own
+     * docblock for why -- Sneakiness's score swap is the reason a bigger
+     * pre-swap score isn't always better).
      *
      * @var array<string, array<string, mixed>>
      */
@@ -371,6 +378,19 @@ final class CardChoiceSchema
             'type' => 'bool',
             'required' => false,
             'label' => "Duplicity's reaction: repeat this mood's own effect with a fresh set of choices",
+        ],
+        'enthusiasm' => [
+            'key' => 'take_bonus',
+            'type' => 'bool',
+            'required' => false,
+            'label' => "Enthusiasm's bonus: score your own highest-valued mood an extra time",
+        ],
+        'passion' => [
+            'key' => 'target_mood_id',
+            'type' => 'mood',
+            'scope' => 'other',
+            'required' => false,
+            'label' => "Passion's bonus: score one of your opponents' moods as though it were yours",
         ],
     ];
 

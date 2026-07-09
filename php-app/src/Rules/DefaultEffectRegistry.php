@@ -212,16 +212,19 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * can't be discarded again -- handled directly by MoodPlayService since
  * no MoodEffect implementation has access to the registry it needs to
  * re-invoke another card's effect (Duplicity -- PlayerChoices::sub()),
- * and a small cluster of "you may score X an extra time" scoring-time
- * bonuses resolved unconditionally by RoundScorer::score() rather than
- * through an interactive choice, since card values are never negative
- * so taking the bonus is always at least as good as declining it --
- * doubling the owner's whole total (Exhilaration), tripling the owner's
- * moods sharing a color with whatever card paid its cost (Bliss, via a
- * pre-play-staged effectState color captured before the card exists as
- * a MoodInPlay -- see BoardState::stagePrePlayEffectState()), and adding
- * the single highest-valued mood among the owner's own (Enthusiasm) or
- * every opponent's (Passion), a "dice" value (a card's alt_value, used as
+ * and a small cluster of scoring-time multiplier bonuses resolved by
+ * RoundScorer::score() -- two printed with no "may" at all, so applied
+ * unconditionally: doubling the owner's whole total (Exhilaration) and
+ * tripling the owner's moods sharing a color with whatever card paid its
+ * cost (Bliss, via a pre-play-staged effectState color captured before
+ * the card exists as a MoodInPlay -- see BoardState::
+ * stagePrePlayEffectState()); two printed as "you may" and resolved from
+ * an explicit scoring-time decision instead (GameService's own pause,
+ * mirroring the mid-play RequiresOpponentDecision pattern below, since
+ * taking the highest-valued mood isn't always correct once a card like
+ * Sneakiness can swap the resulting score away) -- the single
+ * highest-valued mood among the owner's own (Enthusiasm) or a specific
+ * chosen opponent mood (Passion), a "dice" value (a card's alt_value, used as
  * an alternative to its base_value rather than a conditional override)
  * that overrides a mood's value entirely for as long as it's tagged --
  * on any one chosen mood, not just the acting player's own

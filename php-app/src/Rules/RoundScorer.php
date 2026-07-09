@@ -15,23 +15,42 @@ use LogicException;
  *
  * score() also resolves the small cluster of cards whose "while in play"
  * ability multiplies how much of the board counts toward their owner's
- * total, rather than computing a value for their own card: Exhilaration
- * (doubles the owner's whole total), Bliss (triples the owner's moods
- * sharing a color with whatever card paid its cost), Enthusiasm (adds
- * the owner's own single highest-valued mood a second time), and Passion
- * (adds the single highest-valued opponent mood across the table, on top
- * of that opponent still scoring it too). All four are printed as "you
- * may", but since card values are never negative, taking the bonus is
- * always at least as good as declining it -- so each is applied
- * unconditionally rather than needing an interactive scoring-time
- * choice the engine has no API for yet.
+ * total, rather than computing a value for their own card. Two of them
+ * are printed with no "may" at all -- Exhilaration (doubles the owner's
+ * whole total) and Bliss (triples the owner's moods sharing a color with
+ * whatever card paid its cost) -- so there's no legitimate choice to make
+ * regardless of anything else in play; both stay unconditional. The other
+ * two are printed as "you may" -- Enthusiasm (score your own single
+ * highest-valued mood an extra time) and Passion (score one of your
+ * opponents' moods as though it were yours, on top of them still scoring
+ * it too) -- and unlike Exhilaration/Bliss, declining one of these can
+ * genuinely be correct: a card like Sneakiness swaps its owner's own
+ * final score with a chosen opponent's, so inflating your own pre-swap
+ * score isn't always in your interest. Those two are resolved from
+ * $scoringDecisions instead of being computed automatically -- see
+ * GameService's scoring-decision pause, which asks each Enthusiasm/
+ * Passion owner explicitly rather than assuming the maximum is always
+ * what they'd want.
  */
 final class RoundScorer
 {
-    private const SCORE_MULTIPLYING_EFFECT_KEYS = ['exhilaration', 'bliss', 'enthusiasm', 'passion'];
+    private const AUTOMATIC_SCORE_MULTIPLYING_EFFECT_KEYS = ['exhilaration', 'bliss'];
 
-    /** @return array<int, int> playerId => score */
-    public function score(BoardState $state): array
+    /** Enthusiasm/Passion -- see this class's own docblock for why these two, unlike Exhilaration/Bliss, need an explicit decision rather than being computed automatically. */
+    public const DECISION_SCORE_MULTIPLYING_EFFECT_KEYS = ['enthusiasm', 'passion'];
+
+    /**
+     * @param array<int, int> $scoringDecisions cardId => the already-
+     *     resolved bonus amount for that specific Enthusiasm/Passion card
+     *     this round (0 if declined) -- see GameService::
+     *     resolveScoringDecisionBonus(). A card with no entry here
+     *     contributes 0, which is what lets this same method serve both
+     *     as the final score, once every needed entry is present, and as
+     *     a live preview of scores-so-far while decisions are still
+     *     outstanding (undecided cards simply read as "declined for now").
+     * @return array<int, int> playerId => score
+     */
+    public function score(BoardState $state, array $scoringDecisions = []): array
     {
         $scores = array_fill_keys($state->playerOrder(), 0);
         foreach ($state->moodsInPlay() as $mood) {
@@ -40,16 +59,15 @@ final class RoundScorer
 
         foreach ($state->moodsInPlay() as $mood) {
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
-            if (!in_array($effectKey, self::SCORE_MULTIPLYING_EFFECT_KEYS, true)) {
-                continue;
-            }
 
-            $scores[$mood->ownerId] += match ($effectKey) {
-                'exhilaration' => $this->sumOwnMoods($state, $mood->ownerId),
-                'bliss' => 2 * $this->sumOwnMoodsSharingColor($state, $mood->ownerId, $state->effectState($mood->cardId, 'blissColor')),
-                'enthusiasm' => $this->highestOwnMoodValue($state, $mood->ownerId),
-                'passion' => $this->highestOpponentMoodValue($state, $mood->ownerId),
-            };
+            if (in_array($effectKey, self::AUTOMATIC_SCORE_MULTIPLYING_EFFECT_KEYS, true)) {
+                $scores[$mood->ownerId] += match ($effectKey) {
+                    'exhilaration' => $this->sumOwnMoods($state, $mood->ownerId),
+                    'bliss' => 2 * $this->sumOwnMoodsSharingColor($state, $mood->ownerId, $state->effectState($mood->cardId, 'blissColor')),
+                };
+            } elseif (in_array($effectKey, self::DECISION_SCORE_MULTIPLYING_EFFECT_KEYS, true)) {
+                $scores[$mood->ownerId] += $scoringDecisions[$mood->cardId] ?? 0;
+            }
         }
 
         return $scores;
@@ -81,24 +99,19 @@ final class RoundScorer
         return $total;
     }
 
-    private function highestOwnMoodValue(BoardState $state, int $ownerId): int
+    /**
+     * Enthusiasm's own candidate value if its owner accepts the bonus --
+     * exposed publicly (unlike the other private helpers above) since
+     * GameService needs it both to label the decision prompt with the
+     * specific mood/value at stake and to resolve the final bonus once
+     * accepted.
+     */
+    public function highestOwnMoodValue(BoardState $state, int $ownerId): int
     {
         $values = array_map(
             static fn ($mood) => $state->valueOf($mood->cardId),
             $state->moodsOwnedBy($ownerId),
         );
-
-        return $values === [] ? 0 : max($values);
-    }
-
-    private function highestOpponentMoodValue(BoardState $state, int $ownerId): int
-    {
-        $values = [];
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->ownerId !== $ownerId) {
-                $values[] = $state->valueOf($mood->cardId);
-            }
-        }
 
         return $values === [] ? 0 : max($values);
     }

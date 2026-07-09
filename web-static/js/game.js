@@ -328,6 +328,7 @@
 
         const pendingDecision = state.round && state.round.pending_decision;
         renderPendingDecision(pendingDecision);
+        renderScoringPreview(state.round && state.round.scoring_preview);
 
         renderList(
             document.getElementById('in-play-list'),
@@ -882,10 +883,13 @@
         }
 
         activePendingDecision = pendingDecision;
+        const titlesByDecisionType = {
+            duplicity_repeat_offer: "Repeat " + (pendingDecision.played_card_name || 'this mood') + "'s effect?",
+            enthusiasm_extra_score: "Enthusiasm's bonus",
+            passion_score_opponent_mood: "Passion's bonus",
+        };
         document.getElementById('pending-decision-title').textContent =
-            pendingDecision.decision_type === 'duplicity_repeat_offer'
-                ? "Repeat " + (pendingDecision.played_card_name || 'this mood') + "'s effect?"
-                : 'Respond to ' + (pendingDecision.played_card_name || 'a mood');
+            titlesByDecisionType[pendingDecision.decision_type] || 'Respond to ' + (pendingDecision.played_card_name || 'a mood');
 
         // Duplicity's repeat-offer is about the ALREADY-PLAYED card itself
         // (still correctly excludable from a mood/hand_card field's own
@@ -908,6 +912,41 @@
 
         updateRespondButtonEnabled();
         pendingDecisionPanel.hidden = false;
+    }
+
+    // round.scoring_preview (null except while an Enthusiasm/Passion
+    // scoring decision is outstanding -- see GameService::
+    // serializeScoringPreview()) is the running score-so-far (an
+    // undecided card just reads as declined) plus any active Sneakiness
+    // swap targets. Shown to every viewer, not just whoever's actually
+    // answering -- final round scores aren't hidden the way an opponent's
+    // hand is, and without this "you may score one of your opponents'
+    // moods" is close to meaningless to decide on blind, especially once
+    // a swap is in play.
+    function renderScoringPreview(preview) {
+        const container = document.getElementById('scoring-preview');
+        if (!preview) {
+            container.hidden = true;
+            return;
+        }
+
+        renderList(document.getElementById('scoring-preview-scores'), { hidden: true }, Object.entries(preview.scores), ([gamePlayerId, score]) => {
+            const li = document.createElement('li');
+            li.textContent = playerLabelFor(Number(gamePlayerId)) + ': ' + score;
+            return li;
+        });
+
+        const swapsText = document.getElementById('scoring-preview-swaps');
+        if (preview.sneakiness_swaps.length === 0) {
+            swapsText.hidden = true;
+        } else {
+            swapsText.hidden = false;
+            swapsText.textContent = 'Sneakiness will swap scores after scoring: ' + preview.sneakiness_swaps
+                .map((swap) => playerLabelFor(swap.game_player_id) + ' ↔ ' + playerLabelFor(swap.swaps_with_game_player_id))
+                .join(', ');
+        }
+
+        container.hidden = false;
     }
 
     function updateRespondButtonEnabled() {
@@ -933,7 +972,22 @@
         }
 
         const widget = document.getElementById('choice-field-' + field.key);
-        respondButton.disabled = !fieldHasValue(widget, field) || !!fieldValidationMessage(field, widget);
+        const hasValue = fieldHasValue(widget, field);
+
+        // Every one of the seven original opponent-decision types is
+        // required: true (Compulsion's target must choose *a* card, no
+        // decline), so this never had to distinguish the two cases before
+        // -- Enthusiasm's/Passion's own scoring-time decisions are the
+        // first required: false pending-decision fields, and leaving one
+        // blank (declining) has to stay a valid, submittable answer the
+        // same way it already does in the ordinary choices panel (see
+        // updatePlayButtonEnabled()'s own required-only filter).
+        if (field.required && !hasValue) {
+            respondButton.disabled = true;
+            return;
+        }
+
+        respondButton.disabled = hasValue && !!fieldValidationMessage(field, widget);
     }
 
     document.getElementById('respond-decision-button').addEventListener('click', async () => {

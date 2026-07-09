@@ -123,27 +123,84 @@ final class RoundScorerTest extends TestCase
         self::assertSame([1 => 2, 2 => 0, 3 => 0], $scores);
     }
 
-    public function testEnthusiasmAddsItsOwnersHighestValuedMoodAgain(): void
+    /**
+     * Unlike Exhilaration/Bliss, Enthusiasm's "you may" bonus isn't
+     * computed automatically -- score() just adds whatever's in
+     * $scoringDecisions for that card, resolved elsewhere (see
+     * GameService) from the owner's own explicit answer.
+     */
+    public function testEnthusiasmAddsItsOwnersHighestValuedMoodAgainWhenAccepted(): void
     {
         $state = $this->boardState(hands: [1 => [116, 3, 8]]); // Enthusiasm (0), Charity (1), Dignity (base 3)
         $state->moveHandToInPlay(1, 116);
         $state->moveHandToInPlay(1, 3);
         $state->moveHandToInPlay(1, 8);
 
-        $scores = $this->scorer->score($state);
+        $scores = $this->scorer->score($state, [116 => 3]); // accepted: Dignity (3) is the owner's highest mood
 
         self::assertSame([1 => 7, 2 => 0, 3 => 0], $scores);
     }
 
-    public function testPassionAddsTheHighestValuedOpponentMoodWithoutRemovingItFromThem(): void
+    /**
+     * A missing entry in $scoringDecisions reads as "declined" -- this is
+     * also what lets score() double as a live preview while a round's
+     * decisions are still outstanding: an undecided card just contributes
+     * nothing yet, the same as an explicitly declined one.
+     */
+    public function testEnthusiasmAddsNothingWhenDeclinedOrUndecided(): void
+    {
+        $state = $this->boardState(hands: [1 => [116, 3, 8]]);
+        $state->moveHandToInPlay(1, 116);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 8);
+
+        self::assertSame([1 => 4, 2 => 0, 3 => 0], $this->scorer->score($state, [116 => 0])); // explicitly declined
+        self::assertSame([1 => 4, 2 => 0, 3 => 0], $this->scorer->score($state)); // undecided (no entry at all)
+    }
+
+    public function testHighestOwnMoodValueReturnsTheOwnersBestMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [3, 8]]); // Charity (1), Dignity (base 3)
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 8);
+
+        self::assertSame(3, $this->scorer->highestOwnMoodValue($state, 1));
+    }
+
+    public function testHighestOwnMoodValueIsZeroWithNoMoodsInPlay(): void
+    {
+        $state = $this->boardState();
+
+        self::assertSame(0, $this->scorer->highestOwnMoodValue($state, 1));
+    }
+
+    /**
+     * Passion's "you may" bonus is likewise resolved from
+     * $scoringDecisions rather than always taking the highest-valued
+     * opponent mood automatically -- the owner's own choice, keyed by
+     * Passion's own card id to whatever value the chosen opponent mood
+     * (or none, if declined) resolves to.
+     */
+    public function testPassionAddsTheChosenOpponentMoodsValueWithoutRemovingItFromThem(): void
     {
         $state = $this->boardState(hands: [1 => [97], 2 => [8, 3]]); // Passion; Dignity (3), Charity (1) for p2
         $state->moveHandToInPlay(1, 97);
         $state->moveHandToInPlay(2, 8);
         $state->moveHandToInPlay(2, 3);
 
-        $scores = $this->scorer->score($state);
+        $scores = $this->scorer->score($state, [97 => 3]); // chose Dignity (3), not Charity (1)
 
         self::assertSame([1 => 3, 2 => 4, 3 => 0], $scores);
+    }
+
+    public function testPassionAddsNothingWhenDeclinedOrUndecided(): void
+    {
+        $state = $this->boardState(hands: [1 => [97], 2 => [8, 3]]);
+        $state->moveHandToInPlay(1, 97);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 3);
+
+        self::assertSame([1 => 0, 2 => 4, 3 => 0], $this->scorer->score($state, [97 => 0]));
+        self::assertSame([1 => 0, 2 => 4, 3 => 0], $this->scorer->score($state));
     }
 }
