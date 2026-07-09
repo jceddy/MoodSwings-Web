@@ -88,7 +88,14 @@ routed to the PHP app).
     right now" message instead of the usual field-by-field validation.
     Polls
     `GET /games/state` every 4 seconds while open to pick up opponents'
-    moves. Every mood in play and every card in the discard pile is also
+    moves -- suspended while the choices panel or a pending-decision panel
+    is open, so a card being actively composed doesn't get its fields
+    reset out from under the player. Passing closes the choices panel the
+    same way a successful play does (rather than leaving whatever hand
+    card you'd opened to consider playing sitting there instead), since
+    otherwise polling would stay silently suspended until the panel was
+    manually cancelled, even though the pass itself went through fine.
+    Every mood in play and every card in the discard pile is also
     clickable, opening a read-only detail view (name, base value, alt
     value if it has one, current value if a while-in-play effect has
     changed it, owner, rules text, and — if it's currently suppressed — an
@@ -98,18 +105,22 @@ routed to the PHP app).
     checked before deciding how to respond to it. Seven cards (Arrogance,
     Compulsion, Disillusionment, Instability, Intimidation, Malice,
     Suspicion) hand part of their effect to a player other than whoever's
-    turn it is — playing one of these pauses the whole round (Play/Pass
-    both disabled for everyone, a banner names who's being waited on) via
+    turn it is, and two more (Avoidance, Confusion) say a player "chooses"
+    (not "at random") what to give up to a direction-based neighbor —
+    playing any of these nine pauses the whole round (Play/Pass both
+    disabled for everyone, a banner names who's being waited on) via
     `round.pending_decision` in the state response. The one player it's
     actually waiting on sees a response panel instead of the banner,
     reusing the exact same field-rendering code as the regular choices
     panel (including multi-select validation for Malice's two moods and
     the `mode` dropdown for Disillusionment's color) — answered via `POST
-    /games/respond`. Suspicion and Disillusionment queue one decision per
-    player (Disillusionment's queue starts with the next player in turn
-    order and wraps around to the acting player themselves last); only
-    the one player currently up in the queue is prompted at a time, and
-    the round only unfreezes once the last one has answered. Duplicity's
+    /games/respond`. Suspicion, Disillusionment, Avoidance, and Confusion
+    all queue one decision per player (Disillusionment's queue starts with
+    the next player in turn order and wraps around to the acting player
+    themselves last; Avoidance's and Confusion's queue every player with a
+    qualifying mood/hand card, including the acting player); only the one
+    player currently up in the queue is prompted at a time, and the round
+    only unfreezes once the last one has answered. Duplicity's
     repeat offer (see above) uses this exact same pause-and-respond
     mechanism, just targeting the acting player themselves instead of an
     opponent — its panel shows a nested checkbox-plus-fields shape rather

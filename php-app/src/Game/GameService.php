@@ -54,6 +54,20 @@ final class GameService
     private const MAX_PLAYERS = 4;
 
     /**
+     * Default for $gameLockTimeoutSeconds below: how long playMood()/
+     * pass()/respondToDecision() wait to acquire a game's lock (see
+     * withGameLock()) before giving up. Generous relative to how long a
+     * single request actually takes -- this only matters when two
+     * requests for the same game genuinely overlap (the same player's two
+     * tabs, a double-click), which resolves in well under a second
+     * normally; this is a backstop against a stuck/slow request, not a
+     * number anyone should ever be expected to wait out. Overridable via
+     * the constructor so tests can prove the lock is actually enforced
+     * without a multi-second wait.
+     */
+    private const GAME_LOCK_TIMEOUT_SECONDS = 10;
+
+    /**
      * Enthusiasm's/Passion's own scoring-time decisions -- see
      * RoundScorer's docblock for why these two (unlike Exhilaration/
      * Bliss) need an explicit answer rather than being applied
@@ -73,6 +87,7 @@ final class GameService
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
         private readonly RoundScorer $scorer,
+        private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
     ) {
     }
 
@@ -184,56 +199,102 @@ final class GameService
     }
 
     /**
+     * playMood()/pass()/respondToDecision() each load a BoardState, mutate
+     * it in memory, and save it back across one or more separate SQL
+     * transactions (see e.g. respondToDecision()'s own sequential
+     * transactions for a chained scoring decision) -- individually atomic,
+     * but with no protection against a second request for the *same game*
+     * interleaving somewhere in between and silently clobbering the
+     * first's changes when both eventually save (migration 0011 closed
+     * this specific window for pending-decision batches, but the same gap
+     * exists for board state generally). A MySQL named lock, held for the
+     * caller's entire duration via $fn rather than scoped to any one SQL
+     * transaction, serializes every actual mutation for a game without
+     * requiring the three entry points' already-nontrivial internal
+     * transaction structure to change at all. Keyed by game id, not round
+     * id, since a round can complete and a new one begin mid-call
+     * (scoreRoundAndAdvance()) -- only one game-wide lock is ever needed
+     * regardless. Named locks are session-scoped, not transaction-scoped,
+     * and MariaDB releases them automatically if a connection dies, so
+     * there's no risk of a crashed request wedging a game forever.
+     *
+     * @template T
+     * @param callable(): T $fn
+     * @return T
+     */
+    private function withGameLock(int $gameId, callable $fn): mixed
+    {
+        $pdo = Connection::get();
+        $lockName = "moodswings_game:{$gameId}";
+
+        $stmt = $pdo->prepare('SELECT GET_LOCK(?, ?)');
+        $stmt->execute([$lockName, $this->gameLockTimeoutSeconds]);
+        if ((int) $stmt->fetchColumn() !== 1) {
+            throw new GameStateException("Game {$gameId} is busy with another action -- try again");
+        }
+
+        try {
+            return $fn();
+        } finally {
+            $pdo->prepare('SELECT RELEASE_LOCK(?)')->execute([$lockName]);
+        }
+    }
+
+    /**
      * @param array<string, mixed> $choices
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
     public function playMood(int $gameId, int $gamePlayerId, int $cardId, array $choices): array
     {
-        $round = $this->currentRound($gameId);
-        $roundId = (int) $round['id'];
-        $this->assertNoPendingDecision($roundId);
+        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $cardId, $choices): array {
+            $round = $this->currentRound($gameId);
+            $roundId = (int) $round['id'];
+            $this->assertNoPendingDecision($roundId);
 
-        $state = $this->boardStates->load($gameId);
-        $playerChoices = new PlayerChoices($choices);
-        $result = $this->plays->playMood($state, $gamePlayerId, $cardId, $playerChoices);
+            $state = $this->boardStates->load($gameId);
+            $playerChoices = new PlayerChoices($choices);
+            $result = $this->plays->playMood($state, $gamePlayerId, $cardId, $playerChoices);
 
-        if ($result->isPending) {
-            $pdo = Connection::get();
-            $pdo->beginTransaction();
+            if ($result->isPending) {
+                $pdo = Connection::get();
+                $pdo->beginTransaction();
 
-            try {
-                $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
-                $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
-                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $choices);
+                try {
+                    $this->boardStates->save($gameId, $state);
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                    $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $choices);
 
-                $pdo->commit();
-            } catch (Throwable $e) {
-                $pdo->rollBack();
-                throw $e;
+                    $pdo->commit();
+                } catch (Throwable $e) {
+                    $pdo->rollBack();
+                    throw $e;
+                }
+
+                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
             }
 
-            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
-        }
+            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $choices);
 
-        $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $choices);
-
-        return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
+            return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
+        });
     }
 
     /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
     public function pass(int $gameId, int $gamePlayerId): array
     {
-        $round = $this->currentRound($gameId);
-        $this->assertNoPendingDecision((int) $round['id']);
+        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
+            $round = $this->currentRound($gameId);
+            $this->assertNoPendingDecision((int) $round['id']);
 
-        if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
-            throw new GameStateException("It is not player {$gamePlayerId}'s turn");
-        }
+            if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
+                throw new GameStateException("It is not player {$gamePlayerId}'s turn");
+            }
 
-        $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'turn_passed', null, []);
+            $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'turn_passed', null, []);
 
-        return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
+            return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
+        });
     }
 
     /**
@@ -249,127 +310,129 @@ final class GameService
      */
     public function respondToDecision(int $gameId, int $gamePlayerId, array $choices): array
     {
-        $round = $this->currentRound($gameId);
-        $roundId = (int) $round['id'];
+        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $choices): array {
+            $round = $this->currentRound($gameId);
+            $roundId = (int) $round['id'];
 
-        $batchRow = $this->activePendingBatch($roundId);
-        if ($batchRow === null) {
-            throw new GameStateException("Game {$gameId} has no decision pending");
-        }
-
-        $decisionRow = $this->activePendingDecision((int) $batchRow['id']);
-        if ($decisionRow === null || (int) $decisionRow['target_game_player_id'] !== $gamePlayerId) {
-            throw new GameStateException("Player {$gamePlayerId} has no decision pending in game {$gameId}");
-        }
-
-        $field = json_decode((string) $decisionRow['field'], true);
-        $answerKey = $field['key'];
-
-        $pdo = Connection::get();
-        $pdo->beginTransaction();
-
-        try {
-            $pdo->prepare('UPDATE game_pending_decisions SET answer = :answer, resolved_at = NOW() WHERE id = :id')
-                ->execute([
-                    'answer' => json_encode([$answerKey => $choices[$answerKey] ?? null]),
-                    'id' => $decisionRow['id'],
-                ]);
-
-            $remainingStmt = $pdo->prepare(
-                'SELECT COUNT(*) FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL'
-            );
-            $remainingStmt->execute(['batch_id' => $batchRow['id']]);
-
-            if (((int) $remainingStmt->fetchColumn()) > 0) {
-                // Other targets in this batch (e.g. Disillusionment's/
-                // Suspicion's remaining players) still haven't answered.
-                $pdo->commit();
-
-                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+            $batchRow = $this->activePendingBatch($roundId);
+            if ($batchRow === null) {
+                throw new GameStateException("Game {$gameId} has no decision pending");
             }
 
-            $playedCardId = (int) $batchRow['played_card_id'];
-            $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
-                ->execute(['id' => $batchRow['id']]);
-            $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
+            $decisionRow = $this->activePendingDecision((int) $batchRow['id']);
+            if ($decisionRow === null || (int) $decisionRow['target_game_player_id'] !== $gamePlayerId) {
+                throw new GameStateException("Player {$gamePlayerId} has no decision pending in game {$gameId}");
+            }
 
-            if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
-                // Enthusiasm's/Passion's own scoring-time decision (see
-                // scoreRoundAndAdvance()) rather than a mid-play one --
-                // resolved entirely differently: no MoodPlayService chain
-                // to resume, just either the next scoring decision still
-                // outstanding this round, or (once none remain) the same
-                // score/persist/advance tail that would have run
-                // immediately if no decision had ever been needed.
+            $field = json_decode((string) $decisionRow['field'], true);
+            $answerKey = $field['key'];
+
+            $pdo = Connection::get();
+            $pdo->beginTransaction();
+
+            try {
+                $pdo->prepare('UPDATE game_pending_decisions SET answer = :answer, resolved_at = NOW() WHERE id = :id')
+                    ->execute([
+                        'answer' => json_encode([$answerKey => $choices[$answerKey] ?? null]),
+                        'id' => $decisionRow['id'],
+                    ]);
+
+                $remainingStmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL'
+                );
+                $remainingStmt->execute(['batch_id' => $batchRow['id']]);
+
+                if (((int) $remainingStmt->fetchColumn()) > 0) {
+                    // Other targets in this batch (e.g. Disillusionment's/
+                    // Suspicion's remaining players) still haven't answered.
+                    $pdo->commit();
+
+                    return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+                }
+
+                $playedCardId = (int) $batchRow['played_card_id'];
+                $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
+                    ->execute(['id' => $batchRow['id']]);
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
+
+                if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
+                    // Enthusiasm's/Passion's own scoring-time decision (see
+                    // scoreRoundAndAdvance()) rather than a mid-play one --
+                    // resolved entirely differently: no MoodPlayService chain
+                    // to resume, just either the next scoring decision still
+                    // outstanding this round, or (once none remain) the same
+                    // score/persist/advance tail that would have run
+                    // immediately if no decision had ever been needed.
+                    $state = $this->boardStates->load($gameId);
+                    $turnOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
+
+                    $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
+                    if ($nextDecision !== null) {
+                        $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
+                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], []);
+
+                        $pdo->commit();
+
+                        return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+                    }
+
+                    $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
+                    $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions);
+                    $pdo->commit();
+
+                    return $result;
+                }
+
+                $answers = $this->collectAnswers((int) $batchRow['id']);
                 $state = $this->boardStates->load($gameId);
-                $turnOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
+                $topLevelChoices = new PlayerChoices((array) json_decode((string) $batchRow['top_level_choices'], true));
+                $invocationChoices = new PlayerChoices((array) json_decode((string) $batchRow['invocation_choices'], true));
+                $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
+                $invocationSeq = (int) $batchRow['invocation_seq'];
 
-                $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
-                if ($nextDecision !== null) {
-                    $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                    $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], []);
+                $result = $this->plays->resolvePendingDecisions(
+                    $state,
+                    $playedCardId,
+                    $initiatingPlayerId,
+                    $topLevelChoices,
+                    $invocationChoices,
+                    $invocationSeq,
+                    $answers,
+                );
+
+                if ($result->isPending) {
+                    // Resolving the last decision uncovered another one --
+                    // e.g. a Duplicity repeat of this same card also needing a
+                    // real opponent decision, or (now that Duplicity's repeat
+                    // is itself a pending decision) the acting player's own
+                    // "repeat again?" offer. $result->invocationChoices is
+                    // exactly the choices bag that new pause's own invocation
+                    // was given -- see PlayResult's own docblock for why this
+                    // can't be re-derived from any fixed location in
+                    // top_level_choices anymore. top_level_choices itself is
+                    // carried forward unchanged, same as the original play.
+                    // Already inside this method's own transaction, so this
+                    // just writes rows -- no nested beginTransaction().
+                    $this->boardStates->save($gameId, $state);
+                    $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                    $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
+                    $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, []);
 
                     $pdo->commit();
 
                     return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
                 }
 
-                $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
-                $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions);
                 $pdo->commit();
-
-                return $result;
+            } catch (Throwable $e) {
+                $pdo->rollBack();
+                throw $e;
             }
 
-            $answers = $this->collectAnswers((int) $batchRow['id']);
-            $state = $this->boardStates->load($gameId);
-            $topLevelChoices = new PlayerChoices((array) json_decode((string) $batchRow['top_level_choices'], true));
-            $invocationChoices = new PlayerChoices((array) json_decode((string) $batchRow['invocation_choices'], true));
-            $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
-            $invocationSeq = (int) $batchRow['invocation_seq'];
+            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $topLevelChoices->toArray());
 
-            $result = $this->plays->resolvePendingDecisions(
-                $state,
-                $playedCardId,
-                $initiatingPlayerId,
-                $topLevelChoices,
-                $invocationChoices,
-                $invocationSeq,
-                $answers,
-            );
-
-            if ($result->isPending) {
-                // Resolving the last decision uncovered another one --
-                // e.g. a Duplicity repeat of this same card also needing a
-                // real opponent decision, or (now that Duplicity's repeat
-                // is itself a pending decision) the acting player's own
-                // "repeat again?" offer. $result->invocationChoices is
-                // exactly the choices bag that new pause's own invocation
-                // was given -- see PlayResult's own docblock for why this
-                // can't be re-derived from any fixed location in
-                // top_level_choices anymore. top_level_choices itself is
-                // carried forward unchanged, same as the original play.
-                // Already inside this method's own transaction, so this
-                // just writes rows -- no nested beginTransaction().
-                $this->boardStates->save($gameId, $state);
-                $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
-                $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
-                $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, []);
-
-                $pdo->commit();
-
-                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
-            }
-
-            $pdo->commit();
-        } catch (Throwable $e) {
-            $pdo->rollBack();
-            throw $e;
-        }
-
-        $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $topLevelChoices->toArray());
-
-        return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
+            return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
+        });
     }
 
     /**

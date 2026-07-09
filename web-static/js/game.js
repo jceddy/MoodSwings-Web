@@ -400,6 +400,14 @@
             boardError.hidden = false;
             return;
         }
+        // Passing is always valid even with a hand card's choices panel
+        // still open (considered playing it, decided not to) -- close it
+        // the same way submitPlay()'s own success path does, since
+        // otherwise polling stays suppressed indefinitely (see
+        // showBoard()'s pollTimer) and the board silently goes stale
+        // until the player happens to notice and clicks Cancel.
+        selectedCard = null;
+        choicesPanel.hidden = true;
         announceOutcome(body);
         await refreshBoard();
     });
@@ -974,7 +982,7 @@
         const widget = document.getElementById('choice-field-' + field.key);
         const hasValue = fieldHasValue(widget, field);
 
-        // Every one of the seven original opponent-decision types is
+        // Every one of the nine original opponent-decision types is
         // required: true (Compulsion's target must choose *a* card, no
         // decline), so this never had to distinguish the two cases before
         // -- Enthusiasm's/Passion's own scoring-time decisions are the
