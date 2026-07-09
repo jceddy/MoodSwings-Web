@@ -980,7 +980,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 101, new PlayerChoices(['target_mood_ids' => [9]]));
     }
 
-    public function testFuryDiscardsEachPlayersHighestValueMood(): void
+    public function testFuryPausesForEachPlayersOwnChoiceThenDiscardsTheChosenHighestValueMood(): void
     {
         $state = $this->boardState(hands: [1 => [91, 3], 2 => [9], 3 => [7]]);
         $state->moveHandToInPlay(1, 3); // Charity, value 1 -- player 1's lower-value mood
@@ -988,13 +988,76 @@ final class MoodPlayServiceTest extends TestCase
         $state->moveHandToInPlay(3, 7); // Courage, value 1
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 91, new PlayerChoices([])); // Fury itself, value 4
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 91, $choices); // Fury itself, value 4
+
+        self::assertTrue($result->isPending);
+        self::assertCount(3, $result->pendingDecisions);
+        self::assertSame('discarded_mood_id_1', $result->pendingDecisions[0]->key);
+        self::assertSame(1, $result->pendingDecisions[0]->targetPlayerId);
+        self::assertSame([91], $result->pendingDecisions[0]->field['candidate_card_ids']); // only Fury itself -- 4 > Charity's 1
+        self::assertSame('discarded_mood_id_2', $result->pendingDecisions[1]->key);
+        self::assertSame([9], $result->pendingDecisions[1]->field['candidate_card_ids']);
+        self::assertSame('discarded_mood_id_3', $result->pendingDecisions[2]->key);
+        self::assertSame([7], $result->pendingDecisions[2]->field['candidate_card_ids']);
+        self::assertTrue($state->isInPlay(91)); // nothing discarded yet -- still waiting on every answer
+        self::assertTrue($state->isInPlay(3));
+        self::assertTrue($state->isInPlay(9));
+        self::assertTrue($state->isInPlay(7));
+
+        $this->plays->resolvePendingDecisions(
+            $state, 91, 1, $choices, $choices, 0,
+            [
+                'discarded_mood_id_1' => new PlayerChoices(['discarded_mood_id_1' => 91]),
+                'discarded_mood_id_2' => new PlayerChoices(['discarded_mood_id_2' => 9]),
+                'discarded_mood_id_3' => new PlayerChoices(['discarded_mood_id_3' => 7]),
+            ],
+        );
 
         self::assertFalse($state->isInPlay(91)); // player 1's highest (4 > 1)
         self::assertTrue($state->isInPlay(3)); // spared -- not player 1's highest
         self::assertFalse($state->isInPlay(9));
         self::assertFalse($state->isInPlay(7));
         self::assertEqualsCanonicalizing([91, 9, 7], $state->discardPile());
+    }
+
+    public function testFuryOffersEveryMoodTiedForHighestAsACandidateAndAcceptsEitherOne(): void
+    {
+        $state = $this->boardState(hands: [1 => [91, 9, 30]]);
+        $state->moveHandToInPlay(1, 9); // Discipline, value 6
+        $state->moveHandToInPlay(1, 30); // Bashfulness, value 6 -- tied with Discipline, both above Fury's 4
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 91, $choices); // Fury itself, value 4
+
+        self::assertCount(1, $result->pendingDecisions);
+        self::assertEqualsCanonicalizing([9, 30], $result->pendingDecisions[0]->field['candidate_card_ids']);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 91, 1, $choices, $choices, 0,
+            ['discarded_mood_id_1' => new PlayerChoices(['discarded_mood_id_1' => 30])],
+        );
+
+        self::assertTrue($state->isInPlay(91)); // spared -- not tied for player 1's highest
+        self::assertTrue($state->isInPlay(9)); // spared -- the other tied candidate, not the one chosen
+        self::assertFalse($state->isInPlay(30)); // the tied mood the player actually chose
+    }
+
+    public function testFuryRejectsAChosenMoodNotTiedForThatPlayersHighestValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [91, 3]]);
+        $state->moveHandToInPlay(1, 3); // Charity, value 1 -- not player 1's highest (Fury is 4)
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $this->plays->playMood($state, 1, 91, $choices);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->resolvePendingDecisions(
+            $state, 91, 1, $choices, $choices, 0,
+            ['discarded_mood_id_1' => new PlayerChoices(['discarded_mood_id_1' => 3])],
+        );
     }
 
     public function testBravadoDiscardsAnotherMoodAndGrantsAnExtraPlay(): void
