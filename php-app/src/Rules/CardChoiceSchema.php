@@ -211,8 +211,8 @@ final class CardChoiceSchema
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to return to hand (value 3 or less, up to 2; only if you returned a mood above)', 'filter' => ['max_value' => 3], 'count' => ['max' => 2]],
         ],
         'contempt' => [
-            ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['single', 'all'], 'label' => 'Suppress one qualifying mood, or all of them'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to suppress (green or white; required if mode is single)', 'filter' => ['colors' => ['green', 'white']]],
+            ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['single', 'all'], 'label' => 'Put one qualifying mood into the discard pile, or all of them'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to put into the discard pile (green or white; required if mode is single)', 'filter' => ['colors' => ['green', 'white']]],
         ],
         'ambition' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (unlocks an extra play)'],
