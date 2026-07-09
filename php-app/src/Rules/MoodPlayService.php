@@ -218,10 +218,19 @@ final class MoodPlayService
      * repeats have happened so far (1 = after the first repeat, etc.), so
      * comparing it against the current count of such moods in play caps
      * the chain at exactly that many, however many there turn out to be,
-     * rather than the old hard "exactly one, ever" limit. Never offered
-     * for Duplicity's own just-played instance (repeating its own "grant
-     * an extra play" via itself would be a strange self-loop the printed
-     * text doesn't seem to intend).
+     * rather than the old hard "exactly one, ever" limit.
+     *
+     * The printed text triggers on "ANOTHER mood" -- so a Duplicity-
+     * effective source never offers to repeat its OWN just-played
+     * instance via itself, but a *different*, already-in-play
+     * Duplicity-effective source still can (e.g. playing the real
+     * Duplicity while a Creativity is already copying one lets that
+     * Creativity offer one repeat of the just-played Duplicity's own
+     * "grant an extra play" effect). Since the just-played card itself
+     * is already counted in $duplicitySources once it's a
+     * Duplicity-effective card in its own right, subtracting one from the
+     * eligible count in that case excludes only itself, not any other
+     * source.
      *
      * Rather than a flat pre-submitted boolean (the old design), this is
      * itself a pending decision targeting the ACTING player -- see
@@ -242,8 +251,9 @@ final class MoodPlayService
     ): PlayResult {
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         $duplicitySources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'duplicity');
+        $eligibleSources = $effectiveEffectKey === 'duplicity' ? $duplicitySources - 1 : $duplicitySources;
 
-        if ($effectiveEffectKey !== 'duplicity' && $invocationSeq < $duplicitySources) {
+        if ($invocationSeq < $eligibleSources) {
             // The repeat-offer's own answer is resolved directly by
             // resolveDuplicityRepeatOffer() below, which never reads the
             // batch's stored invocation_choices -- $topLevelChoices here

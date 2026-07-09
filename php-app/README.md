@@ -364,13 +364,19 @@ same `PendingDecisionRequest`/`game_pending_decision_batches` machinery
 built for the seven `RequiresOpponentDecision` cards above, except the
 `PendingDecisionRequest`'s `targetPlayerId` is the *acting* player
 themselves rather than an opponent. `MoodPlayService::continueAfterPlayingChain()`
-offers the repeat whenever `$invocationSeq` is still below
-`BoardState::countMoodsInPlayWithEffectiveKey($playerId, 'duplicity')` — the
-number of the acting player's own in-play moods currently
-Duplicity-effective (a real Duplicity, or a Creativity currently copying
-one, via `effectiveCardId()`) — so each independent source in play grants
-its own chained repeat (a real Duplicity plus a Creativity copying it
-grants two), rather than the old hard one-repeat-ever cap. The pending
+offers the repeat whenever `$invocationSeq` is still below the number of
+the acting player's own in-play moods currently Duplicity-effective
+(`BoardState::countMoodsInPlayWithEffectiveKey($playerId, 'duplicity')` —
+a real Duplicity, or a Creativity currently copying one, via
+`effectiveCardId()`) — so each independent source in play grants its own
+chained repeat, rather than the old hard one-repeat-ever cap. The printed
+text triggers on playing *another* mood, so when the just-played card is
+itself Duplicity-effective it's excluded from that count by one (it can
+never repeat its own instance via itself), but every *other*
+Duplicity-effective source already in play still offers its own repeat —
+e.g. playing the real Duplicity while a Creativity already copies one
+still nets two extra-play grants total, one from the original play and
+one from the Creativity's repeat of it. The pending
 decision's `field` is a `type: 'nested'` shape — a `repeat` boolean plus a
 `choices` sub-field wrapping the played card's own `afterPlayingFields()`
 (`stage: 'cost'` fields filtered out, since a repeat only re-invokes
