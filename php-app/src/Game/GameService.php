@@ -8,11 +8,14 @@ use MoodSwings\Database\Connection;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
+use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodPlayService;
+use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
 use PDO;
+use PDOException;
 use Throwable;
 
 /**
@@ -49,6 +52,19 @@ final class GameService
     private const TOTAL_CARDS = 133;
     private const MIN_PLAYERS = 2;
     private const MAX_PLAYERS = 4;
+
+    /**
+     * Enthusiasm's/Passion's own scoring-time decisions -- see
+     * RoundScorer's docblock for why these two (unlike Exhilaration/
+     * Bliss) need an explicit answer rather than being applied
+     * automatically. Distinguished from every other decision_type by
+     * this list rather than a separate batch-level column, since a
+     * scoring decision is otherwise stored the same way as a mid-play one
+     * (see writeScoringDecisionBatch()).
+     */
+    private const ENTHUSIASM_DECISION_TYPE = 'enthusiasm_extra_score';
+    private const PASSION_DECISION_TYPE = 'passion_score_opponent_mood';
+    private const SCORING_DECISION_TYPES = [self::ENTHUSIASM_DECISION_TYPE, self::PASSION_DECISION_TYPE];
 
     /** @var ?array<int, string> card_id => name, memoized per instance by cardCatalogNames() */
     private ?array $cardNames = null;
@@ -272,12 +288,44 @@ final class GameService
                 return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
             }
 
+            $playedCardId = (int) $batchRow['played_card_id'];
+            $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
+                ->execute(['id' => $batchRow['id']]);
+            $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
+
+            if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
+                // Enthusiasm's/Passion's own scoring-time decision (see
+                // scoreRoundAndAdvance()) rather than a mid-play one --
+                // resolved entirely differently: no MoodPlayService chain
+                // to resume, just either the next scoring decision still
+                // outstanding this round, or (once none remain) the same
+                // score/persist/advance tail that would have run
+                // immediately if no decision had ever been needed.
+                $state = $this->boardStates->load($gameId);
+                $turnOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
+
+                $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
+                if ($nextDecision !== null) {
+                    $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
+                    $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], []);
+
+                    $pdo->commit();
+
+                    return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+                }
+
+                $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
+                $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions);
+                $pdo->commit();
+
+                return $result;
+            }
+
             $answers = $this->collectAnswers((int) $batchRow['id']);
             $state = $this->boardStates->load($gameId);
             $topLevelChoices = new PlayerChoices((array) json_decode((string) $batchRow['top_level_choices'], true));
             $invocationChoices = new PlayerChoices((array) json_decode((string) $batchRow['invocation_choices'], true));
             $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
-            $playedCardId = (int) $batchRow['played_card_id'];
             $invocationSeq = (int) $batchRow['invocation_seq'];
 
             $result = $this->plays->resolvePendingDecisions(
@@ -289,10 +337,6 @@ final class GameService
                 $invocationSeq,
                 $answers,
             );
-
-            $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
-                ->execute(['id' => $batchRow['id']]);
-            $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
 
             if ($result->isPending) {
                 // Resolving the last decision uncovered another one --
@@ -386,8 +430,18 @@ final class GameService
      * object until the writes below persist it, and reloading fresh would
      * silently lose whatever the round's very last play just set.
      *
+     * Before computing a final score, checks whether any Enthusiasm/
+     * Passion owner still needs to answer this round's scoring decision
+     * (see RoundScorer's own docblock for why those two, unlike
+     * Exhilaration/Bliss, can't just be applied automatically) -- if so,
+     * this pauses the round exactly like a mid-play decision, one card at
+     * a time, and finishScoringAndAdvance() only actually runs once
+     * nextUnresolvedScoringDecision() finds nothing left to ask (either
+     * because none was ever needed, or because respondToDecision() has
+     * resumed here after the last one was answered).
+     *
      * @param int[] $turnOrder the order players took their turns this round, earliest first
-     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
     private function scoreRoundAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state): array
     {
@@ -397,85 +451,271 @@ final class GameService
             return $this->skipScoringAndAdvance($gameId, $round, $state);
         }
 
-        $scores = $this->applyScoreSwaps($state, $this->scorer->score($state));
-        $winnerId = $this->scorer->winner($scores, $turnOrder);
-        $winsAwarded = $this->consumeExtraWinMarker($state);
+        $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
+        if ($nextDecision !== null) {
+            $pdo = Connection::get();
+            $pdo->beginTransaction();
+
+            try {
+                $this->boardStates->save($gameId, $state);
+                $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
+                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], []);
+
+                $pdo->commit();
+            } catch (Throwable $e) {
+                $pdo->rollBack();
+                throw $e;
+            }
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        }
+
+        $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
         try {
-            $insertScore = $pdo->prepare(
-                'INSERT INTO game_round_scores (game_round_id, game_player_id, score) VALUES (:round_id, :player_id, :score)'
-            );
-            foreach ($scores as $playerId => $score) {
-                $insertScore->execute(['round_id' => $roundId, 'player_id' => $playerId, 'score' => $score]);
-            }
-
-            $updateRound = $pdo->prepare(
-                "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, wins_awarded = :wins_awarded, scored_at = NOW() WHERE id = :round_id"
-            );
-            $updateRound->execute(['winner' => $winnerId, 'wins_awarded' => $winsAwarded, 'round_id' => $roundId]);
-
-            foreach (array_keys($scores) as $playerId) {
-                if ($playerId !== $winnerId) {
-                    $state->drawCard($playerId);
-                }
-            }
-            $this->applyAfterScoringHooks($state, $winnerId);
-
-            // Hurt Feelings only exists in games of 3 or more players.
-            $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($scores, $turnOrder) : null;
-
-            // Honor overrides who goes first next round regardless of who
-            // won -- see BoardState::firstPlayerOverride(). Computed (and
-            // computeFreshGrants() run) even if the game is about to
-            // complete below and this ends up unused, so any banked grant
-            // it consumes is captured by the same save() call either way.
-            $nextFirstPlayer = $state->firstPlayerOverride() ?? $winnerId;
-            $nextRoundGrants = $this->computeFreshGrants($state, $nextFirstPlayer, $hurtFeelingsHolder === $nextFirstPlayer ? 2 : 1);
-            $this->boardStates->save($gameId, $state);
-
-            $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
-                'scores' => $scores,
-                'winner_game_player_id' => $winnerId,
-            ]);
-
-            $totalWins = $this->totalWinsFor($gameId, $winnerId);
-            $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
-
-            if ($totalWins >= $winsNeeded) {
-                $completeGame = $pdo->prepare(
-                    "UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id"
-                );
-                $completeGame->execute(['winner' => $winnerId, 'game_id' => $gameId]);
-
-                $pdo->commit();
-
-                return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
-            }
-
-            $insertRound = $pdo->prepare(
-                "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
-                 VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
-            );
-            $insertRound->execute([
-                'game_id' => $gameId,
-                'round_number' => (int) $round['round_number'] + 1,
-                'first_player' => $nextFirstPlayer,
-                'hurt_feelings' => $hurtFeelingsHolder,
-                'first_player_turn' => $nextFirstPlayer,
-                'plays_remaining' => count($nextRoundGrants),
-                'pending_play_grants' => json_encode($nextRoundGrants),
-            ]);
-
+            $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions);
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();
             throw $e;
         }
 
+        return $result;
+    }
+
+    /**
+     * The actual score/persist/advance logic -- extracted from
+     * scoreRoundAndAdvance() so it can run either inside that method's own
+     * transaction (the common case, no scoring decision needed) or inside
+     * respondToDecision()'s already-open one (once the last outstanding
+     * scoring decision resolves). The caller is responsible for the
+     * transaction; this method never begins or commits one of its own.
+     *
+     * @param int[] $turnOrder
+     * @param array<int, int> $scoringDecisions cardId => resolved bonus, see RoundScorer::score()
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     */
+    private function finishScoringAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state, array $scoringDecisions): array
+    {
+        $roundId = (int) $round['id'];
+        $pdo = Connection::get();
+
+        $scores = $this->applyScoreSwaps($state, $this->scorer->score($state, $scoringDecisions));
+        $winnerId = $this->scorer->winner($scores, $turnOrder);
+        $winsAwarded = $this->consumeExtraWinMarker($state);
+
+        $insertScore = $pdo->prepare(
+            'INSERT INTO game_round_scores (game_round_id, game_player_id, score) VALUES (:round_id, :player_id, :score)'
+        );
+        foreach ($scores as $playerId => $score) {
+            $insertScore->execute(['round_id' => $roundId, 'player_id' => $playerId, 'score' => $score]);
+        }
+
+        $updateRound = $pdo->prepare(
+            "UPDATE game_rounds SET status = 'scored', winner_game_player_id = :winner, wins_awarded = :wins_awarded, scored_at = NOW() WHERE id = :round_id"
+        );
+        $updateRound->execute(['winner' => $winnerId, 'wins_awarded' => $winsAwarded, 'round_id' => $roundId]);
+
+        foreach (array_keys($scores) as $playerId) {
+            if ($playerId !== $winnerId) {
+                $state->drawCard($playerId);
+            }
+        }
+        $this->applyAfterScoringHooks($state, $winnerId);
+
+        // Hurt Feelings only exists in games of 3 or more players.
+        $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($scores, $turnOrder) : null;
+
+        // Honor overrides who goes first next round regardless of who
+        // won -- see BoardState::firstPlayerOverride(). Computed (and
+        // computeFreshGrants() run) even if the game is about to
+        // complete below and this ends up unused, so any banked grant
+        // it consumes is captured by the same save() call either way.
+        $nextFirstPlayer = $state->firstPlayerOverride() ?? $winnerId;
+        $nextRoundGrants = $this->computeFreshGrants($state, $nextFirstPlayer, $hurtFeelingsHolder === $nextFirstPlayer ? 2 : 1);
+        $this->boardStates->save($gameId, $state);
+
+        $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
+            'scores' => $scores,
+            'winner_game_player_id' => $winnerId,
+        ]);
+
+        $totalWins = $this->totalWinsFor($gameId, $winnerId);
+        $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
+
+        if ($totalWins >= $winsNeeded) {
+            $completeGame = $pdo->prepare(
+                "UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id"
+            );
+            $completeGame->execute(['winner' => $winnerId, 'game_id' => $gameId]);
+
+            return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
+        }
+
+        $insertRound = $pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, hurt_feelings_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+             VALUES (:game_id, :round_number, :first_player, :hurt_feelings, :first_player_turn, :plays_remaining, :pending_play_grants, 'in_progress')"
+        );
+        $insertRound->execute([
+            'game_id' => $gameId,
+            'round_number' => (int) $round['round_number'] + 1,
+            'first_player' => $nextFirstPlayer,
+            'hurt_feelings' => $hurtFeelingsHolder,
+            'first_player_turn' => $nextFirstPlayer,
+            'plays_remaining' => count($nextRoundGrants),
+            'pending_play_grants' => json_encode($nextRoundGrants),
+        ]);
+
         return ['round_scored' => true, 'game_completed' => false];
+    }
+
+    /**
+     * The next Enthusiasm/Passion mood in play whose owner hasn't yet
+     * answered this round's scoring decision for it, in turn order (then
+     * by in-play iteration order for a player with more than one) -- or
+     * null once every one has been asked. Recomputed fresh from live
+     * board state plus whatever's already resolved in the database each
+     * time, rather than persisted as an explicit queue, the same way the
+     * mid-play Duplicity repeat chain recomputes its own remaining count
+     * fresh at every step instead of storing it.
+     *
+     * @param int[] $turnOrder
+     * @return ?array{cardId: int, ownerId: int, effectKey: string}
+     */
+    private function nextUnresolvedScoringDecision(BoardState $state, int $roundId, array $turnOrder): ?array
+    {
+        $alreadyResolved = $this->resolvedScoringCardIds($roundId);
+
+        foreach ($turnOrder as $playerId) {
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+                if (in_array($effectKey, RoundScorer::DECISION_SCORE_MULTIPLYING_EFFECT_KEYS, true)
+                    && !in_array($mood->cardId, $alreadyResolved, true)
+                ) {
+                    return ['cardId' => $mood->cardId, 'ownerId' => $playerId, 'effectKey' => $effectKey];
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** @return int[] card ids of every scoring decision already resolved this round */
+    private function resolvedScoringCardIds(int $roundId): array
+    {
+        $placeholders = implode(',', array_fill(0, count(self::SCORING_DECISION_TYPES), '?'));
+        $stmt = Connection::get()->prepare(
+            "SELECT b.played_card_id FROM game_pending_decision_batches b
+             JOIN game_pending_decisions d ON d.batch_id = b.id
+             WHERE b.game_round_id = ? AND b.resolved_at IS NOT NULL AND d.decision_type IN ({$placeholders})"
+        );
+        $stmt->execute([$roundId, ...self::SCORING_DECISION_TYPES]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Every resolved Enthusiasm/Passion decision for this round,
+     * translated from its raw stored answer into the actual bonus amount
+     * RoundScorer::score() adds -- see resolveScoringDecisionBonus().
+     *
+     * @return array<int, int> cardId => resolved bonus amount
+     */
+    private function resolvedScoringDecisionBonuses(BoardState $state, int $roundId): array
+    {
+        $placeholders = implode(',', array_fill(0, count(self::SCORING_DECISION_TYPES), '?'));
+        $stmt = Connection::get()->prepare(
+            "SELECT b.played_card_id, d.decision_type, d.answer FROM game_pending_decision_batches b
+             JOIN game_pending_decisions d ON d.batch_id = b.id
+             WHERE b.game_round_id = ? AND b.resolved_at IS NOT NULL AND d.decision_type IN ({$placeholders})"
+        );
+        $stmt->execute([$roundId, ...self::SCORING_DECISION_TYPES]);
+
+        $bonuses = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $cardId = (int) $row['played_card_id'];
+            $effectKey = $row['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
+            $answer = new PlayerChoices((array) json_decode((string) $row['answer'], true));
+            $bonuses[$cardId] = $this->resolveScoringDecisionBonus($state, $cardId, $effectKey, $answer);
+        }
+
+        return $bonuses;
+    }
+
+    /**
+     * Translates one Enthusiasm/Passion decision's raw stored answer into
+     * the bonus amount it resolves to. Enthusiasm's is a plain take-or-
+     * decline: accepting always means the owner's own current highest
+     * mood value (recomputed now, not whatever it was when the decision
+     * was first asked, in case an earlier-resolved decision this same
+     * round changed it -- though nothing currently in the pool can).
+     * Passion's target_mood_id is validated defensively here (must still
+     * be an in-play mood owned by someone else) even though the field's
+     * own scope already excludes the owner's own moods from what a
+     * well-behaved client would ever submit.
+     */
+    private function resolveScoringDecisionBonus(BoardState $state, int $cardId, string $effectKey, PlayerChoices $answer): int
+    {
+        if ($effectKey === 'enthusiasm') {
+            return $answer->bool('take_bonus') ? $this->scorer->highestOwnMoodValue($state, $state->ownerOf($cardId)) : 0;
+        }
+
+        $targetMoodId = $answer->int('target_mood_id');
+        if ($targetMoodId === null) {
+            return 0;
+        }
+        if (!$state->isInPlay($targetMoodId) || $state->ownerOf($targetMoodId) === $state->ownerOf($cardId)) {
+            throw new InvalidChoiceException("Card {$targetMoodId} is not a valid opponent mood for Passion to score");
+        }
+
+        return $state->valueOf($targetMoodId);
+    }
+
+    /**
+     * @param array{cardId: int, ownerId: int, effectKey: string} $decision
+     */
+    private function writeScoringDecisionBatch(int $gameId, int $roundId, BoardState $state, array $decision): void
+    {
+        $request = $this->scoringDecisionRequest($state, $decision);
+        // Reuses writePendingBatch()'s exact machinery (including its
+        // race-condition protection, see migration 0011) by shaping this
+        // as an ordinary PlayResult::pending() -- invocation_seq and the
+        // two choices bags are meaningless for a scoring decision and
+        // never read back (see respondToDecision()'s own scoring branch),
+        // the same harmless-placeholder precedent Duplicity's repeat
+        // offer already established.
+        $result = PlayResult::pending([$request], $decision['cardId'], 0, new PlayerChoices([]));
+
+        $this->writePendingBatch($gameId, $roundId, $decision['ownerId'], new PlayerChoices([]), new PlayerChoices([]), $result);
+    }
+
+    /**
+     * @param array{cardId: int, ownerId: int, effectKey: string} $decision
+     */
+    private function scoringDecisionRequest(BoardState $state, array $decision): PendingDecisionRequest
+    {
+        if ($decision['effectKey'] === 'enthusiasm') {
+            $template = CardChoiceSchema::reactionTemplate('enthusiasm');
+
+            return new PendingDecisionRequest(
+                key: $template['key'],
+                targetPlayerId: $decision['ownerId'],
+                decisionType: self::ENTHUSIASM_DECISION_TYPE,
+                field: $template,
+            );
+        }
+
+        $template = CardChoiceSchema::reactionTemplate('passion');
+
+        return new PendingDecisionRequest(
+            key: $template['key'],
+            targetPlayerId: $decision['ownerId'],
+            decisionType: self::PASSION_DECISION_TYPE,
+            field: $template,
+        );
     }
 
     /**
@@ -873,6 +1113,7 @@ final class GameService
                 'banned_colors' => $state->bannedColorsThisRound(),
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
                 'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId),
+                'scoring_preview' => $this->serializeScoringPreview($state, (int) $roundRow['id']),
             ];
             $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
         }
@@ -1204,6 +1445,50 @@ final class GameService
     }
 
     /**
+     * The round's live score-so-far (see RoundScorer::score()'s partial-
+     * preview support: an unanswered Enthusiasm/Passion decision just
+     * reads as declined-for-now) plus any active Sneakiness swap targets,
+     * shown alongside an outstanding Enthusiasm/Passion decision so
+     * whoever's answering it -- and everyone else watching -- can reason
+     * about whether taking the bonus actually helps them. Without this,
+     * "you may score one of your opponents' moods" is close to
+     * meaningless to decide on blind, especially once a swap is in play.
+     * Every viewer sees the same thing (final round scores aren't hidden
+     * information the way an opponent's hand is), and it's null whenever
+     * the round has no active scoring decision, since it's only relevant
+     * while one's outstanding.
+     *
+     * @return ?array{scores: array<int, int>, sneakiness_swaps: array<int, array{game_player_id: int, swaps_with_game_player_id: int}>}
+     */
+    private function serializeScoringPreview(BoardState $state, int $roundId): ?array
+    {
+        $batchRow = $this->activePendingBatch($roundId);
+        if ($batchRow === null) {
+            return null;
+        }
+
+        $decisionRow = $this->activePendingDecision((int) $batchRow['id']);
+        if ($decisionRow === null || !in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
+            return null;
+        }
+
+        $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
+
+        $swaps = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $swapWithPlayerId = $state->effectState($mood->cardId, 'swapScoreWithPlayerId');
+            if ($swapWithPlayerId !== null) {
+                $swaps[] = ['game_player_id' => $mood->ownerId, 'swaps_with_game_player_id' => (int) $swapWithPlayerId];
+            }
+        }
+
+        return [
+            'scores' => $this->scorer->score($state, $scoringDecisions),
+            'sneakiness_swaps' => $swaps,
+        ];
+    }
+
+    /**
      * Every row in $batchId, reconstructed as PlayerChoices keyed by each
      * row's own field key -- see RequiresOpponentDecision::
      * resolveDecisions()'s $answers parameter.
@@ -1232,6 +1517,20 @@ final class GameService
      * respondToDecision() both do), so this does no transaction management
      * of its own.
      */
+    /**
+     * assertNoPendingDecision() is a plain SELECT before this method's own
+     * INSERT, so two requests for the same round (the same player's two
+     * open tabs, or a play racing a respondToDecision() that itself
+     * uncovers a chained pending decision) can both pass that check before
+     * either one's batch actually exists. The database closes the window
+     * this application-level check can't: migration 0011's
+     * uq_pending_batches_one_open_per_round unique index allows any number
+     * of resolved batches per round but at most one open (unresolved) one,
+     * so the loser of the race gets a duplicate-key error here instead of
+     * silently creating a second, simultaneously-open batch. Translated
+     * into the same GameStateException assertNoPendingDecision() throws
+     * for the non-racing case, so both surface identically to the caller.
+     */
     private function writePendingBatch(
         int $gameId,
         int $roundId,
@@ -1247,15 +1546,23 @@ final class GameService
                 (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices)
              VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices)'
         );
-        $insertBatch->execute([
-            'game_id' => $gameId,
-            'round_id' => $roundId,
-            'played_card_id' => $result->playedCardId,
-            'invocation_seq' => $result->invocationSeq,
-            'initiator' => $initiatingPlayerId,
-            'top_level_choices' => json_encode($topLevelChoices->toArray()),
-            'invocation_choices' => json_encode($invocationChoices->toArray()),
-        ]);
+
+        try {
+            $insertBatch->execute([
+                'game_id' => $gameId,
+                'round_id' => $roundId,
+                'played_card_id' => $result->playedCardId,
+                'invocation_seq' => $result->invocationSeq,
+                'initiator' => $initiatingPlayerId,
+                'top_level_choices' => json_encode($topLevelChoices->toArray()),
+                'invocation_choices' => json_encode($invocationChoices->toArray()),
+            ]);
+        } catch (PDOException $e) {
+            if ($e->getCode() === '23000') {
+                throw new GameStateException("Round {$roundId} has a decision still pending -- no one can play or pass until it's answered");
+            }
+            throw $e;
+        }
         $batchId = (int) $pdo->lastInsertId();
 
         $insertDecision = $pdo->prepare(

@@ -116,7 +116,19 @@ routed to the PHP app).
     than a single field, which the response panel renders the same way
     the ordinary choices panel already renders nested fields. There's no
     timeout — if a targeted player (including yourself, for a Duplicity
-    repeat) goes AFK the round just stays paused.
+    repeat) goes AFK the round just stays paused. Enthusiasm's and
+    Passion's own "you may" scoring bonuses use this same pause, but
+    triggered by the round ending rather than by a play: unlike
+    Exhilaration/Bliss (no "may" in their printed text, so always applied
+    automatically), taking Enthusiasm's/Passion's bonus isn't always
+    correct — a card like Sneakiness swaps its owner's whole final score
+    with a chosen opponent's, so a bigger pre-swap score can just mean
+    handing your opponent more of one once the swap lands. Since that's
+    close to impossible to reason about blind, `round.scoring_preview`
+    (present only while one of these is being decided) shows every
+    player's running score-so-far plus who's swapping with whom, right
+    above the response panel, the same way suppression info is shown
+    before you decide how to respond to a card you don't recognize.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
