@@ -54,12 +54,21 @@ routed to the PHP app).
     card can't be discarded twice. Guile's and Regret's mandatory discard
     cost is excluded from their nested repeat form (a repeat only re-runs
     the after-playing effect, not the cost to play), leaving just their
-    target-mood field. Creativity's panel instead shows a dropdown to play
-    it as an exact copy of any mood currently in play (any player's) —
-    left blank, it's just a blue card worth 0; because that choice
-    resolves server-side in the same request, Creativity never offers a
-    Duplicity repeat option of its own (see `php-app/README.md` for the
-    same gap noted from the server side). Each card's `is_playable` flag
+    target-mood field. Creativity's panel shows a dropdown to play it as
+    an exact copy of any mood currently in play (any player's) — left
+    blank, it's just a blue card worth 0. Picking one dynamically swaps in
+    that mood's own fields (its own "to play" cost, if any, and its own
+    after-playing choices — e.g. copying Compulsion adds its
+    `target_player_id` field, copying Guile adds both its 2-card discard
+    cost and its `target_mood_id`), plus a repeat checkbox if you have
+    Duplicity in play and the copied mood has its own after-playing
+    ability, plus Scorn's/Validation's own reactions if you have those in
+    play and the copied mood's color/value qualifies — all precomputed
+    per candidate server-side (`copy_simulation`, see `php-app/README.md`)
+    so switching candidates needs no round trip. If the copied mood has
+    its own "to play" cost that can't currently be paid, Play stays
+    disabled with an inline message the same way an ordinary unpayable
+    card's would. Each card's `is_playable` flag
     reflects whether that *specific* card is currently legal to play — not
     just whether it's your turn at all, but whether some outstanding play
     grant this turn actually covers it (e.g. after Intimidation bounces a

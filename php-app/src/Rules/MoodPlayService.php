@@ -272,14 +272,14 @@ final class MoodPlayService
      * discard), never the specific choices passed to it, so probing with
      * an empty PlayerChoices is safe here.
      *
-     * Creativity is a documented exception: its own raw hasToPlay is
-     * always false (it has no printed cost of its own), so this can't
-     * account for whatever cost a copied card might turn out to have --
-     * copy_card_id is only chosen once the play is actually submitted,
-     * the same "resolved client-side in the same request" gap noted on
-     * Duplicity's repeat field and Scorn/Validation's reactions (see
-     * CardChoiceSchema's docblock). A doomed Creativity-copy attempt
-     * still surfaces the usual server-side rejection at submit time.
+     * Creativity is a partial exception: its own raw hasToPlay is always
+     * false (it has no printed cost of its own), so this can't account
+     * for whatever cost a copied card might turn out to have -- that's
+     * still correct here, since Creativity itself is always offered a
+     * Play button regardless of what it might end up copying.
+     * GameService's copy_simulation (via canPayCopiedToPlayCost() below)
+     * covers the narrower, copy_card_id-specific question once the panel
+     * is actually open, dynamically, without a round trip.
      */
     public function isPlayable(BoardState $state, int $playerId, int $cardId): bool
     {
@@ -299,5 +299,27 @@ final class MoodPlayService
         }
 
         return true;
+    }
+
+    /**
+     * Whether $creativityCardId (still in $playerId's hand right now,
+     * about to be played as a copy of $copiedCardId) could pay
+     * $copiedCardId's own "to play" cost -- mirrors playMood()'s own
+     * cost check exactly, including passing $creativityCardId (not
+     * $copiedCardId) as the effect's own $cardId, since that's what
+     * playMood() itself does (GuileEffect/BlissEffect's canPayToPlayCost()
+     * exclude that id from the hand -- Creativity's own id is correct
+     * there, since Creativity is what's actually being played and will
+     * occupy that hand slot). Side-effect-free and safe to call
+     * speculatively, same as isPlayable() above.
+     */
+    public function canPayCopiedToPlayCost(BoardState $state, int $playerId, int $creativityCardId, int $copiedCardId): bool
+    {
+        $row = $state->catalogRow($copiedCardId);
+        if (!$row['hasToPlay']) {
+            return true;
+        }
+
+        return $this->registry->for($row['effectKey'])->canPayToPlayCost($state, $creativityCardId, $playerId, new PlayerChoices([]));
     }
 }

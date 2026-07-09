@@ -426,6 +426,74 @@
 
     let selectedCard = null;
 
+    // Creativity's copy_card_id is the only field whose choice changes what
+    // OTHER fields the panel needs to show. Two different things happen
+    // once a copy target is picked, both mirroring exactly what
+    // MoodPlayService reads once the play actually reaches the server:
+    //  1) the copied mood's OWN fields -- its "to play" cost (e.g. Guile's
+    //     discard_card_ids) and its own after-playing choices (e.g.
+    //     Compulsion's target_player_id, Dignity's discard_card_id) -- read
+    //     from the exact same flat, top-level choices bag a normal play of
+    //     that card would use. These are already sitting on the candidate's
+    //     own serialized choice_fields (currentState.in_play), computed the
+    //     same way for every card -- no new data needed, just reused as-is.
+    //  2) reactions to the play from the ACTING PLAYER's own OTHER cards --
+    //     Duplicity's repeat-with-fresh-choices, Scorn's/Validation's
+    //     reactions -- which depend on board state (do you have Duplicity/
+    //     Scorn/Validation in play?) the client would otherwise have to
+    //     duplicate the checks for, so these come precomputed per candidate
+    //     from the server instead (copy_simulation, from
+    //     GameService::creativityCopySimulation()).
+    // creativityBaseFields is just the copy_card_id field itself -- rendered
+    // once, as a static row, and never rebuilt. Everything else Creativity's
+    // own serialized choice_fields carries (its own baseline Scorn/
+    // Validation reaction, if the viewer has one in play, matching
+    // Creativity's own raw blue color for the "you didn't copy anything"
+    // case) is creativityNoCopyExtraFields -- the fallback extras used
+    // whenever copy_card_id is blank. Both "no copy" and "copy candidate X"
+    // extras render through the same renderCreativityCopyFields() path
+    // (tracked via creativityCopyFieldNodes) so switching between them --
+    // including back to blank -- always fully replaces the previous rows
+    // rather than leaving a stale one behind with a now-wrong filter (e.g.
+    // Scorn's blue-color filter lingering after copying a white mood).
+    let creativityBaseFields = null;
+    let creativityNoCopyExtraFields = [];
+    let creativityCopyFieldNodes = [];
+
+    function renderCreativityCopyFields(fields) {
+        for (const node of creativityCopyFieldNodes) {
+            node.remove();
+        }
+        const fieldsContainer = document.getElementById('choices-fields');
+        creativityCopyFieldNodes = fields.map((field) => {
+            const row = buildFieldRow(field, selectedCard, field.key);
+            fieldsContainer.appendChild(row);
+            return row;
+        });
+    }
+
+    function handleCreativityCopyChange() {
+        const select = document.getElementById('choice-field-copy_card_id');
+        const copiedCardId = select.value ? Number(select.value) : null;
+        const copiedCard = copiedCardId !== null
+            ? currentState.in_play.find((c) => c.card_id === copiedCardId)
+            : null;
+
+        let extras;
+        if (copiedCard) {
+            const simulation = selectedCard.copy_simulation[copiedCardId];
+            extras = [...copiedCard.choice_fields, ...(simulation ? simulation.extra_fields : [])];
+            selectedCard.copy_cost_payable = simulation ? simulation.cost_payable : true;
+        } else {
+            extras = creativityNoCopyExtraFields;
+            selectedCard.copy_cost_payable = true;
+        }
+
+        selectedCard.choice_fields = [...creativityBaseFields, ...extras];
+        renderCreativityCopyFields(extras);
+        updatePlayButtonEnabled();
+    }
+
     function handleHandCardClick(card) {
         openChoicesPanel(card);
     }
@@ -686,6 +754,18 @@
             return;
         }
 
+        // Creativity only: the mood it's about to copy might have its own
+        // "to play" cost that can't currently be paid (e.g. copying Guile
+        // without two other hand cards to discard) -- is_playable above
+        // doesn't know this, since it only checks Creativity's own
+        // (nonexistent) cost. See handleCreativityCopyChange().
+        if (selectedCard.copy_cost_payable === false) {
+            validationMessage.textContent = "That mood's own cost can't be paid right now, so it can't be copied.";
+            validationMessage.hidden = false;
+            playButton.disabled = true;
+            return;
+        }
+
         const allRequiredFilled = selectedCard.choice_fields
             .filter((field) => field.required)
             .every((field) => fieldHasValue(document.getElementById('choice-field-' + field.key), field));
@@ -705,15 +785,37 @@
     }
 
     function openChoicesPanel(card) {
-        selectedCard = card;
+        const isCreativity = card.effect_key === 'creativity';
+
+        // Creativity gets its own mutable clone -- handleCreativityCopyChange()
+        // reassigns its choice_fields as copy_card_id changes, and mutating
+        // the original card object would corrupt currentState.you.hand until
+        // the next poll. Every other card is read-only, so no clone needed.
+        selectedCard = isCreativity ? { ...card, choice_fields: [...card.choice_fields] } : card;
+        selectedCard.copy_cost_payable = true;
+        creativityBaseFields = isCreativity ? card.choice_fields.filter((f) => f.key === 'copy_card_id') : null;
+        creativityNoCopyExtraFields = isCreativity ? card.choice_fields.filter((f) => f.key !== 'copy_card_id') : [];
+        creativityCopyFieldNodes = [];
+
         boardError.hidden = true;
         document.getElementById('choices-card-name').textContent = cardLabel(card);
         document.getElementById('choices-card-rules').textContent = card.rules_text;
 
         const fieldsContainer = document.getElementById('choices-fields');
         fieldsContainer.innerHTML = '';
-        for (const field of card.choice_fields) {
-            fieldsContainer.appendChild(buildFieldRow(field, card, field.key));
+        // Only copy_card_id (or, for every other card, its whole field list)
+        // renders as a static row here -- Creativity's own reaction extras
+        // render through the same renderCreativityCopyFields() path
+        // handleCreativityCopyChange() uses, so there's exactly one place
+        // that ever adds/removes them.
+        const staticFields = isCreativity ? creativityBaseFields : selectedCard.choice_fields;
+        for (const field of staticFields) {
+            const onChange = field.key === 'copy_card_id' ? handleCreativityCopyChange : undefined;
+            fieldsContainer.appendChild(buildFieldRow(field, selectedCard, field.key, onChange));
+        }
+        if (isCreativity) {
+            selectedCard.choice_fields = [...creativityBaseFields, ...creativityNoCopyExtraFields];
+            renderCreativityCopyFields(creativityNoCopyExtraFields);
         }
 
         updatePlayButtonEnabled();
@@ -722,6 +824,9 @@
 
     document.getElementById('cancel-choice-button').addEventListener('click', () => {
         selectedCard = null;
+        creativityBaseFields = null;
+        creativityNoCopyExtraFields = [];
+        creativityCopyFieldNodes = [];
         choicesPanel.hidden = true;
     });
 

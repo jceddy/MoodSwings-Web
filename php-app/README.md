@@ -381,14 +381,30 @@ same restriction server-side with `BoardState::isInPlay($copiedCardId)`,
 throwing `InvalidChoiceException` for a `copy_card_id` that isn't
 currently on the table.
 
-One remaining known gap, intentionally out of scope: Creativity's
-`copy_card_id` is resolved client-side in the same request as the rest of
-a play, so a Duplicity repeat or a Scorn/Validation reaction to a
-Creativity play can't be computed against the *copied* card's fields here
-— only Creativity's own (ability-less) ones. Gating Duplicity's repeat
-field on a card's raw `hasAfterPlaying` (false for Creativity) means
-Creativity simply never offers a repeat option, rather than offering a
-wrong one.
+Since `copy_card_id` is only chosen once Creativity's own panel is open --
+after the rest of `choice_fields` has already been computed against
+Creativity's own (ability-less) raw catalog row -- the server additionally
+precomputes, per candidate mood currently in play,
+`copy_simulation[$candidateCardId] = {extra_fields, cost_payable}`
+(`GameService::creativityCopySimulation()`), reusing the exact same
+`reactionFields()`/`duplicityFields()` this class already calls for an
+ordinary hand card, just parameterized by the *candidate's* own raw
+color/base value/catalog row instead of Creativity's. `cost_payable`
+mirrors `MoodPlayService::playMood()`'s own to-play-cost check
+(`canPayCopiedToPlayCost()`), passing Creativity's own card id -- not the
+candidate's -- as the effect's `$cardId`, matching what `payMood()` itself
+does (`GuileEffect`/`BlissEffect` exclude that id from the hand, and
+Creativity is what's actually occupying that hand slot). The client swaps
+in the matching bundle, plus the candidate's own already-serialized
+`choice_fields` (its own "to play" cost and after-playing choices, read
+from the same flat top-level `choices` bag a normal play of that card
+would use), as `copy_card_id` changes -- see `web-static/README.md`.
+`MoodPlayService`'s repeat/reaction/pending-decision machinery needed no
+changes at all to support this: it was already effective-aware end to
+end (`BoardState::effectiveCardId()`), so a Creativity copy of, say,
+Compulsion already paused for the target's own real choice the same way
+a real Compulsion would, even before the panel could offer
+`target_player_id` to ask for one.
 
 Each of the viewer's own hand cards also carries `is_playable`
 (`MoodPlayService::isPlayable()`), so a client can grey out cards that
@@ -404,11 +420,16 @@ comes back `false` while that grant is outstanding). If the card has a
 `canPayToPlayCost()` implementation only checks board-state feasibility
 (e.g. Guile needs two *other* hand cards to discard), never the specific
 choices passed to it, so probing with an empty `PlayerChoices` is safe.
-Creativity is a documented exception here too: its own raw `hasToPlay` is
-always `false`, so `is_playable` can't account for whatever cost a copied
-card might turn out to have — the same "resolved client-side in the same
-request" gap as above. A doomed Creativity-copy attempt still surfaces
-the usual server-side rejection at submit time.
+Creativity is a partial exception here: its own raw `hasToPlay` is always
+`false`, so `is_playable` -- which only ever asks "should this hand card's
+button be clickable at all" -- correctly stays permissive regardless of
+what it might end up copying. The narrower, copy_card_id-specific
+question ("could *this* candidate's own cost actually be paid right
+now") is `copy_simulation`'s `cost_payable` instead (see above), checked
+dynamically once the panel is open and a candidate is chosen, via
+`MoodPlayService::canPayCopiedToPlayCost()`. A doomed Creativity-copy
+attempt still surfaces the usual server-side rejection at submit time
+regardless.
 
 Every in-play mood also carries `is_suppressed` plus, when suppressed,
 `suppression_expiry` (`'while_source_in_play'` or `'end_of_round'`) and

@@ -74,15 +74,14 @@ namespace MoodSwings\Rules;
  * value being 0 or 1, and build Duplicity's nested repeat sub-form from
  * *this* card's own afterPlayingFields().
  *
- * One remaining known gap, intentionally out of scope: Creativity's
- * copy_card_id choice (see the 'creativity' entry below) is resolved
- * client-side in the same request as the rest of a play, so a Duplicity
- * repeat or a Scorn/Validation reaction to a Creativity play can't be
- * computed against the *copied* card's fields here -- only Creativity's
- * own (ability-less) ones. GameService gates Duplicity's repeat field on a
- * card's raw (non-copy-aware) hasAfterPlaying, which is false for
- * Creativity, so Creativity never offers a repeat option at all rather
- * than offering a wrong one.
+ * Creativity's copy_card_id choice (see the 'creativity' entry below)
+ * isn't known until its own panel is open, so a Duplicity repeat or a
+ * Scorn/Validation reaction to a Creativity play can't be precomputed
+ * here against Creativity's own (ability-less) row the way this schema
+ * handles every other card -- GameService::creativityCopySimulation()
+ * covers this instead, reusing reactionFields()/duplicityFields() but
+ * parameterized per in-play candidate rather than by Creativity's own
+ * raw catalog row; see php-app/README.md.
  *
  * Cards with no printed ability, and cards whose effect never reads
  * PlayerChoices at all (pure computeValue() formulas; unconditional
@@ -295,7 +294,7 @@ final class CardChoiceSchema
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Player to bank an extra play for on their next turn'],
         ],
         'arrogance' => [
-            ['key' => 'opponent_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Opponent to target (one of their qualifying moods is taken at random)'],
+            ['key' => 'opponent_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Opponent to target (they choose one of their qualifying moods to give up)'],
         ],
         'scorn' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => true, 'label' => 'Mood to suppress until end of round'],
