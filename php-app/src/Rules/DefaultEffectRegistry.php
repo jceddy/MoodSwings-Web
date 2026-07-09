@@ -153,8 +153,11 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * each player's own informed choice of what to give up, queued one per
  * player the same way RequiresOpponentDecision already handles a single
  * chosen target (Avoidance for moods in play, Confusion for hand cards),
- * or (Rationalization's "rotate" mode) no choice at all since a whole
- * hand transfers, not a specific card -- and a family of round-scoring
+ * a mandatory per-player discard of the player's own choosing rather than
+ * an exchange, narrowed to only the mood(s) tied for that player's own
+ * highest value (Fury), or (Rationalization's "rotate" mode) no choice at
+ * all since a whole hand transfers, not a specific card -- and a family
+ * of round-scoring
  * hooks resolved by GameService after a round's scores are computed --
  * a one-shot "after scoring, do X to this mood" tag (Bashfulness's
  * conditional-on-winning bottom-of-deck-and-draw; Recklessness's

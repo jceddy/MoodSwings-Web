@@ -105,22 +105,24 @@ routed to the PHP app).
     checked before deciding how to respond to it. Seven cards (Arrogance,
     Compulsion, Disillusionment, Instability, Intimidation, Malice,
     Suspicion) hand part of their effect to a player other than whoever's
-    turn it is, and two more (Avoidance, Confusion) say a player "chooses"
-    (not "at random") what to give up to a direction-based neighbor —
-    playing any of these nine pauses the whole round (Play/Pass both
-    disabled for everyone, a banner names who's being waited on) via
-    `round.pending_decision` in the state response. The one player it's
-    actually waiting on sees a response panel instead of the banner,
-    reusing the exact same field-rendering code as the regular choices
-    panel (including multi-select validation for Malice's two moods and
-    the `mode` dropdown for Disillusionment's color) — answered via `POST
-    /games/respond`. Suspicion, Disillusionment, Avoidance, and Confusion
-    all queue one decision per player (Disillusionment's queue starts with
-    the next player in turn order and wraps around to the acting player
-    themselves last; Avoidance's and Confusion's queue every player with a
-    qualifying mood/hand card, including the acting player); only the one
-    player currently up in the queue is prompted at a time, and the round
-    only unfreezes once the last one has answered. Duplicity's
+    turn it is, and three more (Avoidance, Confusion, Fury) say a player
+    "chooses" (not "at random") what to give up to a direction-based
+    neighbor or discard — playing any of these ten pauses the whole round
+    (Play/Pass both disabled for everyone, a banner names who's being
+    waited on) via `round.pending_decision` in the state response. The one
+    player it's actually waiting on sees a response panel instead of the
+    banner, reusing the exact same field-rendering code as the regular
+    choices panel (including multi-select validation for Malice's two
+    moods and the `mode` dropdown for Disillusionment's color) — answered
+    via `POST /games/respond`. Suspicion, Disillusionment, Avoidance,
+    Confusion, and Fury all queue one decision per player (Disillusionment's
+    queue starts with the next player in turn order and wraps around to
+    the acting player themselves last; Avoidance's, Confusion's, and
+    Fury's queue every player with a qualifying mood/hand card, including
+    the acting player — Fury further narrows each player's own options to
+    just the mood(s) tied for that player's own highest value); only the
+    one player currently up in the queue is prompted at a time, and the
+    round only unfreezes once the last one has answered. Duplicity's
     repeat offer (see above) uses this exact same pause-and-respond
     mechanism, just targeting the acting player themselves instead of an
     opponent — its panel shows a nested checkbox-plus-fields shape rather

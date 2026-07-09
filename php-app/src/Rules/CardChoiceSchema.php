@@ -76,7 +76,7 @@ namespace MoodSwings\Rules;
  * genuine mid-play pause offered to the acting player themselves *after*
  * the played card's afterPlaying() resolves, via the same
  * PendingDecisionRequest/game_pending_decision_batches machinery the
- * nine RequiresOpponentDecision cards use (see MoodPlayService::
+ * ten RequiresOpponentDecision cards use (see MoodPlayService::
  * continueAfterPlayingChain()/duplicityRepeatOfferRequest()). REACTIONS'
  * 'duplicity' entry supplies just the offer's label; its nested 'choices'
  * sub-field is built from afterPlayingFields() below, against the played
@@ -251,8 +251,8 @@ final class CardChoiceSchema
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player to target (must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
         ],
         'hesitation' => [
-            ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['single', 'all'], 'label' => 'Discard one qualifying mood, or all of them'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to discard (red or green; required if mode is single)', 'filter' => ['colors' => ['red', 'green']]],
+            ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['single', 'all'], 'label' => "Return one qualifying mood to its player's hand, or all of them"],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => "Mood to return to its player's hand (red or green; required if mode is single)", 'filter' => ['colors' => ['red', 'green']]],
         ],
         'nostalgia' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to take into your hand'],

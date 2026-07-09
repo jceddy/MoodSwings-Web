@@ -8,9 +8,11 @@ namespace MoodSwings\Rules;
  * Implemented by the handful of effects whose afterPlaying() needs a real
  * decision from a player OTHER than the one who played the card --
  * Arrogance, Compulsion, Instability, Intimidation, Malice, Suspicion,
- * Disillusionment. MoodPlayService checks for this interface instead of
- * calling afterPlaying() directly; every other effect (the vast majority)
- * is untouched by this and just implements MoodEffect as before.
+ * Disillusionment -- or from EVERY qualifying player, including the
+ * acting player themselves -- Avoidance, Confusion, Fury. MoodPlayService
+ * checks for this interface instead of calling afterPlaying() directly;
+ * every other effect (the vast majority) is untouched by this and just
+ * implements MoodEffect as before.
  *
  * Deliberately standalone rather than extending MoodEffect: every
  * implementer still extends AbstractMoodEffect (so it inherits the usual

@@ -280,21 +280,25 @@ persisted on `game_rounds` alongside `pending_play_grants` (Vulnerability
 — `BoardState::discardedThisRound()`). Every card in the pool with a
 printed ability is now implemented.
 
-Nine cards' printed text hands a real decision to a player other than
+Ten cards' printed text hands a real decision to a player other than
 whoever's turn it is (Arrogance, Compulsion, Disillusionment, Instability,
 Intimidation, Malice, Suspicion — see above), or "chooses"/"each player
-chooses" without saying "at random" (Avoidance, Confusion — every player
-with a qualifying mood/hand card gets their own queued decision,
+chooses" without saying "at random" (Avoidance, Confusion, Fury — every
+player with a qualifying mood/hand card gets their own queued decision,
 including the acting player themselves, unlike the other seven's
-single-or-several *other* players). Since a play resolves within one
+single-or-several *other* players). Fury's own queued field additionally
+narrows each player's candidates to only the mood(s) tied for *that
+player's own* highest value, computed fresh at both queue-time and
+resolve-time rather than filtered by any static color/value rule (see
+`candidate_card_ids` below). Since a play resolves within one
 HTTP request from the acting player alone, these implement the optional
 `RequiresOpponentDecision` interface (deliberately not part of
-`MoodEffect` itself — only these nine implement it) instead of
+`MoodEffect` itself — only these ten implement it) instead of
 `afterPlaying()`: `pendingDecisionsFor()` is the same pre-decision
 validation/candidate-computation code as before, but returns a queue of
 `PendingDecisionRequest`s (one per player who needs to answer — more than
 one for Suspicion/Disillusionment's per-chosen-player queues, or
-Avoidance/Confusion's per-everyone-with-a-qualifying-card ones) instead
+Avoidance/Confusion/Fury's per-everyone-with-a-qualifying-card ones) instead
 of picking randomly; `resolveDecisions()` is the old post-decision
 mutation code, reading each answer by its own request key instead of
 `array_rand()`. `MoodPlayService::playMood()` returns a `PlayResult`
@@ -350,10 +354,12 @@ same game from ever running their bodies concurrently in the first
 place. Each target's own prompt reuses the *same* field shapes
 `CardChoiceSchema` already defines for the acting player's own choices
 (a `mood`/`hand_card`/`mode` field, evaluated from the responder's own
-perspective) — the one new shape is `candidate_card_ids` (Instability),
-an explicit pre-computed option list rather than a scope/filter
-derivation, since the two candidates come from another player's live
-choice, not a rule. `GameService::getState()` exposes the active
+perspective) — the one new shape is `candidate_card_ids` (Instability,
+Fury), an explicit pre-computed option list rather than a scope/filter
+derivation, since Instability's two candidates come from another
+player's live choice (not a rule) and Fury's "tied for that player's own
+highest value" set can't be expressed as a static color/value filter at
+all. `GameService::getState()` exposes the active
 decision as `round.pending_decision`, including the actual prompt
 (`field`) only to its target — the same hidden-hand-information scoping
 opponents' hands already get.
