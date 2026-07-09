@@ -13,6 +13,7 @@ use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
 use PDO;
+use PDOException;
 use Throwable;
 
 /**
@@ -1232,6 +1233,20 @@ final class GameService
      * respondToDecision() both do), so this does no transaction management
      * of its own.
      */
+    /**
+     * assertNoPendingDecision() is a plain SELECT before this method's own
+     * INSERT, so two requests for the same round (the same player's two
+     * open tabs, or a play racing a respondToDecision() that itself
+     * uncovers a chained pending decision) can both pass that check before
+     * either one's batch actually exists. The database closes the window
+     * this application-level check can't: migration 0011's
+     * uq_pending_batches_one_open_per_round unique index allows any number
+     * of resolved batches per round but at most one open (unresolved) one,
+     * so the loser of the race gets a duplicate-key error here instead of
+     * silently creating a second, simultaneously-open batch. Translated
+     * into the same GameStateException assertNoPendingDecision() throws
+     * for the non-racing case, so both surface identically to the caller.
+     */
     private function writePendingBatch(
         int $gameId,
         int $roundId,
@@ -1247,15 +1262,23 @@ final class GameService
                 (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices)
              VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices)'
         );
-        $insertBatch->execute([
-            'game_id' => $gameId,
-            'round_id' => $roundId,
-            'played_card_id' => $result->playedCardId,
-            'invocation_seq' => $result->invocationSeq,
-            'initiator' => $initiatingPlayerId,
-            'top_level_choices' => json_encode($topLevelChoices->toArray()),
-            'invocation_choices' => json_encode($invocationChoices->toArray()),
-        ]);
+
+        try {
+            $insertBatch->execute([
+                'game_id' => $gameId,
+                'round_id' => $roundId,
+                'played_card_id' => $result->playedCardId,
+                'invocation_seq' => $result->invocationSeq,
+                'initiator' => $initiatingPlayerId,
+                'top_level_choices' => json_encode($topLevelChoices->toArray()),
+                'invocation_choices' => json_encode($invocationChoices->toArray()),
+            ]);
+        } catch (PDOException $e) {
+            if ($e->getCode() === '23000') {
+                throw new GameStateException("Round {$roundId} has a decision still pending -- no one can play or pass until it's answered");
+            }
+            throw $e;
+        }
         $batchId = (int) $pdo->lastInsertId();
 
         $insertDecision = $pdo->prepare(

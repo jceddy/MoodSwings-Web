@@ -1504,6 +1504,39 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, (int) $round2['plays_remaining']); // base 1 + Stubbornness's bonus (p2 has more moods)
     }
 
+    /**
+     * The negative case for the test above: "if another player has MORE
+     * moods than you" is a strict comparison, so an opponent with an equal
+     * or lower mood count grants nothing.
+     */
+    public function testStubbornnessGrantsNoBonusWhenNoOtherPlayerHasMoreMoods(): void
+    {
+        $u1 = $this->insertUser('stub3');
+        $u2 = $this->insertUser('stub4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 102, 'hand', $p1); // Stubbornness, value 3
+        $this->insertGameCard($gameId, 66, 'in_play', $p1); // Hate, value 0 -- p1 already has 1 mood before playing Stubbornness
+        $this->insertGameCard($gameId, 105, 'in_play', $p2); // Wrath, value 0 -- p2 has exactly as many moods as p1 will, not more
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 102, []); // p1 now has 2 moods (Hate + Stubbornness) vs p2's 1
+        $this->games->pass($gameId, $p2);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']); // p1 won round 1 (3 to 0)
+        self::assertSame(1, (int) $round2['plays_remaining']); // base 1 only -- no opponent has more moods than p1
+    }
+
     public function testGenerosityBanksAnExtraPlayForTheChosenPlayersNextTurn(): void
     {
         $u1 = $this->insertUser('gen1');
@@ -2117,5 +2150,48 @@ final class GameServiceIntegrationTest extends TestCase
         $state = (new BoardStateRepository($registry))->load($gameId);
 
         self::assertSame(6, $state->valueOf(9)); // higher of base(6)/dice(3)
+    }
+
+    /**
+     * GameService::assertNoPendingDecision() is a plain SELECT before
+     * writePendingBatch()'s own INSERT, so it can't by itself stop two
+     * concurrent requests for the same round from both passing the check
+     * before either one's batch exists -- the actual guarantee comes from
+     * migration 0011's unique index, which allows any number of *resolved*
+     * batches per round but at most one *open* one. This proves that
+     * guarantee directly at the database level: two raw inserts for the
+     * same round with neither resolved, bypassing GameService entirely,
+     * the same way two concurrent requests would reach the database if a
+     * check in between didn't happen to run first for both.
+     */
+    public function testDatabaseRejectsASecondSimultaneouslyOpenPendingBatchForTheSameRound(): void
+    {
+        $u1 = $this->insertUser('race1');
+        $u2 = $this->insertUser('race2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $insertOpenBatch = function () use ($gameId, $roundId, $p1): void {
+            $stmt = $this->pdo->prepare(
+                'INSERT INTO game_pending_decision_batches
+                    (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices)
+                 VALUES (:game_id, :round_id, 1, 0, :initiator, \'{}\', \'{}\')'
+            );
+            $stmt->execute(['game_id' => $gameId, 'round_id' => $roundId, 'initiator' => $p1]);
+        };
+
+        $insertOpenBatch(); // the "winner" of the race
+
+        $this->expectException(PDOException::class);
+        $this->expectExceptionCode('23000');
+        $insertOpenBatch(); // the "loser" -- must be rejected, not silently succeed
     }
 }

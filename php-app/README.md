@@ -301,7 +301,19 @@ outstanding the whole round is frozen — `playMood()`/`pass()` both check
 for one first and reject with `409` — nobody, including the acting
 player, can play or pass until the targeted player answers; there's no
 timeout or escape hatch, matching a casual game's existing tolerance for
-an idle match. Each target's own prompt reuses the *same* field shapes
+an idle match. That check is a plain `SELECT` ahead of `writePendingBatch()`'s
+own `INSERT`, so it can't by itself stop two concurrent requests for the
+same round (the same player's two open tabs, or a play racing a
+`respondToDecision()` that itself uncovers a chained decision) from both
+passing it before either one's batch exists — migration `0011`'s
+`uq_pending_batches_one_open_per_round` unique index (on `game_round_id`
+plus a generated column that's `NULL` for every resolved batch and a
+constant for the one still open, if any) closes that window at the
+database level: the loser of the race gets a duplicate-key error,
+translated by `writePendingBatch()`'s own catch into the same
+`GameStateException` the non-racing check throws, rather than silently
+creating a second, simultaneously-open batch. Each target's own prompt
+reuses the *same* field shapes
 `CardChoiceSchema` already defines for the acting player's own choices
 (a `mood`/`hand_card`/`mode` field, evaluated from the responder's own
 perspective) — the one new shape is `candidate_card_ids` (Instability),
