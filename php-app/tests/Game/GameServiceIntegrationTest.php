@@ -2457,4 +2457,58 @@ final class GameServiceIntegrationTest extends TestCase
         }
         self::assertSame([$p1 => 3, $p2 => 5], $scores);
     }
+
+    /**
+     * playMood()/pass()/respondToDecision() are each wrapped in
+     * withGameLock() (a MySQL named lock keyed by game id) to close a
+     * broader race than migration 0011's pending-batch-specific one: two
+     * genuinely concurrent requests for the same game (the same player's
+     * two tabs) could otherwise both load a BoardState, both mutate it
+     * independently, and have whichever save() runs last silently clobber
+     * the other's changes. $this->pdo here is already a MySQL session
+     * distinct from GameService's own Connection::get() singleton (each
+     * opens its own PDO connection despite matching DB credentials), so
+     * acquiring the lock directly on it -- and never releasing it within
+     * this test -- genuinely simulates another in-flight request holding
+     * the lock, without needing real OS-level concurrency (the blocking
+     * happens server-side, between MySQL sessions). A short injected
+     * timeout keeps this test fast rather than waiting out the real
+     * (generous, production-appropriate) default.
+     */
+    public function testPlayMoodFailsWithBusyErrorWhenAnotherRequestHoldsTheGameLock(): void
+    {
+        $u1 = $this->insertUser('lock1');
+        $u2 = $this->insertUser('lock2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameCard($gameId, 8, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $lockStmt = $this->pdo->prepare('SELECT GET_LOCK(?, 5)');
+        $lockStmt->execute(["moodswings_game:{$gameId}"]);
+        self::assertSame(1, (int) $lockStmt->fetchColumn(), 'test setup: failed to acquire the simulated lock');
+
+        $registry = DefaultEffectRegistry::build();
+        $lockedGames = new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            1, // seconds -- short so this test doesn't wait out the real 10s default
+        );
+
+        try {
+            $this->expectException(GameStateException::class);
+            $this->expectExceptionMessage('busy');
+            $lockedGames->playMood($gameId, $p1, 8, []);
+        } finally {
+            $this->pdo->prepare('SELECT RELEASE_LOCK(?)')->execute(["moodswings_game:{$gameId}"]);
+        }
+    }
 }

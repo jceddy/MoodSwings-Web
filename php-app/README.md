@@ -168,8 +168,13 @@ discard pile instead of hand (Harmony/Grief/Angst — see
 first next round" override that `GameService` consults instead of the
 round winner (Honor — see `BoardState::firstPlayerOverride()`, stored
 as a per-mood `effectState` key so it self-corrects if that mood ever
-leaves play), a direction-based simultaneous exchange with every
-player at the table (Avoidance/Confusion/Rationalization), and a family
+leaves play), a direction-based simultaneous exchange with every player
+at the table — each player's own informed choice of what to give up
+("chooses," not "at random"), queued one decision per player the same
+way `RequiresOpponentDecision` already handles a single chosen target
+(Avoidance for moods in play, Confusion for hand cards), or (Rationalization's
+"rotate" mode) no choice at all since a whole hand transfers rather than
+a specific card — and a family
 of round-scoring hooks that `GameService` resolves once a round's
 scores are computed rather than at play time: a one-shot "after
 scoring, do X to this mood" tag, conditional on winning or unconditional
@@ -275,24 +280,29 @@ persisted on `game_rounds` alongside `pending_play_grants` (Vulnerability
 — `BoardState::discardedThisRound()`). Every card in the pool with a
 printed ability is now implemented.
 
-Seven cards' printed text hands a real decision to a player *other* than
-the one whose turn it is (Arrogance, Compulsion, Disillusionment,
-Instability, Intimidation, Malice, Suspicion — see above). Since a play
-resolves within one HTTP request from the acting player alone, these
-implement the optional `RequiresOpponentDecision` interface (deliberately
-not part of `MoodEffect` itself — only these seven implement it) instead
-of `afterPlaying()`: `pendingDecisionsFor()` is the same pre-decision
+Nine cards' printed text hands a real decision to a player other than
+whoever's turn it is (Arrogance, Compulsion, Disillusionment, Instability,
+Intimidation, Malice, Suspicion — see above), or "chooses"/"each player
+chooses" without saying "at random" (Avoidance, Confusion — every player
+with a qualifying mood/hand card gets their own queued decision,
+including the acting player themselves, unlike the other seven's
+single-or-several *other* players). Since a play resolves within one
+HTTP request from the acting player alone, these implement the optional
+`RequiresOpponentDecision` interface (deliberately not part of
+`MoodEffect` itself — only these nine implement it) instead of
+`afterPlaying()`: `pendingDecisionsFor()` is the same pre-decision
 validation/candidate-computation code as before, but returns a queue of
 `PendingDecisionRequest`s (one per player who needs to answer — more than
-one for Suspicion/Disillusionment's per-player queues) instead of picking
-randomly; `resolveDecisions()` is the old post-decision mutation code,
-reading each answer by its own request key instead of `array_rand()`.
-`MoodPlayService::playMood()` returns a `PlayResult` rather than `void`:
-`isPending: true` the moment any decision is outstanding, at which point
-the played card is already fully in play (cost paid, grant spent) but
-nothing past that point has happened yet — nothing in any of the seven
-mutates before its own decision point, so there's never a partial
-mutation to unwind. `GameService::respondToDecision()` (`POST
+one for Suspicion/Disillusionment's per-chosen-player queues, or
+Avoidance/Confusion's per-everyone-with-a-qualifying-card ones) instead
+of picking randomly; `resolveDecisions()` is the old post-decision
+mutation code, reading each answer by its own request key instead of
+`array_rand()`. `MoodPlayService::playMood()` returns a `PlayResult`
+rather than `void`: `isPending: true` the moment any decision is
+outstanding, at which point the played card is already fully in play
+(cost paid, grant spent) but nothing past that point has happened yet —
+nothing in any of the nine mutates before its own decision point, so
+there's never a partial mutation to unwind. `GameService::respondToDecision()` (`POST
 /games/respond`) is the resume entry point: it records one target's
 answer, and once a batch's last row is in, calls the new
 `MoodPlayService::resolvePendingDecisions()`, persisted across the pause
@@ -313,8 +323,31 @@ constant for the one still open, if any) closes that window at the
 database level: the loser of the race gets a duplicate-key error,
 translated by `writePendingBatch()`'s own catch into the same
 `GameStateException` the non-racing check throws, rather than silently
-creating a second, simultaneously-open batch. Each target's own prompt
-reuses the *same* field shapes
+creating a second, simultaneously-open batch.
+
+Migration 0011 only ever closed the pending-batch-specific half of a
+broader gap: `playMood()`/`pass()`/`respondToDecision()` each load a
+`BoardState`, mutate it in memory, and save it back across one or more
+separate SQL transactions, with nothing stopping a second request for the
+*same game* from interleaving somewhere in the middle and clobbering the
+first's changes when both eventually save -- the same player's two open
+tabs, most plausibly. `GameService::withGameLock()` closes this properly:
+a MySQL named lock (`GET_LOCK`/`RELEASE_LOCK`), keyed by game id and held
+for a request's *entire* duration via a closure rather than scoped to any
+one SQL transaction, wraps all three entry points, serializing every
+mutation for a game without requiring their already-nontrivial internal
+transaction structure (several sequential transactions per request in
+some paths, e.g. a chained scoring decision) to change at all. Named
+locks are session-scoped, not transaction-scoped, and MariaDB releases
+them automatically if a connection dies, so a crashed request can't wedge
+a game forever; the timeout (`$gameLockTimeoutSeconds`, generous by
+default, constructor-overridable for tests) is a backstop against a
+stuck/slow request, not a number a normal request should ever approach.
+With this in place, migration 0011's own constraint is now a
+defense-in-depth backstop rather than the primary defense against the
+race it was built for -- the lock already prevents two requests for the
+same game from ever running their bodies concurrently in the first
+place. Each target's own prompt reuses the *same* field shapes
 `CardChoiceSchema` already defines for the acting player's own choices
 (a `mood`/`hand_card`/`mode` field, evaluated from the responder's own
 perspective) — the one new shape is `candidate_card_ids` (Instability),
@@ -374,7 +407,7 @@ same `afterPlaying()` run a *second* time with a fresh, independent set of
 choices, e.g. a card discarded once can't be discarded again on the
 repeat — is implemented as a genuine mid-play pause, reusing the exact
 same `PendingDecisionRequest`/`game_pending_decision_batches` machinery
-built for the seven `RequiresOpponentDecision` cards above, except the
+built for the nine `RequiresOpponentDecision` cards above, except the
 `PendingDecisionRequest`'s `targetPlayerId` is the *acting* player
 themselves rather than an opponent. `MoodPlayService::continueAfterPlayingChain()`
 offers the repeat whenever `$invocationSeq` is still below the number of

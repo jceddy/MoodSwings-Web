@@ -2159,14 +2159,40 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 15, new PlayerChoices(['target_player_id' => 99]));
     }
 
-    public function testAvoidanceGivesEachPlayersOnlyMoodToTheirRightNeighbor(): void
+    /**
+     * "Each player chooses one of their moods" -- not "at random"
+     * (contrast Cruelty/Paranoia/Indecisiveness) -- so every player with
+     * at least one mood in play, including the acting player, gets their
+     * own queued decision, and all transfers apply only once every answer
+     * is in. Player 1's only mood at decision time is Avoidance itself
+     * (already in play by the time afterPlaying-equivalent resolution
+     * runs), so they have no other choice but to give it away.
+     */
+    public function testAvoidancePausesForEachPlayersOwnChoiceThenGivesToTheirRightNeighbor(): void
     {
         $state = $this->boardState(hands: [1 => [29], 2 => [9], 3 => [106]]);
         $state->moveHandToInPlay(2, 9);
         $state->moveHandToInPlay(3, 106);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 29, new PlayerChoices(['direction' => 'right']));
+        $choices = new PlayerChoices(['direction' => 'right']);
+        $result = $this->plays->playMood($state, 1, 29, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(3, $result->pendingDecisions);
+        self::assertSame('given_mood_id_1', $result->pendingDecisions[0]->key);
+        self::assertSame('given_mood_id_2', $result->pendingDecisions[1]->key);
+        self::assertSame('given_mood_id_3', $result->pendingDecisions[2]->key);
+        self::assertSame(1, $state->ownerOf(29)); // not given yet
+
+        $this->plays->resolvePendingDecisions(
+            $state, 29, 1, $choices, $choices, 0,
+            [
+                'given_mood_id_1' => new PlayerChoices(['given_mood_id_1' => 29]),
+                'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
+                'given_mood_id_3' => new PlayerChoices(['given_mood_id_3' => 106]),
+            ],
+        );
 
         self::assertSame(2, $state->ownerOf(29)); // player 1's only mood -- Avoidance itself
         self::assertSame(3, $state->ownerOf(9));
@@ -2180,11 +2206,40 @@ final class MoodPlayServiceTest extends TestCase
         $state->moveHandToInPlay(3, 106);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 29, new PlayerChoices(['direction' => 'left']));
+        $choices = new PlayerChoices(['direction' => 'left']);
+        $this->plays->playMood($state, 1, 29, $choices);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 29, 1, $choices, $choices, 0,
+            [
+                'given_mood_id_1' => new PlayerChoices(['given_mood_id_1' => 29]),
+                'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
+                'given_mood_id_3' => new PlayerChoices(['given_mood_id_3' => 106]),
+            ],
+        );
 
         self::assertSame(3, $state->ownerOf(29));
         self::assertSame(1, $state->ownerOf(9));
         self::assertSame(2, $state->ownerOf(106));
+    }
+
+    public function testAvoidanceRejectsAGivenMoodNotOwnedByThatPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [29], 2 => [9]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['direction' => 'right']);
+        $this->plays->playMood($state, 1, 29, $choices);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->resolvePendingDecisions(
+            $state, 29, 1, $choices, $choices, 0,
+            [
+                'given_mood_id_1' => new PlayerChoices(['given_mood_id_1' => 9]), // not player 1's own mood
+                'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
+            ],
+        );
     }
 
     public function testAvoidanceRejectsAnInvalidDirection(): void
@@ -2196,16 +2251,84 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 29, new PlayerChoices(['direction' => 'up']));
     }
 
-    public function testConfusionGivesEachPlayersOnlyHandCardToTheirRightNeighbor(): void
+    /**
+     * "Each player chooses a card from their hand" -- not "at random"
+     * (contrast Paranoia/Cruelty/Indecisiveness) -- so every player with a
+     * non-empty hand, including the acting player, gets their own queued
+     * decision, and all transfers apply only once every answer is in.
+     */
+    public function testConfusionPausesForEachPlayersOwnChoiceThenGivesToTheirRightNeighbor(): void
     {
         $state = $this->boardState(hands: [1 => [31, 3], 2 => [9], 3 => [106]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 31, new PlayerChoices(['direction' => 'right']));
+        $choices = new PlayerChoices(['direction' => 'right']);
+        $result = $this->plays->playMood($state, 1, 31, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(3, $result->pendingDecisions);
+        self::assertSame('given_card_id_1', $result->pendingDecisions[0]->key);
+        self::assertSame(1, $result->pendingDecisions[0]->targetPlayerId);
+        self::assertSame('given_card_id_2', $result->pendingDecisions[1]->key);
+        self::assertSame(2, $result->pendingDecisions[1]->targetPlayerId);
+        self::assertSame('given_card_id_3', $result->pendingDecisions[2]->key);
+        self::assertSame(3, $result->pendingDecisions[2]->targetPlayerId);
+        self::assertTrue($state->isInHand(1, 3)); // not given yet
+        self::assertTrue($state->isInHand(2, 9));
+        self::assertTrue($state->isInHand(3, 106));
+
+        $this->plays->resolvePendingDecisions(
+            $state, 31, 1, $choices, $choices, 0,
+            [
+                'given_card_id_1' => new PlayerChoices(['given_card_id_1' => 3]),
+                'given_card_id_2' => new PlayerChoices(['given_card_id_2' => 9]),
+                'given_card_id_3' => new PlayerChoices(['given_card_id_3' => 106]),
+            ],
+        );
 
         self::assertTrue($state->isInHand(2, 3));
         self::assertTrue($state->isInHand(3, 9));
         self::assertTrue($state->isInHand(1, 106));
+    }
+
+    public function testConfusionSkipsPlayersWithAnEmptyHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [31], 2 => [9], 3 => []]);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['direction' => 'right']);
+        $result = $this->plays->playMood($state, 1, 31, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions); // only player 2 has a card to give
+        self::assertSame('given_card_id_2', $result->pendingDecisions[0]->key);
+    }
+
+    public function testConfusionRejectsAnInvalidDirection(): void
+    {
+        $state = $this->boardState(hands: [1 => [31, 3]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 31, new PlayerChoices(['direction' => 'up']));
+    }
+
+    public function testConfusionRejectsAGivenCardNotInThatPlayersHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [31, 3], 2 => [9]]);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['direction' => 'right']);
+        $this->plays->playMood($state, 1, 31, $choices);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->resolvePendingDecisions(
+            $state, 31, 1, $choices, $choices, 0,
+            [
+                'given_card_id_1' => new PlayerChoices(['given_card_id_1' => 3]),
+                'given_card_id_2' => new PlayerChoices(['given_card_id_2' => 3]), // not player 2's own card
+            ],
+        );
     }
 
     public function testRationalizationRefreshPutsHandOnBottomOfDeckAndDrawsThatMany(): void

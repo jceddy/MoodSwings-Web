@@ -76,7 +76,7 @@ namespace MoodSwings\Rules;
  * genuine mid-play pause offered to the acting player themselves *after*
  * the played card's afterPlaying() resolves, via the same
  * PendingDecisionRequest/game_pending_decision_batches machinery the
- * seven RequiresOpponentDecision cards use (see MoodPlayService::
+ * nine RequiresOpponentDecision cards use (see MoodPlayService::
  * continueAfterPlayingChain()/duplicityRepeatOfferRequest()). REACTIONS'
  * 'duplicity' entry supplies just the offer's label; its nested 'choices'
  * sub-field is built from afterPlayingFields() below, against the played

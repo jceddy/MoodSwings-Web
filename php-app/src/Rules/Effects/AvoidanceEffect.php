@@ -7,41 +7,79 @@ namespace MoodSwings\Rules\Effects;
 use MoodSwings\Rules\AbstractMoodEffect;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
+use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
+use MoodSwings\Rules\RequiresOpponentDecision;
 
 /**
  * Avoidance: "After playing this mood, choose left or right. Each player
  * chooses one of their moods and gives it to the next player in the
- * chosen direction." The acting player picks the direction; which
- * specific mood each player gives up isn't a meaningful informed choice
- * (moods in play are already public information), so -- consistent with
- * Cruelty/Malice/etc. -- each player's contribution is a random one of
- * their own moods. 'right' is defined as moving forward through seat
- * order (wrapping), 'left' as backward; every giver's mood is picked from
- * a single snapshot of the board before any transfers happen, so one
- * player's mood can't be re-given later in the same resolution.
+ * chosen direction." The text says each player "chooses" their own mood
+ * -- not "at random" (contrast Cruelty/Paranoia/Indecisiveness, which
+ * do) -- so every player with at least one mood in play gets their own
+ * queued decision (see RequiresOpponentDecision, and Confusion's
+ * identical mechanic applied to hand cards instead), including the
+ * acting player themselves. 'right' is defined as moving forward through
+ * seat order (wrapping), 'left' as backward; all transfers are computed
+ * against everyone's ORIGINAL moods and only applied once every answer is
+ * in, matching the printed text's simultaneous exchange -- nobody's
+ * choice is affected by a mood they're about to receive from this same
+ * resolution.
  */
-final class AvoidanceEffect extends AbstractMoodEffect
+final class AvoidanceEffect extends AbstractMoodEffect implements RequiresOpponentDecision
 {
-    public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
+    private const KEY_PREFIX = 'given_mood_id_';
+
+    public function pendingDecisionsFor(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): array
     {
         $direction = $choices->requireString('direction');
         if (!in_array($direction, ['left', 'right'], true)) {
             throw new InvalidChoiceException("Avoidance's direction must be 'left' or 'right'");
         }
 
+        $requests = [];
+        foreach ($state->playerOrder() as $giverId) {
+            if ($state->moodsOwnedBy($giverId) === []) {
+                continue;
+            }
+
+            $requests[] = new PendingDecisionRequest(
+                key: self::KEY_PREFIX . $giverId,
+                targetPlayerId: $giverId,
+                decisionType: 'avoidance_give_mood',
+                field: [
+                    'key' => self::KEY_PREFIX . $giverId,
+                    'type' => 'mood',
+                    'scope' => 'own',
+                    'required' => true,
+                    'label' => "Avoidance: choose one of your moods to give to your {$direction}-hand neighbor",
+                ],
+            );
+        }
+
+        return $requests;
+    }
+
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
+    {
+        $direction = $choices->requireString('direction');
         $order = $state->playerOrder();
         $count = count($order);
 
         $transfers = [];
         foreach ($order as $index => $giverId) {
-            $moods = $state->moodsOwnedBy($giverId);
-            if ($moods === []) {
+            $key = self::KEY_PREFIX . $giverId;
+            if (!isset($answers[$key])) {
                 continue;
             }
-            $randomCardId = array_rand($moods);
+
+            $givenMoodId = $answers[$key]->requireInt($key);
+            if (!$state->isInPlay($givenMoodId) || $state->ownerOf($givenMoodId) !== $giverId) {
+                throw new InvalidChoiceException("Mood {$givenMoodId} is not one of player {$giverId}'s moods in play");
+            }
+
             $neighborIndex = $direction === 'right' ? ($index + 1) % $count : ($index - 1 + $count) % $count;
-            $transfers[$randomCardId] = $order[$neighborIndex];
+            $transfers[$givenMoodId] = $order[$neighborIndex];
         }
 
         foreach ($transfers as $moodCardId => $recipientId) {
