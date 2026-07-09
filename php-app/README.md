@@ -231,9 +231,10 @@ submitted for the triggering play, since the reaction is the same
 player's own decision made in the same request (Duplicity's version of
 this — repeating another mood's own after-playing effect with *fresh*
 choices, since a repeat usually can't reuse the same choices verbatim,
-e.g. a card already discarded once can't be discarded again — is
-resolved the same way but reads from a nested `PlayerChoices::sub('duplicity_repeat_choices')`
-sub-bag instead of the flat top-level one), a mandatory hidden
+e.g. a card already discarded once can't be discarded again — is instead
+offered as a genuine mid-play pause targeting the acting player
+themselves, one per independent Duplicity-effective source currently in
+play; see below), a mandatory hidden
 hand-card choice by another player -- their own real answer, paused for
 mid-play the same way as Arrogance's (Compulsion; Intimidation's
 optional version, whose resulting grant is restricted to that one
@@ -250,12 +251,13 @@ answer is a multi-select, not a single value (Malice) -- see
 reshuffle-and-redeal of every mood in play (including the card causing
 it), reassigning ownership only and never re-triggering after-playing
 effects (Chaos), a repeat of another card's own after-playing effect
-with a *fresh*, nested sub-choices bag rather than reusing the
-triggering play's choices verbatim — needed since e.g. a specific card
-already discarded once can't be discarded again — handled directly by
-`MoodPlayService` since no `MoodEffect` implementation has access to the
-registry it needs to re-invoke another card's effect (Duplicity —
-`PlayerChoices::sub()`), and the scoring-time multiplier cluster
+with a *fresh* pending decision of its own — one per independent
+Duplicity-effective source currently in play, since a repeat usually
+can't reuse the same choices verbatim (e.g. a card already discarded
+once can't be discarded again) — handled directly by `MoodPlayService`
+since no `MoodEffect` implementation has access to the registry it
+needs to re-invoke another card's effect (Duplicity — see below), and
+the scoring-time multiplier cluster
 described above (Exhilaration, Bliss — whose color is captured via
 `BoardState::stagePrePlayEffectState()` before the card exists as a
 `MoodInPlay` to attach `effectState` to normally, since its cost runs
@@ -353,22 +355,35 @@ from the possibly-different live `value` a card in play might have) for
 exactly this kind of client-side reasoning, and for display in the
 frontend's card detail dialog.
 
-Duplicity's nested repeat-with-fresh-choices mechanic (`MoodPlayService`:
-after any card's own `afterPlaying()` resolves, if the acting player has
-Duplicity in play, they may have that same `afterPlaying()` run a *second*
-time with a fresh, independent set of choices — e.g. a card discarded once
-can't be discarded again on the repeat) is exposed via a fixed
-`duplicity_repeat` boolean template (`CardChoiceSchema::reactionTemplate('duplicity')`,
-same mechanism as Scorn/Validation's reactions) plus a `type: 'nested'`
-field, `duplicity_repeat_choices`, whose own `fields` are the played card's
-`afterPlayingFields()` — `forEffectKey()` with any `stage: 'cost'` field
-filtered out, since a repeat only re-invokes `afterPlaying()`, never
-`payToPlayCost()` (Guile's/Regret's mandatory discard is a cost, so it's
-excluded from their repeat form; their `target_mood_id` isn't).
-`GameService::serializeCard()`'s `duplicityFields()` appends both only when
-the *viewer* has Duplicity in play and the card being offered isn't
-Duplicity itself, gated on that card's own raw (not Creativity-copy-aware)
-`hasAfterPlaying` flag.
+Duplicity's repeat mechanic — after any card's own `afterPlaying()`
+resolves, if the acting player has Duplicity in play, they may have that
+same `afterPlaying()` run a *second* time with a fresh, independent set of
+choices, e.g. a card discarded once can't be discarded again on the
+repeat — is implemented as a genuine mid-play pause, reusing the exact
+same `PendingDecisionRequest`/`game_pending_decision_batches` machinery
+built for the seven `RequiresOpponentDecision` cards above, except the
+`PendingDecisionRequest`'s `targetPlayerId` is the *acting* player
+themselves rather than an opponent. `MoodPlayService::continueAfterPlayingChain()`
+offers the repeat whenever `$invocationSeq` is still below
+`BoardState::countMoodsInPlayWithEffectiveKey($playerId, 'duplicity')` — the
+number of the acting player's own in-play moods currently
+Duplicity-effective (a real Duplicity, or a Creativity currently copying
+one, via `effectiveCardId()`) — so each independent source in play grants
+its own chained repeat (a real Duplicity plus a Creativity copying it
+grants two), rather than the old hard one-repeat-ever cap. The pending
+decision's `field` is a `type: 'nested'` shape — a `repeat` boolean plus a
+`choices` sub-field wrapping the played card's own `afterPlayingFields()`
+(`stage: 'cost'` fields filtered out, since a repeat only re-invokes
+`afterPlaying()`, never `payToPlayCost()`) — resolved by
+`MoodPlayService::resolveDuplicityRepeatOffer()`, which reads it via
+`PlayerChoices::sub('duplicity_repeat')` the same way every other
+`RequiresOpponentDecision` answer is unwrapped. Because the repeat is now
+just another paused decision the player answers through
+`POST /games/respond`, `GameService` needs no Duplicity-specific
+serialization at all — the old `duplicityFields()` is gone; a card's
+`choice_fields` describe only its own play, and any repeat offer arrives
+later via `round.pending_decision`, exactly like Compulsion's or
+Arrogance's.
 
 Creativity's "play as a copy of any mood" choice (`copy_card_id`, read from
 the top-level choices, resolved entirely server-side in `MoodPlayService`)
@@ -387,9 +402,12 @@ Creativity's own (ability-less) raw catalog row -- the server additionally
 precomputes, per candidate mood currently in play,
 `copy_simulation[$candidateCardId] = {extra_fields, cost_payable}`
 (`GameService::creativityCopySimulation()`), reusing the exact same
-`reactionFields()`/`duplicityFields()` this class already calls for an
+`reactionFields()` (Scorn/Validation) this class already calls for an
 ordinary hand card, just parameterized by the *candidate's* own raw
-color/base value/catalog row instead of Creativity's. `cost_payable`
+color/base value/catalog row instead of Creativity's — Duplicity's own
+repeat is no longer part of this precomputed bundle at all, since it's
+now a post-play pause rather than a field on the play itself.
+`cost_payable`
 mirrors `MoodPlayService::playMood()`'s own to-play-cost check
 (`canPayCopiedToPlayCost()`), passing Creativity's own card id -- not the
 candidate's -- as the effect's `$cardId`, matching what `payMood()` itself

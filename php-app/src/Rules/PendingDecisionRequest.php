@@ -5,12 +5,17 @@ declare(strict_types=1);
 namespace MoodSwings\Rules;
 
 /**
- * One decision that needs a specific OTHER player's real input before a
- * play can finish resolving -- e.g. Compulsion's target choosing which
- * hand card to give up. Returned by RequiresOpponentDecision::
- * pendingDecisionsFor(); GameService persists one game_pending_decisions
- * row per request, computed at batch-creation time from the target's own
- * perspective.
+ * One decision that needs a specific player's real input before a play
+ * can finish resolving -- usually a specific OTHER player, e.g.
+ * Compulsion's target choosing which hand card to give up (returned by
+ * RequiresOpponentDecision::pendingDecisionsFor()), but $targetPlayerId
+ * can also be the ACTING player themselves -- e.g. Duplicity's own "repeat
+ * this mood's effect again?" offer (see MoodPlayService::
+ * continueAfterPlayingChain()), which still needs the same durable
+ * pause-across-requests treatment even though it's not a different
+ * physical person being asked. GameService persists one
+ * game_pending_decisions row per request, computed at batch-creation time
+ * from the target's own perspective.
  *
  * $field mirrors CardChoiceSchema's field shape (type/scope/filter/multi/
  * count/required/label) so the client can render it with the same

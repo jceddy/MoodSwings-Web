@@ -44,26 +44,31 @@ routed to the PHP app).
     suppress-target, narrowed to moods sharing the card-to-be-played's own
     color; Validation's extra-play checkbox, only offered when that card's
     base value is 0 or 1) — both submitted in the same play request,
-    since that's how the rules engine resolves them. If you have Duplicity
-    in play, every other card that has its own after-playing effect
-    (including a zero-field one like Charity) also gets a "repeat this
-    mood's own effect" checkbox plus an indented, nested copy of that
-    card's own after-playing fields (its `duplicity_repeat_choices`) for a
-    second, independent set of choices — e.g. repeating Dignity offers a
-    second, separately-filtered card-to-discard dropdown, since the same
-    card can't be discarded twice. Guile's and Regret's mandatory discard
-    cost is excluded from their nested repeat form (a repeat only re-runs
-    the after-playing effect, not the cost to play), leaving just their
-    target-mood field. Creativity's panel shows a dropdown to play it as
+    since that's how the rules engine resolves them. Duplicity no longer
+    adds anything to this panel at all: playing any card with its own
+    after-playing effect (including a zero-field one like Charity) while
+    you have Duplicity in play instead pauses the round afterward and
+    offers you — the acting player, same as if you'd targeted yourself —
+    a repeat via the same pending-decision panel described below, one
+    independent offer per Duplicity-effective source you have in play (a
+    second one appears if you also have a Creativity currently copying
+    Duplicity). That panel's "repeat this mood's own effect" checkbox
+    expands an indented, nested copy of the played card's own
+    after-playing fields for a second, independent set of choices — e.g.
+    repeating Dignity offers a second, separately-filtered
+    card-to-discard dropdown, since the same card can't be discarded
+    twice. Guile's and Regret's mandatory discard cost is excluded from
+    the nested repeat form (a repeat only re-runs the after-playing
+    effect, not the cost to play), leaving just their target-mood field.
+    Creativity's panel shows a dropdown to play it as
     an exact copy of any mood currently in play (any player's) — left
     blank, it's just a blue card worth 0. Picking one dynamically swaps in
     that mood's own fields (its own "to play" cost, if any, and its own
     after-playing choices — e.g. copying Compulsion adds its
     `target_player_id` field, copying Guile adds both its 2-card discard
-    cost and its `target_mood_id`), plus a repeat checkbox if you have
-    Duplicity in play and the copied mood has its own after-playing
-    ability, plus Scorn's/Validation's own reactions if you have those in
-    play and the copied mood's color/value qualifies — all precomputed
+    cost and its `target_mood_id`), plus Scorn's/Validation's own
+    reactions if you have those in play and the copied mood's
+    color/value qualifies — all precomputed
     per candidate server-side (`copy_simulation`, see `php-app/README.md`)
     so switching candidates needs no round trip. If the copied mood has
     its own "to play" cost that can't currently be paid, Play stays
@@ -104,8 +109,14 @@ routed to the PHP app).
     player (Disillusionment's queue starts with the next player in turn
     order and wraps around to the acting player themselves last); only
     the one player currently up in the queue is prompted at a time, and
-    the round only unfreezes once the last one has answered. There's no
-    timeout — if a targeted player goes AFK the round just stays paused.
+    the round only unfreezes once the last one has answered. Duplicity's
+    repeat offer (see above) uses this exact same pause-and-respond
+    mechanism, just targeting the acting player themselves instead of an
+    opponent — its panel shows a nested checkbox-plus-fields shape rather
+    than a single field, which the response panel renders the same way
+    the ordinary choices panel already renders nested fields. There's no
+    timeout — if a targeted player (including yourself, for a Duplicity
+    repeat) goes AFK the round just stays paused.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

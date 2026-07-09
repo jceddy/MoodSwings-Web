@@ -29,6 +29,15 @@ use MoodSwings\Rules\Exceptions\InvalidChoiceException;
  */
 final class MoodPlayService
 {
+    /**
+     * The key Duplicity's own "repeat again?" pending decision is filed
+     * under -- reserved, never used by any card's own RequiresOpponentDecision
+     * key (see the 7 existing implementations' own private KEY constants),
+     * so resolvePendingDecisions() can tell a repeat-offer answer apart
+     * from an ordinary opponent decision's just by checking for it.
+     */
+    private const DUPLICITY_REPEAT_KEY = 'duplicity_repeat';
+
     public function __construct(private readonly EffectRegistry $registry)
     {
     }
@@ -126,8 +135,9 @@ final class MoodPlayService
      * (needed later for the reaction loop, which per MoodEffect's own
      * contract always reads it, never an invocation's own bag).
      * $invocationChoices is THIS invocation's own bag -- identical to
-     * $topLevelChoices for the card's own afterPlaying(), or the
-     * duplicity_repeat_choices sub-bag for a repeat.
+     * $topLevelChoices for the card's own afterPlaying(), or the answered
+     * repeat-offer's own "choices" sub-bag for a repeat (see
+     * resolveDuplicityRepeatOffer()).
      */
     private function resolveAfterPlayingChain(
         BoardState $state,
@@ -148,7 +158,7 @@ final class MoodPlayService
         if ($effect instanceof RequiresOpponentDecision) {
             $pendingDecisions = $effect->pendingDecisionsFor($state, $cardId, $playerId, $invocationChoices);
             if ($pendingDecisions !== []) {
-                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq);
+                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq, $invocationChoices);
             }
             // Nothing to ask for this specific play (e.g. declined, or no
             // qualifying target/candidate) -- same as an ordinary no-op
@@ -162,11 +172,13 @@ final class MoodPlayService
     }
 
     /**
-     * Resumes a play that paused in resolveAfterPlayingChain() once every
-     * PendingDecisionRequest from that invocation has an answer -- called
-     * by GameService::respondToDecision() once a batch's last row
-     * resolves. $answers is keyed by each PendingDecisionRequest's own
-     * $key, one PlayerChoices per answer.
+     * Resumes a play that paused in resolveAfterPlayingChain() (an
+     * opponent's own decision) or continueAfterPlayingChain() (Duplicity's
+     * "repeat again?" offer, answered by the acting player themselves)
+     * once every PendingDecisionRequest from that invocation has an
+     * answer -- called by GameService::respondToDecision() once a batch's
+     * last row resolves. $answers is keyed by each PendingDecisionRequest's
+     * own $key, one PlayerChoices per answer.
      *
      * @param array<string, PlayerChoices> $answers
      */
@@ -179,6 +191,10 @@ final class MoodPlayService
         int $invocationSeq,
         array $answers,
     ): PlayResult {
+        if (isset($answers[self::DUPLICITY_REPEAT_KEY])) {
+            return $this->resolveDuplicityRepeatOffer($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $answers[self::DUPLICITY_REPEAT_KEY]);
+        }
+
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         $effect = $this->registry->for($effectiveEffectKey);
         if (!$effect instanceof RequiresOpponentDecision) {
@@ -195,12 +211,27 @@ final class MoodPlayService
      * mood's after-playing effect happen an additional time." This needs
      * the registry (which no MoodEffect implementation has access to) to
      * re-invoke the just-played card's own effect, so it's handled
-     * directly here rather than through reactToAnotherPlay() -- with a
-     * nested sub-choices bag, since the repeat is a fresh decision that
-     * usually can't reuse the same choices verbatim (e.g. a specific card
-     * already discarded once can't be discarded again). Only the played
-     * card's own (invocationSeq 0) afterPlaying() can be repeated once --
-     * a repeat of a repeat was never offered by the choices schema either.
+     * directly here rather than through reactToAnotherPlay(). Every mood
+     * the acting player owns whose EFFECTIVE effect key is 'duplicity'
+     * (a real Duplicity, or a Creativity currently copying one) grants its
+     * own independent repeat -- $invocationSeq already counts how many
+     * repeats have happened so far (1 = after the first repeat, etc.), so
+     * comparing it against the current count of such moods in play caps
+     * the chain at exactly that many, however many there turn out to be,
+     * rather than the old hard "exactly one, ever" limit. Never offered
+     * for Duplicity's own just-played instance (repeating its own "grant
+     * an extra play" via itself would be a strange self-loop the printed
+     * text doesn't seem to intend).
+     *
+     * Rather than a flat pre-submitted boolean (the old design), this is
+     * itself a pending decision targeting the ACTING player -- see
+     * PendingDecisionRequest's own docblock for why a same-player decision
+     * still needs the same durable pause: the player might not want to
+     * commit to every repeat's choices up front, especially since a later
+     * repeat's own valid candidates can depend on what an earlier one just
+     * did (e.g. a card an earlier repeat discarded is no longer a valid
+     * hand-card choice for a later one) -- something only the server, not
+     * a pre-rendered form, can know for certain at each step.
      */
     private function continueAfterPlayingChain(
         BoardState $state,
@@ -210,24 +241,80 @@ final class MoodPlayService
         int $invocationSeq,
     ): PlayResult {
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $duplicitySources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'duplicity');
 
-        if (
-            $invocationSeq === 0
-            && $effectiveEffectKey !== 'duplicity'
-            && $topLevelChoices->bool('duplicity_repeat')
-            && $state->playerHasMoodInPlay($playerId, 'duplicity')
-        ) {
-            return $this->resolveAfterPlayingChain(
-                $state,
-                $cardId,
-                $playerId,
-                $topLevelChoices,
-                $topLevelChoices->sub('duplicity_repeat_choices'),
-                $invocationSeq + 1,
-            );
+        if ($effectiveEffectKey !== 'duplicity' && $invocationSeq < $duplicitySources) {
+            // The repeat-offer's own answer is resolved directly by
+            // resolveDuplicityRepeatOffer() below, which never reads the
+            // batch's stored invocation_choices -- $topLevelChoices here
+            // is just a harmless, always-valid placeholder to satisfy
+            // PlayResult::pending()'s signature.
+            return PlayResult::pending([$this->duplicityRepeatOfferRequest($playerId, $effectiveEffectKey)], $cardId, $invocationSeq, $topLevelChoices);
         }
 
         return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);
+    }
+
+    /**
+     * Builds Duplicity's own "repeat again?" PendingDecisionRequest: a
+     * single nested field wrapping a plain "repeat?" checkbox
+     * (CardChoiceSchema::REACTIONS['duplicity']'s own label, reused so the
+     * wording matches what a still-in-progress play's own hand-card panel
+     * already used before this pause-based redesign) alongside a second
+     * nested "choices" field carrying $effectiveEffectKey's own
+     * afterPlayingFields() -- the same shape the repeated card's own
+     * after-playing choices always take, cost fields excluded since a
+     * repeat never re-pays a "to play" cost.
+     */
+    private function duplicityRepeatOfferRequest(int $playerId, string $effectiveEffectKey): PendingDecisionRequest
+    {
+        $template = CardChoiceSchema::reactionTemplate('duplicity');
+
+        return new PendingDecisionRequest(
+            key: self::DUPLICITY_REPEAT_KEY,
+            targetPlayerId: $playerId,
+            decisionType: 'duplicity_repeat_offer',
+            field: [
+                'key' => self::DUPLICITY_REPEAT_KEY,
+                'type' => 'nested',
+                'required' => false,
+                'label' => $template['label'],
+                'fields' => [
+                    ['key' => 'repeat', 'type' => 'bool', 'required' => false, 'label' => 'Repeat again?'],
+                    [
+                        'key' => 'choices',
+                        'type' => 'nested',
+                        'required' => false,
+                        'label' => 'Choices for the repeat (only used if repeating above)',
+                        'fields' => CardChoiceSchema::afterPlayingFields($effectiveEffectKey),
+                    ],
+                ],
+            ],
+        );
+    }
+
+    /**
+     * Resolves Duplicity's own "repeat again?" answer -- $repeatAnswer is
+     * keyed the same way collectAnswers() keys every other answer (by the
+     * PendingDecisionRequest's own $key), so reading it back out needs the
+     * same key again, matching every RequiresOpponentDecision
+     * implementation's own resolveDecisions() convention exactly (see e.g.
+     * CompulsionEffect).
+     */
+    private function resolveDuplicityRepeatOffer(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        int $invocationSeq,
+        PlayerChoices $repeatAnswer,
+    ): PlayResult {
+        $repeatBag = $repeatAnswer->sub(self::DUPLICITY_REPEAT_KEY);
+        if (!$repeatBag->bool('repeat')) {
+            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);
+        }
+
+        return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $repeatBag->sub('choices'), $invocationSeq + 1);
     }
 
     /**
