@@ -916,7 +916,7 @@ final class GameService
      * default for an in-play/discard-pile card being merely displayed,
      * since nothing there ever reads it.
      *
-     * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool}
+     * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
     private function serializeCard(BoardState $state, int $cardId, ?int $reactingViewerId = null): array
     {
@@ -953,7 +953,44 @@ final class GameService
             'has_dice_value' => $diceValueCatalog['altValue'] !== null,
             'choice_fields' => $choiceFields,
             'is_playable' => $reactingViewerId === null || $this->plays->isPlayable($state, $reactingViewerId, $cardId),
+            'copy_simulation' => ($reactingViewerId !== null && $catalog['effectKey'] === 'creativity')
+                ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
+                : null,
         ];
+    }
+
+    /**
+     * For Creativity specifically (identified above by its own raw
+     * effect_key), precomputes -- for every mood currently in play --
+     * what the choices panel would need to offer if this Creativity ends
+     * up copying that mood: the same reactionFields()/duplicityFields()
+     * this class already builds for an ordinary hand card, just
+     * parameterized by the candidate's own raw color/base_value/catalog
+     * row (never the "effective," copy-resolved one -- matches
+     * MoodPlayService::playMood()'s own zero-hop $state->catalogRow($copiedCardId)
+     * resolution exactly, so copying a copy correctly simulates "blank
+     * Creativity," not whatever the copy itself was copying), plus
+     * whether that candidate's own "to play" cost could be paid right
+     * now. The client swaps in the matching bundle as copy_card_id
+     * changes instead of needing a round trip -- see web-static/README.md.
+     *
+     * @return array<int, array{extra_fields: array<int, array<string, mixed>>, cost_payable: bool}>
+     */
+    private function creativityCopySimulation(BoardState $state, int $viewerId, int $creativityCardId): array
+    {
+        $simulation = [];
+        foreach ($state->moodsInPlay() as $candidateCardId => $mood) {
+            $candidateRow = $state->catalogRow($candidateCardId);
+            $simulation[$candidateCardId] = [
+                'extra_fields' => [
+                    ...$this->reactionFields($state, $viewerId, $candidateRow['color'], $candidateRow['baseValue']),
+                    ...$this->duplicityFields($state, $viewerId, $candidateRow),
+                ],
+                'cost_payable' => $this->plays->canPayCopiedToPlayCost($state, $viewerId, $creativityCardId, $candidateCardId),
+            ];
+        }
+
+        return $simulation;
     }
 
     /**

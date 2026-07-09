@@ -558,6 +558,207 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('target_mood_id', $nested['fields'][0]['key']);
     }
 
+    public function testCopySimulationIsNullForNonCreativityCards(): void
+    {
+        $u1 = $this->insertUser('copysimnull1');
+        $u2 = $this->insertUser('copysimnull2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+
+        self::assertNull(self::findByCardId($hand, 8)['copy_simulation']);
+    }
+
+    /**
+     * Creativity's own choice_fields never gets a duplicity_repeat field
+     * (its raw hasAfterPlaying is false), but copy_simulation -- keyed by
+     * every in-play candidate -- has to offer the repeat option for a
+     * candidate that DOES have its own after-playing ability, using that
+     * candidate's own afterPlayingFields() for the nested sub-form, the
+     * same way an ordinary after-playing hand card already would. A
+     * candidate that's itself Duplicity is excluded, mirroring
+     * duplicityFields()'s own effectKey === 'duplicity' check -- copying
+     * Duplicity shouldn't offer to repeat Duplicity's own effect.
+     */
+    public function testCopySimulationOffersDuplicitysRepeatForAnAfterPlayingCandidateButNotForDuplicityItself(): void
+    {
+        $u1 = $this->insertUser('copysimdup1');
+        $u2 = $this->insertUser('copysimdup2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity, owned by the viewer
+        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- a copy candidate with its own afterPlaying
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $creativity = self::findByCardId($hand, 32);
+
+        $dignitySim = $creativity['copy_simulation'][8];
+        $repeatField = self::findFieldByKey($dignitySim['extra_fields'], 'duplicity_repeat');
+        self::assertNotNull($repeatField);
+        $nested = self::findFieldByKey($dignitySim['extra_fields'], 'duplicity_repeat_choices');
+        self::assertNotNull($nested);
+        self::assertCount(1, $nested['fields']);
+        self::assertSame('discard_card_id', $nested['fields'][0]['key']);
+
+        $duplicitySim = $creativity['copy_simulation'][37];
+        self::assertNull(self::findFieldByKey($duplicitySim['extra_fields'], 'duplicity_repeat'));
+    }
+
+    public function testCopySimulationOffersScornsReactionFilteredToTheCandidatesRawColor(): void
+    {
+        $u1 = $this->insertUser('copysimscorn1');
+        $u2 = $this->insertUser('copysimscorn2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn, owned by the viewer
+        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, white
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $creativity = self::findByCardId($hand, 32);
+
+        $scornField = self::findFieldByKey($creativity['copy_simulation'][8]['extra_fields'], 'scorn_suppress_target');
+        self::assertNotNull($scornField);
+        self::assertSame(['white'], $scornField['filter']['colors']);
+    }
+
+    public function testCopySimulationOffersValidationsReactionOnlyForZeroOrOneValueCandidates(): void
+    {
+        $u1 = $this->insertUser('copysimvalid1');
+        $u2 = $this->insertUser('copysimvalid2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation, owned by the viewer
+        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile, base value 0 -- qualifies
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3 -- doesn't qualify
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $creativity = self::findByCardId($hand, 32);
+
+        self::assertNotNull(self::findFieldByKey($creativity['copy_simulation'][40]['extra_fields'], 'validation_extra_play'));
+        self::assertNull(self::findFieldByKey($creativity['copy_simulation'][8]['extra_fields'], 'validation_extra_play'));
+    }
+
+    public function testCopySimulationCostPayableReflectsTheCandidatesOwnCostExcludingCreativitysOwnHandSlot(): void
+    {
+        $u1 = $this->insertUser('copysimcost1');
+        $u2 = $this->insertUser('copysimcost2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity, alone in hand
+        $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile -- needs 2 *other* hand cards to discard
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- no "to play" cost at all
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['you']['hand'], 32);
+        self::assertFalse($creativity['copy_simulation'][40]['cost_payable']);
+        self::assertTrue($creativity['copy_simulation'][8]['cost_payable']);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry -- now 2 other hand cards exist
+
+        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['you']['hand'], 32);
+        self::assertTrue($creativity['copy_simulation'][40]['cost_payable']);
+    }
+
+    /**
+     * Proves the whole mechanism end-to-end, not just the panel metadata:
+     * playing Creativity as a copy of Dignity, with Duplicity in play and
+     * a genuine duplicity_repeat submitted alongside copy_card_id, has to
+     * actually invoke Dignity's own afterPlaying() twice -- once from the
+     * top-level choices, once from duplicity_repeat_choices -- discarding
+     * two different hand cards and boosting Creativity's own live value
+     * to 5, exactly as if a real Dignity had been played and repeated.
+     * MoodPlayService's effective-aware repeat/reaction machinery already
+     * supported this before this change; only the panel never offered it.
+     */
+    public function testPlayingCreativityAsACopyCorrectlyRepeatsTheCopiedEffectViaDuplicity(): void
+    {
+        $u1 = $this->insertUser('copyplay1');
+        $u2 = $this->insertUser('copyplay2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discarded by the first invocation
+        $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3 -- discarded by the repeat
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- the copy target
+
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 32, [
+            'copy_card_id' => 8,
+            'discard_card_id' => 3,
+            'duplicity_repeat' => true,
+            'duplicity_repeat_choices' => ['discard_card_id' => 4],
+        ]);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertSame([], $state->hand($p1));
+        self::assertSame([3, 4], $state->discardPile());
+        self::assertTrue($state->isInPlay(32));
+        self::assertSame('white', $state->colorOf(32)); // Dignity's color, confirming the copy took effect
+        self::assertSame(5, $state->valueOf(32));
+    }
+
     public function testGetStateMarksOnlyTheCardARestrictedGrantCoversAsPlayable(): void
     {
         $u1 = $this->insertUser('restrictedgrant1');
