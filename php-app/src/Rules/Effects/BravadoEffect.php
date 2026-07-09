@@ -29,6 +29,6 @@ final class BravadoEffect extends AbstractMoodEffect
         }
 
         $state->moveInPlayToDiscard($discardMoodId);
-        $state->grantExtraPlay();
+        $state->grantExtraPlay(sourceCardId: $cardId);
     }
 }

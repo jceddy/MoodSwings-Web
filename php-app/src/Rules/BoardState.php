@@ -48,14 +48,21 @@ final class BoardState
     private array $pendingEffectState = [];
 
     /**
-     * @var array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> one entry per
+     * @var array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int}> one entry per
      * outstanding "play an additional mood" grant this turn. null means
-     * unconditional (e.g. Charity); a restriction array means the grant
-     * only covers a card matching it (e.g. Benevolence's "if it doesn't
-     * share a color with any of your moods") -- see grantAllows(). The
-     * 'onUseEffectState' key (Gluttony/Insecurity) tags whichever specific
-     * card ends up consuming this grant with effectState to apply once
-     * it's played -- see useGrantFor() and MoodPlayService.
+     * unconditional AND ungranted -- only ever startTurn()'s own base
+     * allowance (1, or 2 with Hurt Feelings), never a card's grant; every
+     * grantExtraPlay() call is instead a restriction array (even if
+     * $restriction itself was omitted) once 'sourceCardId' is folded in,
+     * since a granted extra play always has a card to attribute it to. A
+     * restriction array's absent 'type' means the grant only covers a card
+     * matching it (e.g. Benevolence's "if it doesn't share a color with
+     * any of your moods") -- see grantAllows(). The 'onUseEffectState' key
+     * (Gluttony/Insecurity) tags whichever specific card ends up consuming
+     * this grant with effectState to apply once it's played -- see
+     * useGrantFor() and MoodPlayService. 'sourceCardId' is purely a UI
+     * reminder-text concern (see GameService::describePlayGrant()) --
+     * grantAllows() itself never reads it.
      */
     private array $playGrants = [];
 
@@ -680,15 +687,26 @@ final class BoardState
 
     /**
      * Grants $count additional plays this turn. $restriction is null for
-     * an unconditional grant (e.g. Charity); otherwise it's a descriptor
-     * (see grantAllows()) that whatever card is played to use this grant
-     * must satisfy -- e.g. Benevolence grants
-     * ['type' => 'does_not_share_color_with_your_moods'].
+     * an otherwise-unconditional grant (e.g. Charity); otherwise it's a
+     * descriptor (see grantAllows()) that whatever card is played to use
+     * this grant must satisfy -- e.g. Benevolence grants
+     * ['type' => 'does_not_share_color_with_your_moods']. $sourceCardId is
+     * every effect's own $cardId, folded into the stored descriptor as
+     * 'sourceCardId' regardless of whether $restriction itself was given,
+     * purely so GameService can later name which card is responsible for
+     * this specific outstanding play (see describePlayGrant()) -- the one
+     * caller that doesn't pass it is BoardStateTest's own generic
+     * "does a grant exist at all" test, and startTurn()'s own base
+     * allowance is never granted through this method at all.
      *
      * @param ?array{type?: string, values?: int[], source?: string} $restriction
      */
-    public function grantExtraPlay(int $count = 1, ?array $restriction = null): void
+    public function grantExtraPlay(int $count = 1, ?array $restriction = null, ?int $sourceCardId = null): void
     {
+        if ($sourceCardId !== null) {
+            $restriction = [...($restriction ?? []), 'sourceCardId' => $sourceCardId];
+        }
+
         for ($i = 0; $i < $count; $i++) {
             $this->playGrants[] = $restriction;
         }

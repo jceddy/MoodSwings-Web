@@ -20,6 +20,6 @@ final class HarmonyEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->grantExtraPlay(1, ['source' => 'discard']);
+        $state->grantExtraPlay(1, ['source' => 'discard'], sourceCardId: $cardId);
     }
 }

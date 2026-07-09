@@ -21,6 +21,6 @@ final class KindnessEffect extends AbstractMoodEffect
 
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->grantExtraPlay(1, ['type' => 'base_value_in', 'values' => self::QUALIFYING_VALUES]);
+        $state->grantExtraPlay(1, ['type' => 'base_value_in', 'values' => self::QUALIFYING_VALUES], sourceCardId: $cardId);
     }
 }

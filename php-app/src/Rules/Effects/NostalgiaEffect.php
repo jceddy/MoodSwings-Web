@@ -28,6 +28,6 @@ final class NostalgiaEffect extends AbstractMoodEffect
             $state->moveDiscardToHand($playerId, $discardCardId);
         }
 
-        $state->grantExtraPlay();
+        $state->grantExtraPlay(sourceCardId: $cardId);
     }
 }

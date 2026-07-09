@@ -26,6 +26,6 @@ final class GluttonyEffect extends AbstractMoodEffect
             'onUseEffectState' => [
                 'afterScoring' => ['action' => 'discard', 'condition' => 'always'],
             ],
-        ]);
+        ], sourceCardId: $cardId);
     }
 }

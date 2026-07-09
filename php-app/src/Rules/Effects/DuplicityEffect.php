@@ -21,6 +21,6 @@ final class DuplicityEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->grantExtraPlay(1);
+        $state->grantExtraPlay(1, sourceCardId: $cardId);
     }
 }

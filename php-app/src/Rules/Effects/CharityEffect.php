@@ -13,6 +13,6 @@ final class CharityEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->grantExtraPlay();
+        $state->grantExtraPlay(sourceCardId: $cardId);
     }
 }

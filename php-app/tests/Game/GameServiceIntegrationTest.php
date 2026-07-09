@@ -999,6 +999,88 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString("paranoiaevt2's hand", $events[0]['description']);
     }
 
+    public function testRecentEventsDescribeTheChoiceActuallyMadeForAPlay(): void
+    {
+        $u1 = $this->insertUser('choiceevt1');
+        $u2 = $this->insertUser('choiceevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity (base 3, dice 5) -- the mood targeted
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 11, ['target_mood_id' => 8]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        self::assertStringContainsString('target mood: Dignity', $events[0]['description']);
+    }
+
+    public function testRoundIncludesPlayGrantsNamingEachOutstandingPlaysSource(): void
+    {
+        $u1 = $this->insertUser('grantevt1');
+        $u2 = $this->insertUser('grantevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 3, []);
+
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+        self::assertCount(1, $playGrants); // the base turn's own grant was just consumed playing Charity
+        self::assertSame('An extra play from Charity', $playGrants[0]['description']);
+        self::assertSame(3, $playGrants[0]['source_card_id']);
+        self::assertSame('Charity', $playGrants[0]['source_card_name']);
+    }
+
+    public function testGetStateExposesEachMoodsPrintedBaseColorAlongsideItsCurrentOne(): void
+    {
+        $u1 = $this->insertUser('imaginationevt1');
+        $u2 = $this->insertUser('imaginationevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 42, 'hand', $p1); // Imagination (blue)
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity (white)
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 42, ['color' => 'red']);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+
+        $imagination = self::findByCardId($inPlay, 42);
+        self::assertSame('red', $imagination['color']);
+        self::assertSame('blue', $imagination['base_color']);
+
+        $charity = self::findByCardId($inPlay, 3);
+        self::assertSame('red', $charity['color']);
+        self::assertSame('white', $charity['base_color']);
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {
