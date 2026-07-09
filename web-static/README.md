@@ -95,14 +95,31 @@ routed to the PHP app).
     card you'd opened to consider playing sitting there instead), since
     otherwise polling would stay silently suspended until the panel was
     manually cancelled, even though the pass itself went through fine.
-    Every mood in play and every card in the discard pile is also
-    clickable, opening a read-only detail view (name, base value, alt
-    value if it has one, current value if a while-in-play effect has
-    changed it, owner, rules text, and — if it's currently suppressed — an
-    indicator naming the suppressing mood, if the game tracks one, and
-    whether the suppression lasts as long as that mood stays in play or
-    just until the end of the current round) so an unfamiliar card can be
-    checked before deciding how to respond to it. Seven cards (Arrogance,
+    Every mood in play is also clickable, opening a read-only detail view
+    (name, base value, alt value if it has one, current value if a
+    while-in-play effect has changed it, owner, rules text, and — if it's
+    currently suppressed — an indicator naming the suppressing mood, if the
+    game tracks one, and whether the suppression lasts as long as that mood
+    stays in play or just until the end of the current round). Two more
+    reminder lines cover the game's other "one mood affects another" cases
+    the same way: a mood whose printed dice value is currently overridden
+    by Encouragement or Idealism shows "Affected by <that mood>", and a
+    mood doing the suppressing/boosting itself shows "Affecting: <targets>"
+    naming everything it's currently affecting (several at once for a
+    mass-suppression card's "all" mode, or for Idealism's blanket "every
+    mood its owner controls"). Every card in the discard pile is clickable
+    too — almost always the same read-only detail view, so an unfamiliar
+    card can be checked before deciding how to respond to it, but the rare
+    exception is a card actually covered by a discard-sourced extra play
+    (Angst/Harmony/Grief) or by Melancholy's "play from the discard pile as
+    though it were your hand" — the same `is_playable` flag that already
+    filters a hand card routes a click on one of those straight to the
+    ordinary Play/Cancel choices panel instead. While the viewer is the one
+    a pending decision (see below) is actually waiting on, their own hand
+    cards switch to opening this same read-only detail view rather than the
+    choices panel too — the response panel, not the ordinary choices panel,
+    owns picking a card in that moment, but an unfamiliar hand card still
+    needs to be checkable before answering. Seven cards (Arrogance,
     Compulsion, Disillusionment, Instability, Intimidation, Malice,
     Suspicion) hand part of their effect to a player other than whoever's
     turn it is, and three more (Avoidance, Confusion, Fury) say a player
@@ -141,7 +158,18 @@ routed to the PHP app).
     (present only while one of these is being decided) shows every
     player's running score-so-far plus who's swapping with whom, right
     above the response panel, the same way suppression info is shown
-    before you decide how to respond to a card you don't recognize.
+    before you decide how to respond to a card you don't recognize. A
+    "Recent plays" list at the bottom of the board shows the last 15
+    plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
+    played Paranoia, revealing Charity from Bob's hand") — it comes along
+    for free with each poll (`state.recent_events`, already fully formatted
+    server-side, see `php-app/README.md`) rather than needing its own
+    endpoint or polling loop. This is specifically what makes Paranoia's
+    and Curiosity's own random reveal visible at all to anyone besides
+    whoever happened to submit that particular play — including, for
+    Paranoia, the very player whose hand card got revealed and buried —
+    since neither card's outcome is derivable from anything else in the
+    state response once the moment it happened has passed.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

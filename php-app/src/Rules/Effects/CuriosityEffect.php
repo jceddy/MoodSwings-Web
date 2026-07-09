@@ -14,7 +14,10 @@ use MoodSwings\Rules\PlayerChoices;
  * do, that player reveals a random card from their hand. If the revealed
  * card shares a color with any mood, this mood's value becomes 6." The
  * revealed card is only looked at, not moved -- it stays in the target's
- * hand either way.
+ * hand either way, so once this request/response is over its identity is
+ * just as invisible to everyone but the acting player as Paranoia's own
+ * reveal would be -- see recordRevealedCard()'s own docblock for why this
+ * is logged the same way.
  */
 final class CuriosityEffect extends AbstractMoodEffect
 {
@@ -33,6 +36,7 @@ final class CuriosityEffect extends AbstractMoodEffect
         }
 
         $revealedCardId = $hand[array_rand($hand)];
+        $state->recordRevealedCard($revealedCardId);
         $revealedColor = $state->colorOf($revealedCardId);
 
         foreach ($state->moodsInPlay() as $mood) {

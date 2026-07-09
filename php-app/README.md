@@ -548,6 +548,62 @@ the suppression doesn't need to watch for anything leaving play to know
 when to lift — it just expires at the round boundary regardless
 (`BoardState::clearEndOfRoundSuppressions()`).
 
+Suppression isn't the only "one in-play mood affects another" relationship
+worth surfacing: a mood with a printed dice value (`has_dice_value`) can
+have it overridden by Encouragement (one specific chosen mood,
+`boostedMoodId`) or Idealism (blanket, every mood its owner controls) --
+see `BoardState::diceValueBoosterCardId()`, which `valueOf()` already
+called internally before this was exposed for UI purposes, just returning
+`bool` under its previous name (`diceValueApplies()`). Each in-play mood
+now carries `boosted_by_card_id`/`boosted_by_name` (the reverse of
+`suppressed_by_*`, computed the same way, `null` unless a booster currently
+applies) and `affecting` -- an array of `{card_id, name, relationship}`
+naming every OTHER in-play mood this one is currently suppressing
+(`relationship: 'suppressed'`, via the new `BoardState::
+suppressedByCardId()`, the reverse lookup of `suppressionSourceCardId`) or
+dice-value-boosting (`relationship: 'dice_value'`, one entry for
+Encouragement's single target, several for Idealism's blanket one -- both
+fall out of the same `diceValueBoosterCardId()` check against every other
+candidate, no special-casing needed). See `GameService::
+affectingEntries()`.
+
+`GameService::getState()`'s `discard_pile` mapping now passes the viewer's
+own game-player id to `serializeCard()` the same way `hand` already does
+(previously omitted, since nothing in the discard pile was ever a play
+candidate) -- `is_playable`/`choice_fields`/Scorn's and Validation's
+reaction fields are now correctly computed for a discard-pile card too,
+covering the rare case a discard-sourced extra play (Angst/Harmony/Grief)
+or Melancholy's blanket "play from the discard pile as though it were your
+hand" actually makes one playable for the rest of the current turn (see
+`BoardState::grantAllows()`'s `'source' => 'discard'` handling, which
+already supported this server-side -- only the state response and the
+frontend's discard-pile click handling were missing).
+
+`GameService::getState()` also carries `recent_events` -- the last 15
+`game_events` rows for the game, newest first, each reduced to a single
+ready-to-display `description` string (`GameService::describeEvent()`).
+This exists specifically to close a hidden-information gap `mood_played`'s
+own event logging otherwise leaves open: its `details` column has always
+only ever held the *choices a player submitted*, never what an effect
+*actually did* with them, which is indistinguishable for almost every card
+(the outcome is a deterministic function of the choices) but not for
+Paranoia/Curiosity -- both pick uniformly at random which of a *target's*
+hand cards to reveal, with `array_rand()`'s result never appearing
+anywhere in `$choices` at all. Once that single HTTP response is gone, no
+player who wasn't the one who submitted the play -- including, for
+Paranoia, the very player whose card got revealed -- had any way to ever
+learn what it was. `BoardState::recordRevealedCard()`/
+`consumeRevealedCardIds()` closes that: both effects record the id they
+picked; `GameService::withRevealedCards()` reads it back immediately
+before the play's own `mood_played` event is logged and folds it into that
+event's `details` as `revealed_card_ids`, which `describeEvent()` then
+expands into "revealing X from Y's hand" using the same `target_player_id`
+choice both cards already share. Nothing else currently needs this same
+treatment -- every other `array_rand()` user (Cruelty/Indecisiveness/
+Altruism) picks from a mood/card that was already publicly visible in play
+or the discard pile before the pick, so there's no hidden information for
+a history entry to be the only way to recover.
+
 ## Game layer
 
 `src/Game/` wires the pure rules engine above to the

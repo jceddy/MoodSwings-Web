@@ -274,7 +274,7 @@ final class GameService
                 return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
             }
 
-            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $choices);
+            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $this->withRevealedCards($state, $choices));
 
             return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
         });
@@ -429,7 +429,7 @@ final class GameService
                 throw $e;
             }
 
-            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $topLevelChoices->toArray());
+            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $this->withRevealedCards($state, $topLevelChoices->toArray()));
 
             return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
         });
@@ -1188,8 +1188,10 @@ final class GameService
 
         $names = $this->cardCatalogNames();
         foreach ($state->moodsInPlay() as $cardId => $mood) {
+            $serialized = $this->serializeCard($state, $cardId);
+            $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
             $response['in_play'][] = [
-                ...$this->serializeCard($state, $cardId),
+                ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
                 'suppression_expiry' => $mood->suppressionExpiry,
@@ -1197,17 +1199,101 @@ final class GameService
                 'suppressed_by_name' => $mood->suppressionSourceCardId !== null
                     ? ($names[$mood->suppressionSourceCardId] ?? null)
                     : null,
+                'boosted_by_card_id' => $boosterCardId,
+                'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
+                'affecting' => $this->affectingEntries($state, $cardId, $names),
             ];
         }
 
+        // $viewerGamePlayerId (not omitted, the way in_play's own mapping
+        // above still is) so is_playable/choice_fields'/reaction fields
+        // reflect the rare case a discard-sourced play grant (Angst,
+        // Harmony, Grief) or Melancholy's blanket "play from the discard
+        // pile as though it were your hand" actually covers one of these
+        // cards right now -- see MoodPlayService::isPlayable() and
+        // BoardState::grantAllows()'s 'source' => 'discard' handling.
         $response['discard_pile'] = array_map(
-            fn (int $cardId) => $this->serializeCard($state, $cardId),
+            fn (int $cardId) => $this->serializeCard($state, $cardId, $viewerGamePlayerId),
             $state->discardPile()
         );
 
         $response['deck_count'] = count($state->deck());
+        $response['recent_events'] = $this->recentEvents($gameId, $players);
 
         return $response;
+    }
+
+    /**
+     * The last few plays/passes/rounds-scored for this game, newest first,
+     * as ready-to-display strings -- a "smallish panel" alternative to
+     * building out a full game-history view, specifically so a player who
+     * wasn't the one who played Paranoia or Curiosity has some way to find
+     * out what got revealed (see BoardState::recordRevealedCard()) instead
+     * of that information being visible only in the instant it happened,
+     * to only the one player who happened to submit that request.
+     * Deliberately built server-side rather than handing the client raw
+     * event rows to interpret -- describeEvent() is the one place that
+     * needs to know each event_type's/detail shape, rather than
+     * duplicating that knowledge into game.js too.
+     *
+     * @param array<int, array{game_player_id:int, username:string}> $players
+     * @return array<int, array{id:int, created_at:string, description:string}>
+     */
+    private function recentEvents(int $gameId, array $players, int $limit = 15): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT id, event_type, acting_game_player_id, card_id, details, created_at
+             FROM game_events WHERE game_id = :game_id ORDER BY id DESC LIMIT :limit'
+        );
+        $stmt->bindValue('game_id', $gameId, PDO::PARAM_INT);
+        $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $playerNames = array_column($players, 'username', 'game_player_id');
+        $cardNames = $this->cardCatalogNames();
+
+        return array_map(
+            fn (array $row) => [
+                'id' => (int) $row['id'],
+                'created_at' => $row['created_at'],
+                'description' => $this->describeEvent($row, $playerNames, $cardNames),
+            ],
+            $stmt->fetchAll(),
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @param array<int, string> $playerNames
+     * @param array<int, string> $cardNames
+     */
+    private function describeEvent(array $row, array $playerNames, array $cardNames): string
+    {
+        $actor = $row['acting_game_player_id'] !== null ? ($playerNames[(int) $row['acting_game_player_id']] ?? 'A player') : 'A player';
+        $cardName = $row['card_id'] !== null ? ($cardNames[(int) $row['card_id']] ?? 'a card') : 'a card';
+        $details = $row['details'] !== null ? json_decode((string) $row['details'], true) : [];
+
+        $description = match ($row['event_type']) {
+            'mood_played' => "{$actor} played {$cardName}",
+            'turn_passed' => "{$actor} passed",
+            'pending_decision_created' => "{$actor} played {$cardName}, waiting on a response",
+            'pending_decision_resolved' => "A response to {$cardName} was resolved",
+            'round_scored' => ($details['skipped'] ?? false) ? 'Round scored (nobody won)' : 'Round scored',
+            default => "{$actor} played {$cardName}",
+        };
+
+        // Paranoia/Curiosity's own reveal -- see BoardState::
+        // recordRevealedCard()'s docblock for why this is the one detail
+        // that has to be spelled out explicitly rather than left for the
+        // choices already folded into $details to explain on their own.
+        $revealedCardIds = $details['revealed_card_ids'] ?? [];
+        if ($revealedCardIds !== []) {
+            $revealedNames = array_map(fn (int $id) => $cardNames[$id] ?? 'a card', $revealedCardIds);
+            $targetName = isset($details['target_player_id']) ? ($playerNames[(int) $details['target_player_id']] ?? 'a player') : 'a player';
+            $description .= ', revealing ' . implode(', ', $revealedNames) . " from {$targetName}'s hand";
+        }
+
+        return $description;
     }
 
     /**
@@ -1216,15 +1302,18 @@ final class GameService
      * card sitting in a hand or the discard pile there's no live effect to
      * apply, so its printed catalog color/base value is what's shown.
      *
-     * $reactingViewerId is only passed for a card in the *viewer's own
-     * hand* -- it's what lets this method decide whether to append Scorn's/
-     * Validation's reactToAnotherPlay() fields (see CardChoiceSchema's
-     * docblock): both react to the viewer's own subsequent plays, so they
-     * only ever apply to a card the viewer might actually play, never to
-     * an in-play or discard-pile card being merely displayed. The same
-     * flag gates 'is_playable' (MoodPlayService::isPlayable()) -- true by
-     * default for an in-play/discard-pile card being merely displayed,
-     * since nothing there ever reads it.
+     * $reactingViewerId is only passed for a card the viewer might actually
+     * end up playing -- every card in their own hand, plus (unlike an
+     * in-play card, which is never itself a play candidate) every card in
+     * the discard pile, since a discard-sourced play grant (Angst,
+     * Harmony, Grief) or Melancholy can make one of those playable too. It's
+     * what lets this method decide whether to append Scorn's/Validation's
+     * reactToAnotherPlay() fields (see CardChoiceSchema's docblock): both
+     * react to the viewer's own subsequent plays, so they only ever apply
+     * to a card the viewer might actually play, never to an in-play card
+     * being merely displayed. The same flag gates 'is_playable'
+     * (MoodPlayService::isPlayable()) -- true by default for an in-play
+     * card being merely displayed, since nothing there ever reads it.
      *
      * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
@@ -1266,6 +1355,46 @@ final class GameService
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
         ];
+    }
+
+    /**
+     * The reverse of a card's own "affected by" info (suppressed_by_*,
+     * boosted_by_*, both set alongside this in the in_play mapping above) --
+     * every OTHER in-play mood that $cardId is itself currently affecting,
+     * so a card like Encouragement or Guilt can say what it's doing without
+     * the viewer having to find and check each target individually.
+     * Suppression can have several targets at once (Guilt/Contempt's "all"
+     * mode); a dice-value boost has at most one specific target for
+     * Encouragement, or several for Idealism's blanket "every mood I own"
+     * (both fall out of the same diceValueBoosterCardId() check on every
+     * other candidate, no special-casing needed here). A card's own
+     * suppression zeroes its value regardless of any dice value that would
+     * otherwise apply (see BoardState::valueOf()), so a currently-suppressed
+     * target is deliberately not excluded here -- Encouragement/Idealism are
+     * still "affecting" it in the sense that they'd apply the moment it's
+     * no longer suppressed, and the target's own card-detail view already
+     * shows the suppression itself distinctly enough not to be confusing.
+     *
+     * @param array<int, string> $names
+     * @return array<int, array{card_id:int, name:string, relationship:string}>
+     */
+    private function affectingEntries(BoardState $state, int $cardId, array $names): array
+    {
+        $affecting = [];
+        foreach ($state->moodsInPlay() as $otherCardId => $otherMood) {
+            if ($otherCardId === $cardId) {
+                continue;
+            }
+            $otherRow = $state->catalogRow($state->effectiveCardId($otherCardId));
+            if ($otherRow['altValue'] !== null && $state->diceValueBoosterCardId($otherCardId) === $cardId) {
+                $affecting[] = ['card_id' => $otherCardId, 'name' => $names[$otherCardId] ?? '?', 'relationship' => 'dice_value'];
+            }
+        }
+        foreach ($state->suppressedByCardId($cardId) as $suppressedCardId) {
+            $affecting[] = ['card_id' => $suppressedCardId, 'name' => $names[$suppressedCardId] ?? '?', 'relationship' => 'suppressed'];
+        }
+
+        return $affecting;
     }
 
     /**
@@ -1644,6 +1773,30 @@ final class GameService
     }
 
     /** @param array<string, mixed> $details */
+    /**
+     * Folds any card ids BoardState::recordRevealedCard() collected during
+     * this play (Paranoia/Curiosity) into $choices before it's logged as a
+     * mood_played event's own details -- see recordRevealedCard()'s own
+     * docblock for why this can't just be read back out of $choices like
+     * everything else in it. A no-op ([] added under a key that's simply
+     * never read) for every other card. Always call this right before the
+     * logEvent() it feeds, never earlier -- consumeRevealedCardIds() clears
+     * what it returns, so calling it any other time would silently drop
+     * the reveal for whichever call actually logs the event.
+     *
+     * @param array<string, mixed> $choices
+     * @return array<string, mixed>
+     */
+    private function withRevealedCards(BoardState $state, array $choices): array
+    {
+        $revealedCardIds = $state->consumeRevealedCardIds();
+        if ($revealedCardIds === []) {
+            return $choices;
+        }
+
+        return [...$choices, 'revealed_card_ids' => $revealedCardIds];
+    }
+
     private function logEvent(int $gameId, ?int $roundId, ?int $actingPlayerId, string $eventType, ?int $cardId, array $details): void
     {
         $stmt = Connection::get()->prepare(
