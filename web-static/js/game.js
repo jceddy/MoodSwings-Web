@@ -612,14 +612,16 @@
         return select;
     }
 
-    // Builds one <label> per field for the choices panel. Most fields are a
-    // label wrapping a single widget (DOM id choice-field-<path>). A
-    // type: 'nested' field (Duplicity's repeat-with-fresh-choices form) is a
-    // label wrapping an indented container of its own sub-fields instead,
-    // each one's path prefixed with the nested field's own key -- e.g.
-    // choice-field-duplicity_repeat_choices.target_mood_id. Only one level
-    // of nesting is ever produced (Duplicity is excluded from repeating
-    // itself server-side, so a nested field's own fields are never nested).
+    // Builds one <label> per field for the choices panel and the
+    // pending-decision panel alike. Most fields are a label wrapping a
+    // single widget (DOM id choice-field-<path>). A type: 'nested' field
+    // is a label wrapping an indented container of its own sub-fields
+    // instead, each one's path prefixed with the nested field's own key --
+    // recursively, so nesting can be more than one level deep. Currently
+    // only Duplicity's repeat offer uses this: a top-level 'duplicity_repeat'
+    // nested field holding a 'repeat' checkbox plus its own nested
+    // 'choices' field (the repeated card's own fields), giving paths like
+    // choice-field-duplicity_repeat.choices.target_mood_id.
     function buildFieldRow(field, card, path, onChange) {
         path = path || field.key;
         onChange = onChange || updatePlayButtonEnabled;
@@ -651,8 +653,9 @@
     // updatePlayButtonEnabled without recursing: a nested field's own
     // sub-fields may carry `required: true` from their original card
     // schema, but whether that requirement actually applies here depends on
-    // the sibling duplicity_repeat checkbox, so it's left informational
-    // only (not enforced client-side) for this pass.
+    // the sibling 'repeat?' checkbox (Duplicity's repeat offer -- see
+    // updateRespondButtonEnabled()), so it's left informational only (not
+    // enforced client-side) for this pass.
     function collectValidatableFields(fields, prefix) {
         const result = [];
         for (const field of fields) {
@@ -880,13 +883,25 @@
 
         activePendingDecision = pendingDecision;
         document.getElementById('pending-decision-title').textContent =
-            'Respond to ' + (pendingDecision.played_card_name || 'a mood');
+            pendingDecision.decision_type === 'duplicity_repeat_offer'
+                ? "Repeat " + (pendingDecision.played_card_name || 'this mood') + "'s effect?"
+                : 'Respond to ' + (pendingDecision.played_card_name || 'a mood');
+
+        // Duplicity's repeat-offer is about the ALREADY-PLAYED card itself
+        // (still correctly excludable from a mood/hand_card field's own
+        // candidates via fieldOptions()'s card.card_id check, the same way
+        // it would be while that card was still being played) -- every
+        // other decision type has no "card being played" from the
+        // responder's own perspective, so the placeholder stays a no-op.
+        const fieldCard = pendingDecision.decision_type === 'duplicity_repeat_offer'
+            ? { card_id: pendingDecision.played_card_id }
+            : PENDING_DECISION_PLACEHOLDER_CARD;
 
         const fieldContainer = document.getElementById('pending-decision-field');
         fieldContainer.innerHTML = '';
         fieldContainer.appendChild(buildFieldRow(
             pendingDecision.field,
-            PENDING_DECISION_PLACEHOLDER_CARD,
+            fieldCard,
             pendingDecision.field.key,
             updateRespondButtonEnabled
         ));
@@ -903,6 +918,20 @@
         }
 
         const field = activePendingDecision.field;
+
+        // Duplicity's repeat-offer is the one pending-decision field shaped
+        // like a nested choices-panel field (a "repeat?" checkbox plus a
+        // nested sub-form for the repeat's own choices) rather than a
+        // single simple widget -- declining is always a complete, valid
+        // answer regardless of what the (inert unless repeating) nested
+        // form contains, matching the same "not enforced client-side"
+        // tradeoff this codebase already accepts for the ordinary choices
+        // panel's own nested-field required-ness (see updatePlayButtonEnabled()).
+        if (field.type === 'nested') {
+            respondButton.disabled = false;
+            return;
+        }
+
         const widget = document.getElementById('choice-field-' + field.key);
         respondButton.disabled = !fieldHasValue(widget, field) || !!fieldValidationMessage(field, widget);
     }
@@ -950,10 +979,10 @@
 
     // Builds the choices payload, descending into a nested field's own
     // .fields with a dotted path (matching buildFieldRow's widget ids) to
-    // produce a sub-object -- e.g. { duplicity_repeat: true,
-    // duplicity_repeat_choices: { target_mood_id: 12 } }. A nested field is
-    // only included if its sub-object ended up non-empty, so submitting
-    // without touching the repeat leaves the payload as if it weren't there.
+    // produce a sub-object -- e.g. { duplicity_repeat: { repeat: true,
+    // choices: { target_mood_id: 12 } } }. A nested field is only included
+    // if its sub-object ended up non-empty, so submitting without touching
+    // the repeat offer leaves the payload as if it weren't there.
     function buildChoicesFromFields(fields, prefix) {
         const choices = {};
         for (const field of fields) {

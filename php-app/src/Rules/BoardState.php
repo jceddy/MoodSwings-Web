@@ -735,12 +735,26 @@ final class BoardState
     /** Whether $playerId currently has a mood with effect_key $effectKey in play (e.g. Melancholy, or GameService checking for Hope/Grace/Stubbornness at the start of a turn). */
     public function playerHasMoodInPlay(int $playerId, string $effectKey): bool
     {
+        return $this->countMoodsInPlayWithEffectiveKey($playerId, $effectKey) > 0;
+    }
+
+    /**
+     * How many of $playerId's own in-play moods have $effectKey as their
+     * EFFECTIVE (copy-aware) effect key -- e.g. a real Duplicity plus a
+     * Creativity currently copying Duplicity both count. Most callers only
+     * need playerHasMoodInPlay()'s boolean; Duplicity's repeat-offer needs
+     * the actual count, since each such mood grants its own independent
+     * "may repeat" decision (see MoodPlayService::continueAfterPlayingChain()).
+     */
+    public function countMoodsInPlayWithEffectiveKey(int $playerId, string $effectKey): int
+    {
+        $count = 0;
         foreach ($this->moodsOwnedBy($playerId) as $mood) {
             if ($this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'] === $effectKey) {
-                return true;
+                $count++;
             }
         }
 
-        return false;
+        return $count;
     }
 }

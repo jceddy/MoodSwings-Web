@@ -59,29 +59,39 @@ namespace MoodSwings\Rules;
  *                            // only ever re-invokes afterPlaying(), never the cost again.
  * }
  *
- * Scorn's and Validation's reactToAnotherPlay() choices, and Duplicity's
- * repeat-with-fresh-choices mechanic, don't fit the per-effect_key SCHEMA
- * above -- all three fire while playing a *different* card, triggered by a
- * mood the acting player already has in play (see
- * MoodPlayService::playMood(): the reactToAnotherPlay() loop for Scorn/
- * Validation, and the dedicated 'duplicity_repeat'/'duplicity_repeat_choices'
- * block -- using PlayerChoices::sub() -- for Duplicity). REACTIONS below
- * holds their fixed field shape; GameService::serializeCard() decides, per
- * hand card, whether to append them -- it knows the viewer's own in-play
- * moods (playerHasMoodInPlay()) and the specific card being offered, which
- * is exactly what's needed to fill in Scorn's color filter (must match
- * *this* card's color), gate Validation's field on *this* card's base
- * value being 0 or 1, and build Duplicity's nested repeat sub-form from
- * *this* card's own afterPlayingFields().
+ * Scorn's and Validation's reactToAnotherPlay() choices don't fit the
+ * per-effect_key SCHEMA above -- both fire while playing a *different*
+ * card, triggered by a mood the acting player already has in play, as
+ * part of the *same* request (see MoodEffect::reactToAnotherPlay()).
+ * REACTIONS below holds their fixed field shape; GameService::serializeCard()
+ * decides, per hand card, whether to append them -- it knows the viewer's
+ * own in-play moods (playerHasMoodInPlay()) and the specific card being
+ * offered, which is exactly what's needed to fill in Scorn's color filter
+ * (must match *this* card's color) and gate Validation's field on *this*
+ * card's base value being 0 or 1.
+ *
+ * Duplicity's repeat-with-fresh-choices mechanic also doesn't fit the
+ * per-effect_key SCHEMA above, but for a different reason: it isn't
+ * decided as part of the triggering play's own request at all -- it's a
+ * genuine mid-play pause offered to the acting player themselves *after*
+ * the played card's afterPlaying() resolves, via the same
+ * PendingDecisionRequest/game_pending_decision_batches machinery the
+ * seven RequiresOpponentDecision cards use (see MoodPlayService::
+ * continueAfterPlayingChain()/duplicityRepeatOfferRequest()). REACTIONS'
+ * 'duplicity' entry supplies just the offer's label; its nested 'choices'
+ * sub-field is built from afterPlayingFields() below, against the played
+ * card's own effect_key.
  *
  * Creativity's copy_card_id choice (see the 'creativity' entry below)
- * isn't known until its own panel is open, so a Duplicity repeat or a
- * Scorn/Validation reaction to a Creativity play can't be precomputed
- * here against Creativity's own (ability-less) row the way this schema
- * handles every other card -- GameService::creativityCopySimulation()
- * covers this instead, reusing reactionFields()/duplicityFields() but
- * parameterized per in-play candidate rather than by Creativity's own
- * raw catalog row; see php-app/README.md.
+ * isn't known until its own panel is open, so a Scorn/Validation reaction
+ * to a Creativity play can't be precomputed here against Creativity's own
+ * (ability-less) row the way this schema handles every other card --
+ * GameService::creativityCopySimulation() covers this instead, reusing
+ * reactionFields() but parameterized per in-play candidate rather than by
+ * Creativity's own raw catalog row; see php-app/README.md. A Duplicity
+ * repeat of a Creativity copy needs no such precomputation, since it's
+ * resolved after the play completes, against whatever effect_key the
+ * copy actually resolved to.
  *
  * Cards with no printed ability, and cards whose effect never reads
  * PlayerChoices at all (pure computeValue() formulas; unconditional
@@ -329,11 +339,16 @@ final class CardChoiceSchema
     ];
 
     /**
-     * Templates for reactToAnotherPlay() fields, keyed by the *reacting*
-     * card's effect_key -- GameService::serializeCard() fills in the
-     * per-played-card specifics (Scorn's color filter, Validation's
-     * value-gated inclusion) before appending these to a hand card's own
-     * choice_fields.
+     * Templates for reactToAnotherPlay() fields (Scorn/Validation) and for
+     * Duplicity's repeat offer, keyed by the *reacting* card's effect_key.
+     * Scorn's and Validation's templates are filled in by
+     * GameService::serializeCard() (color filter, value-gated inclusion)
+     * before being appended to a hand card's own choice_fields -- both fire
+     * as part of the *triggering* play's own request. Duplicity's is
+     * instead used by MoodPlayService::duplicityRepeatOfferRequest() to
+     * label a post-play PendingDecisionRequest offered to the acting
+     * player themselves, since a repeat is no longer decided as part of
+     * the original play request at all.
      *
      * @var array<string, array<string, mixed>>
      */

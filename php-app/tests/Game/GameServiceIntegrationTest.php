@@ -448,7 +448,15 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'validation_extra_play'));
     }
 
-    public function testGetStateAppendsDuplicityRepeatFieldsForAHandCardWithItsOwnAfterPlayingField(): void
+    /**
+     * Duplicity's repeat option is no longer a pre-submitted top-level
+     * choice_fields entry -- it's a pending decision targeting the ACTING
+     * player themselves, offered only once the played card's own
+     * after-playing effect (here Dignity's) has already resolved. Every
+     * other viewer sees who it's waiting on but not the actual field,
+     * same hidden-information scoping as an opponent's own decision.
+     */
+    public function testGetStateExposesDuplicitysRepeatOfferAsAPendingDecisionForTheActingPlayer(): void
     {
         $u1 = $this->insertUser('duplicity1');
         $u2 = $this->insertUser('duplicity2');
@@ -460,78 +468,44 @@ final class GameServiceIntegrationTest extends TestCase
         $gameId = (int) $this->pdo->lastInsertId();
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
-        $this->insertGamePlayer($gameId, $u2, 1);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
         $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity -- has its own afterPlaying choice
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discard fodder
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
-        $dignity = self::findByCardId($hand, 8);
+        $playResult = $this->games->playMood($gameId, $p1, 8, ['discard_card_id' => 3]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
 
-        $repeat = self::findFieldByKey($dignity['choice_fields'], 'duplicity_repeat');
-        self::assertNotNull($repeat, 'expected a duplicity_repeat field on Dignity while Duplicity is in play');
-        self::assertSame('bool', $repeat['type']);
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame($p1, $pending['target_game_player_id']);
+        self::assertTrue($pending['is_you']);
+        self::assertSame('duplicity_repeat_offer', $pending['decision_type']);
+        self::assertSame('duplicity_repeat', $pending['field']['key']);
+        self::assertSame('nested', $pending['field']['type']);
+        self::assertSame('repeat', $pending['field']['fields'][0]['key']);
+        self::assertSame('bool', $pending['field']['fields'][0]['type']);
+        $choicesField = $pending['field']['fields'][1];
+        self::assertSame('choices', $choicesField['key']);
+        self::assertCount(1, $choicesField['fields']);
+        self::assertSame('discard_card_id', $choicesField['fields'][0]['key']);
 
-        $nested = self::findFieldByKey($dignity['choice_fields'], 'duplicity_repeat_choices');
-        self::assertNotNull($nested);
-        self::assertSame('nested', $nested['type']);
-        self::assertCount(1, $nested['fields']);
-        self::assertSame('discard_card_id', $nested['fields'][0]['key']);
+        // A bystander sees who it's waiting on, never the actual field.
+        $bystanderPending = $this->games->getState($gameId, $u2)['round']['pending_decision'];
+        self::assertFalse($bystanderPending['is_you']);
+        self::assertArrayNotHasKey('field', $bystanderPending);
     }
 
-    public function testGetStateOmitsDuplicityFieldsWhenViewerHasNoDuplicityInPlay(): void
-    {
-        $u1 = $this->insertUser('noduplicity1');
-        $u2 = $this->insertUser('noduplicity2');
-
-        $stmt = $this->pdo->prepare(
-            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
-        );
-        $stmt->execute(['created_by' => $u1]);
-        $gameId = (int) $this->pdo->lastInsertId();
-
-        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
-        $this->insertGamePlayer($gameId, $u2, 1);
-
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, no Duplicity anywhere in play
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
-
-        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
-
-        self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'duplicity_repeat'));
-        self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'duplicity_repeat_choices'));
-    }
-
-    public function testGetStateOmitsDuplicityFieldsForCreativitySinceItsRawHasAfterPlayingIsFalse(): void
-    {
-        $u1 = $this->insertUser('creativitydup1');
-        $u2 = $this->insertUser('creativitydup2');
-
-        $stmt = $this->pdo->prepare(
-            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
-        );
-        $stmt->execute(['created_by' => $u1]);
-        $gameId = (int) $this->pdo->lastInsertId();
-
-        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
-        $this->insertGamePlayer($gameId, $u2, 1);
-
-        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
-        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity -- raw hasAfterPlaying is false
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
-
-        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
-        $creativity = self::findByCardId($hand, 32);
-
-        self::assertNull(self::findFieldByKey($creativity['choice_fields'], 'duplicity_repeat'));
-        $copyField = self::findFieldByKey($creativity['choice_fields'], 'copy_card_id');
-        self::assertNotNull($copyField);
-        self::assertSame('mood', $copyField['type']);
-        self::assertSame('any', $copyField['scope']);
-    }
-
-    public function testGetStatesDuplicityNestedChoicesExcludeGuilesCostFieldButKeepItsTargetField(): void
+    /**
+     * Guile's own "to play" cost field never belongs in a repeat's own
+     * choices -- a repeat only re-invokes afterPlaying(), never re-pays a
+     * cost already paid once when Guile was originally played -- mirrors
+     * CardChoiceSchema::afterPlayingFields()'s own stage:'cost' exclusion,
+     * now consumed by MoodPlayService::duplicityRepeatOfferRequest()
+     * instead of the old choice_fields-level duplicityFields().
+     */
+    public function testDuplicitysRepeatOfferExcludesGuilesCostFieldButKeepsItsTargetField(): void
     {
         $u1 = $this->insertUser('guiledup1');
         $u2 = $this->insertUser('guiledup2');
@@ -543,19 +517,23 @@ final class GameServiceIntegrationTest extends TestCase
         $gameId = (int) $this->pdo->lastInsertId();
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
-        $this->insertGamePlayer($gameId, $u2, 1);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
         $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile -- discard cost + afterPlaying target
+        $this->insertGameCard($gameId, 3, 'hand', $p1);
+        $this->insertGameCard($gameId, 7, 'hand', $p1); // Guile's own 2-card discard cost
+        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Guile's own afterPlaying target
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
-        $guile = self::findByCardId($hand, 40);
+        $playResult = $this->games->playMood($gameId, $p1, 40, ['discard_card_ids' => [3, 7], 'target_mood_id' => 9]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
 
-        $nested = self::findFieldByKey($guile['choice_fields'], 'duplicity_repeat_choices');
-        self::assertNotNull($nested);
-        self::assertCount(1, $nested['fields']);
-        self::assertSame('target_mood_id', $nested['fields'][0]['key']);
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        $choicesField = $pending['field']['fields'][1];
+        self::assertSame('choices', $choicesField['key']);
+        self::assertCount(1, $choicesField['fields']);
+        self::assertSame('target_mood_id', $choicesField['fields'][0]['key']);
     }
 
     public function testCopySimulationIsNullForNonCreativityCards(): void
@@ -591,7 +569,14 @@ final class GameServiceIntegrationTest extends TestCase
      * duplicityFields()'s own effectKey === 'duplicity' check -- copying
      * Duplicity shouldn't offer to repeat Duplicity's own effect.
      */
-    public function testCopySimulationOffersDuplicitysRepeatForAnAfterPlayingCandidateButNotForDuplicityItself(): void
+    /**
+     * Duplicity's repeat is no longer part of copy_simulation at all --
+     * once a Creativity play is actually in play (real or copied), the
+     * same pause-based repeat-offer mechanism applies uniformly (see
+     * MoodPlayService::continueAfterPlayingChain()), so there's nothing
+     * copy-specific left to precompute in the panel here.
+     */
+    public function testCopySimulationNeverIncludesDuplicitysRepeatSinceItsNowAPostPlayPause(): void
     {
         $u1 = $this->insertUser('copysimdup1');
         $u2 = $this->insertUser('copysimdup2');
@@ -607,22 +592,13 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity, owned by the viewer
         $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
-        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- a copy candidate with its own afterPlaying
+        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- has its own afterPlaying
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
         $creativity = self::findByCardId($hand, 32);
 
-        $dignitySim = $creativity['copy_simulation'][8];
-        $repeatField = self::findFieldByKey($dignitySim['extra_fields'], 'duplicity_repeat');
-        self::assertNotNull($repeatField);
-        $nested = self::findFieldByKey($dignitySim['extra_fields'], 'duplicity_repeat_choices');
-        self::assertNotNull($nested);
-        self::assertCount(1, $nested['fields']);
-        self::assertSame('discard_card_id', $nested['fields'][0]['key']);
-
-        $duplicitySim = $creativity['copy_simulation'][37];
-        self::assertNull(self::findFieldByKey($duplicitySim['extra_fields'], 'duplicity_repeat'));
+        self::assertNull(self::findFieldByKey($creativity['copy_simulation'][8]['extra_fields'], 'duplicity_repeat'));
     }
 
     public function testCopySimulationOffersScornsReactionFilteredToTheCandidatesRawColor(): void
@@ -711,12 +687,11 @@ final class GameServiceIntegrationTest extends TestCase
 
     /**
      * Proves the whole mechanism end-to-end, not just the panel metadata:
-     * playing Creativity as a copy of Dignity, with Duplicity in play and
-     * a genuine duplicity_repeat submitted alongside copy_card_id, has to
-     * actually invoke Dignity's own afterPlaying() twice -- once from the
-     * top-level choices, once from duplicity_repeat_choices -- discarding
-     * two different hand cards and boosting Creativity's own live value
-     * to 5, exactly as if a real Dignity had been played and repeated.
+     * playing Creativity as a copy of Dignity, with Duplicity in play,
+     * pauses for the acting player's own "repeat again?" offer exactly
+     * like a real Dignity play would -- answering it has to actually
+     * invoke Dignity's own afterPlaying() a second time, discarding a
+     * second hand card and boosting Creativity's own live value to 5.
      * MoodPlayService's effective-aware repeat/reaction machinery already
      * supported this before this change; only the panel never offered it.
      */
@@ -742,12 +717,16 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 32, [
+        $playResult = $this->games->playMood($gameId, $p1, 32, [
             'copy_card_id' => 8,
             'discard_card_id' => 3,
-            'duplicity_repeat' => true,
-            'duplicity_repeat_choices' => ['discard_card_id' => 4],
         ]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $respondResult = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 4]],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
@@ -757,6 +736,60 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($state->isInPlay(32));
         self::assertSame('white', $state->colorOf(32)); // Dignity's color, confirming the copy took effect
         self::assertSame(5, $state->valueOf(32));
+    }
+
+    /**
+     * The real end-to-end version of the "repeat of a repeat" fix: a real
+     * Duplicity plus a Creativity already copying one, both in play,
+     * grant two independent repeats of the played card's own effect --
+     * each offered and answered one at a time through the real HTTP-
+     * service-layer respondToDecision() flow, not pre-declared all at
+     * once. Only reachable this way since every card, Duplicity included,
+     * is single-copy.
+     */
+    public function testTwoIndependentDuplicitySourcesGrantTwoChainedRepeatsThroughRespondToDecision(): void
+    {
+        $u1 = $this->insertUser('twodup1');
+        $u2 = $this->insertUser('twodup2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // real Duplicity
+        $this->insertGameCard($gameId, 32, 'in_play', $p1); // Creativity, already copying Duplicity
+        $this->pdo->prepare('UPDATE game_cards SET copied_card_id = 37 WHERE game_id = :game_id AND card_id = 32')
+            ->execute(['game_id' => $gameId]);
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1
+        $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3
+        $this->insertGameCard($gameId, 6, 'hand', $p1); // Conviction, value 2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, 8, ['discard_card_id' => 3]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $respondResult1 = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 4]],
+        ]);
+        self::assertTrue($respondResult1['pending_decision'] ?? false, 'a second independent Duplicity source should still be available');
+
+        $respondResult2 = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 6]],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult2);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertSame([], $state->hand($p1));
+        self::assertSame([3, 4, 6], $state->discardPile());
+        self::assertSame(5, $state->valueOf(8));
     }
 
     public function testGetStateMarksOnlyTheCardARestrictedGrantCoversAsPlayable(): void

@@ -188,7 +188,7 @@ final class GameService
             try {
                 $this->boardStates->save($gameId, $state);
                 $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
-                $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $playerChoices, $result);
+                $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $choices);
 
                 $pdo->commit();
@@ -295,15 +295,21 @@ final class GameService
             $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
 
             if ($result->isPending) {
-                // A Duplicity repeat of this same card also needs a real
-                // opponent decision -- persist the next batch the same way
-                // the original play did, carrying top_level_choices
-                // forward unchanged. Already inside this method's own
-                // transaction, so this just writes rows -- no nested
-                // beginTransaction().
+                // Resolving the last decision uncovered another one --
+                // e.g. a Duplicity repeat of this same card also needing a
+                // real opponent decision, or (now that Duplicity's repeat
+                // is itself a pending decision) the acting player's own
+                // "repeat again?" offer. $result->invocationChoices is
+                // exactly the choices bag that new pause's own invocation
+                // was given -- see PlayResult's own docblock for why this
+                // can't be re-derived from any fixed location in
+                // top_level_choices anymore. top_level_choices itself is
+                // carried forward unchanged, same as the original play.
+                // Already inside this method's own transaction, so this
+                // just writes rows -- no nested beginTransaction().
                 $this->boardStates->save($gameId, $state);
                 $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
-                $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $topLevelChoices->sub('duplicity_repeat_choices'), $result);
+                $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                 $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, []);
 
                 $pdo->commit();
@@ -937,7 +943,6 @@ final class GameService
             $choiceFields = [
                 ...$choiceFields,
                 ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue),
-                ...$this->duplicityFields($state, $reactingViewerId, $catalog),
             ];
         }
 
@@ -963,16 +968,22 @@ final class GameService
      * For Creativity specifically (identified above by its own raw
      * effect_key), precomputes -- for every mood currently in play --
      * what the choices panel would need to offer if this Creativity ends
-     * up copying that mood: the same reactionFields()/duplicityFields()
-     * this class already builds for an ordinary hand card, just
-     * parameterized by the candidate's own raw color/base_value/catalog
-     * row (never the "effective," copy-resolved one -- matches
-     * MoodPlayService::playMood()'s own zero-hop $state->catalogRow($copiedCardId)
+     * up copying that mood: the same reactionFields() this class already
+     * builds for an ordinary hand card, just parameterized by the
+     * candidate's own raw color/base_value/catalog row (never the
+     * "effective," copy-resolved one -- matches MoodPlayService::
+     * playMood()'s own zero-hop $state->catalogRow($copiedCardId)
      * resolution exactly, so copying a copy correctly simulates "blank
      * Creativity," not whatever the copy itself was copying), plus
      * whether that candidate's own "to play" cost could be paid right
      * now. The client swaps in the matching bundle as copy_card_id
      * changes instead of needing a round trip -- see web-static/README.md.
+     * Duplicity's own repeat option isn't part of this: it's no longer a
+     * pre-submitted top-level choice at all (see MoodPlayService::
+     * continueAfterPlayingChain()), so it needs no client-side
+     * precomputation here either -- once the Creativity play is actually
+     * in play (real or copied), the same pause-based offer applies
+     * uniformly, no special-casing for a copy.
      *
      * @return array<int, array{extra_fields: array<int, array<string, mixed>>, cost_payable: bool}>
      */
@@ -982,10 +993,7 @@ final class GameService
         foreach ($state->moodsInPlay() as $candidateCardId => $mood) {
             $candidateRow = $state->catalogRow($candidateCardId);
             $simulation[$candidateCardId] = [
-                'extra_fields' => [
-                    ...$this->reactionFields($state, $viewerId, $candidateRow['color'], $candidateRow['baseValue']),
-                    ...$this->duplicityFields($state, $viewerId, $candidateRow),
-                ],
+                'extra_fields' => $this->reactionFields($state, $viewerId, $candidateRow['color'], $candidateRow['baseValue']),
                 'cost_payable' => $this->plays->canPayCopiedToPlayCost($state, $viewerId, $creativityCardId, $candidateCardId),
             ];
         }
@@ -1019,43 +1027,6 @@ final class GameService
         }
 
         return $fields;
-    }
-
-    /**
-     * Duplicity's repeat-with-fresh-choices fields, appended for *this
-     * specific card* when the viewer has Duplicity in play. Gated on
-     * $catalog['hasAfterPlaying'] -- the card's own *raw* (non-Creativity-
-     * copy-aware) flag, deliberately: MoodPlayService gates the real
-     * repeat on the *effective* (copy-aware) row, but since Creativity's
-     * copy_card_id is only known once the play is actually submitted, this
-     * can't precompute the right nested fields for a Creativity play here
-     * -- so Creativity (whose own raw hasAfterPlaying is false) simply
-     * never gets a repeat option, rather than offering a wrong one. See
-     * CardChoiceSchema's docblock for the same note.
-     *
-     * @param array{effectKey:string,hasAfterPlaying:bool} $catalog
-     * @return array<int, array<string, mixed>>
-     */
-    private function duplicityFields(BoardState $state, int $viewerId, array $catalog): array
-    {
-        if (
-            !$catalog['hasAfterPlaying']
-            || $catalog['effectKey'] === 'duplicity'
-            || !$state->playerHasMoodInPlay($viewerId, 'duplicity')
-        ) {
-            return [];
-        }
-
-        return [
-            CardChoiceSchema::reactionTemplate('duplicity'),
-            [
-                'key' => 'duplicity_repeat_choices',
-                'type' => 'nested',
-                'required' => false,
-                'label' => 'Choices for the repeat (only used if repeating above)',
-                'fields' => CardChoiceSchema::afterPlayingFields($catalog['effectKey']),
-            ],
-        ];
     }
 
     /** @return array<int, string> card_id => name */

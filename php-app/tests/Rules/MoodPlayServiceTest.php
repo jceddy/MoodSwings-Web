@@ -3134,19 +3134,36 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(1, $state->playsRemaining());
     }
 
-    public function testDuplicityRepeatsAnotherMoodsAfterPlayingEffectWithFreshChoices(): void
+    public function testDuplicityPausesForTheActingPlayersOwnRepeatOfferThenRepeatsWithFreshChoices(): void
     {
         $state = $this->boardState(hands: [1 => [37, 8, 3, 7]]); // Duplicity, Dignity, Charity (value 1), Courage (value 1)
         $state->startTurn(1);
         $state->grantExtraPlay(1);
         $this->plays->playMood($state, 1, 37, new PlayerChoices([]));
 
-        $this->plays->playMood($state, 1, 8, new PlayerChoices([
-            'discard_card_id' => 3,
-            'duplicity_repeat' => true,
-            'duplicity_repeat_choices' => ['discard_card_id' => 7],
-        ]));
+        $choices = new PlayerChoices(['discard_card_id' => 3]);
+        $result = $this->plays->playMood($state, 1, 8, $choices);
 
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        $decision = $result->pendingDecisions[0];
+        self::assertSame('duplicity_repeat', $decision->key);
+        self::assertSame(1, $decision->targetPlayerId); // the acting player themselves, not an opponent
+        self::assertSame('duplicity_repeat_offer', $decision->decisionType);
+        self::assertSame('nested', $decision->field['type']);
+        // Invocation 0's own discard already happened -- only the optional
+        // repeat is on hold.
+        self::assertContains(3, $state->discardPile());
+        self::assertSame(5, $state->valueOf(8));
+
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state, 8, 1, $choices, $choices, 0,
+            ['duplicity_repeat' => new PlayerChoices([
+                'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 7]],
+            ])],
+        );
+
+        self::assertFalse($finalResult->isPending);
         self::assertSame(5, $state->valueOf(8));
         self::assertContains(3, $state->discardPile());
         self::assertContains(7, $state->discardPile());
@@ -3159,18 +3176,78 @@ final class MoodPlayServiceTest extends TestCase
         $state->grantExtraPlay(1);
         $this->plays->playMood($state, 1, 37, new PlayerChoices([]));
 
-        $this->plays->playMood($state, 1, 8, new PlayerChoices(['discard_card_id' => 3]));
+        $choices = new PlayerChoices(['discard_card_id' => 3]);
+        $result = $this->plays->playMood($state, 1, 8, $choices);
+        self::assertTrue($result->isPending);
 
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state, 8, 1, $choices, $choices, 0,
+            ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => false]])],
+        );
+
+        self::assertFalse($finalResult->isPending);
         self::assertSame([3], $state->discardPile());
     }
 
-    public function testDuplicityDoesNotReactToItsOwnPlay(): void
+    public function testDuplicityDoesNotOfferToRepeatItsOwnJustPlayedInstance(): void
     {
         $state = $this->boardState(hands: [1 => [37]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 37, new PlayerChoices(['duplicity_repeat' => true]));
+        $result = $this->plays->playMood($state, 1, 37, new PlayerChoices([]));
 
+        self::assertFalse($result->isPending);
+        self::assertSame(1, $state->playsRemaining()); // only Duplicity's own single grant
+    }
+
+    /**
+     * The actual "repeat of a repeat" gap this closes: every Duplicity-
+     * effective mood the player owns grants its own independent repeat --
+     * a real Duplicity plus a Creativity currently copying one (the only
+     * way to ever have two, since every card including Duplicity itself
+     * is single-copy) means the played card's effect can happen three
+     * times total (original + 2 repeats), each pause offered and answered
+     * one at a time rather than needing to be pre-declared as a deeply
+     * nested tree of choices up front.
+     */
+    public function testDuplicityGrantsOneIndependentRepeatPerDuplicityEffectiveSourceInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 32, 8, 3, 4, 6]]); // Duplicity, Creativity, Dignity, 3 discard fodder
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 37); // real Duplicity
+        $state->moveHandToInPlay(1, 32, 37); // Creativity, copying Duplicity -- a second, independent source
+
+        $choices = new PlayerChoices(['discard_card_id' => 3]);
+        $result = $this->plays->playMood($state, 1, 8, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertContains(3, $state->discardPile());
+
+        $result2 = $this->plays->resolvePendingDecisions(
+            $state, 8, 1, $choices, $choices, $result->invocationSeq,
+            ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 4]]])],
+        );
+        self::assertTrue($result2->isPending, 'a second independent Duplicity source should still be available');
+        self::assertContains(4, $state->discardPile());
+
+        $result3 = $this->plays->resolvePendingDecisions(
+            $state, 8, 1, $choices, $choices, $result2->invocationSeq,
+            ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 6]]])],
+        );
+        self::assertFalse($result3->isPending, 'no Duplicity sources left -- the chain has to stop here');
+        self::assertContains(6, $state->discardPile());
+        self::assertSame(5, $state->valueOf(8));
+    }
+
+    public function testDuplicityStillDoesNotOfferToRepeatItsOwnPlayEvenWithASecondSourceInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 32]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 32, 37); // Creativity, already in play, copying Duplicity
+
+        $result = $this->plays->playMood($state, 1, 37, new PlayerChoices([])); // playing the *real* Duplicity
+
+        self::assertFalse($result->isPending);
         self::assertSame(1, $state->playsRemaining()); // only Duplicity's own single grant
     }
 
