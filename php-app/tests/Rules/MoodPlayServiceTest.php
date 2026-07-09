@@ -3239,7 +3239,16 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(5, $state->valueOf(8));
     }
 
-    public function testDuplicityStillDoesNotOfferToRepeatItsOwnPlayEvenWithASecondSourceInPlay(): void
+    /**
+     * "Each time you play ANOTHER mood" -- a Duplicity-effective source
+     * never offers to repeat its own just-played instance via itself, but
+     * a *different*, already-in-play Duplicity-effective source still can.
+     * Playing the real Duplicity while a Creativity is already copying one
+     * lets that Creativity offer exactly one repeat of the just-played
+     * Duplicity's own "grant an extra play" effect -- two grants total if
+     * accepted, one from the original play and one from the repeat.
+     */
+    public function testDuplicitysOwnPlayCanStillBeRepeatedByAnAlreadyInPlaySeparateSource(): void
     {
         $state = $this->boardState(hands: [1 => [37, 32]]);
         $state->startTurn(1);
@@ -3247,8 +3256,15 @@ final class MoodPlayServiceTest extends TestCase
 
         $result = $this->plays->playMood($state, 1, 37, new PlayerChoices([])); // playing the *real* Duplicity
 
-        self::assertFalse($result->isPending);
-        self::assertSame(1, $state->playsRemaining()); // only Duplicity's own single grant
+        self::assertTrue($result->isPending, 'the already-in-play Creativity-copy-of-Duplicity should offer one repeat');
+        self::assertSame(1, $state->playsRemaining()); // only the original play's own grant so far
+
+        $result2 = $this->plays->resolvePendingDecisions(
+            $state, 37, 1, new PlayerChoices([]), new PlayerChoices([]), $result->invocationSeq,
+            ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => true, 'choices' => []]])],
+        );
+        self::assertFalse($result2->isPending, 'the just-played Duplicity itself never offers to repeat its own instance');
+        self::assertSame(2, $state->playsRemaining()); // original grant + the repeat's own grant
     }
 
     public function testChaosReassignsOwnershipOfEveryMoodInPlay(): void
