@@ -1188,8 +1188,10 @@ final class GameService
 
         $names = $this->cardCatalogNames();
         foreach ($state->moodsInPlay() as $cardId => $mood) {
+            $serialized = $this->serializeCard($state, $cardId);
+            $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
             $response['in_play'][] = [
-                ...$this->serializeCard($state, $cardId),
+                ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
                 'suppression_expiry' => $mood->suppressionExpiry,
@@ -1197,11 +1199,21 @@ final class GameService
                 'suppressed_by_name' => $mood->suppressionSourceCardId !== null
                     ? ($names[$mood->suppressionSourceCardId] ?? null)
                     : null,
+                'boosted_by_card_id' => $boosterCardId,
+                'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
+                'affecting' => $this->affectingEntries($state, $cardId, $names),
             ];
         }
 
+        // $viewerGamePlayerId (not omitted, the way in_play's own mapping
+        // above still is) so is_playable/choice_fields'/reaction fields
+        // reflect the rare case a discard-sourced play grant (Angst,
+        // Harmony, Grief) or Melancholy's blanket "play from the discard
+        // pile as though it were your hand" actually covers one of these
+        // cards right now -- see MoodPlayService::isPlayable() and
+        // BoardState::grantAllows()'s 'source' => 'discard' handling.
         $response['discard_pile'] = array_map(
-            fn (int $cardId) => $this->serializeCard($state, $cardId),
+            fn (int $cardId) => $this->serializeCard($state, $cardId, $viewerGamePlayerId),
             $state->discardPile()
         );
 
@@ -1216,15 +1228,18 @@ final class GameService
      * card sitting in a hand or the discard pile there's no live effect to
      * apply, so its printed catalog color/base value is what's shown.
      *
-     * $reactingViewerId is only passed for a card in the *viewer's own
-     * hand* -- it's what lets this method decide whether to append Scorn's/
-     * Validation's reactToAnotherPlay() fields (see CardChoiceSchema's
-     * docblock): both react to the viewer's own subsequent plays, so they
-     * only ever apply to a card the viewer might actually play, never to
-     * an in-play or discard-pile card being merely displayed. The same
-     * flag gates 'is_playable' (MoodPlayService::isPlayable()) -- true by
-     * default for an in-play/discard-pile card being merely displayed,
-     * since nothing there ever reads it.
+     * $reactingViewerId is only passed for a card the viewer might actually
+     * end up playing -- every card in their own hand, plus (unlike an
+     * in-play card, which is never itself a play candidate) every card in
+     * the discard pile, since a discard-sourced play grant (Angst,
+     * Harmony, Grief) or Melancholy can make one of those playable too. It's
+     * what lets this method decide whether to append Scorn's/Validation's
+     * reactToAnotherPlay() fields (see CardChoiceSchema's docblock): both
+     * react to the viewer's own subsequent plays, so they only ever apply
+     * to a card the viewer might actually play, never to an in-play card
+     * being merely displayed. The same flag gates 'is_playable'
+     * (MoodPlayService::isPlayable()) -- true by default for an in-play
+     * card being merely displayed, since nothing there ever reads it.
      *
      * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
@@ -1266,6 +1281,46 @@ final class GameService
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
         ];
+    }
+
+    /**
+     * The reverse of a card's own "affected by" info (suppressed_by_*,
+     * boosted_by_*, both set alongside this in the in_play mapping above) --
+     * every OTHER in-play mood that $cardId is itself currently affecting,
+     * so a card like Encouragement or Guilt can say what it's doing without
+     * the viewer having to find and check each target individually.
+     * Suppression can have several targets at once (Guilt/Contempt's "all"
+     * mode); a dice-value boost has at most one specific target for
+     * Encouragement, or several for Idealism's blanket "every mood I own"
+     * (both fall out of the same diceValueBoosterCardId() check on every
+     * other candidate, no special-casing needed here). A card's own
+     * suppression zeroes its value regardless of any dice value that would
+     * otherwise apply (see BoardState::valueOf()), so a currently-suppressed
+     * target is deliberately not excluded here -- Encouragement/Idealism are
+     * still "affecting" it in the sense that they'd apply the moment it's
+     * no longer suppressed, and the target's own card-detail view already
+     * shows the suppression itself distinctly enough not to be confusing.
+     *
+     * @param array<int, string> $names
+     * @return array<int, array{card_id:int, name:string, relationship:string}>
+     */
+    private function affectingEntries(BoardState $state, int $cardId, array $names): array
+    {
+        $affecting = [];
+        foreach ($state->moodsInPlay() as $otherCardId => $otherMood) {
+            if ($otherCardId === $cardId) {
+                continue;
+            }
+            $otherRow = $state->catalogRow($state->effectiveCardId($otherCardId));
+            if ($otherRow['altValue'] !== null && $state->diceValueBoosterCardId($otherCardId) === $cardId) {
+                $affecting[] = ['card_id' => $otherCardId, 'name' => $names[$otherCardId] ?? '?', 'relationship' => 'dice_value'];
+            }
+        }
+        foreach ($state->suppressedByCardId($cardId) as $suppressedCardId) {
+            $affecting[] = ['card_id' => $suppressedCardId, 'name' => $names[$suppressedCardId] ?? '?', 'relationship' => 'suppressed'];
+        }
+
+        return $affecting;
     }
 
     /**

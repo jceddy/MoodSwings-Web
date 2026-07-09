@@ -95,14 +95,31 @@ routed to the PHP app).
     card you'd opened to consider playing sitting there instead), since
     otherwise polling would stay silently suspended until the panel was
     manually cancelled, even though the pass itself went through fine.
-    Every mood in play and every card in the discard pile is also
-    clickable, opening a read-only detail view (name, base value, alt
-    value if it has one, current value if a while-in-play effect has
-    changed it, owner, rules text, and — if it's currently suppressed — an
-    indicator naming the suppressing mood, if the game tracks one, and
-    whether the suppression lasts as long as that mood stays in play or
-    just until the end of the current round) so an unfamiliar card can be
-    checked before deciding how to respond to it. Seven cards (Arrogance,
+    Every mood in play is also clickable, opening a read-only detail view
+    (name, base value, alt value if it has one, current value if a
+    while-in-play effect has changed it, owner, rules text, and — if it's
+    currently suppressed — an indicator naming the suppressing mood, if the
+    game tracks one, and whether the suppression lasts as long as that mood
+    stays in play or just until the end of the current round). Two more
+    reminder lines cover the game's other "one mood affects another" cases
+    the same way: a mood whose printed dice value is currently overridden
+    by Encouragement or Idealism shows "Affected by <that mood>", and a
+    mood doing the suppressing/boosting itself shows "Affecting: <targets>"
+    naming everything it's currently affecting (several at once for a
+    mass-suppression card's "all" mode, or for Idealism's blanket "every
+    mood its owner controls"). Every card in the discard pile is clickable
+    too — almost always the same read-only detail view, so an unfamiliar
+    card can be checked before deciding how to respond to it, but the rare
+    exception is a card actually covered by a discard-sourced extra play
+    (Angst/Harmony/Grief) or by Melancholy's "play from the discard pile as
+    though it were your hand" — the same `is_playable` flag that already
+    filters a hand card routes a click on one of those straight to the
+    ordinary Play/Cancel choices panel instead. While the viewer is the one
+    a pending decision (see below) is actually waiting on, their own hand
+    cards switch to opening this same read-only detail view rather than the
+    choices panel too — the response panel, not the ordinary choices panel,
+    owns picking a card in that moment, but an unfamiliar hand card still
+    needs to be checkable before answering. Seven cards (Arrogance,
     Compulsion, Disillusionment, Instability, Intimidation, Malice,
     Suspicion) hand part of their effect to a player other than whoever's
     turn it is, and three more (Avoidance, Confusion, Fury) say a player

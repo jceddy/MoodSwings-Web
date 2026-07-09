@@ -388,6 +388,28 @@ final class BoardState
         return $this->moodInPlay($cardId)->isSuppressed;
     }
 
+    /**
+     * The reverse of a suppressed mood's own suppressionSourceCardId --
+     * every mood currently suppressed *by* $sourceCardId. Purely a UI
+     * reminder-text lookup (see GameService's "affecting" field on each
+     * in-play card's serialization): the target's own suppressionSourceCardId
+     * already drives the actual suppression, this just answers it from the
+     * source's side.
+     *
+     * @return int[]
+     */
+    public function suppressedByCardId(int $sourceCardId): array
+    {
+        $result = [];
+        foreach ($this->moodsInPlay as $cardId => $mood) {
+            if ($mood->isSuppressed && $mood->suppressionSourceCardId === $sourceCardId) {
+                $result[] = $cardId;
+            }
+        }
+
+        return $result;
+    }
+
     /** Clears every suppression whose source is $sourceCardId (e.g. that mood left play). */
     public function clearSuppressionsFrom(int $sourceCardId): void
     {
@@ -488,7 +510,7 @@ final class BoardState
         // its value" -- alt_value is the printed "dice" number, so this
         // overrides the card's own computed value entirely (rather than
         // just adding to it) for as long as either card applies.
-        if ($row['altValue'] !== null && $this->diceValueApplies($cardId, $mood->ownerId)) {
+        if ($row['altValue'] !== null && $this->diceValueBoosterCardId($cardId) !== null) {
             return max($row['baseValue'], $row['altValue']);
         }
 
@@ -500,25 +522,31 @@ final class BoardState
     }
 
     /**
-     * Encouragement tags one specific chosen mood (its 'boostedMoodId'
-     * effectState key); Idealism blankets every mood its owner controls.
-     * A mood without a printed alt_value ("dice") is never affected by
-     * either, regardless of whether it's targeted/owned -- see valueOf(),
-     * which only calls this once it's already confirmed $cardId has one.
+     * The card id of the Encouragement or Idealism currently applying
+     * $cardId's dice value, or null if neither currently does. Encouragement
+     * tags one specific chosen mood (its 'boostedMoodId' effectState key);
+     * Idealism blankets every mood its owner controls. A mood without a
+     * printed alt_value ("dice") is never affected by either, regardless of
+     * whether it's targeted/owned, but this method doesn't check that
+     * itself -- valueOf() only calls it once it's already confirmed $cardId
+     * has one, and GameService's "affecting"/"affected by" reminder-text
+     * lookup (see its in_play serialization) checks has_dice_value
+     * separately before showing anything either direction.
      */
-    private function diceValueApplies(int $cardId, int $ownerId): bool
+    public function diceValueBoosterCardId(int $cardId): ?int
     {
-        foreach ($this->moodsInPlay as $mood) {
+        $ownerId = $this->moodInPlay($cardId)->ownerId;
+        foreach ($this->moodsInPlay as $boosterCardId => $mood) {
             $effectKey = $this->catalogRow($this->effectiveCardId($mood->cardId))['effectKey'];
             if ($effectKey === 'encouragement' && ($mood->effectState['boostedMoodId'] ?? null) === $cardId) {
-                return true;
+                return $boosterCardId;
             }
             if ($effectKey === 'idealism' && $mood->ownerId === $ownerId) {
-                return true;
+                return $boosterCardId;
             }
         }
 
-        return false;
+        return null;
     }
 
     // --- turn / plays-remaining ---

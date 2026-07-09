@@ -548,6 +548,37 @@ the suppression doesn't need to watch for anything leaving play to know
 when to lift — it just expires at the round boundary regardless
 (`BoardState::clearEndOfRoundSuppressions()`).
 
+Suppression isn't the only "one in-play mood affects another" relationship
+worth surfacing: a mood with a printed dice value (`has_dice_value`) can
+have it overridden by Encouragement (one specific chosen mood,
+`boostedMoodId`) or Idealism (blanket, every mood its owner controls) --
+see `BoardState::diceValueBoosterCardId()`, which `valueOf()` already
+called internally before this was exposed for UI purposes, just returning
+`bool` under its previous name (`diceValueApplies()`). Each in-play mood
+now carries `boosted_by_card_id`/`boosted_by_name` (the reverse of
+`suppressed_by_*`, computed the same way, `null` unless a booster currently
+applies) and `affecting` -- an array of `{card_id, name, relationship}`
+naming every OTHER in-play mood this one is currently suppressing
+(`relationship: 'suppressed'`, via the new `BoardState::
+suppressedByCardId()`, the reverse lookup of `suppressionSourceCardId`) or
+dice-value-boosting (`relationship: 'dice_value'`, one entry for
+Encouragement's single target, several for Idealism's blanket one -- both
+fall out of the same `diceValueBoosterCardId()` check against every other
+candidate, no special-casing needed). See `GameService::
+affectingEntries()`.
+
+`GameService::getState()`'s `discard_pile` mapping now passes the viewer's
+own game-player id to `serializeCard()` the same way `hand` already does
+(previously omitted, since nothing in the discard pile was ever a play
+candidate) -- `is_playable`/`choice_fields`/Scorn's and Validation's
+reaction fields are now correctly computed for a discard-pile card too,
+covering the rare case a discard-sourced extra play (Angst/Harmony/Grief)
+or Melancholy's blanket "play from the discard pile as though it were your
+hand" actually makes one playable for the rest of the current turn (see
+`BoardState::grantAllows()`'s `'source' => 'discard'` handling, which
+already supported this server-side -- only the state response and the
+frontend's discard-pile click handling were missing).
+
 ## Game layer
 
 `src/Game/` wires the pure rules engine above to the

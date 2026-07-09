@@ -266,6 +266,28 @@
             suppressionEl.hidden = true;
         }
 
+        // boosted_by_name/affecting only exist on in-play cards (see
+        // GameService::getState()'s in_play mapping) -- both read as
+        // undefined, and so stay hidden, for a hand/discard-pile card.
+        const affectedByEl = document.getElementById('card-detail-affected-by');
+        if (card.boosted_by_name) {
+            affectedByEl.textContent = 'Affected by ' + card.boosted_by_name + ' (dice value)';
+            affectedByEl.hidden = false;
+        } else {
+            affectedByEl.hidden = true;
+        }
+
+        const affectingEl = document.getElementById('card-detail-affecting');
+        if (card.affecting && card.affecting.length > 0) {
+            const relationshipLabels = { dice_value: 'dice value', suppressed: 'suppressed' };
+            affectingEl.textContent = 'Affecting: ' + card.affecting
+                .map((entry) => entry.name + ' (' + (relationshipLabels[entry.relationship] || entry.relationship) + ')')
+                .join(', ');
+            affectingEl.hidden = false;
+        } else {
+            affectingEl.hidden = true;
+        }
+
         document.getElementById('card-detail-rules').textContent = card.rules_text || 'No ability.';
         cardDetailDialog.showModal();
     }
@@ -346,20 +368,44 @@
             }
         );
 
-        document.getElementById('discard-count').textContent = state.discard_pile.length;
-        document.getElementById('deck-count').textContent = state.deck_count;
-        renderList(document.getElementById('discard-list'), { hidden: true }, state.discard_pile, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
-            return li;
-        });
-
         // A pending decision freezes the whole round -- nobody, including
         // the player whose turn it nominally is, can play or pass until
         // the targeted player has answered it.
         const canAct = state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
+
+        document.getElementById('discard-count').textContent = state.discard_pile.length;
+        document.getElementById('deck-count').textContent = state.deck_count;
+        renderList(document.getElementById('discard-list'), { hidden: true }, state.discard_pile, (card) => {
+            const li = document.createElement('li');
+            // Almost always just informational (a discard-pile card can't
+            // normally be played), but Angst/Harmony/Grief's discard-sourced
+            // extra play, or Melancholy's "play from the discard pile as
+            // though it were your hand," can make a specific one playable
+            // for the rest of this turn -- is_playable already reflects
+            // that (see GameService::getState()'s discard_pile mapping), so
+            // route straight to the same Play/Cancel panel a hand card
+            // uses instead of the read-only detail view in that case.
+            if (canAct && card.is_playable) {
+                li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
+            } else {
+                li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
+            }
+            return li;
+        });
+
+        // While the viewer is the one being asked to answer a pending
+        // decision (e.g. Confusion's "choose a hand card to give away"),
+        // the response panel -- not the ordinary choices panel -- owns
+        // choosing which card; clicking a hand card here instead opens the
+        // same read-only detail view in-play/discard-pile cards already
+        // get, so an unfamiliar card can still be checked before answering.
+        const respondingToDecision = !!(pendingDecision && pendingDecision.is_you);
         renderList(document.getElementById('hand-list'), { hidden: true }, state.you.hand || [], (card) => {
             const li = document.createElement('li');
+            if (respondingToDecision) {
+                li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
+                return li;
+            }
             li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
             li.lastChild.disabled = !canAct;
             // is_playable reflects whether some outstanding play grant this
