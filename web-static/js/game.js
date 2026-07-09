@@ -424,6 +424,17 @@
         });
 
         document.getElementById('pass-button').disabled = !canAct;
+
+        renderList(
+            document.getElementById('recent-events-list'),
+            document.getElementById('recent-events-empty'),
+            state.recent_events || [],
+            (event) => {
+                const li = document.createElement('li');
+                li.textContent = event.description;
+                return li;
+            }
+        );
     }
 
     document.getElementById('start-game-button').addEventListener('click', async () => {

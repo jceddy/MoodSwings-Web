@@ -969,6 +969,36 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($courage['boosted_by_card_id']); // has no printed dice value at all
     }
 
+    public function testRecentEventsLetsAPlayerOtherThanTheActorSeeWhatParanoiaRevealed(): void
+    {
+        $u1 = $this->insertUser('paranoiaevt1');
+        $u2 = $this->insertUser('paranoiaevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 71, 'hand', $p1); // Paranoia
+        $this->insertGameCard($gameId, 9, 'hand', $p2); // Discipline -- p2's only card, so the reveal is deterministic
+        $this->insertGameCard($gameId, 106, 'deck', null, 0); // for Paranoia's own draw
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 71, ['target_player_id' => $p2]);
+
+        // p2 never submitted this request at all -- without recent_events,
+        // they'd have no way to ever learn Discipline was the card
+        // revealed from their own hand.
+        $events = $this->games->getState($gameId, $u2)['recent_events'];
+        self::assertNotEmpty($events);
+        self::assertStringContainsString('revealing Discipline', $events[0]['description']);
+        self::assertStringContainsString("paranoiaevt2's hand", $events[0]['description']);
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {

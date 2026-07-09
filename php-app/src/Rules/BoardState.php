@@ -60,6 +60,21 @@ final class BoardState
     private array $playGrants = [];
 
     /**
+     * @var int[] card ids revealed by a purely random ($cardId chosen via
+     * array_rand(), not any submitted choice) effect this play -- Paranoia/
+     * Curiosity. Transient, never persisted by BoardStateRepository: it
+     * exists only so GameService can read it back (consumeRevealedCardIds())
+     * immediately before logging the play's own mood_played event, and fold
+     * it into that event's details so a player who wasn't the one who
+     * played the card can still find out what got revealed, e.g. via a
+     * recent-plays panel. Not used for a card revealed by an explicit
+     * choice (Doubt's own reveal, Intimidation's target's own answer) --
+     * those are already visible in the play's own submitted choices/
+     * pending-decision answer, already logged as-is.
+     */
+    private array $pendingRevealedCardIds = [];
+
+    /**
      * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog card id => catalog row
      * @param int[] $playerOrder seat order (turn order) for this game
      * @param array<int, int[]> $hands playerId => hand card ids
@@ -408,6 +423,28 @@ final class BoardState
         }
 
         return $result;
+    }
+
+    /** See $pendingRevealedCardIds' own docblock. Called by Paranoia/Curiosity at the point they pick their random hand card. */
+    public function recordRevealedCard(int $cardId): void
+    {
+        $this->pendingRevealedCardIds[] = $cardId;
+    }
+
+    /**
+     * Returns and clears every card id recorded via recordRevealedCard()
+     * since the last call -- GameService calls this immediately before
+     * logging a play's own mood_played event, so it's always scoped to
+     * exactly the play (or Duplicity-repeated plays) that just resolved.
+     *
+     * @return int[]
+     */
+    public function consumeRevealedCardIds(): array
+    {
+        $ids = $this->pendingRevealedCardIds;
+        $this->pendingRevealedCardIds = [];
+
+        return $ids;
     }
 
     /** Clears every suppression whose source is $sourceCardId (e.g. that mood left play). */

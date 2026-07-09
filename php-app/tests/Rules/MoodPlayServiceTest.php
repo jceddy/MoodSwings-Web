@@ -1768,6 +1768,13 @@ final class MoodPlayServiceTest extends TestCase
         self::assertCount(1, $state->hand(2));
         self::assertTrue($state->isInHand(1, 106));
         self::assertCount(1, $state->deck());
+
+        // Whichever of the two cards got bottomed is also recorded for
+        // GameService to log -- see BoardState::recordRevealedCard().
+        $revealedIds = $state->consumeRevealedCardIds();
+        self::assertCount(1, $revealedIds);
+        self::assertContains($revealedIds[0], [9, 3]);
+        self::assertFalse($state->isInHand(2, $revealedIds[0]));
     }
 
     public function testParanoiaRejectsATargetWithAnEmptyHand(): void
@@ -1876,6 +1883,10 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 33, new PlayerChoices(['target_player_id' => 2]));
 
         self::assertSame(6, $state->valueOf(33));
+        // The revealed card stays in hand either way, so it's only ever
+        // visible via this recorded-for-logging id -- see
+        // BoardState::recordRevealedCard().
+        self::assertSame([9], $state->consumeRevealedCardIds());
     }
 
     public function testCuriosityDoesNotBoostValueWhenNoColorMatches(): void

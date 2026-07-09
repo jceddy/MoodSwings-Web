@@ -274,7 +274,7 @@ final class GameService
                 return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
             }
 
-            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $choices);
+            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $this->withRevealedCards($state, $choices));
 
             return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
         });
@@ -429,7 +429,7 @@ final class GameService
                 throw $e;
             }
 
-            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $topLevelChoices->toArray());
+            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $this->withRevealedCards($state, $topLevelChoices->toArray()));
 
             return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
         });
@@ -1218,8 +1218,82 @@ final class GameService
         );
 
         $response['deck_count'] = count($state->deck());
+        $response['recent_events'] = $this->recentEvents($gameId, $players);
 
         return $response;
+    }
+
+    /**
+     * The last few plays/passes/rounds-scored for this game, newest first,
+     * as ready-to-display strings -- a "smallish panel" alternative to
+     * building out a full game-history view, specifically so a player who
+     * wasn't the one who played Paranoia or Curiosity has some way to find
+     * out what got revealed (see BoardState::recordRevealedCard()) instead
+     * of that information being visible only in the instant it happened,
+     * to only the one player who happened to submit that request.
+     * Deliberately built server-side rather than handing the client raw
+     * event rows to interpret -- describeEvent() is the one place that
+     * needs to know each event_type's/detail shape, rather than
+     * duplicating that knowledge into game.js too.
+     *
+     * @param array<int, array{game_player_id:int, username:string}> $players
+     * @return array<int, array{id:int, created_at:string, description:string}>
+     */
+    private function recentEvents(int $gameId, array $players, int $limit = 15): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT id, event_type, acting_game_player_id, card_id, details, created_at
+             FROM game_events WHERE game_id = :game_id ORDER BY id DESC LIMIT :limit'
+        );
+        $stmt->bindValue('game_id', $gameId, PDO::PARAM_INT);
+        $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $playerNames = array_column($players, 'username', 'game_player_id');
+        $cardNames = $this->cardCatalogNames();
+
+        return array_map(
+            fn (array $row) => [
+                'id' => (int) $row['id'],
+                'created_at' => $row['created_at'],
+                'description' => $this->describeEvent($row, $playerNames, $cardNames),
+            ],
+            $stmt->fetchAll(),
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @param array<int, string> $playerNames
+     * @param array<int, string> $cardNames
+     */
+    private function describeEvent(array $row, array $playerNames, array $cardNames): string
+    {
+        $actor = $row['acting_game_player_id'] !== null ? ($playerNames[(int) $row['acting_game_player_id']] ?? 'A player') : 'A player';
+        $cardName = $row['card_id'] !== null ? ($cardNames[(int) $row['card_id']] ?? 'a card') : 'a card';
+        $details = $row['details'] !== null ? json_decode((string) $row['details'], true) : [];
+
+        $description = match ($row['event_type']) {
+            'mood_played' => "{$actor} played {$cardName}",
+            'turn_passed' => "{$actor} passed",
+            'pending_decision_created' => "{$actor} played {$cardName}, waiting on a response",
+            'pending_decision_resolved' => "A response to {$cardName} was resolved",
+            'round_scored' => ($details['skipped'] ?? false) ? 'Round scored (nobody won)' : 'Round scored',
+            default => "{$actor} played {$cardName}",
+        };
+
+        // Paranoia/Curiosity's own reveal -- see BoardState::
+        // recordRevealedCard()'s docblock for why this is the one detail
+        // that has to be spelled out explicitly rather than left for the
+        // choices already folded into $details to explain on their own.
+        $revealedCardIds = $details['revealed_card_ids'] ?? [];
+        if ($revealedCardIds !== []) {
+            $revealedNames = array_map(fn (int $id) => $cardNames[$id] ?? 'a card', $revealedCardIds);
+            $targetName = isset($details['target_player_id']) ? ($playerNames[(int) $details['target_player_id']] ?? 'a player') : 'a player';
+            $description .= ', revealing ' . implode(', ', $revealedNames) . " from {$targetName}'s hand";
+        }
+
+        return $description;
     }
 
     /**
@@ -1699,6 +1773,30 @@ final class GameService
     }
 
     /** @param array<string, mixed> $details */
+    /**
+     * Folds any card ids BoardState::recordRevealedCard() collected during
+     * this play (Paranoia/Curiosity) into $choices before it's logged as a
+     * mood_played event's own details -- see recordRevealedCard()'s own
+     * docblock for why this can't just be read back out of $choices like
+     * everything else in it. A no-op ([] added under a key that's simply
+     * never read) for every other card. Always call this right before the
+     * logEvent() it feeds, never earlier -- consumeRevealedCardIds() clears
+     * what it returns, so calling it any other time would silently drop
+     * the reveal for whichever call actually logs the event.
+     *
+     * @param array<string, mixed> $choices
+     * @return array<string, mixed>
+     */
+    private function withRevealedCards(BoardState $state, array $choices): array
+    {
+        $revealedCardIds = $state->consumeRevealedCardIds();
+        if ($revealedCardIds === []) {
+            return $choices;
+        }
+
+        return [...$choices, 'revealed_card_ids' => $revealedCardIds];
+    }
+
     private function logEvent(int $gameId, ?int $roundId, ?int $actingPlayerId, string $eventType, ?int $cardId, array $details): void
     {
         $stmt = Connection::get()->prepare(

@@ -158,7 +158,18 @@ routed to the PHP app).
     (present only while one of these is being decided) shows every
     player's running score-so-far plus who's swapping with whom, right
     above the response panel, the same way suppression info is shown
-    before you decide how to respond to a card you don't recognize.
+    before you decide how to respond to a card you don't recognize. A
+    "Recent plays" list at the bottom of the board shows the last 15
+    plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
+    played Paranoia, revealing Charity from Bob's hand") — it comes along
+    for free with each poll (`state.recent_events`, already fully formatted
+    server-side, see `php-app/README.md`) rather than needing its own
+    endpoint or polling loop. This is specifically what makes Paranoia's
+    and Curiosity's own random reveal visible at all to anyone besides
+    whoever happened to submit that particular play — including, for
+    Paranoia, the very player whose hand card got revealed and buried —
+    since neither card's outcome is derivable from anything else in the
+    state response once the moment it happened has passed.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

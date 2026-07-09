@@ -15,7 +15,13 @@ use MoodSwings\Rules\PlayerChoices;
  * card from their hand and puts it on the bottom of the deck, then you
  * draw a card." The rules specify a genuinely random card, so this
  * resolves fully here -- see Cruelty/Indecisiveness for the same idea
- * applied to moods in play instead of a hand.
+ * applied to moods in play instead of a hand. The reveal itself only
+ * happens within this one request/response, and the card then goes
+ * somewhere nobody -- not even the acting player -- can see again (the
+ * bottom of the deck), so recordRevealedCard() logs it for GameService to
+ * fold into this play's own game_events row; otherwise every player other
+ * than whoever answered the "which player" choice would have no way to
+ * ever find out what got revealed.
  */
 final class ParanoiaEffect extends AbstractMoodEffect
 {
@@ -32,6 +38,7 @@ final class ParanoiaEffect extends AbstractMoodEffect
         }
 
         $randomCardId = $hand[array_rand($hand)];
+        $state->recordRevealedCard($randomCardId);
         $state->moveHandToBottomOfDeck($targetPlayerId, $randomCardId);
         $state->drawCard($playerId);
     }

@@ -579,6 +579,31 @@ hand" actually makes one playable for the rest of the current turn (see
 already supported this server-side -- only the state response and the
 frontend's discard-pile click handling were missing).
 
+`GameService::getState()` also carries `recent_events` -- the last 15
+`game_events` rows for the game, newest first, each reduced to a single
+ready-to-display `description` string (`GameService::describeEvent()`).
+This exists specifically to close a hidden-information gap `mood_played`'s
+own event logging otherwise leaves open: its `details` column has always
+only ever held the *choices a player submitted*, never what an effect
+*actually did* with them, which is indistinguishable for almost every card
+(the outcome is a deterministic function of the choices) but not for
+Paranoia/Curiosity -- both pick uniformly at random which of a *target's*
+hand cards to reveal, with `array_rand()`'s result never appearing
+anywhere in `$choices` at all. Once that single HTTP response is gone, no
+player who wasn't the one who submitted the play -- including, for
+Paranoia, the very player whose card got revealed -- had any way to ever
+learn what it was. `BoardState::recordRevealedCard()`/
+`consumeRevealedCardIds()` closes that: both effects record the id they
+picked; `GameService::withRevealedCards()` reads it back immediately
+before the play's own `mood_played` event is logged and folds it into that
+event's `details` as `revealed_card_ids`, which `describeEvent()` then
+expands into "revealing X from Y's hand" using the same `target_player_id`
+choice both cards already share. Nothing else currently needs this same
+treatment -- every other `array_rand()` user (Cruelty/Indecisiveness/
+Altruism) picks from a mood/card that was already publicly visible in play
+or the discard pile before the pick, so there's no hidden information for
+a history entry to be the only way to recover.
+
 ## Game layer
 
 `src/Game/` wires the pure rules engine above to the
