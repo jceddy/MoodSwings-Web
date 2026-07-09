@@ -97,7 +97,9 @@ routed to the PHP app).
     manually cancelled, even though the pass itself went through fine.
     Every mood in play is also clickable, opening a read-only detail view
     (name, base value, alt value if it has one, current value if a
-    while-in-play effect has changed it, owner, rules text, and — if it's
+    while-in-play effect has changed it, its printed color too if
+    Imagination has recolored it (or, for a Creativity copy, if that
+    differs from whatever it's copying), owner, rules text, and — if it's
     currently suppressed — an indicator naming the suppressing mood, if the
     game tracks one, and whether the suppression lasts as long as that mood
     stays in play or just until the end of the current round). Two more
@@ -161,15 +163,28 @@ routed to the PHP app).
     before you decide how to respond to a card you don't recognize. A
     "Recent plays" list at the bottom of the board shows the last 15
     plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
-    played Paranoia, revealing Charity from Bob's hand") — it comes along
-    for free with each poll (`state.recent_events`, already fully formatted
-    server-side, see `php-app/README.md`) rather than needing its own
-    endpoint or polling loop. This is specifically what makes Paranoia's
-    and Curiosity's own random reveal visible at all to anyone besides
-    whoever happened to submit that particular play — including, for
-    Paranoia, the very player whose hand card got revealed and buried —
-    since neither card's outcome is derivable from anything else in the
-    state response once the moment it happened has passed.
+    played Paranoia (target player: Bob), revealing Charity from Bob's
+    hand") — it comes along for free with each poll (`state.recent_events`,
+    already fully formatted server-side, see `php-app/README.md`) rather
+    than needing its own endpoint or polling loop. This is specifically
+    what makes Paranoia's and Curiosity's own random reveal visible at all
+    to anyone besides whoever happened to submit that particular play —
+    including, for Paranoia, the very player whose hand card got revealed
+    and buried — since neither card's outcome is derivable from anything
+    else in the state response once the moment it happened has passed;
+    every other play's own line also spells out whatever choice was
+    actually made (a target player, a chosen mood/hand card, a color, and
+    so on), not just which card was played.
+
+    A "Plays left: N" `<details>` element (collapsed by default, so it
+    doesn't crowd the board when there's nothing interesting to say) sits
+    just above the Pass button — expanding it lists each outstanding play
+    this turn (`state.round.play_grants`, already rendered server-side into
+    e.g. "An extra play from Charity" or "An extra play from Angst from
+    the discard pile"), rather than just the bare count `plays_remaining`
+    already gave no way to explain. The base turn's own single play (two
+    with Hurt Feelings) reads as "Your normal turn" instead, since it isn't
+    granted by any specific card.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

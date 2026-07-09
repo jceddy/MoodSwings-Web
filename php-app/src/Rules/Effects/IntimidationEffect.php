@@ -71,6 +71,6 @@ final class IntimidationEffect extends AbstractMoodEffect implements RequiresOpp
         }
 
         $state->giveHandCardToPlayer($targetPlayerId, $playerId, $revealedCardId);
-        $state->grantExtraPlay(1, ['type' => 'specific_card_ids', 'values' => [$revealedCardId]]);
+        $state->grantExtraPlay(1, ['type' => 'specific_card_ids', 'values' => [$revealedCardId]], sourceCardId: $cardId);
     }
 }

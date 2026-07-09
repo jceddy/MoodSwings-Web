@@ -33,6 +33,6 @@ final class ThrillEffect extends AbstractMoodEffect
         foreach ($targets as $targetCardId) {
             $state->moveInPlayToHand($targetCardId);
         }
-        $state->grantExtraPlay(count($targets));
+        $state->grantExtraPlay(count($targets), sourceCardId: $cardId);
     }
 }

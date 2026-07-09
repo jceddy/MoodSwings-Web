@@ -34,6 +34,6 @@ final class AngstEffect extends AbstractMoodEffect
         }
 
         $state->moveInPlayToDiscard($discardMoodId);
-        $state->grantExtraPlay(1, ['source' => 'discard']);
+        $state->grantExtraPlay(1, ['source' => 'discard'], sourceCardId: $cardId);
     }
 }

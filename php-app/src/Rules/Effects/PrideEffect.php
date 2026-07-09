@@ -37,6 +37,6 @@ final class PrideEffect extends AbstractMoodEffect
             throw new InvalidChoiceException("Player {$chosenPlayerId} does not have more moods than player {$playerId}");
         }
 
-        $state->grantExtraPlay($gap);
+        $state->grantExtraPlay($gap, sourceCardId: $cardId);
     }
 }

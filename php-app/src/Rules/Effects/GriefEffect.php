@@ -15,6 +15,6 @@ final class GriefEffect extends AbstractMoodEffect
 
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->grantExtraPlay(self::GRANTED_PLAYS, ['source' => 'discard']);
+        $state->grantExtraPlay(self::GRANTED_PLAYS, ['source' => 'discard'], sourceCardId: $cardId);
     }
 }

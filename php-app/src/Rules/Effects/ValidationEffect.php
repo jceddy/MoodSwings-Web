@@ -22,7 +22,7 @@ final class ValidationEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->grantExtraPlay(1);
+        $state->grantExtraPlay(1, sourceCardId: $cardId);
     }
 
     public function reactToAnotherPlay(BoardState $state, int $reactorCardId, int $playedCardId, int $playerId, PlayerChoices $choices): void
@@ -33,7 +33,7 @@ final class ValidationEffect extends AbstractMoodEffect
         }
 
         if ($choices->bool('validation_extra_play')) {
-            $state->grantExtraPlay(1);
+            $state->grantExtraPlay(1, sourceCardId: $reactorCardId);
         }
     }
 }

@@ -21,6 +21,6 @@ final class BenevolenceEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->grantExtraPlay(1, ['type' => 'does_not_share_color_with_your_moods']);
+        $state->grantExtraPlay(1, ['type' => 'does_not_share_color_with_your_moods'], sourceCardId: $cardId);
     }
 }

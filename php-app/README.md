@@ -604,6 +604,46 @@ Altruism) picks from a mood/card that was already publicly visible in play
 or the discard pile before the pick, so there's no hidden information for
 a history entry to be the only way to recover.
 
+Beyond the reveal-specific handling above, `describeEvent()` also appends a
+generic summary of whatever was actually submitted for a `mood_played`/
+`pending_decision_created`/`pending_decision_resolved` event -- "target
+player: Bob", "given card: Charity" -- via `describeChoices()`/
+`describeChoiceEntry()`. This is deliberately driven by each choice/answer
+key's own *naming convention* (a trailing `_player_id(s)`/`_mood_id(s)`/
+`_card_id(s)` names what kind of id it is) rather than `CardChoiceSchema`,
+since a `pending_decision_resolved` event's answer is keyed by a field name
+generated dynamically per target (e.g. Confusion's `given_card_id_169`),
+never one of `CardChoiceSchema`'s own static field definitions -- the same
+generic key-shape convention still applies regardless, so one heuristic
+covers every card's own choices and every pending decision's own answer
+without needing per-card knowledge here at all.
+
+`round.play_grants` is a similar reminder-text pass over
+`BoardState::pendingPlayGrants()` (already persisted as
+`game_rounds.pending_play_grants`, but never previously surfaced to the
+client at all beyond its own plain count, `plays_remaining`) --
+`GameService::describePlayGrant()` renders each outstanding grant as e.g.
+"An extra play from Charity" or "An extra play from Angst from the discard
+pile", so a "Plays left" indicator can explain *why* a play is still
+available, not just that one is. This needed `grantExtraPlay()` itself to
+start tracking provenance: it now takes an optional `$sourceCardId`,
+folded into the stored restriction descriptor as `'sourceCardId'` --
+passed by all 21 of its call sites (every card that ever grants an extra
+play) but never read by `grantAllows()` itself, purely a UI concern. The
+one grant this never applies to is `startTurn()`'s own base allowance (1,
+or 2 with Hurt Feelings) -- it's stored as a bare `null`, same as always,
+which `describePlayGrant()` reads as "Your normal turn" rather than a
+granted extra play from any specific card.
+
+Each in-play mood's serialization also carries `base_color` alongside its
+current `color` -- the printed color, ignoring Imagination's "while in
+play, all moods are the chosen color" blanket override (or, for a
+Creativity copy, the *copied* card's own printed color, matching how
+`base_value` already resolves against the copied card rather than
+Creativity's own colorless-in-spirit row). Silently identical to `color`
+the overwhelming majority of the time; worth a look only when Imagination
+is actually in play.
+
 ## Game layer
 
 `src/Game/` wires the pure rules engine above to the

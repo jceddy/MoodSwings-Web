@@ -238,6 +238,13 @@
         document.getElementById('card-detail-name').textContent = card.name;
 
         let meta = card.color + ', base value ' + card.base_value;
+        // base_color only differs from color while Imagination is in play
+        // (or, for a Creativity copy, is simply the copied card's own
+        // printed color) -- otherwise identical, so this stays silent the
+        // overwhelming majority of the time.
+        if (card.base_color && card.base_color !== card.color) {
+            meta += ' (printed color: ' + card.base_color + ')';
+        }
         if (card.alt_value !== null && card.alt_value !== undefined) {
             meta += ' (alt value: ' + card.alt_value + ')';
         }
@@ -424,6 +431,19 @@
         });
 
         document.getElementById('pass-button').disabled = !canAct;
+
+        const playGrants = (state.round && state.round.play_grants) || [];
+        document.getElementById('plays-remaining-count').textContent = playGrants.length;
+        renderList(
+            document.getElementById('play-grants-list'),
+            { hidden: true }, // always at least the base turn's own grant while a round is in progress
+            playGrants,
+            (grant) => {
+                const li = document.createElement('li');
+                li.textContent = grant.description;
+                return li;
+            }
+        );
 
         renderList(
             document.getElementById('recent-events-list'),

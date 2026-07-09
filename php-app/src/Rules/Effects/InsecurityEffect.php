@@ -23,6 +23,6 @@ final class InsecurityEffect extends AbstractMoodEffect
             'onUseEffectState' => [
                 'afterScoring' => ['action' => 'return_to_hand', 'condition' => 'always'],
             ],
-        ]);
+        ], sourceCardId: $cardId);
     }
 }

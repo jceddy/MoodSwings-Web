@@ -28,6 +28,6 @@ final class FearEffect extends AbstractMoodEffect
             $state->moveInPlayToHand($handMoodId);
         }
 
-        $state->grantExtraPlay();
+        $state->grantExtraPlay(sourceCardId: $cardId);
     }
 }

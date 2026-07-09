@@ -1171,6 +1171,10 @@ final class GameService
                 'status' => $roundRow['status'],
                 'current_turn_game_player_id' => $currentTurnGamePlayerId,
                 'plays_remaining' => (int) $roundRow['plays_remaining'],
+                'play_grants' => array_map(
+                    fn (?array $restriction) => $this->describePlayGrant($restriction),
+                    $state->pendingPlayGrants(),
+                ),
                 'first_game_player_id' => (int) $roundRow['first_game_player_id'],
                 'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
                 'banned_colors' => $state->bannedColorsThisRound(),
@@ -1293,7 +1297,138 @@ final class GameService
             $description .= ', revealing ' . implode(', ', $revealedNames) . " from {$targetName}'s hand";
         }
 
+        // Every other choice actually submitted for this play/response --
+        // a target player, a chosen mood/hand card, a color, a mode string,
+        // and so on. Only mood_played/pending_decision_created/
+        // pending_decision_resolved ever have anything worth describing
+        // here (round_scored's 'skipped' and mood_played's own
+        // 'revealed_card_ids' are both already spoken for above).
+        if (in_array($row['event_type'], ['mood_played', 'pending_decision_created', 'pending_decision_resolved'], true)) {
+            $choiceSummary = $this->describeChoices($details, $playerNames, $cardNames);
+            if ($choiceSummary !== '') {
+                $description .= " ({$choiceSummary})";
+            }
+        }
+
         return $description;
+    }
+
+    /**
+     * Renders whatever was actually submitted for a play/response as a
+     * short, generic summary -- "target player: Bob", "given card: Charity"
+     * -- rather than needing per-effect-key knowledge of every card's own
+     * choice shape (CardChoiceSchema's field definitions don't cover a
+     * pending-decision response anyway, since those field keys are
+     * generated dynamically per target -- e.g. Confusion's
+     * "given_card_id_169" -- not statically known ahead of time). Keyed
+     * purely by naming convention, the same one every choice/answer key in
+     * this codebase already follows: a trailing '_player_id(s)'/
+     * '_mood_id(s)'/'_card_id(s)' names what kind of id it is, regardless
+     * of which specific card or decision it came from.
+     *
+     * @param array<string, mixed> $details
+     * @param array<int, string> $playerNames
+     * @param array<int, string> $cardNames
+     */
+    private function describeChoices(array $details, array $playerNames, array $cardNames): string
+    {
+        $parts = [];
+        foreach ($details as $key => $value) {
+            if (in_array($key, ['revealed_card_ids', 'skipped'], true)) {
+                continue; // already spoken for elsewhere in describeEvent()
+            }
+
+            $entry = $this->describeChoiceEntry($key, $value, $playerNames, $cardNames);
+            if ($entry !== null) {
+                $parts[] = $entry;
+            }
+        }
+
+        return implode(', ', $parts);
+    }
+
+    private function describeChoiceEntry(string $key, mixed $value, array $playerNames, array $cardNames): ?string
+    {
+        if ($value === null || $value === [] || $value === false) {
+            return null; // a decline/empty choice -- nothing worth showing
+        }
+
+        $label = $this->humanizeChoiceKey($key);
+
+        if (str_contains($key, '_player_ids') && is_array($value)) {
+            return $label . ': ' . implode(', ', array_map(fn ($id) => $playerNames[(int) $id] ?? 'a player', $value));
+        }
+        if (str_contains($key, '_player_id')) {
+            return $label . ': ' . ($playerNames[(int) $value] ?? 'a player');
+        }
+        if ((str_contains($key, '_mood_ids') || str_contains($key, '_card_ids')) && is_array($value)) {
+            return $label . ': ' . implode(', ', array_map(fn ($id) => $cardNames[(int) $id] ?? 'a card', $value));
+        }
+        if (str_contains($key, '_mood_id') || str_contains($key, '_card_id')) {
+            return $label . ': ' . ($cardNames[(int) $value] ?? 'a card');
+        }
+        if ($value === true) {
+            return $label;
+        }
+        if (is_array($value)) {
+            return $label . ': ' . implode(', ', $value);
+        }
+
+        return $label . ': ' . $value;
+    }
+
+    /**
+     * "given_card_id_169" -> "given card" (both the per-target numeric
+     * suffix a RequiresOpponentDecision response key carries, and the
+     * trailing _id/_ids every choice key ends with regardless of whether
+     * it's actually plural, are just naming plumbing -- neither belongs in
+     * the displayed label).
+     */
+    private function humanizeChoiceKey(string $key): string
+    {
+        $key = (string) preg_replace('/_\d+$/', '', $key);
+        $key = (string) preg_replace('/_ids?$/', '', $key);
+
+        return str_replace('_', ' ', $key);
+    }
+
+    /**
+     * @param ?array{type?: string, values?: int[], source?: string, sourceCardId?: int} $restriction
+     * @return array{description:string, source_card_id:?int, source_card_name:?string}
+     */
+    private function describePlayGrant(?array $restriction): array
+    {
+        if ($restriction === null) {
+            // Only ever startTurn()'s own base allowance (1, or 2 with Hurt
+            // Feelings) -- every actual grantExtraPlay() call always folds
+            // in 'sourceCardId', so this is never a granted extra play.
+            return ['description' => 'Your normal turn', 'source_card_id' => null, 'source_card_name' => null];
+        }
+
+        $cardNames = $this->cardCatalogNames();
+        $sourceCardId = $restriction['sourceCardId'] ?? null;
+        $sourceCardName = $sourceCardId !== null ? ($cardNames[$sourceCardId] ?? 'a card') : null;
+
+        $zoneNote = ($restriction['source'] ?? 'hand') === 'discard' ? ' from the discard pile' : '';
+
+        $restrictionNote = match ($restriction['type'] ?? null) {
+            null => '',
+            'shares_color_with_your_moods' => ' (must share a color with one of your moods)',
+            'does_not_share_color_with_your_moods' => ' (must not share a color with any of your moods)',
+            'base_value_in' => ' (base value ' . implode(' or ', $restriction['values']) . ')',
+            'specific_card_ids' => ' (' . implode(' or ', array_map(fn ($id) => $cardNames[$id] ?? 'a card', $restriction['values'])) . ' only)',
+            default => '',
+        };
+
+        $description = $sourceCardName !== null
+            ? "An extra play from {$sourceCardName}{$zoneNote}{$restrictionNote}"
+            : "An extra play{$zoneNote}{$restrictionNote}";
+
+        return [
+            'description' => $description,
+            'source_card_id' => $sourceCardId,
+            'source_card_name' => $sourceCardName,
+        ];
     }
 
     /**
@@ -1315,7 +1450,7 @@ final class GameService
      * (MoodPlayService::isPlayable()) -- true by default for an in-play
      * card being merely displayed, since nothing there ever reads it.
      *
-     * @return array{card_id:int,name:string,color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
+     * @return array{card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
     private function serializeCard(BoardState $state, int $cardId, ?int $reactingViewerId = null): array
     {
@@ -1343,6 +1478,13 @@ final class GameService
             'card_id' => $cardId,
             'name' => $names[$cardId] ?? $catalog['effectKey'],
             'color' => $color,
+            // The printed color, ignoring Imagination's "while in play, all
+            // moods are the chosen color" override that $color itself
+            // already reflects -- for a Creativity copy this is the
+            // COPIED card's own printed color (matching base_value's own
+            // $diceValueCatalog use just below), not Creativity's own
+            // (colorless-in-spirit, since it's whatever it copies) row.
+            'base_color' => $diceValueCatalog['color'],
             'value' => $inPlay ? $state->valueOf($cardId) : $catalog['baseValue'],
             'base_value' => $baseValue,
             'alt_value' => $diceValueCatalog['altValue'],

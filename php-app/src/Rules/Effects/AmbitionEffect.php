@@ -29,6 +29,6 @@ final class AmbitionEffect extends AbstractMoodEffect
         }
 
         $state->moveHandToDiscard($playerId, $discardCardId);
-        $state->grantExtraPlay();
+        $state->grantExtraPlay(sourceCardId: $cardId);
     }
 }
