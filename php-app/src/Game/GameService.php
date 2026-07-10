@@ -1388,13 +1388,23 @@ final class GameService
         $playedFrom = $details['played_from'] ?? null;
         $playedFromSuffix = $playedFrom !== null ? " from {$playedFrom}" : '';
 
+        // BoardState::$pendingGrantUsed's own docblock: only ever set when
+        // the play actually consumed a genuinely granted extra play, never
+        // for the ordinary base allowance every turn already starts with
+        // -- so this stays empty for a plain first play of the turn, the
+        // same way $playedFromSuffix stays empty for played_from's own
+        // absence. Same two event types as $playedFromSuffix, for the same
+        // reason (only those two ever announce a card actually being played).
+        $grantUsed = $details['grant_used'] ?? null;
+        $grantUsedSuffix = $grantUsed !== null ? ' (using ' . $this->describeGrantDetails($grantUsed) . ')' : '';
+
         $description = match ($row['event_type']) {
-            'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}",
+            'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
             'turn_passed' => "{$actor} passed",
-            'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}, waiting on a response",
+            'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
             'pending_decision_resolved' => "A response to {$cardName} was resolved",
             'round_scored' => $this->describeRoundScored($details, $playerNames),
-            default => "{$actor} played {$cardName}{$playedFromSuffix}",
+            default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 
         // Paranoia/Curiosity's own reveal -- see BoardState::
@@ -1455,6 +1465,34 @@ final class GameService
                 $ownershipChanges,
             );
             $description .= '; ' . implode('; ', $ownershipParts);
+        }
+
+        // Every draw BoardState::consumeDraws() recorded for this event --
+        // deliberately just "{player} drew a card", never which card (see
+        // $pendingDraws' own docblock), and one segment per draw rather
+        // than grouped/counted, matching how card_moves/ownership_changes
+        // above also list every occurrence individually.
+        $draws = $details['draws'] ?? [];
+        if ($draws !== []) {
+            $drawParts = array_map(fn (int $playerId) => ($playerNames[$playerId] ?? 'A player') . ' drew a card', $draws);
+            $description .= '; ' . implode('; ', $drawParts);
+        }
+
+        // Every extra play BoardState::consumeGrantsCreated() recorded for
+        // this event -- source/restriction/zone, via the same
+        // describeGrantDetails() wording a just-used grant gets above and
+        // an outstanding one gets in round.play_grants (see
+        // describePlayGrant()). Attributed to $actor: grantExtraPlay()
+        // always grants to whoever's turn is currently active, which is
+        // always the same player this event's own acting_game_player_id
+        // already names (see $pendingGrantsCreated's own docblock).
+        $grantsCreated = $details['grants_created'] ?? [];
+        if ($grantsCreated !== []) {
+            $grantParts = array_map(
+                fn (?array $restriction) => "{$actor} was granted " . $this->describeGrantDetails($restriction ?? []),
+                $grantsCreated,
+            );
+            $description .= '; ' . implode('; ', $grantParts);
         }
 
         return $description;
@@ -1531,7 +1569,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 
@@ -1619,9 +1657,39 @@ final class GameService
             return ['description' => 'Your normal turn', 'source_card_id' => null, 'source_card_name' => null];
         }
 
-        $cardNames = $this->cardCatalogNames();
+        return [
+            'description' => ucfirst($this->describeGrantDetails($restriction)),
+            'source_card_id' => $restriction['sourceCardId'] ?? null,
+            'source_card_name' => $this->sourceCardNameFor($restriction),
+        ];
+    }
+
+    private function sourceCardNameFor(array $restriction): ?string
+    {
         $sourceCardId = $restriction['sourceCardId'] ?? null;
-        $sourceCardName = $sourceCardId !== null ? ($cardNames[$sourceCardId] ?? 'a card') : null;
+
+        return $sourceCardId !== null ? ($this->cardCatalogNames()[$sourceCardId] ?? 'a card') : null;
+    }
+
+    /**
+     * "an extra play from Charity", "an extra play from the discard pile
+     * (must share a color with one of your moods)", etc. -- the shared
+     * source/zone/restriction wording describePlayGrant() uses for an
+     * outstanding grant (capitalized there via ucfirst()) and describeEvent()
+     * uses verbatim (lowercase, mid-sentence) for a newly created or
+     * just-used one. $restriction is never null here -- unlike
+     * describePlayGrant(), which also has to cover startTurn()'s own base
+     * allowance sentinel, every caller of this method already knows it has
+     * an actual grant (an empty array for Hope's/Grace's own untracked
+     * same-turn bonus, per MoodPlayService::playMood(), rather than null,
+     * so the "Your normal turn" case never gets here by accident).
+     *
+     * @param array{type?: string, values?: int[], source?: string, sourceCardId?: int} $restriction
+     */
+    private function describeGrantDetails(array $restriction): string
+    {
+        $cardNames = $this->cardCatalogNames();
+        $sourceCardName = $this->sourceCardNameFor($restriction);
 
         $zoneNote = ($restriction['source'] ?? 'hand') === 'discard' ? ' from the discard pile' : '';
 
@@ -1634,15 +1702,9 @@ final class GameService
             default => '',
         };
 
-        $description = $sourceCardName !== null
-            ? "An extra play from {$sourceCardName}{$zoneNote}{$restrictionNote}"
-            : "An extra play{$zoneNote}{$restrictionNote}";
-
-        return [
-            'description' => $description,
-            'source_card_id' => $sourceCardId,
-            'source_card_name' => $sourceCardName,
-        ];
+        return $sourceCardName !== null
+            ? "an extra play from {$sourceCardName}{$zoneNote}{$restrictionNote}"
+            : "an extra play{$zoneNote}{$restrictionNote}";
     }
 
     /**
@@ -2196,18 +2258,20 @@ final class GameService
 
     /**
      * Folds whatever BoardState::consumeRevealedCardIds()/consumeCardMoves()/
-     * consumeOwnershipChanges() have collected since the last event was
-     * logged into $details before it's persisted -- see those methods' own
+     * consumeOwnershipChanges()/consumeDraws()/consumeGrantsCreated()/
+     * consumeGrantUsed() have collected since the last event was logged
+     * into $details before it's persisted -- see those methods' own
      * docblocks for why this can't just be read back out of $details like
      * everything else in it. A no-op for a play that revealed, moved, or
-     * reassigned nothing. $state is optional purely because a few call
-     * sites (turn_passed, and the scoring-decision response branch, neither
-     * of which can move or reassign a card) have no BoardState in scope at
-     * the point they log their own event -- every call site that already
-     * has one loaded always passes it, so nothing it did is ever silently
-     * lost. Always called from logEvent() itself, immediately before the
-     * event is persisted, never earlier: every consume method clears what
-     * it returns, so reading them any other time would risk attributing a
+     * reassigned nothing, drew no cards, and granted/used no extra play.
+     * $state is optional purely because a few call sites (turn_passed, and
+     * the scoring-decision response branch, neither of which can move or
+     * reassign a card) have no BoardState in scope at the point they log
+     * their own event -- every call site that already has one loaded
+     * always passes it, so nothing it did is ever silently lost. Always
+     * called from logEvent() itself, immediately before the event is
+     * persisted, never earlier: every consume method clears what it
+     * returns, so reading them any other time would risk attributing a
      * change to the wrong event or dropping it entirely.
      *
      * @param array<string, mixed> $details
@@ -2232,6 +2296,21 @@ final class GameService
         $ownershipChanges = $state->consumeOwnershipChanges();
         if ($ownershipChanges !== []) {
             $details['ownership_changes'] = $ownershipChanges;
+        }
+
+        $draws = $state->consumeDraws();
+        if ($draws !== []) {
+            $details['draws'] = $draws;
+        }
+
+        $grantsCreated = $state->consumeGrantsCreated();
+        if ($grantsCreated !== []) {
+            $details['grants_created'] = $grantsCreated;
+        }
+
+        $grantUsed = $state->consumeGrantUsed();
+        if ($grantUsed !== null) {
+            $details['grant_used'] = $grantUsed;
         }
 
         return $details;

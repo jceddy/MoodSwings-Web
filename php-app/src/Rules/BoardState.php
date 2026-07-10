@@ -120,6 +120,40 @@ final class BoardState
     private array $pendingOwnershipChanges = [];
 
     /**
+     * @var int[] One entry (the drawing player's id) per successful
+     * drawCard() call this play/response/scoring pass -- deliberately just
+     * the player id, never the card itself (see drawCard()'s own docblock
+     * for why revealing which card was drawn would leak hidden hand
+     * information no other recorded move does). Same consume-before-
+     * logging convention as $pendingCardMoves/$pendingOwnershipChanges.
+     */
+    private array $pendingDraws = [];
+
+    /**
+     * @var array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     * One entry per unit of grantExtraPlay(), mirroring what's pushed onto
+     * $playGrants itself -- lets GameService announce a newly granted
+     * extra play (source/restriction/zone) the moment it's created, not
+     * just once it's eventually used (see consumeGrantsCreated()).
+     */
+    private array $pendingGrantsCreated = [];
+
+    /**
+     * The restriction descriptor useGrantFor() most recently consumed, if
+     * it was an actual granted extra play (not the ordinary null-
+     * restriction base allowance every turn already starts with) -- lets
+     * GameService say which grant a play used, alongside the usual
+     * "played from hand" wording. A single nullable value, not a queue
+     * like the others above: MoodPlayService calls useGrantFor() at most
+     * once per top-level playMood() (a Duplicity repeat never consumes a
+     * second grant), so there's never more than one to report before the
+     * next consume.
+     *
+     * @var ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}
+     */
+    private ?array $pendingGrantUsed = null;
+
+    /**
      * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog card id => catalog row
      * @param int[] $playerOrder seat order (turn order) for this game
      * @param array<int, int[]> $hands playerId => hand card ids
@@ -383,8 +417,24 @@ final class BoardState
             return null;
         }
         $this->hands[$playerId][] = $cardId;
+        $this->pendingDraws[] = $playerId;
 
         return $cardId;
+    }
+
+    /**
+     * Returns and clears every player id recorded via drawCard() since the
+     * last call -- see $pendingDraws' own docblock. Same consume-before-
+     * logging convention as consumeCardMoves()/consumeOwnershipChanges().
+     *
+     * @return int[]
+     */
+    public function consumeDraws(): array
+    {
+        $draws = $this->pendingDraws;
+        $this->pendingDraws = [];
+
+        return $draws;
     }
 
     private function removeFromHand(int $playerId, int $cardId): void
@@ -820,7 +870,28 @@ final class BoardState
 
         for ($i = 0; $i < $count; $i++) {
             $this->playGrants[] = $restriction;
+            $this->pendingGrantsCreated[] = $restriction;
         }
+    }
+
+    /**
+     * Returns and clears every restriction descriptor recorded via
+     * grantExtraPlay() since the last call -- see $pendingGrantsCreated'
+     * own docblock. Same consume-before-logging convention as
+     * consumeCardMoves()/consumeOwnershipChanges()/consumeDraws().
+     * Deliberately never populated by computeFreshGrants()'s own
+     * perpetual (Hope/Grace/Stubbornness) or banked (Generosity/Joy)
+     * recomputation at the start of a future turn, since those bypass
+     * this method entirely -- see GameService::computeFreshGrants().
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     */
+    public function consumeGrantsCreated(): array
+    {
+        $grants = $this->pendingGrantsCreated;
+        $this->pendingGrantsCreated = [];
+
+        return $grants;
     }
 
     public function playsRemaining(): int
@@ -862,11 +933,34 @@ final class BoardState
                 unset($this->playGrants[$index]);
                 $this->playGrants = array_values($this->playGrants);
 
+                if ($restriction !== null) {
+                    $this->pendingGrantUsed = $restriction;
+                }
+
                 return $restriction;
             }
         }
 
         return null;
+    }
+
+    /**
+     * Returns and clears $pendingGrantUsed -- see its own docblock. Unlike
+     * the other consume*() methods here, a null return doesn't mean
+     * "nothing happened since the last call" as much as "either nothing
+     * consumed a grant, or it consumed the ordinary base allowance" --
+     * GameService only cares about the latter distinction (an actual
+     * granted extra play worth announcing) either way, so both collapse to
+     * the same "say nothing" outcome for its purposes.
+     *
+     * @return ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}
+     */
+    public function consumeGrantUsed(): ?array
+    {
+        $grant = $this->pendingGrantUsed;
+        $this->pendingGrantUsed = null;
+
+        return $grant;
     }
 
     /** Consumes one grant regardless of restriction -- for tests/setup that don't care which. MoodPlayService uses useGrantFor() instead, since it must consume a grant that actually permits the card being played. */
