@@ -379,9 +379,11 @@
             (player) => {
                 const li = document.createElement('li');
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
+                const wentFirst = state.round && state.round.first_game_player_id === player.game_player_id;
                 li.textContent = player.username + ' — seat ' + player.seat_order +
                     ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
                     player.hand_count + ' card(s) in hand' +
+                    (wentFirst ? ' — went first this round' : '') +
                     (isTurn ? ' — on turn' : '');
                 return li;
             }

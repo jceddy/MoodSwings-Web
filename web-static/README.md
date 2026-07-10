@@ -215,7 +215,12 @@ routed to the PHP app).
     instant, not anything accumulated from earlier rounds; distinct from
     `total_wins`, which only counts outright round victories) — "Alice —
     seat 0, 12 point(s), 2 win(s), 5 card(s) in hand" — so nobody has to
-    manually add up the values on their own moods.
+    manually add up the values on their own moods. It also marks whoever
+    went first this round (`state.round.first_game_player_id`, already
+    tracked server-side for Chivalry/Honor/Triumph-style effects but
+    previously never surfaced to the client) with its own "— went first
+    this round" tag, independent of (and possibly a different player
+    from) whoever the "— on turn" tag currently marks.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
