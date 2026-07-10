@@ -2503,7 +2503,13 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 56, ['target_mood_id' => 3, 'recipient_player_id' => $p2]);
+        // Which mood to give away is a pending decision the acting player
+        // (not an opponent) answers immediately after Betrayal enters play
+        // -- see BetrayalEffect's own docblock.
+        $playResult = $this->games->playMood($gameId, $p1, 56, ['recipient_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 3]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
         $charity = self::findByCardId($inPlay, 3);
@@ -2517,6 +2523,61 @@ final class GameServiceIntegrationTest extends TestCase
             ],
             $charity['temporary_ownership'],
         );
+    }
+
+    /**
+     * The core scenario BetrayalEffect's own RequiresOpponentDecision
+     * redesign exists for: giving Betrayal itself away used to be
+     * impossible through the ordinary GameService round trip (it wasn't
+     * in play yet at choice-submission time, so it could never appear as
+     * a candidate), even though nothing about the printed card text
+     * excludes it. Exercises the full playMood() -> pending_decision:true
+     * -> respondToDecision() round trip, not just BoardState directly.
+     */
+    public function testBetrayalCanGiveItselfAwayThroughTheFullRoundTrip(): void
+    {
+        $u1 = $this->insertUser('selfbetray1');
+        $u2 = $this->insertUser('selfbetray2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal -- p1's only mood
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, 56, ['recipient_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $pendingDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('betrayal_give_mood', $pendingDecision['decision_type']);
+        self::assertSame($p1, $pendingDecision['target_game_player_id']);
+        self::assertTrue($pendingDecision['is_you']);
+
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 56]);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $betrayal = self::findByCardId($inPlay, 56);
+        self::assertSame($p2, $betrayal['owner_game_player_id']);
+        self::assertSame(
+            [
+                'original_owner_game_player_id' => $p1,
+                'original_owner_name' => 'selfbetray1',
+                'source_card_id' => 56,
+                'source_card_name' => 'Betrayal',
+                'reverts' => 'after_scoring',
+            ],
+            $betrayal['temporary_ownership'],
+        );
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        $allDescriptions = implode(' | ', array_column($events, 'description'));
+        self::assertStringContainsString('Betrayal changed ownership from selfbetray1 to selfbetray2', $allDescriptions);
     }
 
     /**

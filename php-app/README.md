@@ -329,6 +329,32 @@ translated by `writePendingBatch()`'s own catch into the same
 `GameStateException` the non-racing check throws, rather than silently
 creating a second, simultaneously-open batch.
 
+`BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer, for
+a different reason than the other ten: nothing about Betrayal's own printed
+text ("give one of your moods to another player") excludes giving Betrayal
+itself away, but that mood can't be offered as an ordinary `choice_fields`
+entry the way "one of your own moods" is for almost every other card --
+Betrayal is still sitting in the player's *hand* at the moment an ordinary
+choices panel is filled out, so a field sourced from the current board
+could never legally include it as a candidate. `pendingDecisionsFor()`
+returns exactly one `PendingDecisionRequest` with `targetPlayerId` set to
+the *acting* player themselves (not an opponent -- the same self-targeting
+`PendingDecisionRequest`'s own docblock already documents for Duplicity's
+repeat-offer, just via this general interface instead of that offer's own
+bespoke `MoodPlayService` code path), asked the instant Betrayal has
+actually entered play; by then `target_mood_id`'s own field (`type: mood,
+scope: own`, sourced from the live board the same way any other in-play
+mood choice already is) legitimately includes Betrayal, since it's already
+there. Never declined (no "may" in the printed text, unlike Arrogance's own
+optional trigger), so `pendingDecisionsFor()` never returns `[]` here --
+`recipient_player_id` stays an ordinary up-front `choice_fields` entry
+(submitted, and validated, before the pause), since which *other player*
+to target has no equivalent problem. The frontend needed no changes at all
+for this: the pending-decision response panel already renders any decision
+type other than `duplicity_repeat_offer` (Betrayal's own `betrayal_give_mood`
+included) with no candidate-exclusion placeholder, so nothing had to be
+taught that this one card's own decision is a legal answer to itself.
+
 Migration 0011 only ever closed the pending-batch-specific half of a
 broader gap: `playMood()`/`pass()`/`respondToDecision()` each load a
 `BoardState`, mutate it in memory, and save it back across one or more

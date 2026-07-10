@@ -2501,16 +2501,55 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(['action' => 'bottom_and_draw', 'condition' => 'if_won'], $state->effectState(30, 'afterScoring'));
     }
 
-    public function testBetrayalGivesAMoodAwayAndTagsItToReturn(): void
+    public function testBetrayalPausesForItsOwnMoodChoiceThenTagsItToReturn(): void
     {
         $state = $this->boardState(hands: [1 => [56, 3]]); // Betrayal, Charity
         $state->moveHandToInPlay(1, 3);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 56, new PlayerChoices(['target_mood_id' => 3, 'recipient_player_id' => 2]));
+        $choices = new PlayerChoices(['recipient_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 56, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        // Unlike every other RequiresOpponentDecision card, the target is
+        // the ACTING player themselves -- Betrayal's own choice of which
+        // mood to give away can't be made until Betrayal is actually in
+        // play, but nobody OTHER than player 1 answers it.
+        self::assertSame(1, $result->pendingDecisions[0]->targetPlayerId);
+        self::assertSame(1, $state->ownerOf(3)); // not given away yet
+
+        $this->plays->resolvePendingDecisions(
+            $state, 56, 1, $choices, $choices, 0,
+            ['target_mood_id' => new PlayerChoices(['target_mood_id' => 3])],
+        );
 
         self::assertSame(2, $state->ownerOf(3));
         self::assertSame(['sourceCardId' => 56, 'ownerId' => 1], $state->effectState(3, 'returnsToOwnerAfterScoring'));
+    }
+
+    /**
+     * The whole point of deferring this choice until after Betrayal has
+     * actually entered play: giving Betrayal itself away is a legal
+     * answer, even though it could never have been offered as an ordinary
+     * up-front choice (Betrayal is still in hand, not in play, at the
+     * moment the choices panel would otherwise be filled out).
+     */
+    public function testBetrayalCanGiveItselfAway(): void
+    {
+        $state = $this->boardState(hands: [1 => [56]]);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['recipient_player_id' => 2]);
+        $this->plays->playMood($state, 1, 56, $choices);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 56, 1, $choices, $choices, 0,
+            ['target_mood_id' => new PlayerChoices(['target_mood_id' => 56])],
+        );
+
+        self::assertSame(2, $state->ownerOf(56));
+        self::assertSame(['sourceCardId' => 56, 'ownerId' => 1], $state->effectState(56, 'returnsToOwnerAfterScoring'));
     }
 
     public function testBetrayalRejectsATargetNotOwnedByYou(): void
@@ -2519,8 +2558,14 @@ final class MoodPlayServiceTest extends TestCase
         $state->moveHandToInPlay(2, 3);
         $state->startTurn(1);
 
+        $choices = new PlayerChoices(['recipient_player_id' => 2]);
+        $this->plays->playMood($state, 1, 56, $choices);
+
         $this->expectException(InvalidChoiceException::class);
-        $this->plays->playMood($state, 1, 56, new PlayerChoices(['target_mood_id' => 3, 'recipient_player_id' => 2]));
+        $this->plays->resolvePendingDecisions(
+            $state, 56, 1, $choices, $choices, 0,
+            ['target_mood_id' => new PlayerChoices(['target_mood_id' => 3])],
+        );
     }
 
     public function testBetrayalRejectsGivingToYourself(): void
@@ -2530,7 +2575,7 @@ final class MoodPlayServiceTest extends TestCase
         $state->startTurn(1);
 
         $this->expectException(InvalidChoiceException::class);
-        $this->plays->playMood($state, 1, 56, new PlayerChoices(['target_mood_id' => 3, 'recipient_player_id' => 1]));
+        $this->plays->playMood($state, 1, 56, new PlayerChoices(['recipient_player_id' => 1]));
     }
 
     public function testSneakinessTagsAnOpponentForAScoreSwap(): void
