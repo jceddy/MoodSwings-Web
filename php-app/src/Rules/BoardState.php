@@ -107,6 +107,19 @@ final class BoardState
     private array $pendingCardMoves = [];
 
     /**
+     * @var array<int, array{card_id:int, from_player_id:int, to_player_id:int}>
+     * Every ownership change recorded this play/response/scoring pass, via
+     * the same consume-before-logging convention as $pendingCardMoves --
+     * see consumeOwnershipChanges(). A mood already sitting in play never
+     * has anything hidden about who owns it, so unlike $pendingCardMoves
+     * this needs no zone-based exceptions: every giveInPlayToPlayer() call
+     * is recorded, whether it's a card's own effect (Guile, Instability,
+     * Avoidance, Chaos), a temporary "give it back later" swap (Arrogance,
+     * Betrayal, Recklessness), or that swap's own later reversal.
+     */
+    private array $pendingOwnershipChanges = [];
+
+    /**
      * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog card id => catalog row
      * @param int[] $playerOrder seat order (turn order) for this game
      * @param array<int, int[]> $hands playerId => hand card ids
@@ -200,20 +213,29 @@ final class BoardState
     public function moveHandToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromHand($playerId, $cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId));
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'hand'));
     }
 
     /** Harmony/Grief/Angst: plays a mood "from the discard pile" instead of from hand -- see BoardState::$playGrants' 'source' key and MoodPlayService. */
     public function moveDiscardToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromDiscard($cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId));
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'discard'));
     }
 
-    /** @return array<string, mixed> */
-    private function initialEffectState(int $cardId): array
+    /**
+     * 'playedFromZone' persists (unlike $pendingCardMoves/$pendingRevealedCardIds,
+     * which only ever need to survive to the end of the single request that
+     * fired them) as ordinary effectState -- GameService reads it back to
+     * say e.g. "played Harmony from discard" even for a play that pauses on
+     * a RequiresOpponentDecision and only actually finishes several requests
+     * later, once the mood is long since already sitting in play.
+     *
+     * @return array<string, mixed>
+     */
+    private function initialEffectState(int $cardId, string $fromZone): array
     {
-        return [...$this->playedInRoundTag(), ...$this->consumeStagedEffectState($cardId)];
+        return ['playedFromZone' => $fromZone, ...$this->playedInRoundTag(), ...$this->consumeStagedEffectState($cardId)];
     }
 
     /** @return array<string, mixed> */
@@ -341,7 +363,9 @@ final class BoardState
 
     public function giveInPlayToPlayer(int $cardId, int $newOwnerId): void
     {
+        $oldOwnerId = $this->moodInPlay($cardId)->ownerId;
         $this->moodInPlay($cardId)->ownerId = $newOwnerId;
+        $this->recordOwnershipChange($cardId, $oldOwnerId, $newOwnerId);
     }
 
     /** Fascination: hands a card directly from one player's hand to another's (e.g. "give it to another player"), rather than routing it through discard/deck. */
@@ -514,6 +538,31 @@ final class BoardState
         $this->pendingCardMoves = [];
 
         return $moves;
+    }
+
+    private function recordOwnershipChange(int $cardId, int $fromPlayerId, int $toPlayerId): void
+    {
+        $this->pendingOwnershipChanges[] = [
+            'card_id' => $cardId,
+            'from_player_id' => $fromPlayerId,
+            'to_player_id' => $toPlayerId,
+        ];
+    }
+
+    /**
+     * Returns and clears every ownership change recorded via
+     * giveInPlayToPlayer() since the last call -- see
+     * $pendingOwnershipChanges' own docblock. Same consume-before-logging
+     * convention as consumeCardMoves()/consumeRevealedCardIds().
+     *
+     * @return array<int, array{card_id:int, from_player_id:int, to_player_id:int}>
+     */
+    public function consumeOwnershipChanges(): array
+    {
+        $changes = $this->pendingOwnershipChanges;
+        $this->pendingOwnershipChanges = [];
+
+        return $changes;
     }
 
     /** Clears every suppression whose source is $sourceCardId (e.g. that mood left play). */

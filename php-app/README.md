@@ -567,6 +567,31 @@ fall out of the same `diceValueBoosterCardId()` check against every other
 candidate, no special-casing needed). See `GameService::
 affectingEntries()`.
 
+Every in-play mood also carries `temporary_ownership` -- `null` unless its
+current owner only holds it temporarily, in which case
+`{original_owner_game_player_id, original_owner_name, source_card_id,
+source_card_name, reverts}` names which card caused the change, who owned
+it before, and when it reverts. `reverts` is `'when_source_leaves_play'`
+for Arrogance's own steal (reading its `returnsToOwnerIfCardLeavesPlay`
+effectState tag) or `'after_scoring'` for Betrayal's/Recklessness's "give
+it back later" (reading `returnsToOwnerAfterScoring`, whose shape changed
+from a bare owner id to `{sourceCardId, ownerId}` specifically so this
+method has a card to name -- `GameService::applyAfterScoringHooks()`,
+the only other reader, just pulls `ownerId` back out same as before). See
+`GameService::temporaryOwnershipInfo()`. Every OTHER `giveInPlayToPlayer()`
+caller (Guile, Instability, Avoidance, Chaos) is a permanent trade with no
+such tag, so this is `null` for those -- the change is still visible in
+game history (see the `ownership_changes` section above), just without
+this popup-specific "when does it end" detail.
+
+`GameService::getState()`'s `players` mapping now carries `total_score`
+alongside the existing `total_wins` -- a running sum of every
+`game_round_scores.score` row for that `game_player_id` (see the new
+`totalScoreFor()`, mirroring `totalWinsFor()`'s own query shape). Distinct
+from `total_wins` (how many rounds a player has outright won) since a
+round's loser(s) still score points worth showing on a "who's ahead" view
+even though they didn't win that round.
+
 `GameService::getState()`'s `discard_pile` mapping now passes the viewer's
 own game-player id to `serializeCard()` the same way `hand` already does
 (previously omitted, since nothing in the discard pile was ever a play
@@ -645,6 +670,44 @@ hasn't happened yet, so there would be nothing for `consumeCardMoves()` to
 find. That log call now happens right after `resolvePendingDecisions()`
 instead, with the same `BoardState` passed through so its own accumulated
 moves are captured.
+
+Two more pieces of history round out "anything that changes about a card
+gets logged, not just what a player submitted":
+
+- **Which zone a card was played from.** `mood_played`/
+  `pending_decision_created` now say e.g. "Alice played Harmony from hand"
+  or "Alice played Grief's bonus target from discard" -- necessary since a
+  discard-sourced play grant (Angst/Harmony/Grief) or Melancholy's blanket
+  "play from the discard pile as though it were your hand" means a play's
+  own source zone isn't always the obvious default. Unlike `card_moves`/
+  `revealed_card_ids` above, this doesn't need a per-request consume/clear
+  step: `BoardState::moveHandToInPlay()`/`moveDiscardToInPlay()` tag the
+  newly-in-play mood with a `playedFromZone` effectState key (`'hand'` or
+  `'discard'`), the same way they already tag `playedInRound` -- ordinary,
+  permanently-persisted effectState, so it's still there to read from
+  `GameService::withPlayedFrom()` even for a play that pauses on a
+  `RequiresOpponentDecision` and only actually finishes several requests
+  later (the mood is already sitting in play with its tag by the time
+  anyone resolves the decision). Deliberately scoped to only the two event
+  types that actually announce a play -- a scoring-time
+  `pending_decision_created` (Enthusiasm/Passion) is never about a card
+  freshly entering play, so `withPlayedFrom()` is only ever called at the
+  4 call sites that are (the initial pending pause/immediate `mood_played`
+  in `playMood()`, and the chained pending pause/final `mood_played` once
+  a decision resolves in `respondToDecision()`), rather than folded into
+  every event automatically the way `withCardHistory()`'s three fields are.
+- **Every ownership reassignment.** `BoardState::giveInPlayToPlayer()` now
+  records a `{card_id, from_player_id, to_player_id}` entry (mirroring
+  `recordMove()`'s own convention) into a new `$pendingOwnershipChanges`
+  list, drained by `consumeOwnershipChanges()` and folded into
+  `withCardHistory()` alongside `card_moves`/`revealed_card_ids` -- so
+  every card whose owner changes (Guile, Instability, Avoidance, Chaos's
+  full reshuffle, Arrogance's steal, Betrayal's/Recklessness's "give it
+  back later" and that swap's own eventual reversal) shows up as its own
+  "X changed ownership from Bob to Alice" line, tracked completely
+  independently of `card_moves` -- a card's zone and its owner can each
+  change without the other (most of the cards above never move the mood
+  out of play at all).
 
 Beyond the reveal-specific handling above, `describeEvent()` also appends a
 generic summary of whatever was actually submitted for a `mood_played`/

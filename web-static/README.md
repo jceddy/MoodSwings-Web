@@ -109,7 +109,15 @@ routed to the PHP app).
     mood doing the suppressing/boosting itself shows "Affecting: <targets>"
     naming everything it's currently affecting (several at once for a
     mass-suppression card's "all" mode, or for Idealism's blanket "every
-    mood its owner controls"). Every card in the discard pile is clickable
+    mood its owner controls"). A mood someone only holds temporarily
+    (Arrogance's steal, or Betrayal's/Recklessness's "give it back later")
+    shows a fourth reminder line: which card caused the change, who owned
+    it originally, and when it reverts — "when <that card> leaves play" for
+    Arrogance's own tag, or "after this round is scored" for Betrayal's/
+    Recklessness's, matching `state.in_play[].temporary_ownership`'s own
+    `reverts` value (`null` for a permanent trade like Guile's/Instability's/
+    Avoidance's/Chaos's, which still shows up in the "Recent plays" history
+    below, just without this popup detail). Every card in the discard pile is clickable
     too — almost always the same read-only detail view, so an unfamiliar
     card can be checked before deciding how to respond to it, but the rare
     exception is a card actually covered by a discard-sourced extra play
@@ -163,8 +171,11 @@ routed to the PHP app).
     before you decide how to respond to a card you don't recognize. A
     "Recent plays" list at the bottom of the board shows the last 15
     plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
-    played Paranoia (target player: Bob), revealing Charity from Bob's
-    hand") — it comes along for free with each poll (`state.recent_events`,
+    played Paranoia from hand (target player: Bob), revealing Charity from
+    Bob's hand") — always naming which zone the card was actually played
+    from (hand, or the discard pile for a Harmony/Grief/Angst-style bonus
+    play or Melancholy's blanket discard-as-hand), not just that it was
+    played — it comes along for free with each poll (`state.recent_events`,
     already fully formatted server-side, see `php-app/README.md`) rather
     than needing its own endpoint or polling loop. This is specifically
     what makes Paranoia's and Curiosity's own random reveal visible at all
@@ -178,9 +189,21 @@ routed to the PHP app).
     puts one of its own player's *in-play* moods into the discard pile,
     saying so explicitly ("mood moved from play to discard: Charity")
     rather than the more general "discard mood" phrasing that elsewhere
-    always means a *hand* card going to the discard pile. A round-scored
-    line names every player's own final score and who won, not just that
-    scoring happened.
+    always means a *hand* card going to the discard pile. Any mood whose
+    owner changes — Guile/Instability/Avoidance/Chaos's permanent trades,
+    Arrogance's/Betrayal's/Recklessness's own temporary "give it back
+    later" swaps, and that swap's own eventual reversal — gets its own
+    line too, e.g. "Charity changed ownership from Bob to Alice"
+    (`state.<event>.ownership_changes`, tracked completely independently
+    of a card's zone). A round-scored line names every player's own final
+    score and who won, not just that scoring happened.
+
+    The "Players" list near the top of the board shows each player's
+    running point total alongside their win count and hand size
+    (`player.total_score`, a running sum across every round scored so far
+    this game — distinct from `total_wins`, which only counts outright
+    round victories) — "Alice — seat 0, 12 point(s), 2 win(s), 5 card(s)
+    in hand".
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits

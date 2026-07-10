@@ -18,7 +18,8 @@ use MoodSwings\Rules\PlayerChoices;
  * 'afterScoring' effectState key at play time (rather than needing a
  * separate "for every mood currently in play" scan each round); the
  * optional taken mood is tagged with 'returnsToOwnerAfterScoring' the same
- * way Betrayal's is -- see GameService::applyAfterScoringHooks().
+ * way Betrayal's is (see that class's own docblock for the tag's
+ * {sourceCardId, ownerId} shape) -- see GameService::applyAfterScoringHooks().
  */
 final class RecklessnessEffect extends AbstractMoodEffect
 {
@@ -41,6 +42,6 @@ final class RecklessnessEffect extends AbstractMoodEffect
         }
 
         $state->giveInPlayToPlayer($targetCardId, $playerId);
-        $state->setEffectState($targetCardId, 'returnsToOwnerAfterScoring', $originalOwnerId);
+        $state->setEffectState($targetCardId, 'returnsToOwnerAfterScoring', ['sourceCardId' => $cardId, 'ownerId' => $originalOwnerId]);
     }
 }
