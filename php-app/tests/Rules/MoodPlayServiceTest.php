@@ -268,6 +268,65 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 3]));
     }
 
+    public function testDoubtBlocksPlayingCreativityWhenBlueIsBannedEvenIfCopyingAnotherColor(): void
+    {
+        // Creativity's own printed color is blue, regardless of what it
+        // copies -- per a rules judge ruling, Doubt's color ban applies to
+        // the color of the card actually being played, checked before
+        // copy_card_id is even read (see MoodPlayService::playMood(),
+        // which computes $copiedCardId only after this check), not to
+        // whatever color the copy would end up being. So a Doubt ban on
+        // blue blocks playing Creativity at all, even to copy an in-play
+        // mood of a completely different color.
+        $state = $this->boardState(hands: [1 => [36, 48], 2 => [7, 32]]); // Doubt, Panic (blue); Courage (white), Creativity
+        $state->startRound(1, 3);
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 7, new PlayerChoices([])); // Courage, white, now in play as a copy target
+
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 36, new PlayerChoices(['reveal_card_ids' => [48]])); // Doubt reveals blue Panic, banning blue next round
+
+        $state->startRound(2, 4);
+        $state->startTurn(2);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 2, 32, new PlayerChoices(['copy_card_id' => 7])); // Creativity, blue -- banned even though copying white Courage
+    }
+
+    public function testCreativityCopyingACardWithAToPlayCostStillRequiresPayingIt(): void
+    {
+        // Bliss's "discard a card" to-play cost is checked/paid against
+        // Creativity's own card id (still in hand at that point), not the
+        // copied card's id -- see MoodPlayService::playMood() and
+        // canPayCopiedToPlayCost()'s own docblock. This isn't new behavior
+        // (it already worked before the Doubt/Validation fixes above/below),
+        // but is pinned here as a regression guard since all three touch
+        // the same Creativity-copy code path.
+        $state = $this->boardState(hands: [1 => [32, 5, 6], 2 => [108, 3]]); // Creativity, Complacency, discard fodder; Bliss + discard fodder
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 108, new PlayerChoices(['discard_card_id' => 3])); // Bliss enters play
+
+        $state->startTurn(1);
+        $handSizeBefore = count($state->hand(1));
+        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 108, 'discard_card_id' => 5]));
+
+        self::assertSame($handSizeBefore - 2, count($state->hand(1))); // Creativity itself, plus the discarded card
+        self::assertFalse($state->isInHand(1, 5));
+        self::assertTrue($state->isInDiscardPile(5));
+    }
+
+    public function testCreativityCopyingACardWithAToPlayCostFailsWithoutAnythingToDiscard(): void
+    {
+        $state = $this->boardState(hands: [1 => [32], 2 => [108, 3]]); // Creativity, with no other hand card; Bliss + discard fodder
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 108, new PlayerChoices(['discard_card_id' => 3])); // Bliss enters play
+
+        $state->startTurn(1);
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 108]));
+    }
+
     public function testBenevolenceAllowsABonusPlayOfADifferentColor(): void
     {
         $state = $this->boardState(hands: [1 => [2, 106]]); // Benevolence (white), Zeal (red)
@@ -3178,6 +3237,25 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 5, new PlayerChoices(['validation_extra_play' => true]));
 
         self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testValidationReactsToACreativityCopyRegardlessOfTheCopiedCardsValue(): void
+    {
+        // Per a rules judge ruling, Validation's "0 or 1 in its top right
+        // corner" check reads the card as it sits in hand -- Creativity's
+        // own printed 0 -- not whatever value the copy ends up having once
+        // in play. So copying Discipline (base value 6) should still
+        // trigger Validation's reaction, exactly as if a plain 0-value
+        // card had been played.
+        $state = $this->boardState(hands: [1 => [26, 32], 2 => [9]]); // Validation, Creativity; Discipline (base value 6)
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 9, new PlayerChoices([])); // Discipline, now in play
+
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // Validation, grants 1 extra play
+        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 9, 'validation_extra_play' => true])); // Creativity copying Discipline
+
+        self::assertSame(1, $state->playsRemaining());
     }
 
     public function testCompulsionPausesForTheTargetsOwnChoiceThenResolvesTheTransfer(): void
