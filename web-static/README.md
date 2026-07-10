@@ -17,8 +17,18 @@ routed to the PHP app).
   session; otherwise shows the logged-in username, a logout button, a
   "Friends" button (see below), and the game lobby/board itself:
   - **Lobby**: your games (via `GET /games`), each showing opponents,
-    status, and whether it's your turn; a "New game" dialog picks 1-3
-    friends (via `GET /friends`) plus a format, then calls `POST /games`.
+    status, and whether it's your turn — status reads as e.g. "In
+    Progress" rather than the raw `in_progress` the API returns
+    (`humanizeStatus()`, a generic snake_case-to-Title-Case transform, not
+    a fixed per-status lookup table, so any future status value still
+    reads reasonably without needing an update here); a "New game" dialog
+    picks 1-3 friends (via `GET /friends`) plus a format, then calls
+    `POST /games`. Polls `GET /games` every 4 seconds while the lobby is
+    open (mirroring the board's own poll below, and mutually exclusive
+    with it via the same `pollTimer` variable, since only one of the two
+    views is ever visible at once) — so a game another player just
+    created (or one you created yourself from a second tab) shows up on
+    its own, without needing a hard reload.
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
     deck count, and your hand (via `GET /games/state`). Clicking any hand
     card opens a panel showing its name and rules text plus Play/Cancel, so
@@ -199,11 +209,13 @@ routed to the PHP app).
     score and who won, not just that scoring happened.
 
     The "Players" list near the top of the board shows each player's
-    running point total alongside their win count and hand size
-    (`player.total_score`, a running sum across every round scored so far
-    this game — distinct from `total_wins`, which only counts outright
-    round victories) — "Alice — seat 0, 12 point(s), 2 win(s), 5 card(s)
-    in hand".
+    current point total alongside their win count and hand size
+    (`player.total_score` — a live sum of what's actually on the board
+    right now, i.e. what each player would score if the round ended this
+    instant, not anything accumulated from earlier rounds; distinct from
+    `total_wins`, which only counts outright round victories) — "Alice —
+    seat 0, 12 point(s), 2 win(s), 5 card(s) in hand" — so nobody has to
+    manually add up the values on their own moods.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits

@@ -1139,7 +1139,12 @@ final class GameService
                 'seat_order' => (int) $row['seat_order'],
                 'hand_count' => $handCounts[(int) $row['id']] ?? 0,
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
-                'total_score' => $this->totalScoreFor((int) $row['id']),
+                // Overwritten below with the live sum of this player's
+                // in-play moods' current values once BoardState is loaded
+                // -- 0 here only actually applies to a 'waiting' game
+                // (nothing dealt yet), the one status this function
+                // returns for before ever reaching that point.
+                'total_score' => 0,
             ];
         }
 
@@ -1180,6 +1185,20 @@ final class GameService
         $roundRow = $roundStmt->fetch();
 
         $state = $this->boardStates->load($gameId);
+
+        // A quality-of-life running total -- how many points a player
+        // would score if the round ended and every in-play mood scored at
+        // its current value -- so nobody has to manually add up the
+        // numbers on their own board. Deliberately NOT the accumulated
+        // game_round_scores total across previous rounds (that's what
+        // total_wins already exists to summarize at the round-victory
+        // level); this is always just a live snapshot of the board as it
+        // stands right now, resetting to 0 the moment a round scores and
+        // every mood leaves play.
+        foreach ($response['players'] as &$player) {
+            $player['total_score'] = $this->boardPointTotalFor($state, $player['game_player_id']);
+        }
+        unset($player);
 
         $cardIds = array_keys($this->cardCatalogNames());
 
@@ -1811,21 +1830,23 @@ final class GameService
     }
 
     /**
-     * A player's running point total across every round scored so far this
-     * game -- distinct from totalWinsFor()'s round-victory count, since a
-     * round's loser(s) still score points (just not a win) that a "who's
-     * ahead" view needs too. game_player_id is unique to one game (a fresh
-     * row per game, never reused), so this needs no game_id filter of its
-     * own the way totalWinsFor() does.
+     * The live sum of $playerId's own in-play moods' current values --
+     * distinct from totalWinsFor()'s round-victory count, and distinct
+     * from any accumulated across-rounds total: this reads straight off
+     * the board (BoardState::valueOf(), the same computation scoring
+     * itself uses) rather than any persisted game_round_scores row, so it
+     * naturally stays in sync with anything that changes a mood's value
+     * mid-round (suppression, a dice-value boost, Imagination's recolor,
+     * ...) without needing its own invalidation.
      */
-    private function totalScoreFor(int $playerId): int
+    private function boardPointTotalFor(BoardState $state, int $playerId): int
     {
-        $stmt = Connection::get()->prepare(
-            'SELECT COALESCE(SUM(score), 0) AS total FROM game_round_scores WHERE game_player_id = :player_id'
-        );
-        $stmt->execute(['player_id' => $playerId]);
+        $total = 0;
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            $total += $state->valueOf($mood->cardId);
+        }
 
-        return (int) $stmt->fetchColumn();
+        return $total;
     }
 
     private function currentRound(int $gameId): array
