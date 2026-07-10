@@ -432,7 +432,13 @@
 
         document.getElementById('pass-button').disabled = !canAct;
 
-        const playGrants = (state.round && state.round.play_grants) || [];
+        // round.play_grants describes whoever's turn it currently is, not
+        // the viewer specifically -- showing it while it's someone else's
+        // turn would read as "you have a play left" when you don't, so the
+        // whole indicator stays hidden until it's actually your turn.
+        const playGrantsDetails = document.getElementById('play-grants-details');
+        playGrantsDetails.hidden = !state.you.is_your_turn;
+        const playGrants = (state.you.is_your_turn && state.round && state.round.play_grants) || [];
         document.getElementById('plays-remaining-count').textContent = playGrants.length;
         renderList(
             document.getElementById('play-grants-list'),
