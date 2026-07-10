@@ -208,6 +208,22 @@ routed to the PHP app).
     of a card's zone). A round-scored line names every player's own final
     score and who won, not just that scoring happened.
 
+    A separate, more prominent green banner (`#board-message`) flashes
+    "Game complete!" or "Round scored — a new round has begun." right
+    after a play/pass/response that actually triggers one
+    (`announceOutcome()`, keyed off that action's own `game_completed`/
+    `round_scored` response flags) — distinct from the "Recent plays" line
+    above, which is a permanent history entry built from the next poll's
+    own `state.recent_events` rather than a one-off local reaction to a
+    single request's result. Since nothing ever hides this banner on an
+    ordinary board load (only another play/pass/response, right before
+    submitting, ever clears it), `showBoard()` now explicitly hides it too
+    the moment a game's board is (re)opened — otherwise a game that had
+    already completed the last time its board was viewed would leave the
+    "Game complete!" banner sitting there, incorrectly, the next time any
+    *other* game's board opened, including a freshly created one that had
+    never even started yet.
+
     The "Players" list near the top of the board shows each player's
     current point total alongside their win count and hand size
     (`player.total_score` — a live sum of what's actually on the board

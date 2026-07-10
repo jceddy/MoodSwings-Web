@@ -147,6 +147,15 @@
         currentGameId = gameId;
         lobbyView.hidden = true;
         boardView.hidden = false;
+        // boardMessage ("Game complete!"/"Round scored...") is otherwise
+        // only ever hidden right before submitting a play/pass/response --
+        // never on a plain board load -- so without this, a message left
+        // over from whichever game was open last (e.g. its own
+        // "Game complete!") would still be sitting there, visible, the
+        // moment a brand-new game's board first renders. boardError
+        // doesn't need the same treatment -- refreshBoard() itself
+        // already clears it on every successful load.
+        boardMessage.hidden = true;
         refreshBoard();
         if (pollTimer) {
             clearInterval(pollTimer);
