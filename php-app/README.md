@@ -591,13 +591,18 @@ valueOf()` across every mood a player currently owns in play (see the new
 `boardPointTotalFor()`), not anything persisted or accumulated across
 rounds. It moves with the board -- a mood entering/leaving play, or its
 value changing mid-round (suppression, a dice-value boost, Imagination's
-recolor, ...) -- and resets to 0 the moment a round scores and every mood
-clears. This was originally built as a running total pulled from
-`game_round_scores` (added, then corrected the same day it shipped, once
-testing showed a live board snapshot -- "how many points would I score
-right now" -- is what a "don't make me add up my own cards" indicator
-actually needs); `total_wins` is still the only place round-victory
-history is summarized.
+recolor, ...) -- but does NOT reset to 0 just because a round scores:
+`finishScoringAndAdvance()` never clears the board on its own, only
+specific cards' own `afterScoring` tags (Bashfulness/Gluttony/Insecurity/
+Recklessness) remove anything, so an ordinary mood with no such tag
+carries its value straight into the next round's own total, exactly as
+`RoundScorer::score()` itself would count it if the round ended again
+right now. This was originally built as a running total pulled from
+`game_round_scores` (corrected the same day it shipped, once testing
+showed a live board snapshot -- "how many points would I score right
+now" -- is what a "don't make me add up my own cards" indicator actually
+needs); `total_wins` is still the only place round-victory history is
+summarized.
 
 `GameService::getState()`'s `discard_pile` mapping now passes the viewer's
 own game-player id to `serializeCard()` the same way `hand` already does
