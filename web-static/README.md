@@ -194,7 +194,15 @@ routed to the PHP app).
     while it's actually your own turn — `state.round.play_grants` itself
     always describes whoever's turn it currently is, so showing it
     unconditionally would read as "you have a play left" on someone
-    else's turn.
+    else's turn. The `<details>` starts `hidden` in the markup itself
+    (not just hidden via JS once state loads), and `refreshBoard()` tags
+    each `/games/state` call with an incrementing sequence number and
+    drops the response if a newer call has since been issued — otherwise
+    an in-flight poll issued a moment before an action like Start game
+    can resolve *after* that action's own fresher render and silently
+    overwrite it with stale data (e.g. showing this indicator again after
+    the game started with an opponent going first, until the page was
+    reloaded).
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

@@ -82,6 +82,31 @@ final class BoardState
     private array $pendingRevealedCardIds = [];
 
     /**
+     * @var array<int, array{card_id:int, from_zone:string, to_zone:string, from_player_id:?int, to_player_id:?int}>
+     * Every zone transition recorded this play/response/scoring pass, so
+     * GameService can fold them into whichever event it's about to log
+     * (see consumeCardMoves()) -- this is what lets a card moved by a
+     * random/effect-internal choice (Cruelty, Indecisiveness, Altruism) or
+     * an opponent's own answer (Malice's color cascade, Disillusionment,
+     * Suspicion) show up in game history exactly like a card named in the
+     * acting player's own submitted choices already does, without every
+     * effect class needing to log anything itself.
+     *
+     * Deliberately NOT recorded here: moveHandToInPlay()/moveDiscardToInPlay()
+     * (always the card actually being played -- already implicit in the
+     * mood_played/pending_decision_created event's own card_id, so adding
+     * it again here would just repeat the same fact on every single play),
+     * and drawCard() (unlike every other zone this class moves cards
+     * through, a hand a card is DRAWN into was never previously public --
+     * recording it would leak which card a player drew to every other
+     * player's history, something no other move recorded here does, since
+     * every other source zone -- play, the discard pile, or a hand a card
+     * is LEAVING via an effect -- is either already public or already
+     * loggable the same way a submitted choice already is).
+     */
+    private array $pendingCardMoves = [];
+
+    /**
      * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog card id => catalog row
      * @param int[] $playerOrder seat order (turn order) for this game
      * @param array<int, int[]> $hands playerId => hand card ids
@@ -227,6 +252,7 @@ final class BoardState
         unset($this->moodsInPlay[$cardId]);
         $this->discard[] = $cardId;
         $this->discardedThisRound = true;
+        $this->recordMove($cardId, 'play', 'discard');
         $this->cascadeMoodLeavingPlay($cardId);
     }
 
@@ -235,6 +261,7 @@ final class BoardState
         $owner = $this->moodInPlay($cardId)->ownerId;
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$owner][] = $cardId;
+        $this->recordMove($cardId, 'play', 'hand', toPlayerId: $owner);
         $this->cascadeMoodLeavingPlay($cardId);
     }
 
@@ -244,6 +271,7 @@ final class BoardState
         $this->moodInPlay($cardId);
         unset($this->moodsInPlay[$cardId]);
         $this->hands[$newOwnerId][] = $cardId;
+        $this->recordMove($cardId, 'play', 'hand', toPlayerId: $newOwnerId);
         $this->cascadeMoodLeavingPlay($cardId);
     }
 
@@ -252,6 +280,7 @@ final class BoardState
         $this->moodInPlay($cardId);
         unset($this->moodsInPlay[$cardId]);
         $this->deck[] = $cardId;
+        $this->recordMove($cardId, 'play', 'deck');
         $this->cascadeMoodLeavingPlay($cardId);
     }
 
@@ -285,18 +314,21 @@ final class BoardState
         $this->removeFromHand($playerId, $cardId);
         $this->discard[] = $cardId;
         $this->discardedThisRound = true;
+        $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
     }
 
     public function moveHandToBottomOfDeck(int $playerId, int $cardId): void
     {
         $this->removeFromHand($playerId, $cardId);
         $this->deck[] = $cardId;
+        $this->recordMove($cardId, 'hand', 'deck', fromPlayerId: $playerId);
     }
 
     public function moveDiscardToHand(int $playerId, int $cardId): void
     {
         $this->removeFromDiscard($cardId);
         $this->hands[$playerId][] = $cardId;
+        $this->recordMove($cardId, 'discard', 'hand', toPlayerId: $playerId);
     }
 
     /** Altruism: shuffles the remainder of the discard pile onto the bottom of the deck. */
@@ -304,6 +336,7 @@ final class BoardState
     {
         $this->removeFromDiscard($cardId);
         $this->deck[] = $cardId;
+        $this->recordMove($cardId, 'discard', 'deck');
     }
 
     public function giveInPlayToPlayer(int $cardId, int $newOwnerId): void
@@ -316,6 +349,7 @@ final class BoardState
     {
         $this->removeFromHand($fromPlayerId, $cardId);
         $this->hands[$toPlayerId][] = $cardId;
+        $this->recordMove($cardId, 'hand', 'hand', fromPlayerId: $fromPlayerId, toPlayerId: $toPlayerId);
     }
 
     public function drawCard(int $playerId): ?int
@@ -452,6 +486,34 @@ final class BoardState
         $this->pendingRevealedCardIds = [];
 
         return $ids;
+    }
+
+    private function recordMove(int $cardId, string $fromZone, string $toZone, ?int $fromPlayerId = null, ?int $toPlayerId = null): void
+    {
+        $this->pendingCardMoves[] = [
+            'card_id' => $cardId,
+            'from_zone' => $fromZone,
+            'to_zone' => $toZone,
+            'from_player_id' => $fromPlayerId,
+            'to_player_id' => $toPlayerId,
+        ];
+    }
+
+    /**
+     * Returns and clears every move recorded via recordMove() since the
+     * last call -- see $pendingCardMoves' own docblock. Mirrors
+     * consumeRevealedCardIds()'s own call convention: GameService calls
+     * this immediately before logging whichever event this play/response/
+     * scoring pass is about to produce.
+     *
+     * @return array<int, array{card_id:int, from_zone:string, to_zone:string, from_player_id:?int, to_player_id:?int}>
+     */
+    public function consumeCardMoves(): array
+    {
+        $moves = $this->pendingCardMoves;
+        $this->pendingCardMoves = [];
+
+        return $moves;
     }
 
     /** Clears every suppression whose source is $sourceCardId (e.g. that mood left play). */

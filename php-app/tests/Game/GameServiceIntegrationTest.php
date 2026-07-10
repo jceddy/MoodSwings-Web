@@ -1596,6 +1596,42 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Bashfulness's own after-scoring move (still in play, so already
+     * public) belongs in the round_scored event's own history same as any
+     * other zone move -- but the replacement card its owner draws right
+     * afterward must NOT appear anywhere, since a drawn card was never
+     * public the way an in-play one was (see BoardState::drawCard()'s own
+     * docblock for why that one move is deliberately never recorded).
+     */
+    public function testRecentEventsDescribeBashfulnessesAfterScoringMoveButNotTheReplacementDraw(): void
+    {
+        $u1 = $this->insertUser('bashevt1');
+        $u2 = $this->insertUser('bashevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
+        $this->insertGameCard($gameId, 3, 'deck', null, 0); // p2's loser draw
+        $this->insertGameCard($gameId, 7, 'deck', null, 1); // p1's replacement draw (Courage) -- must stay unnamed
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 30, []);
+        $this->games->pass($gameId, $p2);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        $roundScored = $events[0]['description'];
+        self::assertStringContainsString('Bashfulness moved from play to the deck', $roundScored);
+        self::assertStringNotContainsString('Courage', $roundScored);
+    }
+
+    /**
      * Corruption's "the winner of the current round wins two rounds
      * instead of one" has to actually move game_rounds.wins_awarded, and
      * totalWinsFor() has to pick that up when checking for game
@@ -2239,6 +2275,87 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertFalse($state->isInPlay(9));
         self::assertFalse($state->isInPlay(3));
         self::assertFalse($state->isInPlay(8)); // shares white with the two chosen moods
+    }
+
+    /**
+     * Malice's own color cascade (Dignity, shares white with the two
+     * chosen moods) is never itself part of the target's submitted
+     * `chosen_mood_ids` answer -- before BoardState::consumeCardMoves()
+     * existed, this card's own discard was invisible in game history even
+     * though it was a direct, non-random consequence of a real choice.
+     */
+    public function testRecentEventsDescribeEveryMoodMaliceDiscardsIncludingTheColorCascade(): void
+    {
+        $u1 = $this->insertUser('malevt1');
+        $u2 = $this->insertUser('malevt2');
+        $u3 = $this->insertUser('malevt3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
+        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white -- chosen
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- chosen
+        $this->insertGameCard($gameId, 8, 'in_play', $p3); // Dignity, white -- cascade, never chosen
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 68, ['target_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [9, 3]]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        // The moves are attributed to the 'pending_decision_resolved' event
+        // (logged the moment resolveDecisions() actually made them), not
+        // necessarily the most recent event overall -- so this checks
+        // across every recent event's own description, not just events[0].
+        $allDescriptions = implode(' | ', array_column($events, 'description'));
+        self::assertStringContainsString('Discipline moved from play to the discard pile', $allDescriptions);
+        self::assertStringContainsString('Charity moved from play to the discard pile', $allDescriptions);
+        self::assertStringContainsString('Dignity moved from play to the discard pile', $allDescriptions);
+    }
+
+    /**
+     * Cruelty's own discarded mood is a genuinely random pick
+     * (array_rand()), never itself a submitted choice -- exactly the gap
+     * BoardState::consumeCardMoves() closes: the pick doesn't need its own
+     * bespoke reveal mechanism (unlike Paranoia/Curiosity's own hand
+     * reveal) since the mood was already public while in play.
+     */
+    public function testRecentEventsDescribeCrueltysRandomlyDiscardedMood(): void
+    {
+        $u1 = $this->insertUser('cruelevt1');
+        $u2 = $this->insertUser('cruelevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 61, 'hand', $p1); // Cruelty
+        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 61, ['opponent_player_ids' => [$p2]]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        $description = $events[0]['description'];
+        self::assertMatchesRegularExpression(
+            '/(Discipline|Charity) moved from play to the discard pile/',
+            $description,
+        );
     }
 
     /**

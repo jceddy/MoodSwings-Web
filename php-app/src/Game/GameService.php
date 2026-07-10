@@ -263,7 +263,7 @@ final class GameService
                     $this->boardStates->save($gameId, $state);
                     $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
-                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $choices);
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $choices, $state);
 
                     $pdo->commit();
                 } catch (Throwable $e) {
@@ -274,7 +274,7 @@ final class GameService
                 return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
             }
 
-            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $this->withRevealedCards($state, $choices));
+            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $choices, $state);
 
             return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
         });
@@ -353,7 +353,6 @@ final class GameService
                 $playedCardId = (int) $batchRow['played_card_id'];
                 $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
                     ->execute(['id' => $batchRow['id']]);
-                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
 
                 if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
                     // Enthusiasm's/Passion's own scoring-time decision (see
@@ -362,14 +361,18 @@ final class GameService
                     // to resume, just either the next scoring decision still
                     // outstanding this round, or (once none remain) the same
                     // score/persist/advance tail that would have run
-                    // immediately if no decision had ever been needed.
+                    // immediately if no decision had ever been needed. Neither
+                    // decision type moves a card, so this branch's own event
+                    // has no BoardState to fold card history from.
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
+
                     $state = $this->boardStates->load($gameId);
                     $turnOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
 
                     $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
                     if ($nextDecision !== null) {
                         $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], []);
+                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], [], $state);
 
                         $pdo->commit();
 
@@ -400,6 +403,21 @@ final class GameService
                     $answers,
                 );
 
+                // Logged only now, after resolvePendingDecisions() has
+                // actually run -- $choices here is just the last responder's
+                // own answer (every other target's answer was already
+                // written to game_pending_decisions when they responded, and
+                // isn't otherwise repeated here), but $state now carries
+                // every zone move the resolution itself just made (e.g.
+                // Malice's color cascade discarding moods beyond the two the
+                // acting player chose, or Disillusionment/Suspicion
+                // resolving every remaining target at once) -- see
+                // BoardState::consumeCardMoves(). Logging any earlier (as
+                // this used to, right after the UPDATE above) would always
+                // log an empty move list, since none of these moves have
+                // happened yet at that point.
+                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices, $state);
+
                 if ($result->isPending) {
                     // Resolving the last decision uncovered another one --
                     // e.g. a Duplicity repeat of this same card also needing a
@@ -416,7 +434,7 @@ final class GameService
                     $this->boardStates->save($gameId, $state);
                     $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
                     $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
-                    $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, []);
+                    $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, [], $state);
 
                     $pdo->commit();
 
@@ -429,7 +447,7 @@ final class GameService
                 throw $e;
             }
 
-            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $this->withRevealedCards($state, $topLevelChoices->toArray()));
+            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $topLevelChoices->toArray(), $state);
 
             return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
         });
@@ -522,7 +540,7 @@ final class GameService
             try {
                 $this->boardStates->save($gameId, $state);
                 $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], []);
+                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], [], $state);
 
                 $pdo->commit();
             } catch (Throwable $e) {
@@ -604,7 +622,7 @@ final class GameService
         $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
             'scores' => $scores,
             'winner_game_player_id' => $winnerId,
-        ]);
+        ], $state);
 
         $totalWins = $this->totalWinsFor($gameId, $winnerId);
         $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
@@ -979,7 +997,7 @@ final class GameService
 
             $this->boardStates->save($gameId, $state);
 
-            $this->logEvent($gameId, $roundId, null, 'round_scored', null, ['skipped' => true]);
+            $this->logEvent($gameId, $roundId, null, 'round_scored', null, ['skipped' => true], $state);
 
             $insertRound = $pdo->prepare(
                 "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -1311,7 +1329,46 @@ final class GameService
             }
         }
 
+        // Every zone move BoardState::consumeCardMoves() actually recorded
+        // for this event -- spelled out regardless of event type (unlike
+        // the choice summary above, round_scored's own after-scoring
+        // hooks -- Bashfulness/Betrayal/Gluttony/Insecurity/Recklessness --
+        // can move cards too) and regardless of whether the choice summary
+        // above already named the same card for a different reason (e.g.
+        // "chosen mood ids: X" doesn't itself say X actually left play) --
+        // this is what makes a random/effect-internal move (Cruelty,
+        // Indecisiveness, Altruism) or every target's own move in a
+        // multi-target batch (Malice's cascade, Confusion, Disillusionment,
+        // Suspicion) show up here exactly like a directly-chosen one does.
+        $cardMoves = $details['card_moves'] ?? [];
+        if ($cardMoves !== []) {
+            $moveParts = array_map(fn (array $move) => $this->describeCardMove($move, $playerNames, $cardNames), $cardMoves);
+            $description .= '; ' . implode('; ', $moveParts);
+        }
+
         return $description;
+    }
+
+    /** @param array{card_id:int, from_zone:string, to_zone:string, from_player_id:?int, to_player_id:?int} $move */
+    private function describeCardMove(array $move, array $playerNames, array $cardNames): string
+    {
+        $cardName = $cardNames[$move['card_id']] ?? 'a card';
+        $from = $this->describeZone($move['from_zone'], $move['from_player_id'], $playerNames);
+        $to = $this->describeZone($move['to_zone'], $move['to_player_id'], $playerNames);
+
+        return "{$cardName} moved from {$from} to {$to}";
+    }
+
+    /** @param array<int, string> $playerNames */
+    private function describeZone(string $zone, ?int $playerId, array $playerNames): string
+    {
+        return match ($zone) {
+            'play' => 'play',
+            'discard' => 'the discard pile',
+            'deck' => 'the deck',
+            'hand' => $playerId !== null ? (($playerNames[$playerId] ?? 'a player') . "'s hand") : 'a hand',
+            default => $zone,
+        };
     }
 
     /**
@@ -1363,7 +1420,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 
@@ -1960,33 +2017,48 @@ final class GameService
         }
     }
 
-    /** @param array<string, mixed> $details */
     /**
-     * Folds any card ids BoardState::recordRevealedCard() collected during
-     * this play (Paranoia/Curiosity) into $choices before it's logged as a
-     * mood_played event's own details -- see recordRevealedCard()'s own
-     * docblock for why this can't just be read back out of $choices like
-     * everything else in it. A no-op ([] added under a key that's simply
-     * never read) for every other card. Always call this right before the
-     * logEvent() it feeds, never earlier -- consumeRevealedCardIds() clears
-     * what it returns, so calling it any other time would silently drop
-     * the reveal for whichever call actually logs the event.
+     * Folds whatever BoardState::consumeRevealedCardIds()/consumeCardMoves()
+     * have collected since the last event was logged into $details before
+     * it's persisted -- see those methods' own docblocks for why this
+     * can't just be read back out of $details like everything else in it.
+     * A no-op for a play that revealed or moved nothing. $state is optional
+     * purely because a few call sites (turn_passed, and the scoring-decision
+     * response branch, neither of which can move a card) have no BoardState
+     * in scope at the point they log their own event -- every call site
+     * that already has one loaded always passes it, so nothing it moved is
+     * ever silently lost. Always called from logEvent() itself, immediately
+     * before the event is persisted, never earlier: both consume methods
+     * clear what they return, so reading them any other time would risk
+     * attributing a move to the wrong event or dropping it entirely.
      *
-     * @param array<string, mixed> $choices
+     * @param array<string, mixed> $details
      * @return array<string, mixed>
      */
-    private function withRevealedCards(BoardState $state, array $choices): array
+    private function withCardHistory(?BoardState $state, array $details): array
     {
-        $revealedCardIds = $state->consumeRevealedCardIds();
-        if ($revealedCardIds === []) {
-            return $choices;
+        if ($state === null) {
+            return $details;
         }
 
-        return [...$choices, 'revealed_card_ids' => $revealedCardIds];
+        $revealedCardIds = $state->consumeRevealedCardIds();
+        if ($revealedCardIds !== []) {
+            $details['revealed_card_ids'] = $revealedCardIds;
+        }
+
+        $cardMoves = $state->consumeCardMoves();
+        if ($cardMoves !== []) {
+            $details['card_moves'] = $cardMoves;
+        }
+
+        return $details;
     }
 
-    private function logEvent(int $gameId, ?int $roundId, ?int $actingPlayerId, string $eventType, ?int $cardId, array $details): void
+    /** @param array<string, mixed> $details */
+    private function logEvent(int $gameId, ?int $roundId, ?int $actingPlayerId, string $eventType, ?int $cardId, array $details, ?BoardState $state = null): void
     {
+        $details = $this->withCardHistory($state, $details);
+
         $stmt = Connection::get()->prepare(
             'INSERT INTO game_events (game_id, game_round_id, acting_game_player_id, event_type, card_id, details)
              VALUES (:game_id, :round_id, :acting_player_id, :event_type, :card_id, :details)'

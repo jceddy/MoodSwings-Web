@@ -112,6 +112,18 @@
     let currentState = null;
     let pollTimer = null;
 
+    // refreshBoard() can overlap with itself -- the 4-second poll timer
+    // doesn't wait for a prior call to finish, and a user action (Start
+    // game, Play, Pass, ...) triggers its own refreshBoard() independent
+    // of whatever poll might already be in flight. Without this, an older
+    // request that happens to resolve *after* a newer one (a slow "still
+    // waiting" poll issued just before Start was clicked, resolving after
+    // Start's own now-in_progress fetch, say) would silently overwrite the
+    // correct render with stale data -- exactly the "wrong until the page
+    // is reloaded" shape a genuine race produces. Only the most recently
+    // issued call's response is ever actually rendered.
+    let boardRequestSeq = 0;
+
     function showLobby() {
         currentGameId = null;
         currentState = null;
@@ -304,7 +316,11 @@
     });
 
     async function refreshBoard() {
+        const seq = ++boardRequestSeq;
         const { ok, body } = await getGameState(currentGameId);
+        if (seq !== boardRequestSeq) {
+            return; // a newer refreshBoard() call has since been issued -- this response is stale, ignore it
+        }
         if (!ok) {
             boardError.textContent = body.message || 'Could not load this game.';
             boardError.hidden = false;
