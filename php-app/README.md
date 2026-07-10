@@ -709,6 +709,30 @@ find. That log call now happens right after `resolvePendingDecisions()`
 instead, with the same `BoardState` passed through so its own accumulated
 moves are captured.
 
+Moving that call earlier also uncovered a genuinely redundant event
+`respondToDecision()` used to always log afterward: once the whole chain
+finishes (`$result->isPending` false), it used to close with its own
+`mood_played` event -- but by that point, `resolvePendingDecisions()` has
+already run its full course (including any Scorn/Validation reaction
+loop), so `pending_decision_resolved`'s own `withCardHistory()` call,
+logged moments earlier, has *already* drained every `card_moves`/
+`ownership_changes`/`revealed_card_ids` entry that resolution produced.
+The closing `mood_played` event's own `$details` would then only ever
+contain the submitted choices already shown once on the original
+`pending_decision_created` event -- a plain "played {card} ({choices})"
+duplicate with nothing new to say, for every single opponent-decision
+play (e.g. Betrayal's own "played Betrayal from hand (recipient player:
+Bob)" appearing a second time, unchanged, right after "A response to
+Betrayal was resolved" already described what actually happened). That
+closing `logEvent()` call is gone; `respondToDecision()` now just returns
+`finishPlay()` once the batch is fully resolved, relying entirely on the
+`pending_decision_created` (announces the play) and `pending_decision_resolved`
+(the last responder's own answer plus every card_moves/ownership_changes
+entry the resolution produced) pair to tell the whole story. `playMood()`'s
+own `mood_played` event, for a play that never pauses at all, is
+unaffected -- there, it's the *only* event for that play, not a duplicate
+of one already logged moments earlier.
+
 Two more pieces of history round out "anything that changes about a card
 gets logged, not just what a player submitted":
 

@@ -2581,6 +2581,57 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * respondToDecision() used to log a closing 'mood_played' event once
+     * the whole chain finished, on top of the 'pending_decision_created'
+     * event the original play already logged and the
+     * 'pending_decision_resolved' event the response itself just logged --
+     * a redundant third "played Betrayal (recipient player: ...)" line
+     * repeating exactly what the first event already said, with nothing
+     * new to add (everything the response actually did was already fully
+     * captured by 'pending_decision_resolved', logged right after
+     * resolvePendingDecisions() itself ran). GameService::
+     * respondToDecision() no longer logs that closing event at all.
+     */
+    public function testRespondToDecisionDoesNotLogARedundantClosingMoodPlayedEvent(): void
+    {
+        $u1 = $this->insertUser('noduplicate1');
+        $u2 = $this->insertUser('noduplicate2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 56, ['recipient_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 3]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertCount(2, $events);
+
+        $descriptions = array_column($events, 'description');
+        self::assertStringContainsString('waiting on a response', $descriptions[1]); // pending_decision_created, oldest
+        self::assertStringStartsWith('A response to Betrayal was resolved', $descriptions[0]); // pending_decision_resolved, newest
+
+        // The old, now-removed closing event's own exact phrasing (no
+        // "waiting on a response" suffix, unlike the still-present first
+        // event) must not appear anywhere.
+        foreach ($descriptions as $description) {
+            self::assertDoesNotMatchRegularExpression(
+                '/^\S+ played Betrayal from hand \(recipient player: \S+\)$/',
+                $description,
+            );
+        }
+    }
+
+    /**
      * total_score is a live "if the round ended right now" snapshot of the
      * board, not anything accumulated across previously-scored rounds --
      * so this checks it directly against a fixed set of already-in-play
