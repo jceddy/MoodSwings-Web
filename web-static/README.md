@@ -151,7 +151,19 @@ routed to the PHP app).
     banner, reusing the exact same field-rendering code as the regular
     choices panel (including multi-select validation for Malice's two
     moods and the `mode` dropdown for Disillusionment's color) — answered
-    via `POST /games/respond`. Suspicion, Disillusionment, Avoidance,
+    via `POST /games/respond`. Betrayal uses this exact same pending-decision
+    mechanism for a different reason than those seven: nobody else answers
+    it (the panel appears immediately, in the same session, the moment
+    Betrayal is played -- no "waiting on" banner ever shows for it, the
+    same way none ever shows for Duplicity's own repeat-offer below), but
+    which of the acting player's own moods to give away can't be offered as
+    an ordinary up-front field the way it is for almost every other "your
+    own mood" choice -- Betrayal is a legal answer to its own choice (its
+    printed text doesn't exclude itself), but it isn't in play yet at the
+    moment an ordinary choices panel is filled out, so a field sourced from
+    the current board could never legally include it. Deferring the choice
+    until after Betrayal has actually entered play is what makes offering
+    it as a candidate possible at all. Suspicion, Disillusionment, Avoidance,
     Confusion, and Fury all queue one decision per player (Disillusionment's
     queue starts with the next player in turn order and wraps around to
     the acting player themselves last; Avoidance's, Confusion's, and
@@ -207,6 +219,22 @@ routed to the PHP app).
     (`state.<event>.ownership_changes`, tracked completely independently
     of a card's zone). A round-scored line names every player's own final
     score and who won, not just that scoring happened.
+
+    A separate, more prominent green banner (`#board-message`) flashes
+    "Game complete!" or "Round scored — a new round has begun." right
+    after a play/pass/response that actually triggers one
+    (`announceOutcome()`, keyed off that action's own `game_completed`/
+    `round_scored` response flags) — distinct from the "Recent plays" line
+    above, which is a permanent history entry built from the next poll's
+    own `state.recent_events` rather than a one-off local reaction to a
+    single request's result. Since nothing ever hides this banner on an
+    ordinary board load (only another play/pass/response, right before
+    submitting, ever clears it), `showBoard()` now explicitly hides it too
+    the moment a game's board is (re)opened — otherwise a game that had
+    already completed the last time its board was viewed would leave the
+    "Game complete!" banner sitting there, incorrectly, the next time any
+    *other* game's board opened, including a freshly created one that had
+    never even started yet.
 
     The "Players" list near the top of the board shows each player's
     current point total alongside their win count and hand size

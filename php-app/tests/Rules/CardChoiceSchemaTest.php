@@ -128,17 +128,20 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertTrue($fields[0]['multi']);
     }
 
-    public function testTwoFieldCardForBetrayalNeedsAMoodAndAPlayer(): void
+    public function testBetrayalOnlyExposesTheRecipientNotTheMoodChoice(): void
     {
+        // Which mood to give away isn't an ordinary up-front field --
+        // Betrayal is a legal answer to its own choice, but isn't in play
+        // yet at the moment this panel is filled out, so BetrayalEffect
+        // defers it to a pending decision (see that class's own docblock)
+        // instead of a static choice_fields entry here.
         $fields = CardChoiceSchema::forEffectKey('betrayal');
 
-        self::assertCount(2, $fields);
-        self::assertSame('mood', $fields[0]['type']);
-        self::assertSame('own', $fields[0]['scope']);
-        self::assertSame('player', $fields[1]['type']);
-        self::assertSame('other', $fields[1]['scope']);
+        self::assertCount(1, $fields);
+        self::assertSame('recipient_player_id', $fields[0]['key']);
+        self::assertSame('player', $fields[0]['type']);
+        self::assertSame('other', $fields[0]['scope']);
         self::assertTrue($fields[0]['required']);
-        self::assertTrue($fields[1]['required']);
     }
 
     public function testScornAndValidationOnlyExposeTheirOwnPlayNotTheirReaction(): void

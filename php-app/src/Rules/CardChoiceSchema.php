@@ -278,7 +278,16 @@ final class CardChoiceSchema
             ['key' => 'given_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your mood to give in exchange (required if targeting an opponent above)'],
         ],
         'betrayal' => [
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => true, 'label' => 'Your mood to give away'],
+            // No 'target_mood_id' entry here -- unlike every other "your
+            // own mood" choice, Betrayal itself is a valid answer (its
+            // own printed text doesn't exclude itself), but it isn't in
+            // play yet at the moment this panel is filled out, so a
+            // static field sourced from what's currently on the board
+            // could never legally offer it. See BetrayalEffect, which
+            // defers that choice to a pending decision the acting player
+            // answers immediately after Betrayal has actually entered
+            // play, the same mechanism used for an opponent's own answer
+            // elsewhere in this table -- just targeting the acting player.
             ['key' => 'recipient_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Player to give it to'],
         ],
         'sneakiness' => [
