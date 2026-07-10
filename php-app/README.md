@@ -609,14 +609,28 @@ generic summary of whatever was actually submitted for a `mood_played`/
 `pending_decision_created`/`pending_decision_resolved` event -- "target
 player: Bob", "given card: Charity" -- via `describeChoices()`/
 `describeChoiceEntry()`. This is deliberately driven by each choice/answer
-key's own *naming convention* (a trailing `_player_id(s)`/`_mood_id(s)`/
-`_card_id(s)` names what kind of id it is) rather than `CardChoiceSchema`,
-since a `pending_decision_resolved` event's answer is keyed by a field name
-generated dynamically per target (e.g. Confusion's `given_card_id_169`),
-never one of `CardChoiceSchema`'s own static field definitions -- the same
-generic key-shape convention still applies regardless, so one heuristic
-covers every card's own choices and every pending decision's own answer
-without needing per-card knowledge here at all.
+key's own *naming convention* (`player_id(s)`/`mood_id(s)`/`card_id(s)`
+appearing anywhere in the key names what kind of id it is -- checked with
+`str_contains()`, not an anchored trailing match, since Suspicion's own key
+is the bare `player_ids` with no leading `target_`/`opponent_` the way
+every other card's own player-id choice key has) rather than
+`CardChoiceSchema`, since a `pending_decision_resolved` event's answer is
+keyed by a field name generated dynamically per target (e.g. Confusion's
+`given_card_id_169`), never one of `CardChoiceSchema`'s own static field
+definitions -- the same generic key-shape convention still applies
+regardless, so one heuristic covers every card's own choices and every
+pending decision's own answer without needing per-card knowledge here at
+all. `humanizeChoiceKey()` special-cases one specific key prefix,
+`discard_mood_id(s)`, as "mood moved from play to discard" rather than its
+own generic "discard mood" -- distinct enough from every other `discard_*`
+choice (Dignity's `discard_card_id`, etc., all of which discard a *hand*
+card, and still read fine as the generic "discard card") that leaving it
+unlabeled read as the same familiar hand-to-discard action instead.
+
+`describeEvent()`'s `round_scored` case is `describeRoundScored()`, not
+just a static string -- every player's own final score (`$details['scores']`,
+already logged, just previously unused for display) plus who won, e.g.
+"Round scored (Alice: 12, Bob: 8) -- Alice won".
 
 `round.play_grants` is a similar reminder-text pass over
 `BoardState::pendingPlayGrants()` (already persisted as
@@ -633,7 +647,12 @@ play) but never read by `grantAllows()` itself, purely a UI concern. The
 one grant this never applies to is `startTurn()`'s own base allowance (1,
 or 2 with Hurt Feelings) -- it's stored as a bare `null`, same as always,
 which `describePlayGrant()` reads as "Your normal turn" rather than a
-granted extra play from any specific card.
+granted extra play from any specific card. `round.play_grants` itself
+always describes whoever's turn it currently is, not the viewer
+specifically -- the frontend's own "Plays left" indicator stays hidden
+entirely unless it's actually the viewer's turn (see `web-static/README.md`),
+rather than showing another player's own outstanding plays as if they were
+the viewer's.
 
 Each in-play mood's serialization also carries `base_color` alongside its
 current `color` -- the printed color, ignoring Imagination's "while in

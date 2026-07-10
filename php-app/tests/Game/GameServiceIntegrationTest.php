@@ -1081,6 +1081,79 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('white', $charity['base_color']);
     }
 
+    public function testRecentEventsNameSuspicionsChosenPlayersByUsernameNotId(): void
+    {
+        $u1 = $this->insertUser('suspicionevt1');
+        $u2 = $this->insertUser('suspicionevt2');
+        $u3 = $this->insertUser('suspicionevt3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $this->insertGameCard($gameId, 9, 'hand', $p2);
+        $this->insertGameCard($gameId, 3, 'hand', $p3);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 78, ['player_ids' => [$p2, $p3]]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        // Suspicion's own choice key is the bare 'player_ids' (no leading
+        // 'target_'/'opponent_' the way every other card's own player-id
+        // choice keys have) -- this used to fall through to raw numeric
+        // ids instead of resolving usernames.
+        self::assertStringContainsString('suspicionevt2', $events[0]['description']);
+        self::assertStringContainsString('suspicionevt3', $events[0]['description']);
+    }
+
+    public function testRecentEventsDescribeARoundsFinalScoresAndWinner(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, 55, []); // Apathy, value 4
+        $this->games->pass($gameId, $p2);
+        $this->games->pass($gameId, $p3);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        $roundScored = $events[0]['description'];
+        self::assertStringContainsString('p1: 4', $roundScored);
+        self::assertStringContainsString('p2: 0', $roundScored);
+        self::assertStringContainsString('p3: 0', $roundScored);
+        self::assertStringContainsString('p1 won', $roundScored);
+    }
+
+    public function testRecentEventsDescribeBravadosMoodMovedFromPlayToDiscard(): void
+    {
+        $u1 = $this->insertUser('bravadoevt1');
+        $this->insertUser('bravadoevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+
+        $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- discarded as Bravado's own cost
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 84, ['discard_mood_id' => 3]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        self::assertStringContainsString('mood moved from play to discard: Charity', $events[0]['description']);
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {
@@ -1140,7 +1213,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3];
+        return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1, 'u2' => $u2, 'u3' => $u3];
     }
 
     public function testPlayMoodAdvancesTurnWithoutEndingRoundWhenPlaysRemain(): void

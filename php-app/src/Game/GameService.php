@@ -1282,7 +1282,7 @@ final class GameService
             'turn_passed' => "{$actor} passed",
             'pending_decision_created' => "{$actor} played {$cardName}, waiting on a response",
             'pending_decision_resolved' => "A response to {$cardName} was resolved",
-            'round_scored' => ($details['skipped'] ?? false) ? 'Round scored (nobody won)' : 'Round scored',
+            'round_scored' => $this->describeRoundScored($details, $playerNames),
             default => "{$actor} played {$cardName}",
         };
 
@@ -1301,13 +1301,42 @@ final class GameService
         // a target player, a chosen mood/hand card, a color, a mode string,
         // and so on. Only mood_played/pending_decision_created/
         // pending_decision_resolved ever have anything worth describing
-        // here (round_scored's 'skipped' and mood_played's own
-        // 'revealed_card_ids' are both already spoken for above).
+        // here (round_scored's own details are fully handled by
+        // describeRoundScored() above, and mood_played's own
+        // 'revealed_card_ids' is already spoken for above).
         if (in_array($row['event_type'], ['mood_played', 'pending_decision_created', 'pending_decision_resolved'], true)) {
             $choiceSummary = $this->describeChoices($details, $playerNames, $cardNames);
             if ($choiceSummary !== '') {
                 $description .= " ({$choiceSummary})";
             }
+        }
+
+        return $description;
+    }
+
+    /**
+     * @param array<string, mixed> $details
+     * @param array<int, string> $playerNames
+     */
+    private function describeRoundScored(array $details, array $playerNames): string
+    {
+        if ($details['skipped'] ?? false) {
+            return 'Round scored (nobody won)';
+        }
+
+        $scoreParts = [];
+        foreach ($details['scores'] ?? [] as $gamePlayerId => $score) {
+            $scoreParts[] = ($playerNames[(int) $gamePlayerId] ?? 'a player') . ': ' . $score;
+        }
+
+        $description = 'Round scored';
+        if ($scoreParts !== []) {
+            $description .= ' (' . implode(', ', $scoreParts) . ')';
+        }
+
+        $winnerId = $details['winner_game_player_id'] ?? null;
+        if ($winnerId !== null) {
+            $description .= ' -- ' . ($playerNames[(int) $winnerId] ?? 'a player') . ' won';
         }
 
         return $description;
@@ -1355,16 +1384,22 @@ final class GameService
 
         $label = $this->humanizeChoiceKey($key);
 
-        if (str_contains($key, '_player_ids') && is_array($value)) {
+        // No leading underscore required (Suspicion's own key is the bare
+        // 'player_ids', not e.g. 'target_player_ids') -- every other
+        // choice/answer key in the whole schema that ends this way always
+        // has one, but requiring it here would silently fall through to
+        // the raw-id-printing generic branch below for Suspicion's own
+        // choice specifically.
+        if (str_contains($key, 'player_ids') && is_array($value)) {
             return $label . ': ' . implode(', ', array_map(fn ($id) => $playerNames[(int) $id] ?? 'a player', $value));
         }
-        if (str_contains($key, '_player_id')) {
+        if (str_contains($key, 'player_id')) {
             return $label . ': ' . ($playerNames[(int) $value] ?? 'a player');
         }
-        if ((str_contains($key, '_mood_ids') || str_contains($key, '_card_ids')) && is_array($value)) {
+        if ((str_contains($key, 'mood_ids') || str_contains($key, 'card_ids')) && is_array($value)) {
             return $label . ': ' . implode(', ', array_map(fn ($id) => $cardNames[(int) $id] ?? 'a card', $value));
         }
-        if (str_contains($key, '_mood_id') || str_contains($key, '_card_id')) {
+        if (str_contains($key, 'mood_id') || str_contains($key, 'card_id')) {
             return $label . ': ' . ($cardNames[(int) $value] ?? 'a card');
         }
         if ($value === true) {
@@ -1387,6 +1422,17 @@ final class GameService
     private function humanizeChoiceKey(string $key): string
     {
         $key = (string) preg_replace('/_\d+$/', '', $key);
+
+        // discard_mood_id/discard_mood_ids specifically move an in-play
+        // mood to the discard pile -- distinct enough from every other
+        // "discard" choice (Dignity's discard_card_id, etc., all of which
+        // discard a HAND card, and read fine as this method's own generic
+        // "discard card") that just calling it "discard mood" reads as
+        // though it's the same familiar hand-to-discard action instead.
+        if (str_starts_with($key, 'discard_mood')) {
+            return str_ends_with($key, 's') ? 'moods moved from play to discard' : 'mood moved from play to discard';
+        }
+
         $key = (string) preg_replace('/_ids?$/', '', $key);
 
         return str_replace('_', ' ', $key);

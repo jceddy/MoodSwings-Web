@@ -174,7 +174,13 @@ routed to the PHP app).
     else in the state response once the moment it happened has passed;
     every other play's own line also spells out whatever choice was
     actually made (a target player, a chosen mood/hand card, a color, and
-    so on), not just which card was played.
+    so on), not just which card was played — including, for a card that
+    puts one of its own player's *in-play* moods into the discard pile,
+    saying so explicitly ("mood moved from play to discard: Charity")
+    rather than the more general "discard mood" phrasing that elsewhere
+    always means a *hand* card going to the discard pile. A round-scored
+    line names every player's own final score and who won, not just that
+    scoring happened.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
@@ -184,7 +190,11 @@ routed to the PHP app).
     the discard pile"), rather than just the bare count `plays_remaining`
     already gave no way to explain. The base turn's own single play (two
     with Hurt Feelings) reads as "Your normal turn" instead, since it isn't
-    granted by any specific card.
+    granted by any specific card. This whole indicator only ever shows
+    while it's actually your own turn — `state.round.play_grants` itself
+    always describes whoever's turn it currently is, so showing it
+    unconditionally would read as "you have a play left" on someone
+    else's turn.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
