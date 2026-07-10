@@ -2583,6 +2583,27 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(3, $after['total_score']); // Charity gone, Bravado (value 3) now in play
     }
 
+    /**
+     * A vanilla card with no afterScoring hook stays in play across a
+     * round boundary (finishScoringAndAdvance() never clears the board on
+     * its own -- only specific cards' own afterScoring tags remove
+     * anything), so total_score must keep counting it once the next round
+     * starts, not drop to 0 just because a round happened to score.
+     */
+    public function testTotalScoreSurvivesARoundScoringWhenNothingLeavesPlay(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, 55, []); // Apathy, value 4 -- no ability
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->pass($gameId, $p3);
+        self::assertTrue($result['round_scored']);
+
+        $players = $this->games->getState($gameId, $u1)['players'];
+        $p1Player = self::findByGamePlayerId($players, $p1);
+        self::assertSame(4, $p1Player['total_score']); // Apathy is still sitting in play
+    }
+
     /** @param array<int, array<string, mixed>> $players */
     private static function findByGamePlayerId(array $players, int $gamePlayerId): array
     {
