@@ -3239,14 +3239,14 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
-    public function testValidationReactsToACreativityCopyRegardlessOfTheCopiedCardsValue(): void
+    public function testValidationDoesNotReactToACreativityCopyOfAHighValuedCard(): void
     {
-        // Per a rules judge ruling, Validation's "0 or 1 in its top right
-        // corner" check reads the card as it sits in hand -- Creativity's
-        // own printed 0 -- not whatever value the copy ends up having once
-        // in play. So copying Discipline (base value 6) should still
-        // trigger Validation's reaction, exactly as if a plain 0-value
-        // card had been played.
+        // Confirmed correct by a rules judge (an earlier ruling to the
+        // contrary was later retracted as a mistake): Validation's "0 or 1
+        // in its top right corner" check is judged by whatever Creativity
+        // is currently copying, not Creativity's own printed 0. So copying
+        // Discipline (base value 6) should not trigger Validation's
+        // reaction, exactly as playing Discipline itself wouldn't.
         $state = $this->boardState(hands: [1 => [26, 32], 2 => [9]]); // Validation, Creativity; Discipline (base value 6)
         $state->startTurn(2);
         $this->plays->playMood($state, 2, 9, new PlayerChoices([])); // Discipline, now in play
@@ -3255,7 +3255,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // Validation, grants 1 extra play
         $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 9, 'validation_extra_play' => true])); // Creativity copying Discipline
 
-        self::assertSame(1, $state->playsRemaining());
+        self::assertSame(0, $state->playsRemaining());
     }
 
     public function testCompulsionPausesForTheTargetsOwnChoiceThenResolvesTheTransfer(): void
