@@ -158,7 +158,12 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('bob');
         $carol = $this->insertUser('carol');
 
-        $gameId = $this->games->createGame($creator, [$creator, $bob, $carol]);
+        // deckType is pinned to 'one_of_each' here so this test's own
+        // deck-count math (133 total, one of every printed card) stays
+        // meaningful regardless of which deck_type createGame() defaults
+        // to -- see testCreateGameDealsAStandardDeckByDefault() for the
+        // 'standard' deck_type's own (smaller, rarity-weighted) math.
+        $gameId = $this->games->createGame($creator, [$creator, $bob, $carol], deckType: 'one_of_each');
         $this->games->startGame($gameId);
 
         $stmt = $this->pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC');
@@ -187,6 +192,63 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(1, (int) $round['plays_remaining']);
 
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testCreateGameDealsAStandardDeckByDefault(): void
+    {
+        // 'standard' -- 23 common/14 uncommon/6 rare/2 mythic (45 total),
+        // matching a new physical box's own printed rarity distribution --
+        // is deck_type's default, unlike the full 133-card 'one_of_each'
+        // pool every game used before this existed (see
+        // testCreateGameAndStartGameDealsCardsAndBeginsFirstRound() above,
+        // which pins deckType explicitly for that reason).
+        $creator = $this->insertUser('deck-alice');
+        $bob = $this->insertUser('deck-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        self::assertSame('standard', $this->fetchGame($gameId)['deck_type']);
+
+        $this->games->startGame($gameId);
+
+        $cardIdsStmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id");
+        $cardIdsStmt->execute(['game_id' => $gameId]);
+        $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        self::assertCount(45, $cardIds);
+        self::assertCount(45, array_unique($cardIds), 'a standard deck must be singleton -- no repeated card ids');
+
+        $placeholders = implode(',', array_fill(0, count($cardIds), '?'));
+        $rarityStmt = $this->pdo->prepare("SELECT rarity, COUNT(*) AS n FROM cards WHERE id IN ({$placeholders}) GROUP BY rarity");
+        $rarityStmt->execute($cardIds);
+        $countsByRarity = array_column($rarityStmt->fetchAll(), 'n', 'rarity');
+
+        self::assertSame([
+            'common' => 23,
+            'uncommon' => 14,
+            'rare' => 6,
+            'mythic' => 2,
+        ], array_map(intval(...), $countsByRarity));
+    }
+
+    public function testCreateGameCanRequestTheOneOfEachDeckInstead(): void
+    {
+        $creator = $this->insertUser('ooe-alice');
+        $bob = $this->insertUser('ooe-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'one_of_each');
+        self::assertSame('one_of_each', $this->fetchGame($gameId)['deck_type']);
+
+        $this->games->startGame($gameId);
+
+        $cardIdsStmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id");
+        $cardIdsStmt->execute(['game_id' => $gameId]);
+        $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        self::assertCount(133, $cardIds);
+        self::assertSame(range(1, 133), (function (array $ids) {
+            sort($ids);
+            return $ids;
+        })($cardIds));
     }
 
     public function testStartGameRejectsFewerThanTwoPlayers(): void
@@ -295,7 +357,11 @@ final class GameServiceIntegrationTest extends TestCase
         $creator = $this->insertUser('board-alice');
         $bob = $this->insertUser('board-bob');
 
-        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        // deckType is pinned to 'one_of_each' for the same reason as
+        // testCreateGameAndStartGameDealsCardsAndBeginsFirstRound() above --
+        // this test's own deck_count assertion below relies on the full
+        // 133-card pool.
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'one_of_each');
         $this->games->startGame($gameId);
 
         $creatorGamePlayerId = $this->games->gamePlayerIdFor($gameId, $creator);

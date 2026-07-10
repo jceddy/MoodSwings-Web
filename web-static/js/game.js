@@ -187,6 +187,19 @@
         return format === 'standard' ? 'Traditional' : humanizeStatus(format);
     }
 
+    // deck_type's own display names -- matching the <option> labels in the
+    // New Game dialog -- don't fit humanizeStatus()'s generic
+    // underscore-splitting capitalization ("one_of_each" would become "One
+    // Of Each", capitalizing "Of"), so this is a fixed lookup instead.
+    const DECK_TYPE_LABELS = {
+        standard: 'Standard',
+        one_of_each: 'One of Each Card',
+    };
+
+    function deckTypeLabel(deckType) {
+        return DECK_TYPE_LABELS[deckType] || deckType;
+    }
+
     async function refreshLobby() {
         const { ok, body } = await listGames();
         const gamesList = document.getElementById('games-list');
@@ -256,7 +269,8 @@
         }
 
         const format = document.getElementById('new-game-format').value;
-        const { ok, body } = await createGame(opponentUserIds, format);
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType);
 
         if (!ok) {
             newGameError.textContent = body.message || 'Could not create the game.';
@@ -385,7 +399,7 @@
 
     function renderBoard(state) {
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ')';
+            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckTypeLabel(state.game.deck_type) + ' deck)';
 
         const inProgressArea = document.getElementById('in-progress-area');
         const startButton = document.getElementById('start-game-button');

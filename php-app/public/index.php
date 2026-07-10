@@ -402,9 +402,10 @@ if ($path === '/games' && $method === 'POST') {
     $userIds = array_values(array_unique([$currentUserId, ...$opponentUserIds]));
     $format = (string) ($body['format'] ?? 'standard');
     $winsNeeded = isset($body['wins_needed']) ? (int) $body['wins_needed'] : 3;
+    $deckType = (string) ($body['deck_type'] ?? 'standard');
 
     try {
-        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded);
+        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType);
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);

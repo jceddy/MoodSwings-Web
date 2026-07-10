@@ -54,6 +54,20 @@ final class GameService
     private const MAX_PLAYERS = 4;
 
     /**
+     * The 'standard' deck_type's own card pool: a randomly-assembled,
+     * singleton (no duplicates) 45-card deck matching a new physical box's
+     * printed rarity distribution, rather than the full 133-card
+     * one-of-everything pool ('one_of_each') that was the only option
+     * before this existed. See buildStandardDeckCardIds().
+     */
+    private const STANDARD_DECK_RARITY_COUNTS = [
+        'common' => 23,
+        'uncommon' => 14,
+        'rare' => 6,
+        'mythic' => 2,
+    ];
+
+    /**
      * Default for $gameLockTimeoutSeconds below: how long playMood()/
      * pass()/respondToDecision() wait to acquire a game's lock (see
      * withGameLock()) before giving up. Generous relative to how long a
@@ -92,7 +106,7 @@ final class GameService
     }
 
     /** @param int[] $userIds seat order follows array order */
-    public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3): int
+    public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3, string $deckType = 'standard'): int
     {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -103,11 +117,12 @@ final class GameService
 
         try {
             $insertGame = $pdo->prepare(
-                "INSERT INTO games (format, status, created_by_user_id, wins_needed)
-                 VALUES (:format, 'waiting', :created_by, :wins_needed)"
+                "INSERT INTO games (format, deck_type, status, created_by_user_id, wins_needed)
+                 VALUES (:format, :deck_type, 'waiting', :created_by, :wins_needed)"
             );
             $insertGame->execute([
                 'format' => $format,
+                'deck_type' => $deckType,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
             ]);
@@ -141,7 +156,7 @@ final class GameService
             throw new GameStateException("Game {$gameId} needs at least " . self::MIN_PLAYERS . ' players to start');
         }
 
-        $cardIds = range(1, self::TOTAL_CARDS);
+        $cardIds = $game['deck_type'] === 'standard' ? $this->buildStandardDeckCardIds() : range(1, self::TOTAL_CARDS);
         shuffle($cardIds);
 
         $pdo = Connection::get();
@@ -196,6 +211,39 @@ final class GameService
             $pdo->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * Assembles a 'standard' deck_type's card pool: STANDARD_DECK_RARITY_COUNTS'
+     * worth of cards per rarity, each drawn without replacement from every
+     * card of that rarity in the catalog (so always singleton -- no card
+     * id ever appears twice), chosen uniformly at random rather than
+     * favoring any particular subset. The catalog currently has more of
+     * every rarity than STANDARD_DECK_RARITY_COUNTS asks for (e.g. 48
+     * common prints for the 23 this needs), so this never has to fall
+     * back to allowing duplicates -- if a future catalog change ever left
+     * a rarity short, array_rand() below would throw rather than silently
+     * returning fewer cards than promised.
+     *
+     * @return int[]
+     */
+    private function buildStandardDeckCardIds(): array
+    {
+        $pdo = Connection::get();
+
+        $cardIds = [];
+        foreach (self::STANDARD_DECK_RARITY_COUNTS as $rarity => $count) {
+            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity');
+            $stmt->execute(['rarity' => $rarity]);
+            $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+            $chosenKeys = (array) array_rand($rarityCardIds, $count);
+            foreach ($chosenKeys as $key) {
+                $cardIds[] = $rarityCardIds[$key];
+            }
+        }
+
+        return $cardIds;
     }
 
     /**
@@ -1042,7 +1090,7 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,status:string,wins_needed:int,created_at:string,started_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
@@ -1096,6 +1144,7 @@ final class GameService
             $games[] = [
                 'id' => $gameId,
                 'format' => $game['format'],
+                'deck_type' => $game['deck_type'],
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
                 'created_at' => $game['created_at'],
@@ -1171,6 +1220,7 @@ final class GameService
             'game' => [
                 'id' => $gameId,
                 'format' => $game['format'],
+                'deck_type' => $game['deck_type'],
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
