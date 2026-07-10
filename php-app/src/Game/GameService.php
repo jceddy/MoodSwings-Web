@@ -447,8 +447,18 @@ final class GameService
                 throw $e;
             }
 
-            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $this->withPlayedFrom($state, $playedCardId, $topLevelChoices->toArray()), $state);
-
+            // No closing 'mood_played' event here -- unlike playMood()'s own
+            // immediate-resolution path (which has no earlier event of its
+            // own for this play), every respondToDecision() call that
+            // reaches this point already has a 'pending_decision_created'
+            // event announcing the play and a 'pending_decision_resolved'
+            // event (just logged above, right after resolvePendingDecisions()
+            // itself ran) covering everything that actually happened --
+            // that event's own $state was already fully drained of
+            // card_moves/ownership_changes/revealed_card_ids by the time
+            // this point is reached, so a second 'mood_played' entry here
+            // would only ever repeat "played {$cardName} ({$choiceSummary})",
+            // a second time, with nothing new to say.
             return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
         });
     }

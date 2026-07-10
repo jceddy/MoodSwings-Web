@@ -17,6 +17,15 @@ use MoodSwings\Rules\PlayerChoices;
  * second reacts to Validation's own owner playing a different,
  * low-valued mood -- see MoodEffect::reactToAnotherPlay() and
  * MoodPlayService.
+ *
+ * "A 0 or 1 in its top right corner" is checked against $playedCardId's
+ * own raw catalog row, not BoardState::effectiveCardId($playedCardId) --
+ * per a rules judge ruling, Creativity's "top right corner" is its own
+ * printed 0, regardless of what it's currently copying, since this reacts
+ * to the physical card as it was in hand a moment ago, before "treating
+ * it as an exact copy" ever entered the picture. So playing Creativity to
+ * copy a mood with a base value above 1 still triggers this reaction,
+ * exactly as playing an ordinary 0-value card would.
  */
 final class ValidationEffect extends AbstractMoodEffect
 {
@@ -27,7 +36,7 @@ final class ValidationEffect extends AbstractMoodEffect
 
     public function reactToAnotherPlay(BoardState $state, int $reactorCardId, int $playedCardId, int $playerId, PlayerChoices $choices): void
     {
-        $baseValue = $state->catalogRow($state->effectiveCardId($playedCardId))['baseValue'];
+        $baseValue = $state->catalogRow($playedCardId)['baseValue'];
         if (!in_array($baseValue, [0, 1], true)) {
             return;
         }

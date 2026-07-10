@@ -48,7 +48,7 @@ final class FuryEffect extends AbstractMoodEffect implements RequiresOpponentDec
                     'type' => 'mood',
                     'candidate_card_ids' => $candidates,
                     'required' => true,
-                    'label' => 'Fury: choose one of your highest value moods to discard',
+                    'label' => 'Fury: choose one of your highest value moods to put in the discard pile',
                 ],
             );
         }
