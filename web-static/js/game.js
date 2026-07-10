@@ -178,6 +178,15 @@
             .join(' ');
     }
 
+    // The 'standard' format's own display name is "Traditional" -- the
+    // underlying value stays 'standard' (it's the API/DB enum value, used
+    // as the <option>'s own value and everywhere on the backend), so this
+    // only overrides how it's *labeled* here; every other format falls
+    // back to humanizeStatus()'s generic capitalization.
+    function formatLabel(format) {
+        return format === 'standard' ? 'Traditional' : humanizeStatus(format);
+    }
+
     async function refreshLobby() {
         const { ok, body } = await listGames();
         const gamesList = document.getElementById('games-list');
@@ -376,7 +385,7 @@
 
     function renderBoard(state) {
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + state.game.format + ')';
+            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ')';
 
         const inProgressArea = document.getElementById('in-progress-area');
         const startButton = document.getElementById('start-game-button');
