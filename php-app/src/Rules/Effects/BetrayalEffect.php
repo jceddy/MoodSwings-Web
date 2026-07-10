@@ -13,10 +13,14 @@ use MoodSwings\Rules\PlayerChoices;
  * Betrayal: "After playing this mood, give one of your moods to another
  * player. After scoring, that mood becomes yours again if it's still in
  * play." The given-away mood is tagged with the well-known
- * 'returnsToOwnerAfterScoring' effectState key (the original owner's id),
- * which GameService::applyAfterScoringHooks() resolves after every round
- * -- "if it's still in play" is automatic, since the tag is simply never
- * consulted for a mood that's left play by then.
+ * 'returnsToOwnerAfterScoring' effectState key ({sourceCardId, ownerId} --
+ * sourceCardId names which card is responsible, purely so a card's own
+ * detail view can explain a temporary ownership change; ownerId is the
+ * original owner's id, the only part GameService::applyAfterScoringHooks()
+ * itself actually reads to resolve it after every round), matching
+ * RecklessnessEffect's own identical tag shape -- "if it's still in play"
+ * is automatic, since the tag is simply never consulted for a mood that's
+ * left play by then.
  */
 final class BetrayalEffect extends AbstractMoodEffect
 {
@@ -36,6 +40,6 @@ final class BetrayalEffect extends AbstractMoodEffect
         }
 
         $state->giveInPlayToPlayer($targetCardId, $recipientPlayerId);
-        $state->setEffectState($targetCardId, 'returnsToOwnerAfterScoring', $playerId);
+        $state->setEffectState($targetCardId, 'returnsToOwnerAfterScoring', ['sourceCardId' => $cardId, 'ownerId' => $playerId]);
     }
 }

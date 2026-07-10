@@ -285,6 +285,22 @@
             suppressionEl.hidden = true;
         }
 
+        // temporary_ownership only exists on in-play cards (see
+        // GameService::getState()'s in_play mapping's temporary_ownership
+        // field) -- reads as undefined, and so stays hidden, for a
+        // hand/discard-pile card, same as boosted_by_name/affecting below.
+        const ownershipEl = document.getElementById('card-detail-ownership');
+        if (card.temporary_ownership) {
+            const revertsText = card.temporary_ownership.reverts === 'when_source_leaves_play'
+                ? 'when ' + card.temporary_ownership.source_card_name + ' leaves play'
+                : 'after this round is scored';
+            ownershipEl.textContent = 'Temporarily owned via ' + card.temporary_ownership.source_card_name +
+                ' — returns to ' + card.temporary_ownership.original_owner_name + ' ' + revertsText + '.';
+            ownershipEl.hidden = false;
+        } else {
+            ownershipEl.hidden = true;
+        }
+
         // boosted_by_name/affecting only exist on in-play cards (see
         // GameService::getState()'s in_play mapping) -- both read as
         // undefined, and so stay hidden, for a hand/discard-pile card.
@@ -346,7 +362,8 @@
                 const li = document.createElement('li');
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
                 li.textContent = player.username + ' — seat ' + player.seat_order +
-                    ', ' + player.total_wins + ' win(s), ' + player.hand_count + ' card(s) in hand' +
+                    ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
+                    player.hand_count + ' card(s) in hand' +
                     (isTurn ? ' — on turn' : '');
                 return li;
             }

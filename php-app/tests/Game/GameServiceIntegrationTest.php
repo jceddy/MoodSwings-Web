@@ -2359,6 +2359,197 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Harmony's own grant lets its owner play a second card straight from
+     * the discard pile in the same turn -- exercising both zones a card
+     * can actually be played from in one test.
+     */
+    public function testRecentEventsMentionWhichZoneACardWasPlayedFrom(): void
+    {
+        $u1 = $this->insertUser('playfromevt1');
+        $this->insertUser('playfromevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+
+        $this->insertGameCard($gameId, 123, 'hand', $p1); // Harmony
+        $this->insertGameCard($gameId, 3, 'discard', null); // Charity, already in the discard pile
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 123, []);
+        $this->games->playMood($gameId, $p1, 3, []);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        // Most recent first -- Charity (from discard) was played second.
+        self::assertStringContainsString('played Charity from discard', $events[0]['description']);
+        self::assertStringContainsString('played Harmony from hand', $events[1]['description']);
+    }
+
+    /**
+     * Guile's ownership swap is permanent (no "give it back" tag at all --
+     * see BoardState::giveInPlayToPlayer()'s own docblock), so this is the
+     * plainest case that an ownership change gets logged at all, distinct
+     * from the temporary Arrogance/Betrayal/Recklessness cases below.
+     */
+    public function testRecentEventsDescribeAMoodsOwnershipChange(): void
+    {
+        $u1 = $this->insertUser('ownevt1');
+        $u2 = $this->insertUser('ownevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile
+        $this->insertGameCard($gameId, 9, 'hand', $p1); // discarded as Guile's cost
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // discarded as Guile's cost
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity -- taken
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 40, ['discard_card_ids' => [9, 8], 'target_mood_id' => 3]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        self::assertStringContainsString('Charity changed ownership from ownevt2 to ownevt1', $events[0]['description']);
+    }
+
+    /**
+     * Arrogance's own temporary-ownership tag has to survive the
+     * RequiresOpponentDecision pause (the target's own choice of which
+     * mood to give up) -- so this checks temporary_ownership only appears
+     * once the target has actually answered, and disappears once Arrogance
+     * itself leaves play (the mood reverting to its original owner).
+     */
+    public function testTemporaryOwnershipInfoForArroganceRevertsWhenArroganceLeavesPlay(): void
+    {
+        $u1 = $this->insertUser('tempown1');
+        $u2 = $this->insertUser('tempown2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 82, 'hand', $p1); // Arrogance
+        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- qualifies
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, 82, ['opponent_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_id' => 3]);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $charity = self::findByCardId($inPlay, 3);
+        self::assertSame(
+            [
+                'original_owner_game_player_id' => $p2,
+                'original_owner_name' => 'tempown2',
+                'source_card_id' => 82,
+                'source_card_name' => 'Arrogance',
+                'reverts' => 'when_source_leaves_play',
+            ],
+            $charity['temporary_ownership'],
+        );
+
+        // Arrogance itself is discarded once it leaves play (simulate by
+        // directly mutating BoardState rather than needing a whole extra
+        // card/turn to make that happen through real play).
+        $registry = DefaultEffectRegistry::build();
+        $repository = new BoardStateRepository($registry);
+        $state = $repository->load($gameId);
+        $state->moveInPlayToDiscard(82);
+        $repository->save($gameId, $state);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $charity = self::findByCardId($inPlay, 3);
+        self::assertNull($charity['temporary_ownership']);
+        self::assertSame($p2, $charity['owner_game_player_id']);
+    }
+
+    /**
+     * Betrayal's own tag reverts at end-of-round, not "when the source
+     * leaves play" -- distinct enough from Arrogance's own case above to
+     * need its own test of the tag's 'reverts' value.
+     */
+    public function testTemporaryOwnershipInfoForBetrayalRevertsAfterScoring(): void
+    {
+        $u1 = $this->insertUser('tempown3');
+        $u2 = $this->insertUser('tempown4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 56, ['target_mood_id' => 3, 'recipient_player_id' => $p2]);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $charity = self::findByCardId($inPlay, 3);
+        self::assertSame(
+            [
+                'original_owner_game_player_id' => $p1,
+                'original_owner_name' => 'tempown3',
+                'source_card_id' => 56,
+                'source_card_name' => 'Betrayal',
+                'reverts' => 'after_scoring',
+            ],
+            $charity['temporary_ownership'],
+        );
+    }
+
+    public function testPlayersExposeARunningTotalScoreAcrossScoredRounds(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, 55, []); // Apathy, value 4
+        $this->games->pass($gameId, $p2);
+        $this->games->pass($gameId, $p3);
+
+        $players = $this->games->getState($gameId, $u1)['players'];
+        $p1Player = self::findByGamePlayerId($players, $p1);
+        $p2Player = self::findByGamePlayerId($players, $p2);
+        $p3Player = self::findByGamePlayerId($players, $p3);
+
+        self::assertSame(4, $p1Player['total_score']);
+        self::assertSame(0, $p2Player['total_score']);
+        self::assertSame(0, $p3Player['total_score']);
+    }
+
+    /** @param array<int, array<string, mixed>> $players */
+    private static function findByGamePlayerId(array $players, int $gamePlayerId): array
+    {
+        foreach ($players as $player) {
+            if ($player['game_player_id'] === $gamePlayerId) {
+                return $player;
+            }
+        }
+
+        self::fail("No player with game_player_id {$gamePlayerId}");
+    }
+
+    /**
      * Exhilaration's doubling isn't tied to its own value -- it has to
      * survive a real load()/save() round trip and actually change the
      * recorded game_round_scores row, not just BoardState's in-memory

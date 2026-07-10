@@ -216,6 +216,47 @@ final class BoardStateTest extends TestCase
         self::assertSame([], $state->consumeCardMoves());
     }
 
+    public function testMoveHandToInPlayTagsPlayedFromZoneAsHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+
+        $state->moveHandToInPlay(1, 3);
+
+        self::assertSame('hand', $state->effectState(3, 'playedFromZone'));
+    }
+
+    public function testMoveDiscardToInPlayTagsPlayedFromZoneAsDiscard(): void
+    {
+        $state = $this->boardState(discard: [3]);
+
+        $state->moveDiscardToInPlay(1, 3);
+
+        self::assertSame('discard', $state->effectState(3, 'playedFromZone'));
+    }
+
+    public function testGiveInPlayToPlayerRecordsAnOwnershipChange(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->moveHandToInPlay(1, 3);
+
+        $state->giveInPlayToPlayer(3, 2);
+
+        self::assertSame(
+            [['card_id' => 3, 'from_player_id' => 1, 'to_player_id' => 2]],
+            $state->consumeOwnershipChanges(),
+        );
+    }
+
+    public function testConsumeOwnershipChangesClearsAccumulatedChanges(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->giveInPlayToPlayer(3, 2);
+
+        self::assertNotSame([], $state->consumeOwnershipChanges());
+        self::assertSame([], $state->consumeOwnershipChanges());
+    }
+
     public function testMovingUnknownCardOutOfHandThrows(): void
     {
         $state = $this->boardState(hands: [1 => []]);

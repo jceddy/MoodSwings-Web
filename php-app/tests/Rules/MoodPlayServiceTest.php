@@ -2510,7 +2510,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 56, new PlayerChoices(['target_mood_id' => 3, 'recipient_player_id' => 2]));
 
         self::assertSame(2, $state->ownerOf(3));
-        self::assertSame(1, $state->effectState(3, 'returnsToOwnerAfterScoring'));
+        self::assertSame(['sourceCardId' => 56, 'ownerId' => 1], $state->effectState(3, 'returnsToOwnerAfterScoring'));
     }
 
     public function testBetrayalRejectsATargetNotOwnedByYou(): void
@@ -2591,7 +2591,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 100, new PlayerChoices(['target_mood_id' => 3]));
 
         self::assertSame(1, $state->ownerOf(3));
-        self::assertSame(2, $state->effectState(3, 'returnsToOwnerAfterScoring'));
+        self::assertSame(['sourceCardId' => 100, 'ownerId' => 2], $state->effectState(3, 'returnsToOwnerAfterScoring'));
     }
 
     public function testRecklessnessRejectsTakingYourOwnMood(): void

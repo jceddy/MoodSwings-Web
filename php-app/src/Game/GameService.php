@@ -263,7 +263,7 @@ final class GameService
                     $this->boardStates->save($gameId, $state);
                     $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
-                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $choices, $state);
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
                     $pdo->commit();
                 } catch (Throwable $e) {
@@ -274,7 +274,7 @@ final class GameService
                 return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
             }
 
-            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $choices, $state);
+            $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
             return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
         });
@@ -434,7 +434,7 @@ final class GameService
                     $this->boardStates->save($gameId, $state);
                     $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
                     $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
-                    $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, [], $state);
+                    $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
                     $pdo->commit();
 
@@ -447,7 +447,7 @@ final class GameService
                 throw $e;
             }
 
-            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $topLevelChoices->toArray(), $state);
+            $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'mood_played', $playedCardId, $this->withPlayedFrom($state, $playedCardId, $topLevelChoices->toArray()), $state);
 
             return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
         });
@@ -869,10 +869,10 @@ final class GameService
             // had its own after-scoring tag) and 'afterScoring' may remove
             // the mood from play, which would leave nothing for
             // giveInPlayToPlayer() to act on.
-            $returnsToOwnerId = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
-            if ($returnsToOwnerId !== null) {
+            $returnsToOwner = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
+            if ($returnsToOwner !== null) {
                 $state->clearEffectState($cardId, 'returnsToOwnerAfterScoring');
-                $state->giveInPlayToPlayer($cardId, $returnsToOwnerId);
+                $state->giveInPlayToPlayer($cardId, $returnsToOwner['ownerId']);
             }
 
             if ($afterScoring !== null) {
@@ -1139,6 +1139,7 @@ final class GameService
                 'seat_order' => (int) $row['seat_order'],
                 'hand_count' => $handCounts[(int) $row['id']] ?? 0,
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
+                'total_score' => $this->totalScoreFor((int) $row['id']),
             ];
         }
 
@@ -1209,6 +1210,7 @@ final class GameService
         );
 
         $names = $this->cardCatalogNames();
+        $playerNames = array_column($players, 'username', 'game_player_id');
         foreach ($state->moodsInPlay() as $cardId => $mood) {
             $serialized = $this->serializeCard($state, $cardId);
             $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
@@ -1224,6 +1226,7 @@ final class GameService
                 'boosted_by_card_id' => $boosterCardId,
                 'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
                 'affecting' => $this->affectingEntries($state, $cardId, $names),
+                'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
             ];
         }
 
@@ -1295,13 +1298,24 @@ final class GameService
         $cardName = $row['card_id'] !== null ? ($cardNames[(int) $row['card_id']] ?? 'a card') : 'a card';
         $details = $row['details'] !== null ? json_decode((string) $row['details'], true) : [];
 
+        // BoardState::$pendingCardMoves' own docblock explains why entering
+        // play is deliberately never one of the moves it records -- this is
+        // the one place that fact still gets said, reading the mood's own
+        // persisted 'playedFromZone' tag (see withPlayedFrom()) instead.
+        // Only ever set on the two event types that actually announce a
+        // play -- a scoring-time pending_decision_created (Enthusiasm/
+        // Passion) is never about a card just entering play, so this stays
+        // silent there even though it shares the same event_type.
+        $playedFrom = $details['played_from'] ?? null;
+        $playedFromSuffix = $playedFrom !== null ? " from {$playedFrom}" : '';
+
         $description = match ($row['event_type']) {
-            'mood_played' => "{$actor} played {$cardName}",
+            'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}",
             'turn_passed' => "{$actor} passed",
-            'pending_decision_created' => "{$actor} played {$cardName}, waiting on a response",
+            'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}, waiting on a response",
             'pending_decision_resolved' => "A response to {$cardName} was resolved",
             'round_scored' => $this->describeRoundScored($details, $playerNames),
-            default => "{$actor} played {$cardName}",
+            default => "{$actor} played {$cardName}{$playedFromSuffix}",
         };
 
         // Paranoia/Curiosity's own reveal -- see BoardState::
@@ -1344,6 +1358,24 @@ final class GameService
         if ($cardMoves !== []) {
             $moveParts = array_map(fn (array $move) => $this->describeCardMove($move, $playerNames, $cardNames), $cardMoves);
             $description .= '; ' . implode('; ', $moveParts);
+        }
+
+        // Every ownership reassignment BoardState::consumeOwnershipChanges()
+        // recorded -- a card's zone move and its ownership are tracked (and
+        // logged) completely independently, since either can happen without
+        // the other (Chaos/Guile/Instability/Avoidance/Arrogance/Betrayal/
+        // Recklessness never move a mood out of play at all, just hand it
+        // to someone else; a mood moving zones -- e.g. back to a hand --
+        // never itself implies who owns it changed).
+        $ownershipChanges = $details['ownership_changes'] ?? [];
+        if ($ownershipChanges !== []) {
+            $ownershipParts = array_map(
+                fn (array $change) => ($cardNames[$change['card_id']] ?? 'a card') . ' changed ownership from ' .
+                    ($playerNames[$change['from_player_id']] ?? 'a player') . ' to ' .
+                    ($playerNames[$change['to_player_id']] ?? 'a player'),
+                $ownershipChanges,
+            );
+            $description .= '; ' . implode('; ', $ownershipParts);
         }
 
         return $description;
@@ -1420,7 +1452,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 
@@ -1643,6 +1675,52 @@ final class GameService
     }
 
     /**
+     * Whether $cardId's current owner only holds it temporarily, and if
+     * so, everything the card-detail view needs to explain that: which
+     * card caused it, who owned it originally, and when it reverts. Two
+     * distinct effectState tags feed this, matching BoardState's own two
+     * "give it back later" mechanics -- Arrogance's
+     * 'returnsToOwnerIfCardLeavesPlay' (reverts once its own sourceCardId
+     * leaves play) and Betrayal's/Recklessness's 'returnsToOwnerAfterScoring'
+     * (reverts at the end of the current round) -- checked in that order,
+     * though a mood is never tagged with both at once in practice. Every
+     * OTHER giveInPlayToPlayer() caller (Guile, Instability, Avoidance,
+     * Chaos) is a permanent trade with no such tag, so this returns null
+     * for those -- their ownership change is still visible in game history
+     * (see BoardState::consumeOwnershipChanges()), just not "temporary".
+     *
+     * @param array<int, string> $names
+     * @param array<int, string> $playerNames
+     * @return ?array{original_owner_game_player_id:int, original_owner_name:string, source_card_id:int, source_card_name:string, reverts:string}
+     */
+    private function temporaryOwnershipInfo(BoardState $state, int $cardId, array $names, array $playerNames): ?array
+    {
+        $stolen = $state->effectState($cardId, 'returnsToOwnerIfCardLeavesPlay');
+        if ($stolen !== null) {
+            return [
+                'original_owner_game_player_id' => $stolen['ownerId'],
+                'original_owner_name' => $playerNames[$stolen['ownerId']] ?? 'a player',
+                'source_card_id' => $stolen['sourceCardId'],
+                'source_card_name' => $names[$stolen['sourceCardId']] ?? 'a card',
+                'reverts' => 'when_source_leaves_play',
+            ];
+        }
+
+        $returnsAfterScoring = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
+        if ($returnsAfterScoring !== null) {
+            return [
+                'original_owner_game_player_id' => $returnsAfterScoring['ownerId'],
+                'original_owner_name' => $playerNames[$returnsAfterScoring['ownerId']] ?? 'a player',
+                'source_card_id' => $returnsAfterScoring['sourceCardId'],
+                'source_card_name' => $names[$returnsAfterScoring['sourceCardId']] ?? 'a card',
+                'reverts' => 'after_scoring',
+            ];
+        }
+
+        return null;
+    }
+
+    /**
      * For Creativity specifically (identified above by its own raw
      * effect_key), precomputes -- for every mood currently in play --
      * what the choices panel would need to offer if this Creativity ends
@@ -1728,6 +1806,24 @@ final class GameService
              WHERE game_id = :game_id AND status = 'scored' AND winner_game_player_id = :player_id"
         );
         $stmt->execute(['game_id' => $gameId, 'player_id' => $playerId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * A player's running point total across every round scored so far this
+     * game -- distinct from totalWinsFor()'s round-victory count, since a
+     * round's loser(s) still score points (just not a win) that a "who's
+     * ahead" view needs too. game_player_id is unique to one game (a fresh
+     * row per game, never reused), so this needs no game_id filter of its
+     * own the way totalWinsFor() does.
+     */
+    private function totalScoreFor(int $playerId): int
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT COALESCE(SUM(score), 0) AS total FROM game_round_scores WHERE game_player_id = :player_id'
+        );
+        $stmt->execute(['player_id' => $playerId]);
 
         return (int) $stmt->fetchColumn();
     }
@@ -2018,19 +2114,20 @@ final class GameService
     }
 
     /**
-     * Folds whatever BoardState::consumeRevealedCardIds()/consumeCardMoves()
-     * have collected since the last event was logged into $details before
-     * it's persisted -- see those methods' own docblocks for why this
-     * can't just be read back out of $details like everything else in it.
-     * A no-op for a play that revealed or moved nothing. $state is optional
-     * purely because a few call sites (turn_passed, and the scoring-decision
-     * response branch, neither of which can move a card) have no BoardState
-     * in scope at the point they log their own event -- every call site
-     * that already has one loaded always passes it, so nothing it moved is
-     * ever silently lost. Always called from logEvent() itself, immediately
-     * before the event is persisted, never earlier: both consume methods
-     * clear what they return, so reading them any other time would risk
-     * attributing a move to the wrong event or dropping it entirely.
+     * Folds whatever BoardState::consumeRevealedCardIds()/consumeCardMoves()/
+     * consumeOwnershipChanges() have collected since the last event was
+     * logged into $details before it's persisted -- see those methods' own
+     * docblocks for why this can't just be read back out of $details like
+     * everything else in it. A no-op for a play that revealed, moved, or
+     * reassigned nothing. $state is optional purely because a few call
+     * sites (turn_passed, and the scoring-decision response branch, neither
+     * of which can move or reassign a card) have no BoardState in scope at
+     * the point they log their own event -- every call site that already
+     * has one loaded always passes it, so nothing it did is ever silently
+     * lost. Always called from logEvent() itself, immediately before the
+     * event is persisted, never earlier: every consume method clears what
+     * it returns, so reading them any other time would risk attributing a
+     * change to the wrong event or dropping it entirely.
      *
      * @param array<string, mixed> $details
      * @return array<string, mixed>
@@ -2049,6 +2146,37 @@ final class GameService
         $cardMoves = $state->consumeCardMoves();
         if ($cardMoves !== []) {
             $details['card_moves'] = $cardMoves;
+        }
+
+        $ownershipChanges = $state->consumeOwnershipChanges();
+        if ($ownershipChanges !== []) {
+            $details['ownership_changes'] = $ownershipChanges;
+        }
+
+        return $details;
+    }
+
+    /**
+     * Folds BoardState::$cardId's own 'playedFromZone' effectState tag
+     * (set once, permanently, the moment it actually entered play -- see
+     * BoardState::initialEffectState()) into $details as 'played_from', so
+     * describeEvent() can say "played Harmony from discard" -- unlike
+     * $revealedCardIds/$cardMoves/$ownershipChanges above, this doesn't
+     * need a BoardState-level consume/clear step: it's read (never
+     * cleared) directly off the mood's own persisted effectState, which is
+     * exactly why it survives from the moment a play pauses on a
+     * RequiresOpponentDecision all the way to whichever later request
+     * finally resolves it, unlike the transient per-request tracking the
+     * other three use.
+     *
+     * @param array<string, mixed> $details
+     * @return array<string, mixed>
+     */
+    private function withPlayedFrom(BoardState $state, int $cardId, array $details): array
+    {
+        $playedFrom = $state->effectState($cardId, 'playedFromZone');
+        if ($playedFrom !== null) {
+            $details['played_from'] = $playedFrom;
         }
 
         return $details;
