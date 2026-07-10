@@ -220,6 +220,24 @@ routed to the PHP app).
     of a card's zone). A round-scored line names every player's own final
     score and who won, not just that scoring happened.
 
+    Drawing a card gets its own segment too -- "Alice drew a card" -- but
+    deliberately never names *which* card, unlike every other zone move
+    described above: a card drawn into a hand was never previously public,
+    so saying which one would leak hidden hand information no other
+    recorded move does (Zeal's/Doubt's/Paranoia's/Corruption's/Conviction's/
+    Hate's/Rationalization's own after-playing draws, and the "each
+    non-winning player draws a card" that happens automatically once a
+    round scores, all read this way). An extra play grant gets logged
+    twice, for two different moments: the instant it's created ("Bob was
+    granted an extra play from Charity"), naming its source card and any
+    zone/restriction it carries (e.g. "an extra play from the discard
+    pile (must share a color with one of your moods)" for Grace's own
+    grant) the same way an *outstanding* grant is already described in
+    the "Plays left" details above -- and again, once it's actually spent,
+    folded right into that later play's own line ("Bob played Apathy from
+    hand (using an extra play from Charity)"), so it's clear not just that
+    a bonus play was used, but which card's own grant it came from.
+
     A separate, more prominent green banner (`#board-message`) flashes
     "Game complete!" or "Round scored — a new round has begun." right
     after a play/pass/response that actually triggers one

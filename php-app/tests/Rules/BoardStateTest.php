@@ -360,6 +360,89 @@ final class BoardStateTest extends TestCase
         self::assertSame(2, $state->playsRemaining());
     }
 
+    public function testDrawCardRecordsTheDrawingPlayerNotTheCard(): void
+    {
+        // Unlike every other zone move, drawing is only ever recorded as
+        // "who drew", never "what" -- see $pendingDraws' own docblock.
+        $state = $this->boardState(deck: [10]);
+
+        $state->drawCard(1);
+
+        self::assertSame([1], $state->consumeDraws());
+    }
+
+    public function testDrawCardFromAnEmptyDeckDoesNotRecordADraw(): void
+    {
+        $state = $this->boardState();
+
+        $state->drawCard(1);
+
+        self::assertSame([], $state->consumeDraws());
+    }
+
+    public function testConsumeDrawsClearsAccumulatedDraws(): void
+    {
+        $state = $this->boardState(deck: [10, 20]);
+
+        $state->drawCard(1);
+        $state->drawCard(2);
+
+        self::assertSame([1, 2], $state->consumeDraws());
+        self::assertSame([], $state->consumeDraws());
+    }
+
+    public function testGrantExtraPlayRecordsEachGrantedUnit(): void
+    {
+        $state = $this->boardState();
+
+        $state->grantExtraPlay(2, ['type' => 'shares_color_with_your_moods'], sourceCardId: 3);
+
+        self::assertSame(
+            [
+                ['type' => 'shares_color_with_your_moods', 'sourceCardId' => 3],
+                ['type' => 'shares_color_with_your_moods', 'sourceCardId' => 3],
+            ],
+            $state->consumeGrantsCreated(),
+        );
+    }
+
+    public function testConsumeGrantsCreatedClearsAccumulatedGrants(): void
+    {
+        $state = $this->boardState();
+
+        $state->grantExtraPlay(sourceCardId: 3);
+
+        self::assertNotSame([], $state->consumeGrantsCreated());
+        self::assertSame([], $state->consumeGrantsCreated());
+    }
+
+    public function testUseGrantForRecordsAConsumedRestrictedGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(1);
+        $state->grantExtraPlay(sourceCardId: 106); // an extra, unconditional grant on top of the base turn
+
+        $state->useGrantFor(3, 1); // consumes the base allowance first (null restriction)
+
+        self::assertNull($state->consumeGrantUsed());
+
+        $state->useGrantFor(3, 1); // consumes the granted extra play
+
+        self::assertSame(['sourceCardId' => 106], $state->consumeGrantUsed());
+    }
+
+    public function testConsumeGrantUsedClearsAfterReading(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(1);
+        $state->grantExtraPlay(sourceCardId: 106);
+        $state->useGrantFor(3, 1); // base allowance
+        $state->useGrantFor(3, 1); // the granted extra play
+
+        self::assertNotNull($state->consumeGrantUsed());
+        self::assertNull($state->consumeGrantUsed());
+    }
+
     public function testCatalogRowThrowsForUnknownCard(): void
     {
         $state = $this->boardState();

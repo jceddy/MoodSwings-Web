@@ -1220,6 +1220,104 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('mood moved from play to discard: Charity', $events[0]['description']);
     }
 
+    /**
+     * Zeal's own draw is never announced by naming the card (see
+     * BoardState::$pendingDraws' own docblock -- unlike every other zone
+     * move recorded for game history, a card drawn into a hand was never
+     * previously public), just that a draw happened at all.
+     */
+    public function testRecentEventsMentionADrawWithoutNamingTheCard(): void
+    {
+        $u1 = $this->insertUser('drawevt1');
+        $u2 = $this->insertUser('drawevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1); // seated so p1's single play doesn't wrap the turn order and auto-score the round
+
+        $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
+        $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence -- bottomed as Zeal's own cost
+        $this->insertGameCard($gameId, 9, 'deck', null, 0); // Discipline -- what actually gets drawn
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 106, ['hand_card_id' => 2]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        self::assertStringContainsString('drawevt1 drew a card', $events[0]['description']);
+        self::assertStringNotContainsString('Discipline', $events[0]['description']);
+    }
+
+    /**
+     * Charity's own unconditional grant is announced the moment it's
+     * created (source: Charity), separately from -- and in addition to --
+     * whatever's eventually said about it once it's actually used (see
+     * testRecentEventsMentionWhichExtraPlayGrantWasUsed() below).
+     */
+    public function testRecentEventsAnnounceANewlyCreatedExtraPlayGrant(): void
+    {
+        $u1 = $this->insertUser('grantcreate1');
+        $u2 = $this->insertUser('grantcreate2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 3, []);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        self::assertStringContainsString('grantcreate1 was granted an extra play from Charity', $events[0]['description']);
+    }
+
+    /**
+     * Once that granted play is actually used for a second card, the
+     * "played" line for *that* play names the grant it used -- distinct
+     * from (and logged well after) the "was granted" line above, which
+     * only announces the grant's existence.
+     */
+    public function testRecentEventsMentionWhichExtraPlayGrantWasUsed(): void
+    {
+        $u1 = $this->insertUser('grantused1');
+        $u2 = $this->insertUser('grantused2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play
+        $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy -- played using it
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 3, []);
+        $this->games->playMood($gameId, $p1, 55, []);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertNotEmpty($events);
+        self::assertStringContainsString(
+            'grantused1 played Apathy from hand (using an extra play from Charity)',
+            $events[0]['description'],
+        );
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {

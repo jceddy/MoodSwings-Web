@@ -733,8 +733,9 @@ own `mood_played` event, for a play that never pauses at all, is
 unaffected -- there, it's the *only* event for that play, not a duplicate
 of one already logged moments earlier.
 
-Two more pieces of history round out "anything that changes about a card
-gets logged, not just what a player submitted":
+Four more pieces of history round out "anything that changes about a card
+(or a player's outstanding plays) gets logged, not just what a player
+submitted":
 
 - **Which zone a card was played from.** `mood_played`/
   `pending_decision_created` now say e.g. "Alice played Harmony from hand"
@@ -770,6 +771,50 @@ gets logged, not just what a player submitted":
   independently of `card_moves` -- a card's zone and its owner can each
   change without the other (most of the cards above never move the mood
   out of play at all).
+- **Drawing a card -- who, never what.** `BoardState::drawCard()` now
+  appends the drawing player's id (only) to a new `$pendingDraws` list on
+  every successful draw (Zeal, Doubt, Paranoia, Corruption, Conviction,
+  Hate, Rationalization's own after-playing draws, plus the "each
+  non-winning player draws a card" `finishScoringAndAdvance()` already ran
+  at every round's end), drained by `consumeDraws()` and folded into
+  `withCardHistory()` under `draws` alongside the three fields above.
+  Deliberately the *one* exception to "record what actually happened,
+  not just what was chosen" this whole section otherwise follows:
+  `drawCard()`'s own docblock already explained why entering a hand was
+  never recorded here at all (unlike every other zone, it was never
+  previously public) -- `$pendingDraws` doesn't change that, it just
+  finally surfaces the fact that *a* draw happened, without violating the
+  reason the card itself still stays hidden. `describeEvent()` renders
+  each entry as its own "Alice drew a card" segment, one per draw (not
+  grouped/counted, matching `card_moves`/`ownership_changes` above),
+  since e.g. Corruption can draw the same player up to two cards in one
+  event.
+- **An extra play grant, at both ends of its life.** `BoardState::
+  grantExtraPlay()` now also appends each restriction descriptor it
+  creates to a new `$pendingGrantsCreated` list (mirroring what it
+  already pushes onto `$playGrants` itself), drained by
+  `consumeGrantsCreated()` -- so the moment Charity/Fear/Validation/
+  Duplicity/etc. grants a bonus play, that event's own description gains
+  an "Alice was granted an extra play from Charity" segment per grant,
+  reusing the same source/zone/restriction wording `describePlayGrant()`
+  already renders for an *outstanding* grant in `round.play_grants`
+  (extracted into a shared `describeGrantDetails()` helper both now call).
+  Symmetrically, `BoardState::useGrantFor()` now records the restriction
+  it actually consumed into `$pendingGrantUsed` -- but only when it's a
+  genuine granted extra play, never the ordinary null-restriction base
+  allowance every turn already starts with -- drained by
+  `consumeGrantUsed()` and folded into `details` as `grant_used`, which
+  `describeEvent()` appends directly onto the *same* `mood_played`/
+  `pending_decision_created` line as `played_from`, e.g. "Bob played
+  Apathy from hand (using an extra play from Charity)" -- distinct from,
+  and logged well after, the "was granted" line above, which only
+  announces a grant's existence, not that it was ever used. Deliberately
+  never populated by `computeFreshGrants()`'s own perpetual (Hope/Grace/
+  Stubbornness) or banked (Generosity/Joy) recomputation at the start of a
+  future turn, since that bypasses `grantExtraPlay()` entirely -- logging
+  those would mean re-announcing the same ongoing "while in play" ability
+  every single turn it's still in effect, not a one-time event worth a
+  history line the way an immediate, same-turn grant is.
 
 Beyond the reveal-specific handling above, `describeEvent()` also appends a
 generic summary of whatever was actually submitted for a `mood_played`/
