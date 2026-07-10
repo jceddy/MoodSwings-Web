@@ -585,12 +585,19 @@ game history (see the `ownership_changes` section above), just without
 this popup-specific "when does it end" detail.
 
 `GameService::getState()`'s `players` mapping now carries `total_score`
-alongside the existing `total_wins` -- a running sum of every
-`game_round_scores.score` row for that `game_player_id` (see the new
-`totalScoreFor()`, mirroring `totalWinsFor()`'s own query shape). Distinct
-from `total_wins` (how many rounds a player has outright won) since a
-round's loser(s) still score points worth showing on a "who's ahead" view
-even though they didn't win that round.
+alongside the existing `total_wins` -- a pure quality-of-life "add up the
+numbers on the board for me" figure: the live sum of `BoardState::
+valueOf()` across every mood a player currently owns in play (see the new
+`boardPointTotalFor()`), not anything persisted or accumulated across
+rounds. It moves with the board -- a mood entering/leaving play, or its
+value changing mid-round (suppression, a dice-value boost, Imagination's
+recolor, ...) -- and resets to 0 the moment a round scores and every mood
+clears. This was originally built as a running total pulled from
+`game_round_scores` (added, then corrected the same day it shipped, once
+testing showed a live board snapshot -- "how many points would I score
+right now" -- is what a "don't make me add up my own cards" indicator
+actually needs); `total_wins` is still the only place round-victory
+history is summarized.
 
 `GameService::getState()`'s `discard_pile` mapping now passes the viewer's
 own game-player id to `serializeCard()` the same way `hand` already does

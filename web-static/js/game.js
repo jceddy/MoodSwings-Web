@@ -134,6 +134,13 @@
         boardView.hidden = true;
         lobbyView.hidden = false;
         refreshLobby();
+        // Picks up a game created by another player (or this same player,
+        // from a second tab) without needing a hard reload -- the same
+        // 4-second cadence showBoard()'s own poll uses, and mutually
+        // exclusive with it, since only one of lobbyView/boardView is ever
+        // visible and each view's own show*() clears any prior pollTimer
+        // before starting its own.
+        pollTimer = setInterval(refreshLobby, 4000);
     }
 
     function showBoard(gameId) {
@@ -151,6 +158,17 @@
         }, 4000);
     }
 
+    // Turns a raw snake_case status value ('in_progress', 'waiting', ...)
+    // into a human-friendly one ('In Progress', 'Waiting') -- generic
+    // rather than a fixed lookup table, so any future status value reads
+    // reasonably without this needing to be updated too.
+    function humanizeStatus(status) {
+        return status
+            .split('_')
+            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    }
+
     async function refreshLobby() {
         const { ok, body } = await listGames();
         const gamesList = document.getElementById('games-list');
@@ -158,7 +176,7 @@
         renderList(gamesList, document.getElementById('games-empty'), ok ? body.games : [], (game) => {
             const li = document.createElement('li');
             const opponents = game.players.map((p) => p.username).join(', ');
-            li.append(opponents + ' — ' + game.status + (game.is_your_turn ? ' (your turn)' : ''));
+            li.append(opponents + ' — ' + humanizeStatus(game.status) + (game.is_your_turn ? ' (your turn)' : ''));
             li.appendChild(actionButton('Open', () => showBoard(game.id)));
             return li;
         });

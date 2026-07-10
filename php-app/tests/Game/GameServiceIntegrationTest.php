@@ -2519,22 +2519,68 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
-    public function testPlayersExposeARunningTotalScoreAcrossScoredRounds(): void
+    /**
+     * total_score is a live "if the round ended right now" snapshot of the
+     * board, not anything accumulated across previously-scored rounds --
+     * so this checks it directly against a fixed set of already-in-play
+     * moods, with no play/pass/scoring involved at all.
+     */
+    public function testPlayersExposeALiveBoardPointTotal(): void
     {
-        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1] = $this->buildThreePlayerFixture();
+        $u1 = $this->insertUser('boardpts1');
+        $u2 = $this->insertUser('boardpts2');
 
-        $this->games->playMood($gameId, $p1, 55, []); // Apathy, value 4
-        $this->games->pass($gameId, $p2);
-        $this->games->pass($gameId, $p3);
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 55, 'in_play', $p1); // Apathy, value 4
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity, value 1
+        $this->insertGameCard($gameId, 5, 'in_play', $p2); // Complacency, value 4
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $players = $this->games->getState($gameId, $u1)['players'];
         $p1Player = self::findByGamePlayerId($players, $p1);
         $p2Player = self::findByGamePlayerId($players, $p2);
-        $p3Player = self::findByGamePlayerId($players, $p3);
 
-        self::assertSame(4, $p1Player['total_score']);
-        self::assertSame(0, $p2Player['total_score']);
-        self::assertSame(0, $p3Player['total_score']);
+        self::assertSame(5, $p1Player['total_score']);
+        self::assertSame(4, $p2Player['total_score']);
+    }
+
+    /**
+     * A mood leaving play (here, discarded as Bravado's own to-play cost)
+     * must be reflected immediately -- proving this is a live snapshot,
+     * not something that only updates once a round actually scores.
+     */
+    public function testTotalScoreDropsAsSoonAsAMoodLeavesPlay(): void
+    {
+        $u1 = $this->insertUser('boardpts3');
+        $this->insertUser('boardpts4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+
+        $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity, value 1 -- discarded as cost
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $before = self::findByGamePlayerId($this->games->getState($gameId, $u1)['players'], $p1);
+        self::assertSame(1, $before['total_score']); // just Charity
+
+        $this->games->playMood($gameId, $p1, 84, ['discard_mood_id' => 3]);
+
+        $after = self::findByGamePlayerId($this->games->getState($gameId, $u1)['players'], $p1);
+        self::assertSame(3, $after['total_score']); // Charity gone, Bravado (value 3) now in play
     }
 
     /** @param array<int, array<string, mixed>> $players */
