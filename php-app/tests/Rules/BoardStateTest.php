@@ -117,6 +117,105 @@ final class BoardStateTest extends TestCase
         self::assertNull($state->drawCard(1));
     }
 
+    public function testMoveInPlayToDiscardRecordsCardMove(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->moveHandToInPlay(1, 3);
+
+        $state->moveInPlayToDiscard(3);
+
+        self::assertSame(
+            [['card_id' => 3, 'from_zone' => 'play', 'to_zone' => 'discard', 'from_player_id' => null, 'to_player_id' => null]],
+            $state->consumeCardMoves(),
+        );
+    }
+
+    public function testMoveInPlayToHandRecordsOwnerAsToPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->moveHandToInPlay(1, 3);
+
+        $state->moveInPlayToHand(3);
+
+        self::assertSame(
+            [['card_id' => 3, 'from_zone' => 'play', 'to_zone' => 'hand', 'from_player_id' => null, 'to_player_id' => 1]],
+            $state->consumeCardMoves(),
+        );
+    }
+
+    public function testMoveInPlayToPlayersHandRecordsNewOwnerAsToPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->moveHandToInPlay(1, 3);
+
+        $state->moveInPlayToPlayersHand(3, 2);
+
+        self::assertSame(
+            [['card_id' => 3, 'from_zone' => 'play', 'to_zone' => 'hand', 'from_player_id' => null, 'to_player_id' => 2]],
+            $state->consumeCardMoves(),
+        );
+    }
+
+    public function testMoveHandToDiscardRecordsFromPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+
+        $state->moveHandToDiscard(1, 3);
+
+        self::assertSame(
+            [['card_id' => 3, 'from_zone' => 'hand', 'to_zone' => 'discard', 'from_player_id' => 1, 'to_player_id' => null]],
+            $state->consumeCardMoves(),
+        );
+    }
+
+    public function testGiveHandCardToPlayerRecordsBothPlayers(): void
+    {
+        $state = $this->boardState(hands: [1 => [3], 2 => []]);
+
+        $state->giveHandCardToPlayer(1, 2, 3);
+
+        self::assertSame(
+            [['card_id' => 3, 'from_zone' => 'hand', 'to_zone' => 'hand', 'from_player_id' => 1, 'to_player_id' => 2]],
+            $state->consumeCardMoves(),
+        );
+    }
+
+    public function testMoveHandToInPlayDoesNotRecordACardMove(): void
+    {
+        // The card actually being played -- already implicit in whichever
+        // mood_played/pending_decision_created event GameService logs for
+        // this play, via that event's own card_id, so recording it again
+        // here would just repeat the same fact on every single play.
+        $state = $this->boardState(hands: [1 => [3]]);
+
+        $state->moveHandToInPlay(1, 3);
+
+        self::assertSame([], $state->consumeCardMoves());
+    }
+
+    public function testDrawCardDoesNotRecordACardMove(): void
+    {
+        // Unlike every other zone a card can move through here, a hand a
+        // card is drawn into was never previously public -- recording it
+        // would leak which card a player drew to every other player's game
+        // history.
+        $state = $this->boardState(deck: [10]);
+
+        $state->drawCard(1);
+
+        self::assertSame([], $state->consumeCardMoves());
+    }
+
+    public function testConsumeCardMovesClearsAccumulatedMoves(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveInPlayToDiscard(3);
+
+        self::assertNotSame([], $state->consumeCardMoves());
+        self::assertSame([], $state->consumeCardMoves());
+    }
+
     public function testMovingUnknownCardOutOfHandThrows(): void
     {
         $state = $this->boardState(hands: [1 => []]);

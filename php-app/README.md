@@ -594,15 +594,57 @@ player who wasn't the one who submitted the play -- including, for
 Paranoia, the very player whose card got revealed -- had any way to ever
 learn what it was. `BoardState::recordRevealedCard()`/
 `consumeRevealedCardIds()` closes that: both effects record the id they
-picked; `GameService::withRevealedCards()` reads it back immediately
-before the play's own `mood_played` event is logged and folds it into that
-event's `details` as `revealed_card_ids`, which `describeEvent()` then
-expands into "revealing X from Y's hand" using the same `target_player_id`
-choice both cards already share. Nothing else currently needs this same
-treatment -- every other `array_rand()` user (Cruelty/Indecisiveness/
-Altruism) picks from a mood/card that was already publicly visible in play
-or the discard pile before the pick, so there's no hidden information for
-a history entry to be the only way to recover.
+picked; `GameService::logEvent()` reads it back (via the shared
+`withCardHistory()` helper, see below) immediately before the play's own
+`mood_played` event is logged and folds it into that event's `details` as
+`revealed_card_ids`, which `describeEvent()` then expands into "revealing X
+from Y's hand" using the same `target_player_id` choice both cards already
+share.
+
+`BoardState::consumeCardMoves()` closes a related but distinct gap:
+`recordRevealedCard()` above only ever existed for the one thing a history
+entry has to recover on its own (hidden information nothing else would ever
+reveal), but a *different* card was still true even for every other
+`array_rand()` user (Cruelty/Indecisiveness/Altruism) and for a multi-target
+`RequiresOpponentDecision` batch (Malice's color cascade, Confusion,
+Disillusionment, Suspicion): the actual zone move never showed up in
+history at all, even though nothing about it was secret -- the card was
+already publicly visible in play or the discard pile before the move. Every
+`BoardState` method that moves a card between zones (except
+`moveHandToInPlay()`/`moveDiscardToInPlay()`, always the card actually
+being played and so already implicit in the event's own `card_id`, and
+`drawCard()`, the one zone a card moves into that's never previously
+public -- see its own docblock) now calls a private `recordMove()` that
+appends a `{card_id, from_zone, to_zone, from_player_id, to_player_id}`
+entry to an in-memory list, regardless of whether a random pick, a
+resolved opponent decision, or a submitted choice caused it. `logEvent()`'s
+new `withCardHistory()` helper (folding in both `consumeRevealedCardIds()`
+and `consumeCardMoves()`, replacing the old, reveal-only
+`withRevealedCards()`) drains that list into every event's own `details`
+under `card_moves`, and `describeEvent()` renders each entry as e.g. "Anger
+moved from play to the discard pile" or "Envy moved from play to Bob's
+hand" -- unconditionally, regardless of event type (so `round_scored`'s own
+after-scoring hooks -- see below -- get this too) and regardless of whether
+the same card was already named for a different reason in the choice
+summary above (that summary says a card was *chosen*; this says where it
+actually *went*, which isn't always the same information). For a
+multi-target pending-decision batch, this also happens to fix a second gap
+for free: `respondToDecision()` only ever logs the *last* responder's own
+submitted answer as the `pending_decision_resolved` event's `details`
+(every earlier target's answer was already durably written to
+`game_pending_decisions` when they responded, not repeated here) -- but
+since every target's move happens in the same `resolveDecisions()` call,
+right before that one event is logged, `card_moves` ends up carrying every
+target's own move regardless, not just the last one's.
+
+The one call site this couldn't help was moved to make it work at all:
+`respondToDecision()` used to log `pending_decision_resolved` immediately
+after marking the batch resolved, *before* calling
+`MoodPlayService::resolvePendingDecisions()` -- at that point, resolution
+hasn't happened yet, so there would be nothing for `consumeCardMoves()` to
+find. That log call now happens right after `resolvePendingDecisions()`
+instead, with the same `BoardState` passed through so its own accumulated
+moves are captured.
 
 Beyond the reveal-specific handling above, `describeEvent()` also appends a
 generic summary of whatever was actually submitted for a `mood_played`/
