@@ -1000,6 +1000,107 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull(self::findFieldByKey($creativity['copy_simulation'][$dignityId]['extra_fields'], 'validation_extra_play'));
     }
 
+    public function testInPlayCreativityCopyDisplaysAsTheCopiedMoodWithACopyIndicator(): void
+    {
+        $u1 = $this->insertUser('creativitydisplay1');
+        $u2 = $this->insertUser('creativitydisplay2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $serenityId = $this->insertGameCard($gameId, 129, 'in_play', $p1); // real Serenity
+        $creativityId = $this->insertGameCard($gameId, 32, 'in_play', $p1); // Creativity, copying Serenity
+        $this->pdo->prepare('UPDATE game_cards SET copied_card_id = :copied_card_id WHERE id = :id')
+            ->execute(['copied_card_id' => $serenityId, 'id' => $creativityId]);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $creativity = self::findByCardId($inPlay, $creativityId);
+
+        self::assertSame('Serenity', $creativity['name']);
+        self::assertSame('serenity', $creativity['effect_key']);
+        self::assertSame(
+            "While in play, this mood's value is 6 if you have an even number of moods, including this one.",
+            $creativity['rules_text'],
+        );
+        self::assertTrue($creativity['is_creativity_copy']);
+
+        // The real Serenity sitting alongside it is unaffected -- only the
+        // Creativity instance itself displays as a copy.
+        $realSerenity = self::findByCardId($inPlay, $serenityId);
+        self::assertSame('Serenity', $realSerenity['name']);
+        self::assertFalse($realSerenity['is_creativity_copy']);
+    }
+
+    public function testInPlayCreativityWithNoCopyChosenStillDisplaysAsPlainCreativity(): void
+    {
+        $u1 = $this->insertUser('creativityblank1');
+        $u2 = $this->insertUser('creativityblank2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Creativity played "blank," copying nothing -- copied_card_id
+        // stays NULL, exactly as an uncopied real play leaves it.
+        $creativityId = $this->insertGameCard($gameId, 32, 'in_play', $p1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['in_play'], $creativityId);
+
+        self::assertSame('Creativity', $creativity['name']);
+        self::assertSame('creativity', $creativity['effect_key']);
+        self::assertFalse($creativity['is_creativity_copy']);
+    }
+
+    /**
+     * A Creativity copying Bliss behaves as Bliss for scoring purposes
+     * (RoundScorer::score() already resolves effect_key through
+     * effectiveCardId()) -- this proves the display-facing bliss_discard_color
+     * field (GameService::getState()'s in_play mapping, keyed off the
+     * serialized card's own effect_key) now agrees, since payToPlayCost()
+     * always tags 'blissColor' on the *playing* card's own id (the
+     * Creativity instance), matching what serializeCard() reads it back
+     * from once effect_key correctly reads as 'bliss' too.
+     */
+    public function testInPlayCreativityCopyOfBlissExposesBlissDiscardColorToo(): void
+    {
+        $u1 = $this->insertUser('creativitybliss1');
+        $u2 = $this->insertUser('creativitybliss2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $blissId = $this->insertGameCard($gameId, 108, 'in_play', $p1); // real Bliss
+        $creativityId = $this->insertGameCard($gameId, 32, 'in_play', $p1); // Creativity, copying Bliss
+        $this->pdo->prepare('UPDATE game_cards SET copied_card_id = :copied_card_id, effect_state = :effect_state WHERE id = :id')
+            ->execute(['copied_card_id' => $blissId, 'effect_state' => json_encode(['blissColor' => 'white']), 'id' => $creativityId]);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['in_play'], $creativityId);
+
+        self::assertSame('Bliss', $creativity['name']);
+        self::assertTrue($creativity['is_creativity_copy']);
+        self::assertSame('white', $creativity['bliss_discard_color']);
+    }
+
     public function testCopySimulationCostPayableReflectsTheCandidatesOwnCostExcludingCreativitysOwnHandSlot(): void
     {
         $u1 = $this->insertUser('copysimcost1');

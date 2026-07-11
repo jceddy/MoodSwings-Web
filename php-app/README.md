@@ -621,6 +621,25 @@ Compulsion already paused for the target's own real choice the same way
 a real Compulsion would, even before the panel could offer
 `target_player_id` to ask for one.
 
+Once an in-play Creativity is actually copying something, `serializeCard()`
+displays it AS the copied mood rather than as Creativity: `name`,
+`effect_key`, and `rules_text` all switch from Creativity's own (raw,
+ability-less) catalog row to `catalogRow(effectiveCardId($cardId))`'s --
+the same lookup `color`/`base_value`/`alt_value` already used -- so an
+in-play Creativity copying Serenity reads and behaves as "Serenity"
+everywhere, including `bliss_discard_color` (below) if it copied Bliss
+specifically, since `BlissEffect::payToPlayCost()` always tags
+`blissColor` on the *playing* card's own id regardless of what it copies.
+A new `is_creativity_copy` boolean (true only for an in-play Creativity
+with a real `copiedCardId` -- false for a "blank," uncopied Creativity,
+whose `effectiveCardId()` just returns itself) is exposed alongside so the
+client can still say *which* card is doing the copying, since the raw
+printed identity is otherwise invisible once the display switches over.
+`choice_fields` and `copy_simulation` are deliberately exempt from this
+switch -- both describe what's available when *playing* Creativity from
+hand, which its own printed `creativity` effect_key always governs
+regardless of what it later copies once in play.
+
 Each of the viewer's own hand cards also carries `is_playable`
 (`MoodPlayService::isPlayable()`), so a client can grey out cards that
 can't legally be played *right now* without having to reimplement the

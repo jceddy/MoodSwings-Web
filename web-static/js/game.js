@@ -328,7 +328,8 @@
     // -- Board ---------------------------------------------------------
 
     function cardLabel(card) {
-        return card.name + ' (' + card.color + ', ' + card.value + ')';
+        return card.name + ' (' + card.color + ', ' + card.value + ')' +
+            (card.is_creativity_copy ? ' [Creativity copy]' : '');
     }
 
     function playerLabelFor(gamePlayerId) {
@@ -360,6 +361,19 @@
             meta += ' — ' + ownerLabel;
         }
         document.getElementById('card-detail-meta').textContent = meta;
+
+        // is_creativity_copy only exists (and is only ever true) on an
+        // in-play Creativity that actually copied something -- see
+        // GameService::serializeCard(). Its name/rules text above already
+        // read as the copied card's own, so this is purely a "why does
+        // this say Serenity when the card is Creativity" explainer.
+        const creativityCopyEl = document.getElementById('card-detail-creativity-copy');
+        if (card.is_creativity_copy) {
+            creativityCopyEl.textContent = 'A Creativity copy of ' + card.name + '.';
+            creativityCopyEl.hidden = false;
+        } else {
+            creativityCopyEl.hidden = true;
+        }
 
         const suppressionEl = document.getElementById('card-detail-suppression');
         if (card.is_suppressed) {

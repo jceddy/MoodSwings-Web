@@ -1865,9 +1865,24 @@ final class GameService
         // whatever card it's currently copying, not from Creativity's own
         // (dice-less) catalog row -- see EncouragementEffect, which checks
         // the same effectiveCardId() for exactly this reason.
-        $diceValueCatalog = $inPlay ? $state->catalogRow($state->effectiveCardId($cardId)) : $catalog;
+        $effectiveCardId = $inPlay ? $state->effectiveCardId($cardId) : $cardId;
+        $diceValueCatalog = $inPlay ? $state->catalogRow($effectiveCardId) : $catalog;
         $color = $inPlay ? $state->colorOf($cardId) : $catalog['color'];
         $baseValue = $diceValueCatalog['baseValue'];
+
+        // An in-play Creativity that's actually copying something (it can
+        // also be played uncopied, as a blank mood -- effectiveCardId()
+        // then just returns $cardId itself) displays as the copied mood
+        // rather than as Creativity: its name, rules text, and effect_key
+        // all switch to the copied card's own, the same way its color and
+        // value already do above, so e.g. a Creativity copying Serenity
+        // reads and behaves exactly like an in-play Serenity everywhere
+        // (including bliss_discard_color below, if it copied Bliss). Only
+        // choice_fields/copy_simulation keep reading $catalog's own
+        // 'creativity' effect_key -- those describe what's available when
+        // *playing* Creativity from hand, which $cardId's own printed
+        // identity always governs regardless of what it later copies.
+        $isCreativityCopy = $inPlay && $effectiveCardId !== $cardId;
 
         $choiceFields = CardChoiceSchema::forEffectKey($catalog['effectKey']);
         if ($reactingViewerId !== null) {
@@ -1879,7 +1894,7 @@ final class GameService
 
         return [
             'card_id' => $cardId,
-            'name' => $names[$cardId] ?? $catalog['effectKey'],
+            'name' => $isCreativityCopy ? ($names[$effectiveCardId] ?? $diceValueCatalog['effectKey']) : ($names[$cardId] ?? $catalog['effectKey']),
             'color' => $color,
             // The printed color, ignoring Imagination's "while in play, all
             // moods are the chosen color" override that $color itself
@@ -1891,11 +1906,12 @@ final class GameService
             'value' => $inPlay ? $state->valueOf($cardId) : $catalog['baseValue'],
             'base_value' => $baseValue,
             'alt_value' => $diceValueCatalog['altValue'],
-            'effect_key' => $catalog['effectKey'],
-            'rules_text' => $catalog['rulesText'],
+            'effect_key' => $isCreativityCopy ? $diceValueCatalog['effectKey'] : $catalog['effectKey'],
+            'rules_text' => $isCreativityCopy ? $diceValueCatalog['rulesText'] : $catalog['rulesText'],
             'has_dice_value' => $diceValueCatalog['altValue'] !== null,
             'choice_fields' => $choiceFields,
             'is_playable' => $reactingViewerId === null || $this->plays->isPlayable($state, $reactingViewerId, $cardId),
+            'is_creativity_copy' => $isCreativityCopy,
             'copy_simulation' => ($reactingViewerId !== null && $catalog['effectKey'] === 'creativity')
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,

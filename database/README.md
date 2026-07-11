@@ -53,6 +53,13 @@ on `;`.
   itself, not written by the app. See the migration file's header comment
   for what's deliberately *not* in there (Hurt Feelings, the Love Headliner
   treatment) and why.
+- **Sets** (`0015`): `sets` (a printed product, identified by a short code —
+  e.g. `MSW`/"Mood Swings", the only one that exists today) and `card_sets`,
+  a many-to-many join between `cards` and `sets` rather than a `set_id`
+  column directly on `cards`, since a card is expected to eventually
+  reappear in a later set (a reprint, a crossover product, etc.) even
+  though every card belongs to exactly one Set today. Seeded once by the
+  migration itself, linking all 133 existing cards to `MSW`.
 - **Games** (`0004`): `games`, `game_players`, `game_rounds`,
   `game_round_scores`, `game_cards`, `game_events` — a played match, its
   seated players, its rounds and their scores, where every physical card
