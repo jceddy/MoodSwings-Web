@@ -1386,6 +1386,46 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull(self::findByCardId($inPlay, $courageId)['bliss_discard_color']);
     }
 
+    public function testGetStateExposesEachDiscardPileCardsLastKnownOwnerToDisambiguateIdenticalCards(): void
+    {
+        $u1 = $this->insertUser('discardowner1');
+        $u2 = $this->insertUser('discardowner2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Two different physical Discipline cards (catalog id 9), one
+        // discarded from each player's own hand -- exactly the scenario a
+        // 'duel' game's two independent decks can produce, per Pacifism's
+        // own 'any'-scope target_mood_ids field.
+        $p1DisciplineId = $this->insertGameCard($gameId, 9, 'discard', $p1);
+        $p2DisciplineId = $this->insertGameCard($gameId, 9, 'discard', $p2);
+        // A card the discard pile tracks no owner for at all (e.g. a row
+        // predating this feature, or one whose owner was never set).
+        $ownerlessId = $this->insertGameCard($gameId, 7, 'discard', null);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $discardPile = $this->games->getState($gameId, $u1)['discard_pile'];
+
+        $p1Discipline = self::findByCardId($discardPile, $p1DisciplineId);
+        self::assertSame($p1, $p1Discipline['last_owner_game_player_id']);
+        self::assertSame('discardowner1', $p1Discipline['last_owner_name']);
+
+        $p2Discipline = self::findByCardId($discardPile, $p2DisciplineId);
+        self::assertSame($p2, $p2Discipline['last_owner_game_player_id']);
+        self::assertSame('discardowner2', $p2Discipline['last_owner_name']);
+
+        $ownerless = self::findByCardId($discardPile, $ownerlessId);
+        self::assertNull($ownerless['last_owner_game_player_id']);
+        self::assertNull($ownerless['last_owner_name']);
+    }
+
     public function testRecentEventsLetsAPlayerOtherThanTheActorSeeWhatParanoiaRevealed(): void
     {
         $u1 = $this->insertUser('paranoiaevt1');

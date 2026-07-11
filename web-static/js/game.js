@@ -506,6 +506,11 @@
         document.getElementById('deck-count').textContent = state.deck_count;
         renderList(document.getElementById('discard-list'), { hidden: true }, state.discard_pile, (card) => {
             const li = document.createElement('li');
+            // last_owner_name disambiguates two players' identical catalog
+            // cards both sitting in the shared discard pile at once (see
+            // the 'discard_card' case in fieldOptions() below) -- shown
+            // here too so the plain list itself isn't ambiguous either.
+            const label = cardLabel(card) + (card.last_owner_name ? ' — ' + card.last_owner_name : '');
             // Almost always just informational (a discard-pile card can't
             // normally be played), but Angst/Harmony/Grief's discard-sourced
             // extra play, or Melancholy's "play from the discard pile as
@@ -515,9 +520,9 @@
             // route straight to the same Play/Cancel panel a hand card
             // uses instead of the read-only detail view in that case.
             if (canAct && card.is_playable) {
-                li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
+                li.appendChild(actionButton(label, () => handleHandCardClick(card)));
             } else {
-                li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
+                li.appendChild(actionButton(label, () => openCardDetail(card)));
             }
             return li;
         });
@@ -767,10 +772,15 @@
                     .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
             case 'mood':
+                // Two players' identical catalog cards can both be in play
+                // at once (a 'duel' game gives each player their own deck),
+                // so the bare card name alone can't tell two options apart
+                // -- appending the owner disambiguates them the same way
+                // the in-play list itself already does.
                 if (field.candidate_card_ids) {
                     return currentState.in_play
                         .filter((c) => field.candidate_card_ids.includes(c.card_id))
-                        .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+                        .map((c) => ({ value: c.card_id, label: cardLabel(c) + ' — ' + playerLabelFor(c.owner_game_player_id) }));
                 }
                 return currentState.in_play
                     .filter((c) => c.card_id !== card.card_id)
@@ -780,16 +790,30 @@
                         return true;
                     })
                     .filter((c) => matchesCardFilter(c, field.filter))
-                    .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+                    .map((c) => ({ value: c.card_id, label: cardLabel(c) + ' — ' + playerLabelFor(c.owner_game_player_id) }));
             case 'hand_card':
+                // No owner suffix needed here -- every option is already
+                // the viewer's own hand, and two identical physical copies
+                // there (e.g. one received via Compulsion) are genuinely
+                // interchangeable for any cost/choice that uses this field.
                 return currentState.you.hand
                     .filter((c) => c.card_id !== card.card_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
             case 'discard_card':
+                // Same disambiguation as 'mood' above, using each card's
+                // last-known owner (state.discard_pile[].last_owner_name --
+                // see GameService::getState()) since the shared discard
+                // pile itself has no current owner to read. Matters
+                // functionally, not just cosmetically: Corruption's own
+                // discard_card_ids field bottoms each cycled card onto its
+                // *owner's* deck in a duel.
                 return currentState.discard_pile
                     .filter((c) => matchesCardFilter(c, field.filter))
-                    .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
+                    .map((c) => ({
+                        value: c.card_id,
+                        label: cardLabel(c) + (c.last_owner_name ? ' — ' + c.last_owner_name : ''),
+                    }));
             default:
                 return [];
         }
