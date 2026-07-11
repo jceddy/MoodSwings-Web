@@ -2874,6 +2874,62 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->valueOf(92));
     }
 
+    /**
+     * The exact scenario Glee's/Patience's "you played it this round"
+     * wording has to get right once a mood can change hands mid-round:
+     * Player 1 plays Glee (worth 6, since they just played it); Player 2
+     * plays Chaos, which reshuffles and redeals every in-play mood
+     * (including Glee itself) without re-triggering anyone's
+     * after-playing effect. Glee ends up owned by Player 2, who never
+     * played it themselves this round, so it has to drop back to 0 for
+     * them -- "you" means whoever currently has it, not whoever it was
+     * originally dealt from.
+     */
+    public function testGleeLosesItsPlayedThisRoundBonusWhenChaosGivesItToAnotherPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [92], 2 => [85]]); // Glee, Chaos
+        $state->startRound(1, 1);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 92, new PlayerChoices([])); // Player 1 plays Glee
+        self::assertSame(6, $state->valueOf(92), 'Glee is worth 6 for the player who just played it');
+
+        $state->startTurn(2);
+        // Deterministic with this seed: shuffle([92, 85]) leaves the order
+        // unchanged, and Chaos deals starting with the acting player (2,
+        // then 1) -- so Glee (dealt first) goes to player 2, Chaos itself
+        // (dealt second) goes to player 1.
+        mt_srand(1);
+        $this->plays->playMood($state, 2, 85, new PlayerChoices([])); // Player 2 plays Chaos
+
+        self::assertSame(2, $state->ownerOf(92), 'Chaos must have actually reassigned Glee to player 2 for this test to be meaningful');
+        self::assertSame(0, $state->valueOf(92), "Glee is worth 0 for its new owner, who didn't play it this round");
+    }
+
+    /**
+     * Proves the fix tracks *who* played it (playedByPlayerId), not just
+     * *that* it was played this round -- a naive "clear the tag on any
+     * ownership change" fix would also break this: the bonus has to come
+     * back once the mood returns to whoever actually played it, still
+     * within the same round (e.g. Arrogance's/Recklessness's own "give it
+     * back" reversion).
+     */
+    public function testGleesBonusResumesIfItReturnsToWhoeverPlayedItTheSameRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [92]]);
+        $state->startRound(1, 1);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 92, new PlayerChoices([]));
+        self::assertSame(6, $state->valueOf(92));
+
+        $state->giveInPlayToPlayer(92, 2);
+        self::assertSame(0, $state->valueOf(92), 'a new owner who did not play it this round gets no bonus');
+
+        $state->giveInPlayToPlayer(92, 1);
+        self::assertSame(6, $state->valueOf(92), 'the bonus resumes once it is back with whoever actually played it, still the same round');
+    }
+
     public function testPrideGrantsExtraPlaysToMatchTheChosenPlayersMoodCount(): void
     {
         $state = $this->boardState(hands: [1 => [22, 4, 9], 2 => [5, 32, 55]]);
