@@ -1280,6 +1280,112 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($courage['boosted_by_card_id']); // has no printed dice value at all
     }
 
+    public function testGetStateExposesScoringEffectsForEveryInPlayCardThatAffectsScoring(): void
+    {
+        $u1 = $this->insertUser('scoringfx1');
+        $u2 = $this->insertUser('scoringfx2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $blissId = $this->insertGameCard($gameId, 108, 'in_play', $p1); // Bliss
+        $exhilarationId = $this->insertGameCard($gameId, 89, 'in_play', $p1); // Exhilaration
+        $sneakinessId = $this->insertGameCard($gameId, 51, 'in_play', $p1); // Sneakiness
+        $aweId = $this->insertGameCard($gameId, 107, 'in_play', $p2); // Awe
+        $corruptionId = $this->insertGameCard($gameId, 60, 'in_play', $p2); // Corruption
+        $enthusiasmId = $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm
+        $passionId = $this->insertGameCard($gameId, 97, 'in_play', $p2); // Passion
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $setEffectState = function (int $cardId, array $effectState): void {
+            $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+                ->execute(['effect_state' => json_encode($effectState), 'id' => $cardId]);
+        };
+        $setEffectState($blissId, ['blissColor' => 'red']);
+        $setEffectState($sneakinessId, ['swapScoreWithPlayerId' => $p2]);
+        $setEffectState($aweId, ['skipScoringThisRound' => true, 'oneTimeFirstPlayerOverride' => $p2]);
+        $setEffectState($corruptionId, ['awardsExtraWin' => true]);
+
+        $effects = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
+        $byCardId = [];
+        foreach ($effects as $entry) {
+            $byCardId[$entry['card_id']] = $entry;
+        }
+        self::assertCount(7, $effects);
+
+        self::assertSame($p1, $byCardId[$blissId]['owner_game_player_id']);
+        self::assertStringContainsString("scoringfx1's Bliss scores their red moods two extra times", $byCardId[$blissId]['description']);
+
+        self::assertStringContainsString("scoringfx1's Exhilaration scores all of their moods an extra time.", $byCardId[$exhilarationId]['description']);
+
+        self::assertStringContainsString("scoringfx1's Sneakiness will swap their round score with scoringfx2's.", $byCardId[$sneakinessId]['description']);
+
+        self::assertSame($p2, $byCardId[$aweId]['owner_game_player_id']);
+        self::assertStringContainsString("scoringfx2's Awe means this round won't be scored", $byCardId[$aweId]['description']);
+
+        self::assertStringContainsString("This round's winner will get two wins instead of one (Corruption).", $byCardId[$corruptionId]['description']);
+
+        self::assertStringContainsString('scoringfx1 may score their highest-valued mood an extra time (Enthusiasm).', $byCardId[$enthusiasmId]['description']);
+
+        self::assertStringContainsString("scoringfx2 may score one of an opponent's moods as their own (Passion).", $byCardId[$passionId]['description']);
+    }
+
+    public function testGetStateOmitsCorruptionFromScoringEffectsWhenItDidNotChooseTheDoubleWinMode(): void
+    {
+        $u1 = $this->insertUser('corruptcycle1');
+        $u2 = $this->insertUser('corruptcycle2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        // No effect_state tagged at all -- e.g. Corruption cycled discard
+        // cards instead of choosing double_win, or declined its ability
+        // entirely (both leave no 'awardsExtraWin' tag).
+        $this->insertGameCard($gameId, 60, 'in_play', $p1); // Corruption
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertSame([], $this->games->getState($gameId, $u1)['round']['scoring_effects']);
+    }
+
+    public function testGetStateExposesBlissDiscardColorOnItsOwnInPlayCardOnly(): void
+    {
+        $u1 = $this->insertUser('blisscolor1');
+        $u2 = $this->insertUser('blisscolor2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $blissId = $this->insertGameCard($gameId, 108, 'in_play', $p1); // Bliss
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- an unrelated card
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['blissColor' => 'blue']), 'id' => $blissId]);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+
+        self::assertSame('blue', self::findByCardId($inPlay, $blissId)['bliss_discard_color']);
+        self::assertNull(self::findByCardId($inPlay, $courageId)['bliss_discard_color']);
+    }
+
     public function testRecentEventsLetsAPlayerOtherThanTheActorSeeWhatParanoiaRevealed(): void
     {
         $u1 = $this->insertUser('paranoiaevt1');

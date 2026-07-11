@@ -397,6 +397,18 @@
             affectingEl.hidden = true;
         }
 
+        // bliss_discard_color only exists on an in-play Bliss card (see
+        // GameService::getState()'s in_play mapping) -- reads as
+        // undefined/null, so stays hidden, for every other card.
+        const blissColorEl = document.getElementById('card-detail-bliss-color');
+        if (card.bliss_discard_color) {
+            blissColorEl.textContent = 'Discarded to pay its cost: a ' + card.bliss_discard_color + ' card ' +
+                '— scores ' + card.bliss_discard_color + ' moods two extra times.';
+            blissColorEl.hidden = false;
+        } else {
+            blissColorEl.hidden = true;
+        }
+
         document.getElementById('card-detail-rules').textContent = card.rules_text || 'No ability.';
         cardDetailDialog.showModal();
     }
@@ -467,6 +479,7 @@
         const pendingDecision = state.round && state.round.pending_decision;
         renderPendingDecision(pendingDecision);
         renderScoringPreview(state.round && state.round.scoring_preview);
+        renderScoringEffects(state.round && state.round.scoring_effects);
 
         renderList(
             document.getElementById('in-play-list'),
@@ -522,8 +535,18 @@
                 li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
                 return li;
             }
+            // Whether it's the viewer's own turn or not, a card sitting in
+            // their own hand is never hidden *from them* -- only playing it
+            // is turn-gated. When canAct is false (not their turn, or a
+            // pending decision elsewhere is freezing the round), route to
+            // the same read-only detail view in-play/discard-pile cards
+            // already get instead of disabling the button outright, the
+            // same split the discard-pile list above already makes.
+            if (!canAct) {
+                li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
+                return li;
+            }
             li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
-            li.lastChild.disabled = !canAct;
             // is_playable reflects whether some outstanding play grant this
             // turn actually covers this specific card (e.g. Intimidation's
             // grant only covers the one card it revealed) and, if the card
@@ -532,7 +555,7 @@
             // stays clickable either way, so the card's rules text can
             // still be inspected -- only the panel's own Play button
             // (see updatePlayButtonEnabled()) is actually gated on this.
-            if (canAct && !card.is_playable) {
+            if (!card.is_playable) {
                 li.lastChild.classList.add('not-playable');
                 li.lastChild.title = "This card can't be played right now";
             }
@@ -1147,6 +1170,21 @@
         }
 
         container.hidden = false;
+    }
+
+    // Board-wide, always-visible (not gated on any pending decision, unlike
+    // scoring_preview above) summary of every in-play mood whose ability
+    // changes how this round's scoring will work -- see
+    // GameService::scoringEffectEntries().
+    function renderScoringEffects(effects) {
+        const container = document.getElementById('scoring-effects');
+        const entries = effects || [];
+        container.hidden = entries.length === 0;
+        renderList(document.getElementById('scoring-effects-list'), { hidden: true }, entries, (effect) => {
+            const li = document.createElement('li');
+            li.textContent = effect.description;
+            return li;
+        });
     }
 
     function updateRespondButtonEnabled() {

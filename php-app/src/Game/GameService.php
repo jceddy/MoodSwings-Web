@@ -9,6 +9,7 @@ use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
+use MoodSwings\Rules\MoodInPlay;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
@@ -1301,6 +1302,7 @@ final class GameService
         unset($player);
 
         $names = $this->cardNamesFor($gameId);
+        $playerNames = array_column($players, 'username', 'game_player_id');
 
         if ($roundRow !== false) {
             $currentTurnGamePlayerId = $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null;
@@ -1319,6 +1321,7 @@ final class GameService
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
                 'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId),
                 'scoring_preview' => $this->serializeScoringPreview($state, (int) $roundRow['id']),
+                'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
             ];
             $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
         }
@@ -1328,7 +1331,6 @@ final class GameService
             $state->hand($viewerGamePlayerId)
         );
 
-        $playerNames = array_column($players, 'username', 'game_player_id');
         foreach ($state->moodsInPlay() as $cardId => $mood) {
             $serialized = $this->serializeCard($state, $cardId, $names);
             $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
@@ -1345,6 +1347,12 @@ final class GameService
                 'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
                 'affecting' => $this->affectingEntries($state, $cardId, $names),
                 'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
+                // Only Bliss's own effectState carries anything worth
+                // surfacing this way -- the color of the card discarded to
+                // pay its cost, remembered once at play time (see
+                // BlissEffect::payToPlayCost()) -- so every other card's
+                // detail view just reads this as null/absent.
+                'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
             ];
         }
 
@@ -2221,6 +2229,90 @@ final class GameService
             'scores' => $this->scorer->score($state, $scoringDecisions),
             'sneakiness_swaps' => $swaps,
         ];
+    }
+
+    /**
+     * A board-wide summary of every in-play mood whose ability changes how
+     * this round's scoring will work -- unlike serializeScoringPreview()
+     * above, which only ever appears while an Enthusiasm/Passion decision
+     * is actually outstanding, this is always computed so a player can see
+     * what's coming before the round even ends. None of it is hidden
+     * information: every entry is either a public in-play card or a choice
+     * already made openly when it was played (Sneakiness's target, Awe's
+     * next-first-player, Corruption's mode), so it's identical for every
+     * viewer.
+     *
+     * Sneakiness/Awe/Corruption only appear here for as long as their
+     * one-time round-scoped effectState tag stays set -- see
+     * applyScoreSwaps()/skipScoringAndAdvance()/consumeExtraWinMarker(),
+     * which each clear their own tag once the round it covers actually
+     * scores -- while Bliss/Exhilaration/Enthusiasm/Passion are genuinely
+     * perpetual for as long as the card stays in play. The effect_key
+     * lookup goes through effectiveCardId(), mirroring RoundScorer::
+     * score()'s own check, so a Creativity copy of one of these is picked
+     * up the same way it actually contributes to the score.
+     *
+     * @param array<int, string> $names
+     * @param array<int, string> $playerNames
+     * @return array<int, array{card_id:int, card_name:string, owner_game_player_id:int, description:string}>
+     */
+    private function scoringEffectEntries(BoardState $state, array $names, array $playerNames): array
+    {
+        $entries = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            $ownerName = $playerNames[$mood->ownerId] ?? 'A player';
+            $cardName = $names[$mood->cardId] ?? 'a card';
+
+            $description = match ($effectKey) {
+                'exhilaration' => "{$ownerName}'s {$cardName} scores all of their moods an extra time.",
+                'bliss' => $this->blissScoringDescription($state, $mood, $ownerName, $cardName),
+                'sneakiness' => $this->sneakinessScoringDescription($state, $mood, $ownerName, $cardName, $playerNames),
+                'awe' => $state->effectState($mood->cardId, 'skipScoringThisRound')
+                    ? "{$ownerName}'s {$cardName} means this round won't be scored -- no one wins or loses."
+                    : null,
+                'corruption' => $state->effectState($mood->cardId, 'awardsExtraWin')
+                    ? "This round's winner will get two wins instead of one ({$cardName})."
+                    : null,
+                'enthusiasm' => "{$ownerName} may score their highest-valued mood an extra time ({$cardName}).",
+                'passion' => "{$ownerName} may score one of an opponent's moods as their own ({$cardName}).",
+                default => null,
+            };
+
+            if ($description !== null) {
+                $entries[] = [
+                    'card_id' => $mood->cardId,
+                    'card_name' => $cardName,
+                    'owner_game_player_id' => $mood->ownerId,
+                    'description' => $description,
+                ];
+            }
+        }
+
+        return $entries;
+    }
+
+    private function blissScoringDescription(BoardState $state, MoodInPlay $mood, string $ownerName, string $cardName): ?string
+    {
+        $color = $state->effectState($mood->cardId, 'blissColor');
+        if ($color === null) {
+            return null;
+        }
+
+        return "{$ownerName}'s {$cardName} scores their {$color} moods two extra times (a {$color} card was discarded to it).";
+    }
+
+    /** @param array<int, string> $playerNames */
+    private function sneakinessScoringDescription(BoardState $state, MoodInPlay $mood, string $ownerName, string $cardName, array $playerNames): ?string
+    {
+        $swapWithPlayerId = $state->effectState($mood->cardId, 'swapScoreWithPlayerId');
+        if ($swapWithPlayerId === null) {
+            return null;
+        }
+
+        $opponentName = $playerNames[$swapWithPlayerId] ?? 'a player';
+
+        return "{$ownerName}'s {$cardName} will swap their round score with {$opponentName}'s.";
     }
 
     /**
