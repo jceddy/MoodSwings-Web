@@ -32,9 +32,10 @@ routed to the PHP app).
     friends already checked auto-unchecks the second one and disables the
     rest, and switching back to Traditional re-enables them, so you can't
     submit a Duel request the server will just reject with a 400. The
-    dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power, One
-    of Each Card, in that order, matching `deck_type`'s own three values --
-    see "Deck types" in `php-app/README.md`) has a plain-language
+    dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
+    jceddy's 75 Card, One of Each Card, in that order, matching
+    `deck_type`'s own four values -- see "Deck types" in
+    `php-app/README.md`) has a plain-language
     description shown right below it (`#new-game-deck-type-description`,
     `updateDeckTypeDescription()`) that updates live as the selection
     changes, and once more when the dialog itself opens (`newGameForm.
