@@ -112,10 +112,20 @@
                     <option value="structure">Structure</option>
                     <option value="power">Power</option>
                     <option value="jceddys_75">jceddy's 75 Card</option>
+                    <option value="custom">Custom Decklist</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
             <p id="new-game-deck-type-description"></p>
+
+            <div id="new-game-decklist-fields" hidden>
+                <label>Upload a decklist file
+                    <input type="file" id="new-game-decklist-file" accept=".txt,text/plain">
+                </label>
+                <label>Or paste your decklist
+                    <textarea id="new-game-decklist-text" rows="10"></textarea>
+                </label>
+            </div>
 
             <button type="submit">Create game</button>
         </form>

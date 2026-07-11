@@ -38,8 +38,8 @@ routed to the PHP app).
     rest, and switching back to Traditional re-enables them, so you can't
     submit a Duel request the server will just reject with a 400. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
-    jceddy's 75 Card, One of Each Card, in that order, matching
-    `deck_type`'s own four values -- see "Deck types" in
+    jceddy's 75 Card, Custom Decklist, One of Each Card, in that order,
+    matching `deck_type`'s own five values -- see "Deck types" in
     `php-app/README.md`) has a plain-language
     description shown right below it (`#new-game-deck-type-description`,
     `updateDeckTypeDescription()`) that updates live as the selection
@@ -47,7 +47,17 @@ routed to the PHP app).
     reset()` resets the `<select>` back to its default, Structure, first)
     so the description shown always matches what's actually selected,
     never a stale one left over from the last time the dialog was open.
-    Polls `GET /games` every 4 seconds while the lobby is
+    Selecting Custom Decklist also reveals `#new-game-decklist-fields` -- a
+    file input and a textarea, both ultimately feeding the same
+    `decklist_text` string sent to `POST /games` (uploading a file just
+    reads its text into the textarea via `FileReader`, so the server only
+    ever sees one input shape regardless of which the player used) -- see
+    "Custom decklists" in `php-app/README.md` for the format itself.
+    `updateDeckTypeAvailability()` disables that option (mirroring
+    `updateOpponentSelectionLimit()`'s own proactive approach) whenever
+    Duel is selected, since custom decklists aren't supported for duel
+    games, falling back to Structure if Custom Decklist was already
+    selected when the format switches. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just

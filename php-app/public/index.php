@@ -410,9 +410,10 @@ if ($path === '/games' && $method === 'POST') {
     // caught by the generic PDOException handler and misreported as
     // "opponents could not be found" -- unrelated to the actual cause.
     $deckType = (string) ($body['deck_type'] ?? 'structure');
+    $decklistText = isset($body['decklist_text']) ? (string) $body['decklist_text'] : null;
 
     try {
-        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType);
+        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType, $decklistText);
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);

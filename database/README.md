@@ -71,7 +71,11 @@ on `;`.
   current-state tables). `games` tracks four points in its life --
   `created_at`/`started_at`/`completed_at` from `0004` itself, plus
   `last_move_at` (`0017`, stamped after every successful play/pass/decision
-  response) -- see "Game timestamps" in `php-app/README.md`.
+  response) -- see "Game timestamps" in `php-app/README.md`. `0018` adds
+  `deck_type = 'custom'` plus `custom_deck_name`/`custom_deck_card_ids`,
+  letting a Traditional game's creator supply their own decklist instead of
+  one of the algorithmically-assembled pools -- see "Custom decklists" in
+  `php-app/README.md`.
   
   This covers the data model only — the actual rules engine (resolving
   each card's effect, turn/phase flow, scoring) is future work, built
