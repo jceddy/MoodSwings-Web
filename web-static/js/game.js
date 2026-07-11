@@ -467,11 +467,13 @@
                 const li = document.createElement('li');
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
                 const wentFirst = state.round && state.round.first_game_player_id === player.game_player_id;
+                const hasHurtFeelings = state.round && state.round.hurt_feelings_game_player_id === player.game_player_id;
                 li.textContent = player.username + ' — seat ' + player.seat_order +
                     ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
                     player.hand_count + ' card(s) in hand' +
                     (wentFirst ? ' — went first this round' : '') +
-                    (isTurn ? ' — on turn' : '');
+                    (isTurn ? ' — on turn' : '') +
+                    (hasHurtFeelings ? ' — has Hurt Feelings (2 plays this round)' : '');
                 return li;
             }
         );
