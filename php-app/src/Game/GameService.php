@@ -111,6 +111,9 @@ final class GameService
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
+        if ($format === 'duel' && count($userIds) !== 2) {
+            throw new GameStateException('A duel game must have exactly 2 players');
+        }
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -180,14 +183,37 @@ final class GameService
                 }
             }
 
-            foreach (array_values($cardIds) as $position => $cardId) {
-                $insertCard->execute([
-                    'game_id' => $gameId,
-                    'card_id' => $cardId,
-                    'zone' => 'deck',
-                    'owner' => null,
-                    'deck_position' => $position,
-                ]);
+            // 'duel' splits the same shuffled remainder round-robin into
+            // one deck per player (createGame() already rejected any
+            // 'duel' game without exactly 2 players) instead of the usual
+            // single shared pool -- see BoardState::$hasSeparateDecks.
+            // Deliberately still drawn from one shuffle rather than two
+            // independently-shuffled pools: the catalog's own uq_game_cards_card
+            // constraint means a given card id can only ever sit in one
+            // player's deck at a time anyway, matching how a physical
+            // "Duel" variant splits a single deck rather than duplicating it.
+            if ($game['format'] === 'duel') {
+                $deckPositionByPlayer = array_fill_keys($playerIds, 0);
+                foreach (array_values($cardIds) as $i => $cardId) {
+                    $ownerId = $playerIds[$i % count($playerIds)];
+                    $insertCard->execute([
+                        'game_id' => $gameId,
+                        'card_id' => $cardId,
+                        'zone' => 'deck',
+                        'owner' => $ownerId,
+                        'deck_position' => $deckPositionByPlayer[$ownerId]++,
+                    ]);
+                }
+            } else {
+                foreach (array_values($cardIds) as $position => $cardId) {
+                    $insertCard->execute([
+                        'game_id' => $gameId,
+                        'card_id' => $cardId,
+                        'zone' => 'deck',
+                        'owner' => null,
+                        'deck_position' => $position,
+                    ]);
+                }
             }
 
             $firstPlayerId = $playerIds[array_rand($playerIds)];
@@ -1321,7 +1347,13 @@ final class GameService
             $state->discardPile()
         );
 
-        $response['deck_count'] = count($state->deck());
+        // The viewer's own deck's remaining count -- in a 'duel' game this
+        // is specifically *their* deck, not their opponent's (the two are
+        // never the same number once either player has drawn a different
+        // count of cards); in a shared-deck game every player's own key
+        // resolves to the same single pool anyway, so this is unchanged
+        // from before per-player decks existed.
+        $response['deck_count'] = count($state->deck($viewerGamePlayerId));
         $response['recent_events'] = $this->recentEvents($gameId, $players);
 
         return $response;

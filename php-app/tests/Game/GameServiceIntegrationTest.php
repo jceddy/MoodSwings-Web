@@ -251,6 +251,209 @@ final class GameServiceIntegrationTest extends TestCase
         })($cardIds));
     }
 
+    public function testCreateGameRejectsADuelWithMoreThanTwoPlayers(): void
+    {
+        $u1 = $this->insertUser('dueltoomany1');
+        $u2 = $this->insertUser('dueltoomany2');
+        $u3 = $this->insertUser('dueltoomany3');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'duel');
+    }
+
+    public function testCreateGameRejectsADuelWithFewerThanTwoPlayers(): void
+    {
+        $u1 = $this->insertUser('dueltoofew1');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($u1, [$u1], format: 'duel');
+    }
+
+    public function testCreateGameAcceptsADuelWithExactlyTwoPlayers(): void
+    {
+        $u1 = $this->insertUser('dueltwo1');
+        $u2 = $this->insertUser('dueltwo2');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel');
+
+        self::assertSame('duel', $this->fetchGame($gameId)['format']);
+    }
+
+    public function testStartGameSplitsTheDeckBetweenBothPlayersForADuel(): void
+    {
+        $u1 = $this->insertUser('duelsplit1');
+        $u2 = $this->insertUser('duelsplit2');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'one_of_each');
+        $this->games->startGame($gameId);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $u2);
+
+        $nullOwnerStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'deck' AND owner_game_player_id IS NULL"
+        );
+        $nullOwnerStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $nullOwnerStmt->fetchColumn()); // no shared/ownerless deck rows in a duel
+
+        $deckStmt = $this->pdo->prepare(
+            "SELECT owner_game_player_id, COUNT(*) AS n FROM game_cards WHERE game_id = :game_id AND zone = 'deck' GROUP BY owner_game_player_id"
+        );
+        $deckStmt->execute(['game_id' => $gameId]);
+        $counts = array_column($deckStmt->fetchAll(), 'n', 'owner_game_player_id');
+
+        self::assertArrayHasKey($p1, $counts);
+        self::assertArrayHasKey($p2, $counts);
+        self::assertSame(133 - 5 * 2, (int) $counts[$p1] + (int) $counts[$p2]); // the full pool, minus both starting hands
+        self::assertLessThanOrEqual(1, abs((int) $counts[$p1] - (int) $counts[$p2])); // split as evenly as possible
+    }
+
+    public function testDrawingACardInADuelAlwaysComesFromTheDrawingPlayersOwnDeck(): void
+    {
+        $u1 = $this->insertUser('dueldraw1');
+        $u2 = $this->insertUser('dueldraw2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
+        $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence -- bottomed as Zeal's own cost
+        $this->insertGameCard($gameId, 9, 'deck', $p1, 0); // p1's own deck -- what p1 should draw
+        $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- must NOT be drawn by p1
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 106, ['hand_card_id' => 2]);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertTrue($state->isInHand($p1, 9)); // drew from its own deck
+        self::assertFalse($state->isInHand($p1, 8)); // never touched p2's own deck
+        self::assertSame([8], $state->deck($p2)); // p2's own deck untouched
+        self::assertContains(2, $state->deck($p1)); // Zeal's own hand-card cost bottomed into p1's own deck
+    }
+
+    public function testMoveInPlayToBottomOfDeckInADuelBottomsIntoTheTargetMoodsOwnersDeck(): void
+    {
+        $u1 = $this->insertUser('duelconv1');
+        $u2 = $this->insertUser('duelconv2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 6, 'hand', $p1); // Conviction
+        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline -- p2's own mood, targeted
+        $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- p2's own consolation draw
+        $this->insertGameCard($gameId, 7, 'deck', $p1, 0); // p1's own deck -- must NOT be touched
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 6, ['target_mood_id' => 9]);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertFalse($state->isInPlay(9));
+        self::assertContains(9, $state->deck($p2)); // bottomed into its own owner's (p2's) deck
+        self::assertTrue($state->isInHand($p2, 8)); // p2 -- the targeted mood's own owner -- drew from their own deck
+        self::assertFalse($state->isInHand($p1, 8));
+        self::assertSame([7], $state->deck($p1)); // p1's own deck untouched
+    }
+
+    public function testMoveDiscardToBottomOfDeckInADuelBottomsIntoTheDiscardedCardsOriginalOwnersDeck(): void
+    {
+        $u1 = $this->insertUser('duelcorrupt1');
+        $u2 = $this->insertUser('duelcorrupt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 60, 'hand', $p1); // Corruption
+        $this->insertGameCard($gameId, 9, 'discard', $p2); // originally p2's own card, now in the shared discard pile
+        $this->insertGameCard($gameId, 7, 'deck', $p1, 0); // p1's own deck -- p1 (the acting player) still draws, per Corruption's own text
+        $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- must NOT be touched
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 60, ['mode' => 'cycle', 'discard_card_ids' => [9]]);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertFalse($state->isInDiscardPile(9));
+        self::assertContains(9, $state->deck($p2)); // bottomed into its ORIGINAL owner's (p2's) deck, not p1's (the acting player)
+        self::assertTrue($state->isInHand($p1, 7)); // the acting player still draws, from their own deck
+        self::assertFalse($state->isInHand($p1, 8));
+    }
+
+    public function testGetStateDeckCountShowsTheViewersOwnDeckInADuel(): void
+    {
+        $u1 = $this->insertUser('dueldeckcount1');
+        $u2 = $this->insertUser('dueldeckcount2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 7, 'deck', $p1, 0);
+        $this->insertGameCard($gameId, 8, 'deck', $p1, 1);
+        $this->insertGameCard($gameId, 9, 'deck', $p2, 0);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertSame(2, $this->games->getState($gameId, $u1)['deck_count']);
+        self::assertSame(1, $this->games->getState($gameId, $u2)['deck_count']);
+    }
+
+    public function testRoundEndDrawInADuelPullsFromEachLosersOwnDeck(): void
+    {
+        $u1 = $this->insertUser('duelroundend1');
+        $u2 = $this->insertUser('duelroundend2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4 -- p1 wins the round
+        $this->insertGameCard($gameId, 7, 'deck', $p2, 0); // p2's own deck -- p2's own consolation draw
+        $this->insertGameCard($gameId, 8, 'deck', $p1, 0); // p1's own deck -- must stay untouched (p1 won)
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, 55, []);
+        $this->games->pass($gameId, $p2);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertTrue($state->isInHand($p2, 7)); // p2 (the loser) drew from their own deck
+        self::assertSame([8], $state->deck($p1)); // p1 (the winner) doesn't draw -- own deck untouched
+    }
+
     public function testStartGameRejectsFewerThanTwoPlayers(): void
     {
         $creator = $this->insertUser('solo');

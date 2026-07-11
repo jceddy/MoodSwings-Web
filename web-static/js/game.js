@@ -222,6 +222,35 @@
     const newGameError = document.getElementById('new-game-error');
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
+    // A 'duel' game requires exactly 2 players total (enforced server-side
+    // by GameService::createGame()), so at most 1 opponent may be chosen
+    // for it -- every other format allows up to 3. Re-run on every
+    // checkbox change and every format-dropdown change, so switching to
+    // 'duel' with 2+ opponents already checked un-checks the extras
+    // (keeping the first one) rather than leaving a selection the server
+    // would just reject.
+    function updateOpponentSelectionLimit() {
+        const maxOpponents = document.getElementById('new-game-format').value === 'duel' ? 1 : 3;
+        const boxes = opponentCheckboxes.querySelectorAll('input');
+
+        let checkedCount = 0;
+        for (const box of boxes) {
+            if (box.checked) {
+                checkedCount += 1;
+                if (checkedCount > maxOpponents) {
+                    box.checked = false;
+                    checkedCount -= 1;
+                }
+            }
+        }
+
+        for (const box of boxes) {
+            box.disabled = checkedCount >= maxOpponents && !box.checked;
+        }
+    }
+
+    document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
+
     document.getElementById('new-game-button').addEventListener('click', async () => {
         newGameError.hidden = true;
         newGameForm.reset();
@@ -237,12 +266,7 @@
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.value = friend.friend_id;
-            checkbox.addEventListener('change', () => {
-                const checked = opponentCheckboxes.querySelectorAll('input:checked');
-                for (const box of opponentCheckboxes.querySelectorAll('input')) {
-                    box.disabled = checked.length >= 3 && !box.checked;
-                }
-            });
+            checkbox.addEventListener('change', updateOpponentSelectionLimit);
             label.appendChild(checkbox);
             label.append(' ' + friend.friend_username);
             opponentCheckboxes.appendChild(label);

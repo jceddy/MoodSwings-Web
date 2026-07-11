@@ -23,7 +23,16 @@ routed to the PHP app).
     a fixed per-status lookup table, so any future status value still
     reads reasonably without needing an update here); a "New game" dialog
     picks 1-3 friends (via `GET /friends`) plus a format, then calls
-    `POST /games`. Polls `GET /games` every 4 seconds while the lobby is
+    `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
+    can be checked at once to match the format's actual player count --
+    3 normally, but only 1 for Duel, since a duel is exactly 2 players and
+    the server rejects anything else (see "Duel: separate per-player
+    decks" in `php-app/README.md`). It runs on every checkbox's own
+    `change` as well as the format `<select>`'s: switching to Duel with 2
+    friends already checked auto-unchecks the second one and disables the
+    rest, and switching back to Traditional re-enables them, so you can't
+    submit a Duel request the server will just reject with a 400. Polls
+    `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just

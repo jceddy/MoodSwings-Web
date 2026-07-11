@@ -13,8 +13,13 @@ final class BoardStateTest extends TestCase
 {
     use CatalogFixture;
 
-    private function boardState(array $hands = [], array $deck = [], array $discard = []): BoardState
-    {
+    private function boardState(
+        array $hands = [],
+        array $deck = [],
+        array $discard = [],
+        bool $hasSeparateDecks = false,
+        array $discardOwners = [],
+    ): BoardState {
         return new BoardState(
             $this->sampleCatalog(),
             DefaultEffectRegistry::build(),
@@ -22,6 +27,8 @@ final class BoardStateTest extends TestCase
             $hands,
             $deck,
             $discard,
+            $hasSeparateDecks,
+            $discardOwners,
         );
     }
 
@@ -441,6 +448,130 @@ final class BoardStateTest extends TestCase
 
         self::assertNotNull($state->consumeGrantUsed());
         self::assertNull($state->consumeGrantUsed());
+    }
+
+    public function testDeckWithNoPlayerIdReturnsTheSharedDeckWhenDecksAreNotSeparate(): void
+    {
+        $state = $this->boardState(deck: [10, 20, 30]);
+
+        self::assertSame([10, 20, 30], $state->deck());
+        self::assertSame([10, 20, 30], $state->deck(1)); // any player resolves to the same shared pool
+        self::assertSame([10, 20, 30], $state->deck(2));
+    }
+
+    public function testDeckWithNoPlayerIdThrowsWhenDecksAreSeparate(): void
+    {
+        $state = $this->boardState(deck: [1 => [10], 2 => [20]], hasSeparateDecks: true);
+
+        $this->expectException(InvalidArgumentException::class);
+        $state->deck();
+    }
+
+    public function testDrawCardPullsFromThatPlayersOwnDeckWhenDecksAreSeparate(): void
+    {
+        $state = $this->boardState(deck: [1 => [10], 2 => [20]], hasSeparateDecks: true);
+
+        self::assertSame(10, $state->drawCard(1));
+        self::assertSame(20, $state->drawCard(2));
+        self::assertTrue($state->isInHand(1, 10));
+        self::assertTrue($state->isInHand(2, 20));
+        self::assertFalse($state->isInHand(1, 20));
+        self::assertFalse($state->isInHand(2, 10));
+    }
+
+    public function testDrawCardFromAnEmptyOwnDeckReturnsNullEvenWhenAnotherPlayersDeckHasCards(): void
+    {
+        $state = $this->boardState(deck: [1 => [], 2 => [20]], hasSeparateDecks: true);
+
+        self::assertNull($state->drawCard(1));
+        self::assertFalse($state->isInHand(1, 20));
+    }
+
+    public function testMoveHandToBottomOfDeckBottomsIntoThatPlayersOwnDeckWhenSeparate(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]], deck: [1 => [], 2 => []], hasSeparateDecks: true);
+
+        $state->moveHandToBottomOfDeck(1, 3);
+
+        self::assertSame([3], $state->deck(1));
+        self::assertSame([], $state->deck(2));
+    }
+
+    public function testMoveInPlayToBottomOfDeckBottomsIntoTheMoodsOwnersDeckWhenSeparate(): void
+    {
+        $state = $this->boardState(hands: [2 => [3]], deck: [1 => [], 2 => []], hasSeparateDecks: true);
+        $state->moveHandToInPlay(2, 3);
+
+        $state->moveInPlayToBottomOfDeck(3);
+
+        self::assertSame([3], $state->deck(2));
+        self::assertSame([], $state->deck(1));
+    }
+
+    /**
+     * Per the ruling this codebase follows: the discard pile itself stays
+     * one shared pool even in a 'duel' game, but a card leaving it for the
+     * bottom of a deck still goes to its own last owner's deck -- never
+     * whichever player happened to be playing Corruption/Altruism.
+     */
+    public function testMoveDiscardToBottomOfDeckBottomsIntoTheDiscardedCardsOwnersDeckNotTheActingPlayers(): void
+    {
+        $state = $this->boardState(hands: [2 => [3]], deck: [1 => [], 2 => []], hasSeparateDecks: true);
+        $state->moveHandToDiscard(2, 3);
+
+        $state->moveDiscardToBottomOfDeck(3); // no acting-player parameter exists at all
+
+        self::assertSame([3], $state->deck(2));
+        self::assertSame([], $state->deck(1));
+    }
+
+    public function testDiscardPileStaysASingleSharedPoolEvenWhenDecksAreSeparate(): void
+    {
+        $state = $this->boardState(hands: [1 => [3], 2 => [9]], hasSeparateDecks: true);
+
+        $state->moveHandToDiscard(1, 3);
+        $state->moveHandToDiscard(2, 9);
+
+        self::assertSame([3, 9], $state->discardPile());
+    }
+
+    public function testDiscardOwnerOfTracksAndClearsOnceTheCardLeavesTheDiscardPile(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]], hasSeparateDecks: true);
+        $state->moveHandToDiscard(1, 3);
+
+        self::assertSame(1, $state->discardOwnerOf(3));
+
+        $state->moveDiscardToHand(1, 3);
+
+        self::assertNull($state->discardOwnerOf(3));
+    }
+
+    public function testDiscardOwnerOfReflectsTheMoodsOwnerWhenDiscardedFromPlay(): void
+    {
+        $state = $this->boardState(hands: [2 => [3]], hasSeparateDecks: true);
+        $state->moveHandToInPlay(2, 3);
+        $state->giveInPlayToPlayer(3, 1); // now owned by 1, not 2
+
+        $state->moveInPlayToDiscard(3);
+
+        self::assertSame(1, $state->discardOwnerOf(3));
+    }
+
+    public function testHasSeparateDecksAndDecksAccessorsReflectASeparateGame(): void
+    {
+        $state = $this->boardState(deck: [1 => [10], 2 => [20]], hasSeparateDecks: true);
+
+        self::assertTrue($state->hasSeparateDecks());
+        self::assertSame([1 => [10], 2 => [20]], $state->decks());
+    }
+
+    public function testHasSeparateDecksAndDecksAccessorsReflectASharedGame(): void
+    {
+        $state = $this->boardState(deck: [10, 20]);
+
+        self::assertFalse($state->hasSeparateDecks());
+        self::assertSame([BoardState::SHARED_DECK_KEY => [10, 20]], $state->decks());
     }
 
     public function testCatalogRowThrowsForUnknownCard(): void

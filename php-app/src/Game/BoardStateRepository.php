@@ -32,6 +32,10 @@ final class BoardStateRepository
     {
         $pdo = Connection::get();
 
+        $formatStmt = $pdo->prepare('SELECT format FROM games WHERE id = :game_id');
+        $formatStmt->execute(['game_id' => $gameId]);
+        $hasSeparateDecks = $formatStmt->fetchColumn() === 'duel';
+
         $playersStmt = $pdo->prepare(
             'SELECT id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
         );
@@ -53,23 +57,40 @@ final class BoardStateRepository
         }
 
         $hands = [];
-        $deckByPosition = [];
+        $deckByOwnerPosition = [];
         $discard = [];
+        $discardOwners = [];
         $inPlayRows = [];
 
         foreach ($gameCards as $row) {
             $cardId = (int) $row['card_id'];
-            match ($row['zone']) {
-                'hand' => $hands[(int) $row['owner_game_player_id']][] = $cardId,
-                'deck' => $deckByPosition[(int) $row['deck_position']] = $cardId,
-                'discard' => $discard[] = $cardId,
-                'in_play' => $inPlayRows[] = $row,
-            };
+            $ownerKey = $row['owner_game_player_id'] !== null ? (int) $row['owner_game_player_id'] : BoardState::SHARED_DECK_KEY;
+
+            if ($row['zone'] === 'hand') {
+                $hands[$ownerKey][] = $cardId;
+            } elseif ($row['zone'] === 'deck') {
+                $deckByOwnerPosition[$ownerKey][(int) $row['deck_position']] = $cardId;
+            } elseif ($row['zone'] === 'discard') {
+                // A discard-pile row's own owner_game_player_id (if any --
+                // see BoardState::$discardOwners) is tracked separately
+                // from the pile itself, which always stays one shared list
+                // regardless of $hasSeparateDecks.
+                $discard[] = $cardId;
+                if ($row['owner_game_player_id'] !== null) {
+                    $discardOwners[$cardId] = (int) $row['owner_game_player_id'];
+                }
+            } else {
+                $inPlayRows[] = $row;
+            }
         }
 
-        ksort($deckByPosition);
+        foreach ($deckByOwnerPosition as $ownerKey => $positions) {
+            ksort($positions);
+            $deckByOwnerPosition[$ownerKey] = array_values($positions);
+        }
+        $deck = $hasSeparateDecks ? $deckByOwnerPosition : ($deckByOwnerPosition[BoardState::SHARED_DECK_KEY] ?? []);
 
-        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, array_values($deckByPosition), $discard);
+        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners);
 
         foreach ($inPlayRows as $row) {
             $sourceCardId = $row['suppression_source_game_card_id'] !== null
@@ -161,12 +182,15 @@ final class BoardStateRepository
             }
         }
 
-        foreach ($state->deck() as $position => $cardId) {
-            $write($cardId, 'deck', null, $position, null, false, null, []);
+        foreach ($state->decks() as $deckKey => $deckCards) {
+            $owner = $deckKey === BoardState::SHARED_DECK_KEY ? null : $deckKey;
+            foreach ($deckCards as $position => $cardId) {
+                $write($cardId, 'deck', $owner, $position, null, false, null, []);
+            }
         }
 
         foreach ($state->discardPile() as $cardId) {
-            $write($cardId, 'discard', null, null, null, false, null, []);
+            $write($cardId, 'discard', $state->discardOwnerOf($cardId), null, null, false, null, []);
         }
 
         /** @var array<int, int> cardId => its suppression source's cardId */
