@@ -54,7 +54,7 @@ instead.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `standard` -- see below). `400` if that's more than 4 players or an opponent id doesn't exist. Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `standard` -- see below). `400` if that's more than 4 players or an opponent id doesn't exist, or a `duel` game doesn't seat *exactly* 2 players total -- see "Duel: separate per-player decks" below. Returns `{"game_id"}`. |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in, most recently active first, each with `players` (`user_id`/`username`/`seat_order`) and `is_your_turn`. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
@@ -920,6 +920,103 @@ JSON for rendering -- hiding opponents' hands (only `hand_count` is
 exposed) and the deck's order (only `deck_count` is), while leaving the
 discard pile fully visible since it's public information in the physical
 game too.
+
+### Duel: separate per-player decks
+
+`format: 'duel'` is the one physical rules difference `format` actually
+makes (every other format value is cosmetic, just echoed back and
+displayed as a label). In a duel, each of the game's exactly-2 players
+draws from -- and bottoms cards onto -- their *own* deck rather than a
+single shared one; `createGame()` rejects any `duel` game that doesn't
+seat exactly 2 total players (`GameStateException`, "A duel game must have
+exactly 2 players") since the split-deck model below only makes sense for
+two.
+
+- `BoardState` generalizes its single flat deck into `array<int, int[]>
+  $decks` keyed by a "deck key": either `BoardState::SHARED_DECK_KEY` (the
+  common case for every non-duel format -- a sentinel `0`, safe because
+  `game_players.id` auto-increments from 1) or each seated player's own
+  `game_player_id` for a duel. A `hasSeparateDecks` constructor flag picks
+  which; `deck(?int $playerId = null)` takes an optional viewer id --
+  omitting it works for shared-deck games (any id resolves to the same
+  pool) but throws if omitted for a duel, since there's no single "the
+  deck" to hand back without knowing whose. `drawCard($playerId)` always
+  pulls from that specific player's own deck in a duel, so a player can
+  never draw from -- or exhaust -- their opponent's.
+- Cards that go to the bottom of a deck always go to their *owner's* deck,
+  not the acting player's: `moveHandToBottomOfDeck($playerId, $cardId)`
+  bottoms into that player's own deck (the hand it came from);
+  `moveInPlayToBottomOfDeck($cardId)` bottoms into the in-play mood's
+  *current* owner's deck (Conviction, Hate); `moveDiscardToBottomOfDeck($cardId)`
+  bottoms into the discarded card's *original* owner's deck (Altruism,
+  Corruption), tracked via a `$discardOwners` map (`cardId => last-known
+  owner`) populated whenever a card enters the discard pile and cleared the
+  moment it leaves, however it leaves. The discard pile itself stays a
+  single shared, unordered pool in every format, duel included -- only the
+  *routing* of a card bottomed *from* it is per-owner, not the pile's
+  contents or visibility. None of the 8 effect classes that call these
+  methods (Altruism, Conviction, Corruption, Doubt, Hate, Paranoia,
+  Rationalization, Zeal) needed any change -- every call site already
+  passed exactly the information `BoardState` needs to route correctly.
+- `startGame()` gives each duel player their own *complete* deck, built and
+  shuffled completely independently -- the same `buildStandardDeckCardIds()`
+  (a random 45-card draw for `deck_type: 'standard'`) or `range(1,
+  TOTAL_CARDS)` (the full 133-card pool for `'one_of_each'`) a single-player
+  game uses, called once per player rather than once for the whole table --
+  with each player's starting hand dealt from their own pool, not a shared
+  one. This means the *same* catalog card can legitimately end up in both
+  players' pools at once (certain for `'one_of_each'`, likely for
+  `'standard'`) -- see "Card identity: catalog id vs. per-game instance id"
+  below for how the engine tells two such cards apart.
+- Persistence reuses `game_cards.owner_game_player_id` (already nullable,
+  already present) for both zones: `null` for a shared deck/discard row,
+  the owning player's `game_player_id` for a duel deck row or any
+  known-owner discard row. `BoardStateRepository::load()` looks up the
+  game's `format` up front to decide whether to bucket loaded `deck` rows
+  by owner or into one shared pool -- deliberately not inferred from the
+  rows themselves, since an empty deck at some point in the game would
+  make that inference ambiguous.
+- `GameService::getState()`'s `deck_count` is the *viewing* player's own
+  deck size in a duel (it differs per player) and the shared pool's size
+  otherwise, unchanged from before.
+
+### Card identity: catalog id vs. per-game instance id
+
+Every other game format keeps `cards.id` (1-133, "the catalog id") unique
+per game -- a shared or split-shared deck can never contain the same
+printed card twice, so catalog id alone was always enough to identify a
+specific physical card within a game. Duel's independent-per-player decks
+break that: since each player draws from their *own* full pool, the same
+catalog card can now exist twice in one game simultaneously (one per
+player), and `game_cards` no longer enforces otherwise (its old `UNIQUE KEY
+uq_game_cards_card (game_id, card_id)` was dropped in migration `0013` in
+favor of a plain index).
+
+Card identity throughout the whole system -- `BoardState`'s hands/decks/
+discard pile/in-play zone, every choice a player submits (`hand_card_id`,
+`target_mood_id`, `discard_card_ids`, Creativity's `copy_card_id`, etc.),
+and every `card_id` field the API returns -- is therefore `game_cards.id`
+(the row's own surrogate primary key, which already existed solely to
+resolve `suppression_source_game_card_id`'s self-reference before this),
+not the catalog id. `copied_card_id` (Creativity "playing as a copy of a
+mood currently in play") is a per-game instance id for the same reason --
+it names a specific physical card on the board, not a printed card in the
+abstract.
+
+`BoardState::catalogRow(int $cardId)` is the *only* place in the whole
+Rules engine that ever reads catalog data (name/color/base value/rules
+text) directly -- no `Effects/*.php` class touches a catalog array itself,
+every one of them goes through `catalogRow()`/`valueOf()`/`colorOf()` --
+which is what let this become a one-method change: a new `$catalogCardIdFor`
+constructor param (`array<int, int>`, instance id => catalog id) that
+`catalogRow()` consults, falling back to treating `$cardId` as already
+being a catalog id when no mapping entry exists. That fallback means every
+game/test where instance and catalog id never diverge (i.e. everything
+except a duel with a genuinely duplicated card) needs no mapping at all --
+confirmed by the ~350 pure in-memory Rules-layer tests, none of which
+supply `$catalogCardIdFor`, all of which kept passing unmodified.
+`BoardStateRepository::load()` builds the real mapping for a live game from
+each loaded `game_cards` row's own `id`/`card_id` pair.
 
 ## Tests
 

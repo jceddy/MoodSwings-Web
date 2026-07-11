@@ -21,16 +21,52 @@ use InvalidArgumentException;
  */
 final class BoardState
 {
-    /** @var array<int, int[]> playerId => hand card ids, in no particular order */
+    /** @var array<int, int[]> playerId => hand card ids (per-game instance ids, not catalog ids -- see BoardState's own $catalogCardIdFor constructor param docblock), in no particular order */
     private array $hands;
 
-    /** @var int[] deck card ids; index 0 is the top of the deck */
-    private array $deck;
+    /**
+     * The 'no specific owner' deck key -- always used for zone='deck'
+     * game_cards rows in a shared-deck game (owner_game_player_id NULL in
+     * the DB), and as $decks' only key whenever $hasSeparateDecks is
+     * false. Safe as a sentinel since game_players.id is an
+     * AUTO_INCREMENT PK starting at 1, so no real player id is ever 0.
+     */
+    public const SHARED_DECK_KEY = 0;
 
-    /** @var int[] discard pile card ids; an unordered set -- no card in the game cares about discard-pile order */
+    /**
+     * @var array<int, int[]> deck key => card ids (per-game instance ids),
+     * index 0 is the top of that deck. Keyed by SHARED_DECK_KEY alone (a
+     * single entry) for an ordinary game with one shared pool; keyed by
+     * each seated player's own game_player_id (one entry per player) for a
+     * 'duel' game, where every player draws only from -- and bottoms cards
+     * only onto -- their own deck, independently built by the same
+     * deck-building rules as a single-player deck (so the same catalog
+     * card can appear in both players' decks at once -- see
+     * $catalogCardIdFor). See $hasSeparateDecks and deckKeyFor().
+     */
+    private array $decks;
+
+    /** @var int[] discard pile card ids (per-game instance ids); an unordered set -- no card in the game cares about discard-pile order. Always a single shared pool, even in a 'duel' game -- see $discardOwners. Since instance ids are unique per physical card even when two players' catalog cards match, this can now legitimately contain two entries for the same printed card without ambiguity. */
     private array $discard;
 
-    /** @var array<int, MoodInPlay> cardId => the mood currently in play */
+    /**
+     * @var array<int, int> cardId (instance id) => the player this
+     * discard-pile card most recently belonged to (whoever's hand it was
+     * discarded from, or whoever owned it in play) -- tracked purely so a
+     * card later put back on the bottom of the deck (Altruism/Corruption)
+     * can be returned to that same player's own deck in a 'duel' game, per
+     * $hasSeparateDecks, without the discard pile itself needing to become
+     * per-player too (it stays a single shared, ownerless-looking pool --
+     * discardPile()/isInDiscardPile() never expose this map). Cleared the
+     * moment a card actually leaves the discard pile (see
+     * removeFromDiscard()), so it never lingers stale once the card's true
+     * owner could change again. Keyed by instance id rather than catalog
+     * id specifically so two different players' identical printed cards in
+     * the pile at once never collide.
+     */
+    private array $discardOwners;
+
+    /** @var array<int, MoodInPlay> cardId (instance id) => the mood currently in play. Keyed by instance id rather than catalog id so two players' identical printed cards can both be in play simultaneously without one clobbering the other. */
     private array $moodsInPlay = [];
 
     private ?int $currentPlayerId = null;
@@ -154,11 +190,36 @@ final class BoardState
     private ?array $pendingGrantUsed = null;
 
     /**
-     * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog card id => catalog row
+     * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog catalog card id (cards.id) => catalog row
      * @param int[] $playerOrder seat order (turn order) for this game
      * @param array<int, int[]> $hands playerId => hand card ids
-     * @param int[] $deck card ids, index 0 = top
+     * @param int[]|array<int, int[]> $deck a flat card-id list (index 0 =
+     *     top) for a single shared deck -- the common case, $hasSeparateDecks
+     *     false -- or, when $hasSeparateDecks is true, a map of each
+     *     seated player's own game_player_id to their own flat card-id
+     *     list (see $decks).
      * @param int[] $discard card ids
+     * @param bool $hasSeparateDecks true for a 'duel' game, where every
+     *     player draws from (and bottoms cards onto) their own deck
+     *     instead of one shared pool -- see deckKeyFor().
+     * @param array<int, int> $discardOwners cardId => last-known owner,
+     *     only ever consulted when $hasSeparateDecks is true -- see
+     *     $discardOwners' own docblock.
+     * @param array<int, int> $catalogCardIdFor every $cardId used
+     *     throughout this class is really a per-game *instance* id
+     *     (game_cards.id once loaded from a real game -- see
+     *     BoardStateRepository), not a catalog id: since a 'duel' game
+     *     gives each player their own complete deck, the same catalog card
+     *     can legitimately exist twice in one game (once per player), so
+     *     catalog id alone can no longer identify a specific physical
+     *     card. This map resolves an instance id back to the catalog id
+     *     whose printed data (name/color/value/rules text) it should use
+     *     -- see catalogRow(). Left empty by every pure in-memory test
+     *     that never supplies it: catalogRow() then falls back to treating
+     *     $cardId as already being a catalog id, exactly preserving
+     *     behavior for any game/test where instance and catalog id
+     *     coincide (i.e. everything except a duel with a genuinely
+     *     duplicated catalog card).
      */
     public function __construct(
         private readonly array $catalog,
@@ -167,16 +228,21 @@ final class BoardState
         array $hands = [],
         array $deck = [],
         array $discard = [],
+        private readonly bool $hasSeparateDecks = false,
+        array $discardOwners = [],
+        private readonly array $catalogCardIdFor = [],
     ) {
         $this->hands = $hands;
-        $this->deck = $deck;
+        $this->decks = $hasSeparateDecks ? $deck : [self::SHARED_DECK_KEY => $deck];
         $this->discard = $discard;
+        $this->discardOwners = $discardOwners;
     }
 
     /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
     public function catalogRow(int $cardId): array
     {
-        return $this->catalog[$cardId] ?? throw new InvalidArgumentException("Unknown card id {$cardId}");
+        $catalogId = $this->catalogCardIdFor[$cardId] ?? $cardId;
+        return $this->catalog[$catalogId] ?? throw new InvalidArgumentException("Unknown card id {$catalogId}");
     }
 
     /** @return int[] */
@@ -231,10 +297,57 @@ final class BoardState
         return in_array($cardId, $this->discard, true);
     }
 
-    /** @return int[] */
-    public function deck(): array
+    /**
+     * $playerId is required whenever $hasSeparateDecks (there's no single
+     * "the deck" to hand back without knowing whose); omit it only for a
+     * shared-deck game, where every player's own key resolves to the same
+     * pool anyway. Throws if omitted for a 'duel' game, rather than
+     * silently guessing which player's deck was meant.
+     *
+     * @return int[] card ids, index 0 = top of that deck
+     */
+    public function deck(?int $playerId = null): array
     {
-        return $this->deck;
+        if ($playerId === null && $this->hasSeparateDecks) {
+            throw new InvalidArgumentException('A player id is required to read a specific deck in a game with separate decks');
+        }
+
+        $key = $playerId !== null ? $this->deckKeyFor($playerId) : self::SHARED_DECK_KEY;
+
+        return $this->decks[$key] ?? [];
+    }
+
+    /**
+     * Every deck, keyed the same way $decks itself is -- SHARED_DECK_KEY
+     * alone for a shared-deck game, or each seated player's own
+     * game_player_id for a 'duel' game. Exists purely for
+     * BoardStateRepository::save() to persist every deck regardless of
+     * how many there are; ordinary rules-engine code should use deck()/
+     * drawCard()/the moveXToBottomOfDeck() family instead, which already
+     * resolve the right one for a given player.
+     *
+     * @return array<int, int[]>
+     */
+    public function decks(): array
+    {
+        return $this->decks;
+    }
+
+    public function hasSeparateDecks(): bool
+    {
+        return $this->hasSeparateDecks;
+    }
+
+    /** The last-known owner of a card currently sitting in the discard pile, if tracked (see $discardOwners) -- only meaningful, and only ever consulted, in a 'duel' game. */
+    public function discardOwnerOf(int $cardId): ?int
+    {
+        return $this->discardOwners[$cardId] ?? null;
+    }
+
+    /** Which $decks key $playerId's own deck lives under -- their own game_player_id in a 'duel' game, or the single shared key otherwise. */
+    private function deckKeyFor(int $playerId): int
+    {
+        return $this->hasSeparateDecks ? $playerId : self::SHARED_DECK_KEY;
     }
 
     private function moodInPlay(int $cardId): MoodInPlay
@@ -255,6 +368,9 @@ final class BoardState
     {
         $this->removeFromDiscard($cardId);
         $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'discard'));
+        // The card just became $playerId's own in-play mood, no longer a
+        // discard-pile card with a "last owner" of its own -- see
+        // removeFromDiscard(), which already cleared any stale entry.
     }
 
     /**
@@ -304,7 +420,7 @@ final class BoardState
 
     public function moveInPlayToDiscard(int $cardId): void
     {
-        $this->moodInPlay($cardId);
+        $this->discardOwners[$cardId] = $this->moodInPlay($cardId)->ownerId;
         unset($this->moodsInPlay[$cardId]);
         $this->discard[] = $cardId;
         $this->discardedThisRound = true;
@@ -333,9 +449,13 @@ final class BoardState
 
     public function moveInPlayToBottomOfDeck(int $cardId): void
     {
-        $this->moodInPlay($cardId);
+        // Read before unset() -- the mood's own current owner is whose
+        // deck this bottoms onto in a 'duel' game (see deckKeyFor()); no
+        // separate parameter needed since an in-play mood's owner is
+        // already always tracked.
+        $ownerId = $this->moodInPlay($cardId)->ownerId;
         unset($this->moodsInPlay[$cardId]);
-        $this->deck[] = $cardId;
+        $this->decks[$this->deckKeyFor($ownerId)][] = $cardId;
         $this->recordMove($cardId, 'play', 'deck');
         $this->cascadeMoodLeavingPlay($cardId);
     }
@@ -369,6 +489,7 @@ final class BoardState
     {
         $this->removeFromHand($playerId, $cardId);
         $this->discard[] = $cardId;
+        $this->discardOwners[$cardId] = $playerId;
         $this->discardedThisRound = true;
         $this->recordMove($cardId, 'hand', 'discard', fromPlayerId: $playerId);
     }
@@ -376,7 +497,7 @@ final class BoardState
     public function moveHandToBottomOfDeck(int $playerId, int $cardId): void
     {
         $this->removeFromHand($playerId, $cardId);
-        $this->deck[] = $cardId;
+        $this->decks[$this->deckKeyFor($playerId)][] = $cardId;
         $this->recordMove($cardId, 'hand', 'deck', fromPlayerId: $playerId);
     }
 
@@ -387,11 +508,22 @@ final class BoardState
         $this->recordMove($cardId, 'discard', 'hand', toPlayerId: $playerId);
     }
 
-    /** Altruism: shuffles the remainder of the discard pile onto the bottom of the deck. */
+    /**
+     * Altruism/Corruption: puts a discard-pile card on the bottom of the
+     * deck. In a 'duel' game this goes to that specific card's own
+     * $discardOwners entry -- the same player whose deck it would already
+     * be sitting in if the discard pile were per-player too, per the
+     * ruling this codebase follows (the discard pile itself stays a
+     * single shared pool; only where a card lands once it leaves it is
+     * player-scoped) -- never the acting player's deck, which is why
+     * neither caller passes a player id here at all.
+     */
     public function moveDiscardToBottomOfDeck(int $cardId): void
     {
+        $ownerId = $this->discardOwners[$cardId] ?? null;
         $this->removeFromDiscard($cardId);
-        $this->deck[] = $cardId;
+        $key = $ownerId !== null ? $this->deckKeyFor($ownerId) : self::SHARED_DECK_KEY;
+        $this->decks[$key][] = $cardId;
         $this->recordMove($cardId, 'discard', 'deck');
     }
 
@@ -412,7 +544,8 @@ final class BoardState
 
     public function drawCard(int $playerId): ?int
     {
-        $cardId = array_shift($this->deck);
+        $key = $this->deckKeyFor($playerId);
+        $cardId = isset($this->decks[$key]) ? array_shift($this->decks[$key]) : null;
         if ($cardId === null) {
             return null;
         }
@@ -456,6 +589,7 @@ final class BoardState
         }
         unset($this->discard[$index]);
         $this->discard = array_values($this->discard);
+        unset($this->discardOwners[$cardId]);
     }
 
     // --- persistence hydration ---

@@ -16,8 +16,10 @@ use PDO;
  * calls load() before resolving a play and save() after, so BoardState
  * itself never has to know it's backed by a database at all.
  *
- * save() always rewrites every one of a game's game_cards rows rather than
- * diffing what changed. With only 133 cards per game this is cheap, and it
+ * save() always rewrites every one of a game's game_cards rows (a plain
+ * UPDATE by each row's own id -- see save()'s own docblock) rather than
+ * diffing what changed. With well under a few hundred cards per game (up to
+ * 266 for a duel's two full 'one_of_each' decks) this is cheap, and it
  * sidesteps having to track which rows a given card effect touched --
  * BoardState itself never records that either, so a diff would mean
  * comparing full before/after state anyway.
@@ -31,6 +33,10 @@ final class BoardStateRepository
     public function load(int $gameId): BoardState
     {
         $pdo = Connection::get();
+
+        $formatStmt = $pdo->prepare('SELECT format FROM games WHERE id = :game_id');
+        $formatStmt->execute(['game_id' => $gameId]);
+        $hasSeparateDecks = $formatStmt->fetchColumn() === 'duel';
 
         $playersStmt = $pdo->prepare(
             'SELECT id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
@@ -47,42 +53,61 @@ final class BoardStateRepository
         $cardsStmt->execute(['game_id' => $gameId]);
         $gameCards = $cardsStmt->fetchAll();
 
-        $cardIdBySurrogateId = [];
+        // Every $cardId flowing through BoardState is really this card's
+        // own per-game instance id (game_cards.id), not its catalog id --
+        // a 'duel' game gives each player their own complete deck, so the
+        // same catalog card can exist twice in one game. This map lets
+        // BoardState::catalogRow() translate an instance id back to the
+        // catalog row (name/color/value/rules text) it should use.
+        $catalogCardIdFor = [];
         foreach ($gameCards as $row) {
-            $cardIdBySurrogateId[(int) $row['id']] = (int) $row['card_id'];
+            $catalogCardIdFor[(int) $row['id']] = (int) $row['card_id'];
         }
 
         $hands = [];
-        $deckByPosition = [];
+        $deckByOwnerPosition = [];
         $discard = [];
+        $discardOwners = [];
         $inPlayRows = [];
 
         foreach ($gameCards as $row) {
-            $cardId = (int) $row['card_id'];
-            match ($row['zone']) {
-                'hand' => $hands[(int) $row['owner_game_player_id']][] = $cardId,
-                'deck' => $deckByPosition[(int) $row['deck_position']] = $cardId,
-                'discard' => $discard[] = $cardId,
-                'in_play' => $inPlayRows[] = $row,
-            };
+            $cardId = (int) $row['id'];
+            $ownerKey = $row['owner_game_player_id'] !== null ? (int) $row['owner_game_player_id'] : BoardState::SHARED_DECK_KEY;
+
+            if ($row['zone'] === 'hand') {
+                $hands[$ownerKey][] = $cardId;
+            } elseif ($row['zone'] === 'deck') {
+                $deckByOwnerPosition[$ownerKey][(int) $row['deck_position']] = $cardId;
+            } elseif ($row['zone'] === 'discard') {
+                // A discard-pile row's own owner_game_player_id (if any --
+                // see BoardState::$discardOwners) is tracked separately
+                // from the pile itself, which always stays one shared list
+                // regardless of $hasSeparateDecks.
+                $discard[] = $cardId;
+                if ($row['owner_game_player_id'] !== null) {
+                    $discardOwners[$cardId] = (int) $row['owner_game_player_id'];
+                }
+            } else {
+                $inPlayRows[] = $row;
+            }
         }
 
-        ksort($deckByPosition);
+        foreach ($deckByOwnerPosition as $ownerKey => $positions) {
+            ksort($positions);
+            $deckByOwnerPosition[$ownerKey] = array_values($positions);
+        }
+        $deck = $hasSeparateDecks ? $deckByOwnerPosition : ($deckByOwnerPosition[BoardState::SHARED_DECK_KEY] ?? []);
 
-        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, array_values($deckByPosition), $discard);
+        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor);
 
         foreach ($inPlayRows as $row) {
-            $sourceCardId = $row['suppression_source_game_card_id'] !== null
-                ? ($cardIdBySurrogateId[(int) $row['suppression_source_game_card_id']] ?? null)
-                : null;
-
             $state->restoreMoodInPlay(
-                (int) $row['card_id'],
+                (int) $row['id'],
                 (int) $row['owner_game_player_id'],
                 $row['copied_card_id'] !== null ? (int) $row['copied_card_id'] : null,
                 (bool) $row['is_suppressed'],
                 $row['suppression_expiry'],
-                $sourceCardId,
+                $row['suppression_source_game_card_id'] !== null ? (int) $row['suppression_source_game_card_id'] : null,
                 $row['effect_state'] !== null ? json_decode((string) $row['effect_state'], true) : [],
             );
         }
@@ -118,18 +143,25 @@ final class BoardStateRepository
     {
         $pdo = Connection::get();
 
-        $upsert = $pdo->prepare(
-            'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id, deck_position, copied_card_id, is_suppressed, suppression_expiry, effect_state)
-             VALUES (:game_id, :card_id, :zone, :owner, :deck_position, :copied_card_id, :is_suppressed, :suppression_expiry, :effect_state)
-             ON DUPLICATE KEY UPDATE
-                zone = VALUES(zone),
-                owner_game_player_id = VALUES(owner_game_player_id),
-                deck_position = VALUES(deck_position),
-                copied_card_id = VALUES(copied_card_id),
-                is_suppressed = VALUES(is_suppressed),
-                suppression_expiry = VALUES(suppression_expiry),
-                effect_state = VALUES(effect_state),
-                suppression_source_game_card_id = NULL'
+        // Every card's game_cards row already exists (created once, at
+        // startGame() time -- nothing ever creates a new one mid-game), so
+        // this only ever moves an existing row between zones. $cardId is
+        // the row's own surrogate id (see load()'s $catalogCardIdFor), so
+        // a plain UPDATE-by-id replaces the old upsert-by-(game_id,card_id)
+        // -- and since suppression_source_game_card_id is now already a
+        // real instance id rather than needing translation from a catalog
+        // id, it can be written in this same pass instead of a second one.
+        $update = $pdo->prepare(
+            'UPDATE game_cards SET
+                zone = :zone,
+                owner_game_player_id = :owner,
+                deck_position = :deck_position,
+                copied_card_id = :copied_card_id,
+                is_suppressed = :is_suppressed,
+                suppression_expiry = :suppression_expiry,
+                suppression_source_game_card_id = :suppression_source_id,
+                effect_state = :effect_state
+             WHERE id = :id AND game_id = :game_id'
         );
 
         $write = function (
@@ -140,41 +172,41 @@ final class BoardStateRepository
             ?int $copiedCardId,
             bool $isSuppressed,
             ?string $suppressionExpiry,
+            ?int $suppressionSourceId,
             array $effectState,
-        ) use ($upsert, $gameId): void {
-            $upsert->execute([
+        ) use ($update, $gameId): void {
+            $update->execute([
+                'id' => $cardId,
                 'game_id' => $gameId,
-                'card_id' => $cardId,
                 'zone' => $zone,
                 'owner' => $owner,
                 'deck_position' => $deckPosition,
                 'copied_card_id' => $copiedCardId,
                 'is_suppressed' => $isSuppressed ? 1 : 0,
                 'suppression_expiry' => $suppressionExpiry,
+                'suppression_source_id' => $suppressionSourceId,
                 'effect_state' => $effectState === [] ? null : json_encode($effectState),
             ]);
         };
 
         foreach ($state->playerOrder() as $playerId) {
             foreach ($state->hand($playerId) as $cardId) {
-                $write($cardId, 'hand', $playerId, null, null, false, null, []);
+                $write($cardId, 'hand', $playerId, null, null, false, null, null, []);
             }
         }
 
-        foreach ($state->deck() as $position => $cardId) {
-            $write($cardId, 'deck', null, $position, null, false, null, []);
+        foreach ($state->decks() as $deckKey => $deckCards) {
+            $owner = $deckKey === BoardState::SHARED_DECK_KEY ? null : $deckKey;
+            foreach ($deckCards as $position => $cardId) {
+                $write($cardId, 'deck', $owner, $position, null, false, null, null, []);
+            }
         }
 
         foreach ($state->discardPile() as $cardId) {
-            $write($cardId, 'discard', null, null, null, false, null, []);
+            $write($cardId, 'discard', $state->discardOwnerOf($cardId), null, null, false, null, null, []);
         }
 
-        /** @var array<int, int> cardId => its suppression source's cardId */
-        $suppressionSources = [];
         foreach ($state->moodsInPlay() as $mood) {
-            if ($mood->suppressionSourceCardId !== null) {
-                $suppressionSources[$mood->cardId] = $mood->suppressionSourceCardId;
-            }
             $write(
                 $mood->cardId,
                 'in_play',
@@ -183,41 +215,10 @@ final class BoardStateRepository
                 $mood->copiedCardId,
                 $mood->isSuppressed,
                 $mood->suppressionExpiry,
+                $mood->suppressionSourceCardId,
                 $mood->effectState,
             );
         }
-
-        // suppression_source_game_card_id is a self-referencing FK to
-        // another row's surrogate id, which doesn't exist until after the
-        // upserts above have run, so it's resolved and written in a second
-        // pass.
-        if ($suppressionSources !== []) {
-            $surrogateIdByCardId = $this->surrogateIdsByCardId($gameId);
-            $updateSource = $pdo->prepare(
-                'UPDATE game_cards SET suppression_source_game_card_id = :source_id WHERE game_id = :game_id AND card_id = :card_id'
-            );
-            foreach ($suppressionSources as $cardId => $sourceCardId) {
-                $updateSource->execute([
-                    'source_id' => $surrogateIdByCardId[$sourceCardId] ?? null,
-                    'game_id' => $gameId,
-                    'card_id' => $cardId,
-                ]);
-            }
-        }
-    }
-
-    /** @return array<int, int> card_id => game_cards.id */
-    private function surrogateIdsByCardId(int $gameId): array
-    {
-        $stmt = Connection::get()->prepare('SELECT id, card_id FROM game_cards WHERE game_id = :game_id');
-        $stmt->execute(['game_id' => $gameId]);
-
-        $map = [];
-        foreach ($stmt->fetchAll() as $row) {
-            $map[(int) $row['card_id']] = (int) $row['id'];
-        }
-
-        return $map;
     }
 
     /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
