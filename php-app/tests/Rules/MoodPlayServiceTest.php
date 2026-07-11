@@ -2534,27 +2534,73 @@ final class MoodPlayServiceTest extends TestCase
         $state->moveHandToInPlay(2, 7);
         $state->startTurn(1);
 
-        $choices = new PlayerChoices(['candidate_mood_ids' => [3, 7], 'given_mood_id' => 9]);
+        $choices = new PlayerChoices(['candidate_mood_ids' => [3, 7]]);
         $result = $this->plays->playMood($state, 1, 96, $choices);
 
         self::assertTrue($result->isPending);
-        self::assertCount(1, $result->pendingDecisions);
-        $decision = $result->pendingDecisions[0];
-        self::assertSame('taken_mood_id', $decision->key);
-        self::assertSame(2, $decision->targetPlayerId);
-        self::assertSame('instability_choose_mood', $decision->decisionType);
-        self::assertSame([3, 7], $decision->field['candidate_card_ids']);
+        self::assertCount(2, $result->pendingDecisions);
+        $takenDecision = $result->pendingDecisions[0];
+        self::assertSame('taken_mood_id', $takenDecision->key);
+        self::assertSame(2, $takenDecision->targetPlayerId);
+        self::assertSame('instability_choose_mood', $takenDecision->decisionType);
+        self::assertSame([3, 7], $takenDecision->field['candidate_card_ids']);
+
+        // Unlike the opponent's own step above, the "what do I give back"
+        // step targets the ACTING player themselves -- deferred until now
+        // (rather than collected up front) specifically so Instability
+        // itself, which only entered play as part of this same playMood()
+        // call, can legally be offered as an answer -- see
+        // testInstabilityCanGiveItselfAway() below.
+        $givenDecision = $result->pendingDecisions[1];
+        self::assertSame('given_mood_id', $givenDecision->key);
+        self::assertSame(1, $givenDecision->targetPlayerId);
+        self::assertSame('instability_give_mood', $givenDecision->decisionType);
+
         self::assertSame(2, $state->ownerOf(3)); // not taken yet
         self::assertSame(2, $state->ownerOf(7));
 
         $this->plays->resolvePendingDecisions(
             $state, 96, 1, $choices, $choices, 0,
-            ['taken_mood_id' => new PlayerChoices(['taken_mood_id' => 7])],
+            [
+                'taken_mood_id' => new PlayerChoices(['taken_mood_id' => 7]),
+                'given_mood_id' => new PlayerChoices(['given_mood_id' => 9]),
+            ],
         );
 
         self::assertSame(1, $state->ownerOf(7));
         self::assertSame(2, $state->ownerOf(3)); // the other candidate is untouched
         self::assertSame(2, $state->ownerOf(9));
+    }
+
+    /**
+     * The whole point of deferring given_mood_id until after Instability
+     * has actually entered play: giving Instability itself away is a
+     * legal answer, even though it could never have been offered as an
+     * ordinary up-front choice (Instability is still in hand, not in
+     * play, at the moment the choices panel would otherwise be filled
+     * out).
+     */
+    public function testInstabilityCanGiveItselfAway(): void
+    {
+        $state = $this->boardState(hands: [1 => [96], 2 => [3, 7]]);
+        $state->moveHandToInPlay(2, 3);
+        $state->moveHandToInPlay(2, 7);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['candidate_mood_ids' => [3, 7]]);
+        $this->plays->playMood($state, 1, 96, $choices);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 96, 1, $choices, $choices, 0,
+            [
+                'taken_mood_id' => new PlayerChoices(['taken_mood_id' => 7]),
+                'given_mood_id' => new PlayerChoices(['given_mood_id' => 96]),
+            ],
+        );
+
+        self::assertSame(1, $state->ownerOf(7));
+        self::assertSame(2, $state->ownerOf(3)); // the other candidate is untouched
+        self::assertSame(2, $state->ownerOf(96));
     }
 
     public function testInstabilityRejectsCandidatesFromDifferentPlayers(): void

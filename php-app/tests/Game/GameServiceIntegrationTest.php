@@ -2698,7 +2698,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->playMood($gameId, $p1, $complacencyId, []);
     }
 
-    public function testInstabilityPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
+    public function testInstabilityPausesForP2sOwnChoiceThenP1sOwnChoiceAndOnlyCompletesAfterBothRespond(): void
     {
         $u1 = $this->insertUser('instab1');
         $u2 = $this->insertUser('instab2');
@@ -2718,9 +2718,13 @@ final class GameServiceIntegrationTest extends TestCase
         $candidate7Id = $this->insertGameCard($gameId, 7, 'in_play', $p2); // candidate
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
+        // given_mood_id is no longer submitted up front -- it can't be
+        // offered as an ordinary choice_fields entry, since Instability
+        // itself isn't in play yet at the moment this request is built;
+        // see testInstabilityCanGiveItselfAwayThroughARealRoundTrip()
+        // below.
         $playResult = $this->games->playMood($gameId, $p1, $instabilityId, [
             'candidate_mood_ids' => [$candidate3Id, $candidate7Id],
-            'given_mood_id' => $givenId,
         ]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
@@ -2729,13 +2733,65 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p2, $state->ownerOf($candidate3Id)); // not taken yet
         self::assertSame($p2, $state->ownerOf($candidate7Id));
 
-        $respondResult = $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => $candidate7Id]);
-        self::assertArrayNotHasKey('pending_decision', $respondResult);
+        // p1 can't answer their own "what do I give back" step before p2
+        // has answered the "which do I give up" step first.
+        try {
+            $this->games->respondToDecision($gameId, $p1, ['given_mood_id' => $givenId]);
+            self::fail('Expected p1 to have no decision pending until p2 answers first');
+        } catch (GameStateException) {
+            // expected
+        }
+
+        $firstRespondResult = $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => $candidate7Id]);
+        self::assertTrue($firstRespondResult['pending_decision'] ?? false);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame($p2, $state->ownerOf($candidate7Id)); // still p2's until p1 answers too
+
+        $finalRespondResult = $this->games->respondToDecision($gameId, $p1, ['given_mood_id' => $givenId]);
+        self::assertArrayNotHasKey('pending_decision', $finalRespondResult);
 
         $state = (new BoardStateRepository($registry))->load($gameId);
         self::assertSame($p1, $state->ownerOf($candidate7Id));
         self::assertSame($p2, $state->ownerOf($candidate3Id)); // the other candidate is untouched
         self::assertSame($p2, $state->ownerOf($givenId));
+    }
+
+    /**
+     * The whole point of deferring given_mood_id until after Instability
+     * has actually entered play: giving Instability itself away is a
+     * legal answer, even though it could never have been offered as an
+     * ordinary up-front choice.
+     */
+    public function testInstabilityCanGiveItselfAwayThroughARealRoundTrip(): void
+    {
+        $u1 = $this->insertUser('instabself1');
+        $u2 = $this->insertUser('instabself2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $instabilityId = $this->insertGameCard($gameId, 96, 'hand', $p1); // Instability
+        $candidate3Id = $this->insertGameCard($gameId, 3, 'in_play', $p2);
+        $candidate7Id = $this->insertGameCard($gameId, 7, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $instabilityId, [
+            'candidate_mood_ids' => [$candidate3Id, $candidate7Id],
+        ]);
+        $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => $candidate7Id]);
+        $this->games->respondToDecision($gameId, $p1, ['given_mood_id' => $instabilityId]);
+
+        $state = (new BoardStateRepository(DefaultEffectRegistry::build()))->load($gameId);
+        self::assertSame($p1, $state->ownerOf($candidate7Id));
+        self::assertSame($p2, $state->ownerOf($instabilityId));
+        self::assertTrue($state->isInPlay($instabilityId));
     }
 
     /**

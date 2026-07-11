@@ -200,7 +200,15 @@ routed to the PHP app).
     moment an ordinary choices panel is filled out, so a field sourced from
     the current board could never legally include it. Deferring the choice
     until after Betrayal has actually entered play is what makes offering
-    it as a candidate possible at all. Suspicion, Disillusionment, Avoidance,
+    it as a candidate possible at all. Instability has this exact same
+    problem for the mood it gives an opponent in exchange, and gets the
+    same fix as a *second* step tacked onto its own existing pending
+    decision -- the opponent's own "which of these two do I give up" step
+    still shows a "waiting on" banner to everyone else first, then the
+    acting player answers their own "which of my own moods (Instability
+    itself included) do I give back" step once that resolves, with no
+    frontend changes needed for either card: the response panel already
+    renders any decision, self-targeted or not, the same way. Suspicion, Disillusionment, Avoidance,
     Confusion, and Fury all queue one decision per player (Disillusionment's
     queue starts with the next player in turn order and wraps around to
     the acting player themselves last; Avoidance's, Confusion's, and
