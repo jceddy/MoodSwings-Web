@@ -360,14 +360,14 @@ final class BoardState
     public function moveHandToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromHand($playerId, $cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'hand'));
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'hand', $playerId));
     }
 
     /** Harmony/Grief/Angst: plays a mood "from the discard pile" instead of from hand -- see BoardState::$playGrants' 'source' key and MoodPlayService. */
     public function moveDiscardToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromDiscard($cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'discard'));
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'discard', $playerId));
         // The card just became $playerId's own in-play mood, no longer a
         // discard-pile card with a "last owner" of its own -- see
         // removeFromDiscard(), which already cleared any stale entry.
@@ -383,15 +383,31 @@ final class BoardState
      *
      * @return array<string, mixed>
      */
-    private function initialEffectState(int $cardId, string $fromZone): array
+    private function initialEffectState(int $cardId, string $fromZone, int $playerId): array
     {
-        return ['playedFromZone' => $fromZone, ...$this->playedInRoundTag(), ...$this->consumeStagedEffectState($cardId)];
+        return ['playedFromZone' => $fromZone, ...$this->playedInRoundTag($playerId), ...$this->consumeStagedEffectState($cardId)];
     }
 
-    /** @return array<string, mixed> */
-    private function playedInRoundTag(): array
+    /**
+     * Patience/Glee: "this mood's value is 1/6 if you played it this
+     * round" -- "you" means whoever *currently* owns it, so this tags both
+     * which round it was played in AND who played it (PlayedThisRoundValueEffect
+     * checks both against the round-in-progress and the mood's current
+     * owner). Ownership can change after being played (Guile/Instability/
+     * Betrayal/Recklessness/Arrogance/Avoidance/Chaos all reassign a
+     * mood's owner via giveInPlayToPlayer() without re-playing it -- see
+     * ChaosEffect's own docblock, "moods may change players, but their
+     * after-playing effects don't happen again"), so the original player
+     * has to be remembered separately from the (mutable) current owner,
+     * not re-derived from it.
+     *
+     * @return array<string, mixed>
+     */
+    private function playedInRoundTag(int $playerId): array
     {
-        return $this->currentRoundNumber !== null ? ['playedInRound' => $this->currentRoundNumber] : [];
+        return $this->currentRoundNumber !== null
+            ? ['playedInRound' => $this->currentRoundNumber, 'playedByPlayerId' => $playerId]
+            : [];
     }
 
     /**

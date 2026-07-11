@@ -197,9 +197,17 @@ that doubles `game_rounds.wins_awarded` regardless of who plays it or
 who wins (Corruption — `GameService::consumeExtraWinMarker()`). A
 separate, reusable "was this mood played this round" tag
 (`playedInRound`, stamped on every mood the moment it enters play from
-`BoardState::currentRoundNumber()`) backs a round-scoped value formula
-shared by two cards with no constructor arguments needed
-(Patience/Glee — `PlayedThisRoundValueEffect`), a variable-count
+`BoardState::currentRoundNumber()`, alongside `playedByPlayerId` —
+whoever actually played it, immutable even once ownership itself
+changes) backs a round-scoped value formula shared by two cards with no
+constructor arguments needed (Patience/Glee — `PlayedThisRoundValueEffect`,
+which checks `playedByPlayerId` against `BoardState::ownerOf()` as well as
+the round number, since "you played it this round" means whoever
+*currently* has it — a mood that changes hands mid-round via Guile/
+Instability/Betrayal/Recklessness/Arrogance/Avoidance/Chaos'
+`giveInPlayToPlayer()` no longer qualifies for its new owner even though
+it's the same round, and the bonus resumes if it's ever handed back to
+whoever actually played it), a variable-count
 extra-play grant sized to close a mood-count gap with a chosen opponent
 computed once at play time (Pride), a widening of which zone a
 player's *normal* plays (not just bonus ones) can draw from, special-
