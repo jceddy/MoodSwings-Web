@@ -243,7 +243,19 @@ routed to the PHP app).
     Exhilaration, Enthusiasm, Passion, Sneakiness, Awe, Corruption), fully
     formatted server-side the same way every other reminder text in this
     app is, so there's nothing here to figure out mid-round rather than
-    only once a decision is already forced. A "Recent plays" list at the bottom of the board shows the last 15
+    only once a decision is already forced.
+
+    `round.board_effects` is `scoring_effects`' sibling section, rendered
+    directly below it (`#board-effects`, `renderBoardEffects()`) for
+    in-play moods whose "while in play" ability reshapes the board itself
+    rather than how scoring works — today that's just Imagination, shown
+    as e.g. "Alice's Imagination — all moods are red." Hidden entirely
+    (both sections independently collapse to nothing, via the same
+    `container.hidden = entries.length === 0` pattern) whenever there's
+    nothing to say, so an ordinary board with neither in play shows
+    neither heading.
+
+    A "Recent plays" list at the bottom of the board shows the last 15
     plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
     played Paranoia from hand (target player: Bob), revealing Charity from
     Bob's hand") — always naming which zone the card was actually played
