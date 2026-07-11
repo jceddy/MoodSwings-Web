@@ -274,8 +274,16 @@ final class CardChoiceSchema
             ['key' => 'direction', 'type' => 'mode', 'required' => false, 'options' => ['left', 'right'], 'label' => 'Direction to rotate (required if mode is rotate)'],
         ],
         'instability' => [
+            // No 'given_mood_id' entry here -- like Betrayal, Instability
+            // itself is a valid answer for "one of your moods to give in
+            // exchange" (its own printed text doesn't exclude it), but it
+            // isn't in play yet at the moment this panel is filled out, so
+            // a static field sourced from the current board could never
+            // legally offer it. See InstabilityEffect, which defers that
+            // choice to a second pending-decision step the acting player
+            // answers immediately after Instability has actually entered
+            // play, right after the opponent's own first-step answer.
             ['key' => 'candidate_mood_ids', 'type' => 'mood', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => "2 of one opponent's moods (they choose which one to give up)", 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_owner']],
-            ['key' => 'given_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => false, 'label' => 'Your mood to give in exchange (required if targeting an opponent above)'],
         ],
         'betrayal' => [
             // No 'target_mood_id' entry here -- unlike every other "your

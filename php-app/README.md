@@ -355,6 +355,26 @@ type other than `duplicity_repeat_offer` (Betrayal's own `betrayal_give_mood`
 included) with no candidate-exclusion placeholder, so nothing had to be
 taught that this one card's own decision is a legal answer to itself.
 
+`InstabilityEffect` reuses this exact same self-give pattern for the same
+reason, but as a *second* step in its own batch rather than Betrayal's
+only one: its printed text ("they choose one of those moods and give it
+to you, then you give them one of your moods") doesn't exclude Instability
+itself from "one of your moods" either, but `given_mood_id` used to be
+collected up front alongside `candidate_mood_ids` -- before Instability
+had actually entered play, so it could never legally be offered. Now
+`pendingDecisionsFor()` returns *two* `PendingDecisionRequest`s: step 0 is
+unchanged (`taken_mood_id`, targeting the opponent, choosing which
+candidate to give up), step 1 targets the *acting* player (`given_mood_id`,
+`type: mood, scope: own`, `required: true`) and is only answerable once
+step 0 resolves, by which point Instability is already in play and
+legitimately included as a candidate -- the same step-ordering/multiple-
+different-targets machinery Suspicion's/Disillusionment's own multi-player
+queues already exercise, just with two steps instead of several. Always
+asked once the exchange is initiated (no further "may" once two candidates
+are chosen), so `resolveDecisions()` only skips the whole thing when
+`pendingDecisionsFor()` itself already returned `[]` for a fully-declined
+play.
+
 Migration 0011 only ever closed the pending-batch-specific half of a
 broader gap: `playMood()`/`pass()`/`respondToDecision()` each load a
 `BoardState`, mutate it in memory, and save it back across one or more
