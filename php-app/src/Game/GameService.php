@@ -1364,7 +1364,22 @@ final class GameService
         // cards right now -- see MoodPlayService::isPlayable() and
         // BoardState::grantAllows()'s 'source' => 'discard' handling.
         $response['discard_pile'] = array_map(
-            fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
+            function (int $cardId) use ($state, $names, $viewerGamePlayerId, $playerNames): array {
+                $lastOwnerId = $state->discardOwnerOf($cardId);
+                return [
+                    ...$this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
+                    // Two players' identical catalog cards can both sit in
+                    // the discard pile at once (a 'duel' game gives each
+                    // player their own deck -- see BoardState::
+                    // $catalogCardIdFor), so a bare name alone can't tell
+                    // them apart -- e.g. Corruption's own discard_card_ids
+                    // choice, which bottoms each cycled card onto its
+                    // *owner's* deck, so which physical card you mean
+                    // genuinely matters, not just its printed identity.
+                    'last_owner_game_player_id' => $lastOwnerId,
+                    'last_owner_name' => $lastOwnerId !== null ? ($playerNames[$lastOwnerId] ?? null) : null,
+                ];
+            },
             $state->discardPile()
         );
 

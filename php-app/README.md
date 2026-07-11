@@ -416,6 +416,26 @@ validate a selection before ever submitting it. `GameService::serializeCard()`
 attaches each card's `choice_fields` (plus `has_dice_value`, needed for
 Encouragement's filter) to the JSON returned by `GET /games/state`.
 
+A `type: 'mood'` field's candidates are always drawn from `state.in_play`
+directly (never separately embedded in the field itself, except
+Instability's precomputed `candidate_card_ids`), which is what makes a
+`'duel' game's two identical catalog cards (see "Card identity" above) a
+real UI problem for `distinct_owners` fields specifically: Pacifism's own
+"one per chosen player" constraint is impossible to satisfy correctly if a
+player can't tell which of two identically-named candidates belongs to
+which owner in the first place. There's no dedicated server-side field for
+this -- `state.in_play[].owner_game_player_id` (always present) is enough
+for a client to label each option unambiguously — but the discard pile
+needed one added: `state.discard_pile[].last_owner_game_player_id`/
+`last_owner_name` (`BoardState::discardOwnerOf()`, `null` if untracked)
+exist purely so a `type: 'discard_card'` field (Corruption's cycle,
+Cynicism's/Nostalgia's own discard choices) can disambiguate the same way,
+since the discard pile itself has no *current* owner to read — this
+matters beyond cosmetics for Corruption specifically, since cycling a
+discard-pile card bottoms it onto its *owner's* deck in a duel, so picking
+the wrong physical card among two identical ones sends it to the wrong
+player's deck.
+
 Scorn's and Validation's `reactToAnotherPlay()` choices (`scorn_suppress_target`,
 `validation_extra_play`) don't fit that per-card schema, since they fire
 while playing a *different* card, triggered by a mood the acting player
