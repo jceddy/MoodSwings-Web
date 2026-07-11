@@ -581,4 +581,68 @@ final class BoardStateTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $state->catalogRow(999999);
     }
+
+    public function testCatalogRowFallsBackToTreatingAnUnmappedCardIdAsAlreadyBeingACatalogId(): void
+    {
+        // No $catalogCardIdFor supplied -- every pure in-memory test relies
+        // on this default, since a literal like 5 doubles as both the
+        // instance id and the catalog id when the two never diverge (i.e.
+        // every game except a duel with a genuinely duplicated card).
+        $state = $this->boardState();
+
+        self::assertSame('complacency', $state->catalogRow(5)['effectKey']);
+    }
+
+    public function testTwoDifferentPhysicalCardsSharingACatalogIdCanBothBeInPlaySimultaneously(): void
+    {
+        // 1001 and 1002 are two different physical copies of catalog card 5
+        // (Complacency, white, value 4) -- the scenario a 'duel' game's two
+        // independently-built decks can now produce, which the old
+        // catalog-id-as-identity model made structurally impossible (a
+        // second moveHandToInPlay() for the same catalog id would have
+        // silently overwritten the first one's MoodInPlay).
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [1001], 2 => [1002]],
+            catalogCardIdFor: [1001 => 5, 1002 => 5],
+        );
+
+        $state->moveHandToInPlay(1, 1001);
+        $state->moveHandToInPlay(2, 1002);
+
+        self::assertTrue($state->isInPlay(1001));
+        self::assertTrue($state->isInPlay(1002));
+        self::assertSame(1, $state->ownerOf(1001));
+        self::assertSame(2, $state->ownerOf(1002));
+        self::assertSame(4, $state->valueOf(1001));
+        self::assertSame(4, $state->valueOf(1002));
+    }
+
+    public function testRemoveFromDiscardDisambiguatesTwoPhysicalCardsSharingACatalogId(): void
+    {
+        // Same duplicated-catalog-card setup as above, but in the discard
+        // pile -- the old model's removeFromDiscard() did a first-match
+        // array_search() by catalog id and would have removed whichever
+        // entry happened to come first, then wiped the single shared
+        // $discardOwners entry for that catalog id regardless of which
+        // physical card was actually meant.
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            discard: [1001, 1002],
+            discardOwners: [1001 => 1, 1002 => 2],
+            catalogCardIdFor: [1001 => 5, 1002 => 5],
+        );
+
+        $state->moveDiscardToBottomOfDeck(1001);
+
+        self::assertFalse($state->isInDiscardPile(1001));
+        self::assertTrue($state->isInDiscardPile(1002));
+        self::assertNull($state->discardOwnerOf(1001));
+        self::assertSame(2, $state->discardOwnerOf(1002));
+        self::assertSame([1001], $state->deck());
+    }
 }

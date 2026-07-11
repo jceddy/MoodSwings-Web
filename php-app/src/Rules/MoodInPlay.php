@@ -5,11 +5,18 @@ declare(strict_types=1);
 namespace MoodSwings\Rules;
 
 /**
- * A single physical card currently in play. cardId is always the card's
- * *printed* identity (see BoardState::effectiveCardId() for why that's
- * distinct from copiedCardId), so effects that care what a card actually
- * is -- e.g. copying a Creativity copies whatever it's a copy of, not
- * Creativity itself -- resolve correctly.
+ * A single physical card currently in play. cardId and copiedCardId are
+ * both per-game *instance* ids (game_cards.id once loaded from a real
+ * game), not catalog ids -- a 'duel' game gives each player their own
+ * complete deck, so the same printed card can exist twice in one game, and
+ * only an instance id can tell two such cards apart. cardId identifies
+ * *this* physical card; copiedCardId (Creativity's "play as a copy of a
+ * mood currently in play") identifies whichever *other* physical card this
+ * one is currently acting as, so effects that care what a card actually is
+ * -- e.g. copying a Creativity copies whatever it's a copy of, not
+ * Creativity itself -- resolve correctly. Both are only ever translated
+ * back to a catalog id (for name/color/value/rules text) via
+ * BoardState::catalogRow()/effectiveCardId().
  *
  * effectState is a small per-mood bag for whatever a card's own effect
  * needs to remember about the choice made when it was played (Imagination's

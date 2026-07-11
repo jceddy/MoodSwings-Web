@@ -21,7 +21,7 @@ use InvalidArgumentException;
  */
 final class BoardState
 {
-    /** @var array<int, int[]> playerId => hand card ids, in no particular order */
+    /** @var array<int, int[]> playerId => hand card ids (per-game instance ids, not catalog ids -- see BoardState's own $catalogCardIdFor constructor param docblock), in no particular order */
     private array $hands;
 
     /**
@@ -34,33 +34,39 @@ final class BoardState
     public const SHARED_DECK_KEY = 0;
 
     /**
-     * @var array<int, int[]> deck key => card ids, index 0 is the top of
-     * that deck. Keyed by SHARED_DECK_KEY alone (a single entry) for an
-     * ordinary game with one shared pool; keyed by each seated player's
-     * own game_player_id (one entry per player) for a 'duel' game, where
-     * every player draws only from -- and bottoms cards only onto -- their
-     * own deck. See $hasSeparateDecks and deckKeyFor().
+     * @var array<int, int[]> deck key => card ids (per-game instance ids),
+     * index 0 is the top of that deck. Keyed by SHARED_DECK_KEY alone (a
+     * single entry) for an ordinary game with one shared pool; keyed by
+     * each seated player's own game_player_id (one entry per player) for a
+     * 'duel' game, where every player draws only from -- and bottoms cards
+     * only onto -- their own deck, independently built by the same
+     * deck-building rules as a single-player deck (so the same catalog
+     * card can appear in both players' decks at once -- see
+     * $catalogCardIdFor). See $hasSeparateDecks and deckKeyFor().
      */
     private array $decks;
 
-    /** @var int[] discard pile card ids; an unordered set -- no card in the game cares about discard-pile order. Always a single shared pool, even in a 'duel' game -- see $discardOwners. */
+    /** @var int[] discard pile card ids (per-game instance ids); an unordered set -- no card in the game cares about discard-pile order. Always a single shared pool, even in a 'duel' game -- see $discardOwners. Since instance ids are unique per physical card even when two players' catalog cards match, this can now legitimately contain two entries for the same printed card without ambiguity. */
     private array $discard;
 
     /**
-     * @var array<int, int> cardId => the player this discard-pile card
-     * most recently belonged to (whoever's hand it was discarded from, or
-     * whoever owned it in play) -- tracked purely so a card later put back
-     * on the bottom of the deck (Altruism/Corruption) can be returned to
-     * that same player's own deck in a 'duel' game, per $hasSeparateDecks,
-     * without the discard pile itself needing to become per-player too
-     * (it stays a single shared, ownerless-looking pool -- discardPile()/
-     * isInDiscardPile() never expose this map). Cleared the moment a card
-     * actually leaves the discard pile (see removeFromDiscard()), so it
-     * never lingers stale once the card's true owner could change again.
+     * @var array<int, int> cardId (instance id) => the player this
+     * discard-pile card most recently belonged to (whoever's hand it was
+     * discarded from, or whoever owned it in play) -- tracked purely so a
+     * card later put back on the bottom of the deck (Altruism/Corruption)
+     * can be returned to that same player's own deck in a 'duel' game, per
+     * $hasSeparateDecks, without the discard pile itself needing to become
+     * per-player too (it stays a single shared, ownerless-looking pool --
+     * discardPile()/isInDiscardPile() never expose this map). Cleared the
+     * moment a card actually leaves the discard pile (see
+     * removeFromDiscard()), so it never lingers stale once the card's true
+     * owner could change again. Keyed by instance id rather than catalog
+     * id specifically so two different players' identical printed cards in
+     * the pile at once never collide.
      */
     private array $discardOwners;
 
-    /** @var array<int, MoodInPlay> cardId => the mood currently in play */
+    /** @var array<int, MoodInPlay> cardId (instance id) => the mood currently in play. Keyed by instance id rather than catalog id so two players' identical printed cards can both be in play simultaneously without one clobbering the other. */
     private array $moodsInPlay = [];
 
     private ?int $currentPlayerId = null;
@@ -184,7 +190,7 @@ final class BoardState
     private ?array $pendingGrantUsed = null;
 
     /**
-     * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog card id => catalog row
+     * @param array<int, array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string}> $catalog catalog card id (cards.id) => catalog row
      * @param int[] $playerOrder seat order (turn order) for this game
      * @param array<int, int[]> $hands playerId => hand card ids
      * @param int[]|array<int, int[]> $deck a flat card-id list (index 0 =
@@ -199,6 +205,21 @@ final class BoardState
      * @param array<int, int> $discardOwners cardId => last-known owner,
      *     only ever consulted when $hasSeparateDecks is true -- see
      *     $discardOwners' own docblock.
+     * @param array<int, int> $catalogCardIdFor every $cardId used
+     *     throughout this class is really a per-game *instance* id
+     *     (game_cards.id once loaded from a real game -- see
+     *     BoardStateRepository), not a catalog id: since a 'duel' game
+     *     gives each player their own complete deck, the same catalog card
+     *     can legitimately exist twice in one game (once per player), so
+     *     catalog id alone can no longer identify a specific physical
+     *     card. This map resolves an instance id back to the catalog id
+     *     whose printed data (name/color/value/rules text) it should use
+     *     -- see catalogRow(). Left empty by every pure in-memory test
+     *     that never supplies it: catalogRow() then falls back to treating
+     *     $cardId as already being a catalog id, exactly preserving
+     *     behavior for any game/test where instance and catalog id
+     *     coincide (i.e. everything except a duel with a genuinely
+     *     duplicated catalog card).
      */
     public function __construct(
         private readonly array $catalog,
@@ -209,6 +230,7 @@ final class BoardState
         array $discard = [],
         private readonly bool $hasSeparateDecks = false,
         array $discardOwners = [],
+        private readonly array $catalogCardIdFor = [],
     ) {
         $this->hands = $hands;
         $this->decks = $hasSeparateDecks ? $deck : [self::SHARED_DECK_KEY => $deck];
@@ -219,7 +241,8 @@ final class BoardState
     /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
     public function catalogRow(int $cardId): array
     {
-        return $this->catalog[$cardId] ?? throw new InvalidArgumentException("Unknown card id {$cardId}");
+        $catalogId = $this->catalogCardIdFor[$cardId] ?? $cardId;
+        return $this->catalog[$catalogId] ?? throw new InvalidArgumentException("Unknown card id {$catalogId}");
     }
 
     /** @return int[] */

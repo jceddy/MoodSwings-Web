@@ -96,7 +96,7 @@ final class GameServiceIntegrationTest extends TestCase
         string $zone,
         ?int $owner = null,
         ?int $deckPosition = null,
-    ): void {
+    ): int {
         $stmt = $this->pdo->prepare(
             'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id, deck_position)
              VALUES (:game_id, :card_id, :zone, :owner, :deck_position)'
@@ -108,6 +108,8 @@ final class GameServiceIntegrationTest extends TestCase
             'owner' => $owner,
             'deck_position' => $deckPosition,
         ]);
+
+        return (int) $this->pdo->lastInsertId();
     }
 
     private function insertGameRound(
@@ -279,7 +281,7 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('duel', $this->fetchGame($gameId)['format']);
     }
 
-    public function testStartGameSplitsTheDeckBetweenBothPlayersForADuel(): void
+    public function testStartGameGivesEachDuelPlayerTheirOwnIndependentOneOfEachDeck(): void
     {
         $u1 = $this->insertUser('duelsplit1');
         $u2 = $this->insertUser('duelsplit2');
@@ -302,10 +304,57 @@ final class GameServiceIntegrationTest extends TestCase
         $deckStmt->execute(['game_id' => $gameId]);
         $counts = array_column($deckStmt->fetchAll(), 'n', 'owner_game_player_id');
 
-        self::assertArrayHasKey($p1, $counts);
-        self::assertArrayHasKey($p2, $counts);
-        self::assertSame(133 - 5 * 2, (int) $counts[$p1] + (int) $counts[$p2]); // the full pool, minus both starting hands
-        self::assertLessThanOrEqual(1, abs((int) $counts[$p1] - (int) $counts[$p2])); // split as evenly as possible
+        // Each player gets their OWN complete deck (133 total, 5 dealt to
+        // hand), not a shared pool split between them.
+        self::assertSame(133 - 5, (int) $counts[$p1]);
+        self::assertSame(133 - 5, (int) $counts[$p2]);
+
+        // 'one_of_each' means each player's own hand+deck is a full,
+        // independent permutation of every catalog card, so the two
+        // players' own sets of catalog card ids are identical (just
+        // shuffled differently) rather than disjoint -- proving these
+        // weren't split from one shared pool, which would have made the
+        // same catalog card appearing in both sets structurally
+        // impossible.
+        $catalogIdsFor = function (int $gamePlayerId) use ($gameId): array {
+            $stmt = $this->pdo->prepare(
+                "SELECT card_id FROM game_cards WHERE game_id = :game_id AND owner_game_player_id = :owner AND zone IN ('hand', 'deck')"
+            );
+            $stmt->execute(['game_id' => $gameId, 'owner' => $gamePlayerId]);
+            $ids = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+            sort($ids);
+
+            return $ids;
+        };
+        $p1CatalogIds = $catalogIdsFor($p1);
+        $p2CatalogIds = $catalogIdsFor($p2);
+
+        self::assertCount(133, array_unique($p1CatalogIds));
+        self::assertSame($p1CatalogIds, $p2CatalogIds);
+    }
+
+    public function testStartGameGivesEachDuelPlayerTheirOwnIndependentStandardDeck(): void
+    {
+        $u1 = $this->insertUser('duelstandard1');
+        $u2 = $this->insertUser('duelstandard2');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'standard');
+        $this->games->startGame($gameId);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $u2);
+
+        $deckStmt = $this->pdo->prepare(
+            "SELECT owner_game_player_id, COUNT(*) AS n FROM game_cards WHERE game_id = :game_id AND zone = 'deck' GROUP BY owner_game_player_id"
+        );
+        $deckStmt->execute(['game_id' => $gameId]);
+        $counts = array_column($deckStmt->fetchAll(), 'n', 'owner_game_player_id');
+
+        // 45-card standard deck (23 common + 14 uncommon + 6 rare + 2
+        // mythic), minus the 5-card starting hand, independently built for
+        // each player -- not a 45-card pool shared/split between them.
+        self::assertSame(45 - 5, (int) $counts[$p1]);
+        self::assertSame(45 - 5, (int) $counts[$p2]);
     }
 
     public function testDrawingACardInADuelAlwaysComesFromTheDrawingPlayersOwnDeck(): void
@@ -322,21 +371,21 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
-        $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence -- bottomed as Zeal's own cost
-        $this->insertGameCard($gameId, 9, 'deck', $p1, 0); // p1's own deck -- what p1 should draw
-        $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- must NOT be drawn by p1
+        $zealId = $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
+        $benevolenceId = $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence -- bottomed as Zeal's own cost
+        $p1TopCardId = $this->insertGameCard($gameId, 9, 'deck', $p1, 0); // p1's own deck -- what p1 should draw
+        $p2TopCardId = $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- must NOT be drawn by p1
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 106, ['hand_card_id' => 2]);
+        $this->games->playMood($gameId, $p1, $zealId, ['hand_card_id' => $benevolenceId]);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
 
-        self::assertTrue($state->isInHand($p1, 9)); // drew from its own deck
-        self::assertFalse($state->isInHand($p1, 8)); // never touched p2's own deck
-        self::assertSame([8], $state->deck($p2)); // p2's own deck untouched
-        self::assertContains(2, $state->deck($p1)); // Zeal's own hand-card cost bottomed into p1's own deck
+        self::assertTrue($state->isInHand($p1, $p1TopCardId)); // drew from its own deck
+        self::assertFalse($state->isInHand($p1, $p2TopCardId)); // never touched p2's own deck
+        self::assertSame([$p2TopCardId], $state->deck($p2)); // p2's own deck untouched
+        self::assertContains($benevolenceId, $state->deck($p1)); // Zeal's own hand-card cost bottomed into p1's own deck
     }
 
     public function testMoveInPlayToBottomOfDeckInADuelBottomsIntoTheTargetMoodsOwnersDeck(): void
@@ -353,22 +402,22 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 6, 'hand', $p1); // Conviction
-        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline -- p2's own mood, targeted
-        $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- p2's own consolation draw
-        $this->insertGameCard($gameId, 7, 'deck', $p1, 0); // p1's own deck -- must NOT be touched
+        $convictionId = $this->insertGameCard($gameId, 6, 'hand', $p1); // Conviction
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline -- p2's own mood, targeted
+        $p2TopCardId = $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- p2's own consolation draw
+        $p1TopCardId = $this->insertGameCard($gameId, 7, 'deck', $p1, 0); // p1's own deck -- must NOT be touched
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 6, ['target_mood_id' => 9]);
+        $this->games->playMood($gameId, $p1, $convictionId, ['target_mood_id' => $disciplineId]);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
 
-        self::assertFalse($state->isInPlay(9));
-        self::assertContains(9, $state->deck($p2)); // bottomed into its own owner's (p2's) deck
-        self::assertTrue($state->isInHand($p2, 8)); // p2 -- the targeted mood's own owner -- drew from their own deck
-        self::assertFalse($state->isInHand($p1, 8));
-        self::assertSame([7], $state->deck($p1)); // p1's own deck untouched
+        self::assertFalse($state->isInPlay($disciplineId));
+        self::assertContains($disciplineId, $state->deck($p2)); // bottomed into its own owner's (p2's) deck
+        self::assertTrue($state->isInHand($p2, $p2TopCardId)); // p2 -- the targeted mood's own owner -- drew from their own deck
+        self::assertFalse($state->isInHand($p1, $p2TopCardId));
+        self::assertSame([$p1TopCardId], $state->deck($p1)); // p1's own deck untouched
     }
 
     public function testMoveDiscardToBottomOfDeckInADuelBottomsIntoTheDiscardedCardsOriginalOwnersDeck(): void
@@ -385,21 +434,21 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 60, 'hand', $p1); // Corruption
-        $this->insertGameCard($gameId, 9, 'discard', $p2); // originally p2's own card, now in the shared discard pile
-        $this->insertGameCard($gameId, 7, 'deck', $p1, 0); // p1's own deck -- p1 (the acting player) still draws, per Corruption's own text
-        $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- must NOT be touched
+        $corruptionId = $this->insertGameCard($gameId, 60, 'hand', $p1); // Corruption
+        $disciplineId = $this->insertGameCard($gameId, 9, 'discard', $p2); // originally p2's own card, now in the shared discard pile
+        $p1TopCardId = $this->insertGameCard($gameId, 7, 'deck', $p1, 0); // p1's own deck -- p1 (the acting player) still draws, per Corruption's own text
+        $p2TopCardId = $this->insertGameCard($gameId, 8, 'deck', $p2, 0); // p2's own deck -- must NOT be touched
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 60, ['mode' => 'cycle', 'discard_card_ids' => [9]]);
+        $this->games->playMood($gameId, $p1, $corruptionId, ['mode' => 'cycle', 'discard_card_ids' => [$disciplineId]]);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
 
-        self::assertFalse($state->isInDiscardPile(9));
-        self::assertContains(9, $state->deck($p2)); // bottomed into its ORIGINAL owner's (p2's) deck, not p1's (the acting player)
-        self::assertTrue($state->isInHand($p1, 7)); // the acting player still draws, from their own deck
-        self::assertFalse($state->isInHand($p1, 8));
+        self::assertFalse($state->isInDiscardPile($disciplineId));
+        self::assertContains($disciplineId, $state->deck($p2)); // bottomed into its ORIGINAL owner's (p2's) deck, not p1's (the acting player)
+        self::assertTrue($state->isInHand($p1, $p1TopCardId)); // the acting player still draws, from their own deck
+        self::assertFalse($state->isInHand($p1, $p2TopCardId));
     }
 
     public function testGetStateDeckCountShowsTheViewersOwnDeckInADuel(): void
@@ -439,19 +488,19 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4 -- p1 wins the round
-        $this->insertGameCard($gameId, 7, 'deck', $p2, 0); // p2's own deck -- p2's own consolation draw
-        $this->insertGameCard($gameId, 8, 'deck', $p1, 0); // p1's own deck -- must stay untouched (p1 won)
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4 -- p1 wins the round
+        $p2TopCardId = $this->insertGameCard($gameId, 7, 'deck', $p2, 0); // p2's own deck -- p2's own consolation draw
+        $p1TopCardId = $this->insertGameCard($gameId, 8, 'deck', $p1, 0); // p1's own deck -- must stay untouched (p1 won)
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 55, []);
+        $this->games->playMood($gameId, $p1, $apathyId, []);
         $this->games->pass($gameId, $p2);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
 
-        self::assertTrue($state->isInHand($p2, 7)); // p2 (the loser) drew from their own deck
-        self::assertSame([8], $state->deck($p1)); // p1 (the winner) doesn't draw -- own deck untouched
+        self::assertTrue($state->isInHand($p2, $p2TopCardId)); // p2 (the loser) drew from their own deck
+        self::assertSame([$p1TopCardId], $state->deck($p1)); // p1 (the winner) doesn't draw -- own deck untouched
     }
 
     public function testStartGameRejectsFewerThanTwoPlayers(): void
@@ -612,8 +661,8 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity: base 3, dice/alt 5
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity: base 1, no dice value
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity: base 3, dice/alt 5
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity: base 1, no dice value
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
@@ -622,14 +671,14 @@ final class GameServiceIntegrationTest extends TestCase
             $byCardId[$card['card_id']] = $card;
         }
 
-        self::assertSame(3, $byCardId[8]['base_value']);
-        self::assertSame(5, $byCardId[8]['alt_value']);
-        self::assertTrue($byCardId[8]['has_dice_value']);
-        self::assertSame(3, $byCardId[8]['value']); // not in play yet -- value equals base_value
+        self::assertSame(3, $byCardId[$dignityId]['base_value']);
+        self::assertSame(5, $byCardId[$dignityId]['alt_value']);
+        self::assertTrue($byCardId[$dignityId]['has_dice_value']);
+        self::assertSame(3, $byCardId[$dignityId]['value']); // not in play yet -- value equals base_value
 
-        self::assertSame(1, $byCardId[3]['base_value']);
-        self::assertNull($byCardId[3]['alt_value']);
-        self::assertFalse($byCardId[3]['has_dice_value']);
+        self::assertSame(1, $byCardId[$charityId]['base_value']);
+        self::assertNull($byCardId[$charityId]['alt_value']);
+        self::assertFalse($byCardId[$charityId]['has_dice_value']);
     }
 
     public function testGetStateAppendsScornsReactionFieldFilteredByEachHandCardsOwnColor(): void
@@ -647,8 +696,8 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn, white
-        $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white
-        $this->insertGameCard($gameId, 28, 'hand', $p1); // Anxiety, blue
+        $courageId = $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white
+        $anxietyId = $this->insertGameCard($gameId, 28, 'hand', $p1); // Anxiety, blue
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
@@ -657,11 +706,11 @@ final class GameServiceIntegrationTest extends TestCase
             $byCardId[$card['card_id']] = $card;
         }
 
-        $courageReaction = self::findFieldByKey($byCardId[7]['choice_fields'], 'scorn_suppress_target');
+        $courageReaction = self::findFieldByKey($byCardId[$courageId]['choice_fields'], 'scorn_suppress_target');
         self::assertNotNull($courageReaction, 'expected a Scorn reaction field on the white Courage card');
         self::assertSame(['white'], $courageReaction['filter']['colors']);
 
-        $anxietyReaction = self::findFieldByKey($byCardId[28]['choice_fields'], 'scorn_suppress_target');
+        $anxietyReaction = self::findFieldByKey($byCardId[$anxietyId]['choice_fields'], 'scorn_suppress_target');
         self::assertNotNull($anxietyReaction, 'expected a Scorn reaction field on the blue Anxiety card');
         self::assertSame(['blue'], $anxietyReaction['filter']['colors']);
     }
@@ -681,8 +730,8 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1 -- qualifies
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, base value 3 -- doesn't qualify
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1 -- qualifies
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, base value 3 -- doesn't qualify
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
@@ -691,8 +740,8 @@ final class GameServiceIntegrationTest extends TestCase
             $byCardId[$card['card_id']] = $card;
         }
 
-        self::assertNotNull(self::findFieldByKey($byCardId[3]['choice_fields'], 'validation_extra_play'));
-        self::assertNull(self::findFieldByKey($byCardId[8]['choice_fields'], 'validation_extra_play'));
+        self::assertNotNull(self::findFieldByKey($byCardId[$charityId]['choice_fields'], 'validation_extra_play'));
+        self::assertNull(self::findFieldByKey($byCardId[$dignityId]['choice_fields'], 'validation_extra_play'));
     }
 
     public function testGetStateOmitsReactionFieldsWhenViewerHasNoReactorInPlay(): void
@@ -741,11 +790,11 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity -- has its own afterPlaying choice
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discard fodder
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity -- has its own afterPlaying choice
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discard fodder
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 8, ['discard_card_id' => 3]);
+        $playResult = $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
@@ -790,13 +839,13 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
-        $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile -- discard cost + afterPlaying target
-        $this->insertGameCard($gameId, 3, 'hand', $p1);
-        $this->insertGameCard($gameId, 7, 'hand', $p1); // Guile's own 2-card discard cost
-        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Guile's own afterPlaying target
+        $guileId = $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile -- discard cost + afterPlaying target
+        $discard1Id = $this->insertGameCard($gameId, 3, 'hand', $p1);
+        $discard2Id = $this->insertGameCard($gameId, 7, 'hand', $p1); // Guile's own 2-card discard cost
+        $targetMoodId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Guile's own afterPlaying target
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 40, ['discard_card_ids' => [3, 7], 'target_mood_id' => 9]);
+        $playResult = $this->games->playMood($gameId, $p1, $guileId, ['discard_card_ids' => [$discard1Id, $discard2Id], 'target_mood_id' => $targetMoodId]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
@@ -820,12 +869,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
 
-        self::assertNull(self::findByCardId($hand, 8)['copy_simulation']);
+        self::assertNull(self::findByCardId($hand, $dignityId)['copy_simulation']);
     }
 
     /**
@@ -861,14 +910,14 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity, owned by the viewer
-        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
-        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- has its own afterPlaying
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- has its own afterPlaying
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
-        $creativity = self::findByCardId($hand, 32);
+        $creativity = self::findByCardId($hand, $creativityId);
 
-        self::assertNull(self::findFieldByKey($creativity['copy_simulation'][8]['extra_fields'], 'duplicity_repeat'));
+        self::assertNull(self::findFieldByKey($creativity['copy_simulation'][$dignityId]['extra_fields'], 'duplicity_repeat'));
     }
 
     public function testCopySimulationOffersScornsReactionFilteredToTheCandidatesRawColor(): void
@@ -886,14 +935,14 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn, owned by the viewer
-        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
-        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, white
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, white
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
-        $creativity = self::findByCardId($hand, 32);
+        $creativity = self::findByCardId($hand, $creativityId);
 
-        $scornField = self::findFieldByKey($creativity['copy_simulation'][8]['extra_fields'], 'scorn_suppress_target');
+        $scornField = self::findFieldByKey($creativity['copy_simulation'][$dignityId]['extra_fields'], 'scorn_suppress_target');
         self::assertNotNull($scornField);
         self::assertSame(['white'], $scornField['filter']['colors']);
     }
@@ -913,16 +962,16 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation, owned by the viewer
-        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
-        $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile, base value 0 -- qualifies
-        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3 -- doesn't qualify
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $guileId = $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile, base value 0 -- qualifies
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3 -- doesn't qualify
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
-        $creativity = self::findByCardId($hand, 32);
+        $creativity = self::findByCardId($hand, $creativityId);
 
-        self::assertNotNull(self::findFieldByKey($creativity['copy_simulation'][40]['extra_fields'], 'validation_extra_play'));
-        self::assertNull(self::findFieldByKey($creativity['copy_simulation'][8]['extra_fields'], 'validation_extra_play'));
+        self::assertNotNull(self::findFieldByKey($creativity['copy_simulation'][$guileId]['extra_fields'], 'validation_extra_play'));
+        self::assertNull(self::findFieldByKey($creativity['copy_simulation'][$dignityId]['extra_fields'], 'validation_extra_play'));
     }
 
     public function testCopySimulationCostPayableReflectsTheCandidatesOwnCostExcludingCreativitysOwnHandSlot(): void
@@ -939,20 +988,20 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity, alone in hand
-        $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile -- needs 2 *other* hand cards to discard
-        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- no "to play" cost at all
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity, alone in hand
+        $guileId = $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile -- needs 2 *other* hand cards to discard
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- no "to play" cost at all
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['you']['hand'], 32);
-        self::assertFalse($creativity['copy_simulation'][40]['cost_payable']);
-        self::assertTrue($creativity['copy_simulation'][8]['cost_payable']);
+        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['you']['hand'], $creativityId);
+        self::assertFalse($creativity['copy_simulation'][$guileId]['cost_payable']);
+        self::assertTrue($creativity['copy_simulation'][$dignityId]['cost_payable']);
 
         $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
         $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry -- now 2 other hand cards exist
 
-        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['you']['hand'], 32);
-        self::assertTrue($creativity['copy_simulation'][40]['cost_payable']);
+        $creativity = self::findByCardId($this->games->getState($gameId, $u1)['you']['hand'], $creativityId);
+        self::assertTrue($creativity['copy_simulation'][$guileId]['cost_payable']);
     }
 
     /**
@@ -980,21 +1029,21 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
-        $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discarded by the first invocation
-        $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3 -- discarded by the repeat
-        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- the copy target
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1 -- discarded by the first invocation
+        $chivalryId = $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3 -- discarded by the repeat
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity -- the copy target
 
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 32, [
-            'copy_card_id' => 8,
-            'discard_card_id' => 3,
+        $playResult = $this->games->playMood($gameId, $p1, $creativityId, [
+            'copy_card_id' => $dignityId,
+            'discard_card_id' => $charityId,
         ]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $respondResult = $this->games->respondToDecision($gameId, $p1, [
-            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 4]],
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => $chivalryId]],
         ]);
         self::assertArrayNotHasKey('pending_decision', $respondResult);
 
@@ -1002,10 +1051,10 @@ final class GameServiceIntegrationTest extends TestCase
         $state = (new BoardStateRepository($registry))->load($gameId);
 
         self::assertSame([], $state->hand($p1));
-        self::assertSame([3, 4], $state->discardPile());
-        self::assertTrue($state->isInPlay(32));
-        self::assertSame('white', $state->colorOf(32)); // Dignity's color, confirming the copy took effect
-        self::assertSame(5, $state->valueOf(32));
+        self::assertSame([$charityId, $chivalryId], $state->discardPile());
+        self::assertTrue($state->isInPlay($creativityId));
+        self::assertSame('white', $state->colorOf($creativityId)); // Dignity's color, confirming the copy took effect
+        self::assertSame(5, $state->valueOf($creativityId));
     }
 
     /**
@@ -1031,26 +1080,26 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 37, 'in_play', $p1); // real Duplicity
-        $this->insertGameCard($gameId, 32, 'in_play', $p1); // Creativity, already copying Duplicity
-        $this->pdo->prepare('UPDATE game_cards SET copied_card_id = 37 WHERE game_id = :game_id AND card_id = 32')
-            ->execute(['game_id' => $gameId]);
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1
-        $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3
-        $this->insertGameCard($gameId, 6, 'hand', $p1); // Conviction, value 2
+        $duplicityId = $this->insertGameCard($gameId, 37, 'in_play', $p1); // real Duplicity
+        $creativityId = $this->insertGameCard($gameId, 32, 'in_play', $p1); // Creativity, already copying Duplicity
+        $this->pdo->prepare('UPDATE game_cards SET copied_card_id = :copied_card_id WHERE id = :id')
+            ->execute(['copied_card_id' => $duplicityId, 'id' => $creativityId]);
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, value 1
+        $chivalryId = $this->insertGameCard($gameId, 4, 'hand', $p1); // Chivalry, value 3
+        $convictionId = $this->insertGameCard($gameId, 6, 'hand', $p1); // Conviction, value 2
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 8, ['discard_card_id' => 3]);
+        $playResult = $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $respondResult1 = $this->games->respondToDecision($gameId, $p1, [
-            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 4]],
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => $chivalryId]],
         ]);
         self::assertTrue($respondResult1['pending_decision'] ?? false, 'a second independent Duplicity source should still be available');
 
         $respondResult2 = $this->games->respondToDecision($gameId, $p1, [
-            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 6]],
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => $convictionId]],
         ]);
         self::assertArrayNotHasKey('pending_decision', $respondResult2);
 
@@ -1058,8 +1107,8 @@ final class GameServiceIntegrationTest extends TestCase
         $state = (new BoardStateRepository($registry))->load($gameId);
 
         self::assertSame([], $state->hand($p1));
-        self::assertSame([3, 4, 6], $state->discardPile());
-        self::assertSame(5, $state->valueOf(8));
+        self::assertSame([$charityId, $chivalryId, $convictionId], $state->discardPile());
+        self::assertSame(5, $state->valueOf($dignityId));
     }
 
     public function testGetStateMarksOnlyTheCardARestrictedGrantCoversAsPlayable(): void
@@ -1076,20 +1125,20 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- the one card the grant below covers
-        $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage -- not covered
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- the one card the grant below covers
+        $courageId = $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage -- not covered
         $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         // Mirrors the grant IntimidationEffect hands out, restricted to one
         // specific revealed card -- see BoardState::grantAllows()'s
         // 'specific_card_ids' case.
         $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')
-            ->execute(['grants' => json_encode([['type' => 'specific_card_ids', 'values' => [3]]]), 'id' => $roundId]);
+            ->execute(['grants' => json_encode([['type' => 'specific_card_ids', 'values' => [$charityId]]]), 'id' => $roundId]);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
 
-        self::assertTrue(self::findByCardId($hand, 3)['is_playable']);
-        self::assertFalse(self::findByCardId($hand, 7)['is_playable']);
+        self::assertTrue(self::findByCardId($hand, $charityId)['is_playable']);
+        self::assertFalse(self::findByCardId($hand, $courageId)['is_playable']);
     }
 
     public function testGetStateMarksAnUnaffordableToPlayCostCardUnplayable(): void
@@ -1106,12 +1155,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile, alone -- needs 2 *other* hand cards to discard
+        $guileId = $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile, alone -- needs 2 *other* hand cards to discard
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
 
-        self::assertFalse(self::findByCardId($hand, 40)['is_playable']);
+        self::assertFalse(self::findByCardId($hand, $guileId)['is_playable']);
     }
 
     public function testGetStateMarksHandCardsUnplayableWhenItIsNotTheViewersTurn(): void
@@ -1128,12 +1177,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- otherwise unconditionally playable
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- otherwise unconditionally playable
         $this->insertGameRound($gameId, 1, $p2, $p2, 1); // p2's turn, not p1's
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
 
-        self::assertFalse(self::findByCardId($hand, 3)['is_playable']);
+        self::assertFalse(self::findByCardId($hand, $charityId)['is_playable']);
     }
 
     public function testGetStateExposesSuppressionSourceAndExpiryForAnInPlayMood(): void
@@ -1150,40 +1199,36 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 12, 'in_play', $p1); // Faith
-        $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by Faith, for as long as Faith is in play
-        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- suppressed until the end of the round, no tracked source (mirrors Repentance)
+        $faithId = $this->insertGameCard($gameId, 12, 'in_play', $p1); // Faith
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by Faith, for as long as Faith is in play
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- suppressed until the end of the round, no tracked source (mirrors Repentance)
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
-
-        $faithGameCardId = (int) $this->pdo->query(
-            "SELECT id FROM game_cards WHERE game_id = {$gameId} AND card_id = 12"
-        )->fetchColumn();
 
         $this->pdo->prepare(
             "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'while_source_in_play', suppression_source_game_card_id = :source
-             WHERE game_id = :game_id AND card_id = 7"
-        )->execute(['source' => $faithGameCardId, 'game_id' => $gameId]);
+             WHERE id = :id"
+        )->execute(['source' => $faithId, 'id' => $courageId]);
 
         $this->pdo->prepare(
             "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'end_of_round'
-             WHERE game_id = :game_id AND card_id = 8"
-        )->execute(['game_id' => $gameId]);
+             WHERE id = :id"
+        )->execute(['id' => $dignityId]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
 
-        $courage = self::findByCardId($inPlay, 7);
+        $courage = self::findByCardId($inPlay, $courageId);
         self::assertTrue($courage['is_suppressed']);
         self::assertSame('while_source_in_play', $courage['suppression_expiry']);
-        self::assertSame(12, $courage['suppressed_by_card_id']);
+        self::assertSame($faithId, $courage['suppressed_by_card_id']);
         self::assertSame('Faith', $courage['suppressed_by_name']);
 
-        $dignity = self::findByCardId($inPlay, 8);
+        $dignity = self::findByCardId($inPlay, $dignityId);
         self::assertTrue($dignity['is_suppressed']);
         self::assertSame('end_of_round', $dignity['suppression_expiry']);
         self::assertNull($dignity['suppressed_by_card_id']);
         self::assertNull($dignity['suppressed_by_name']);
 
-        $faith = self::findByCardId($inPlay, 12);
+        $faith = self::findByCardId($inPlay, $faithId);
         self::assertFalse($faith['is_suppressed']);
     }
 
@@ -1201,39 +1246,36 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 11, 'in_play', $p1); // Encouragement
-        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity (base 3, dice 5) -- boosted by Encouragement
-        $this->insertGameCard($gameId, 12, 'in_play', $p1); // Faith
-        $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by Faith
+        $encouragementId = $this->insertGameCard($gameId, 11, 'in_play', $p1); // Encouragement
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity (base 3, dice 5) -- boosted by Encouragement
+        $faithId = $this->insertGameCard($gameId, 12, 'in_play', $p1); // Faith
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by Faith
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $this->pdo->prepare(
-            "UPDATE game_cards SET effect_state = '{\"boostedMoodId\":8}' WHERE game_id = :game_id AND card_id = 11"
-        )->execute(['game_id' => $gameId]);
+            'UPDATE game_cards SET effect_state = :effect_state WHERE id = :id'
+        )->execute(['effect_state' => json_encode(['boostedMoodId' => $dignityId]), 'id' => $encouragementId]);
 
-        $faithGameCardId = (int) $this->pdo->query(
-            "SELECT id FROM game_cards WHERE game_id = {$gameId} AND card_id = 12"
-        )->fetchColumn();
         $this->pdo->prepare(
             "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'while_source_in_play', suppression_source_game_card_id = :source
-             WHERE game_id = :game_id AND card_id = 7"
-        )->execute(['source' => $faithGameCardId, 'game_id' => $gameId]);
+             WHERE id = :id"
+        )->execute(['source' => $faithId, 'id' => $courageId]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
 
-        $dignity = self::findByCardId($inPlay, 8);
+        $dignity = self::findByCardId($inPlay, $dignityId);
         self::assertSame(5, $dignity['value']); // max(base 3, dice 5)
-        self::assertSame(11, $dignity['boosted_by_card_id']);
+        self::assertSame($encouragementId, $dignity['boosted_by_card_id']);
         self::assertSame('Encouragement', $dignity['boosted_by_name']);
 
-        $encouragement = self::findByCardId($inPlay, 11);
+        $encouragement = self::findByCardId($inPlay, $encouragementId);
         self::assertNull($encouragement['boosted_by_card_id']);
-        self::assertSame([['card_id' => 8, 'name' => 'Dignity', 'relationship' => 'dice_value']], $encouragement['affecting']);
+        self::assertSame([['card_id' => $dignityId, 'name' => 'Dignity', 'relationship' => 'dice_value']], $encouragement['affecting']);
 
-        $faith = self::findByCardId($inPlay, 12);
-        self::assertSame([['card_id' => 7, 'name' => 'Courage', 'relationship' => 'suppressed']], $faith['affecting']);
+        $faith = self::findByCardId($inPlay, $faithId);
+        self::assertSame([['card_id' => $courageId, 'name' => 'Courage', 'relationship' => 'suppressed']], $faith['affecting']);
 
-        $courage = self::findByCardId($inPlay, 7);
+        $courage = self::findByCardId($inPlay, $courageId);
         self::assertSame([], $courage['affecting']);
         self::assertNull($courage['boosted_by_card_id']); // has no printed dice value at all
     }
@@ -1252,12 +1294,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 71, 'hand', $p1); // Paranoia
+        $paranoiaId = $this->insertGameCard($gameId, 71, 'hand', $p1); // Paranoia
         $this->insertGameCard($gameId, 9, 'hand', $p2); // Discipline -- p2's only card, so the reveal is deterministic
         $this->insertGameCard($gameId, 106, 'deck', null, 0); // for Paranoia's own draw
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 71, ['target_player_id' => $p2]);
+        $this->games->playMood($gameId, $p1, $paranoiaId, ['target_player_id' => $p2]);
 
         // p2 never submitted this request at all -- without recent_events,
         // they'd have no way to ever learn Discipline was the card
@@ -1282,11 +1324,11 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
-        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity (base 3, dice 5) -- the mood targeted
+        $encouragementId = $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity (base 3, dice 5) -- the mood targeted
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 11, ['target_mood_id' => 8]);
+        $this->games->playMood($gameId, $p1, $encouragementId, ['target_mood_id' => $dignityId]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -1307,15 +1349,15 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 3, []);
+        $this->games->playMood($gameId, $p1, $charityId, []);
 
         $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
         self::assertCount(1, $playGrants); // the base turn's own grant was just consumed playing Charity
         self::assertSame('An extra play from Charity', $playGrants[0]['description']);
-        self::assertSame(3, $playGrants[0]['source_card_id']);
+        self::assertSame($charityId, $playGrants[0]['source_card_id']);
         self::assertSame('Charity', $playGrants[0]['source_card_name']);
     }
 
@@ -1333,19 +1375,19 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 42, 'hand', $p1); // Imagination (blue)
-        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity (white)
+        $imaginationId = $this->insertGameCard($gameId, 42, 'hand', $p1); // Imagination (blue)
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity (white)
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 42, ['color' => 'red']);
+        $this->games->playMood($gameId, $p1, $imaginationId, ['color' => 'red']);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
 
-        $imagination = self::findByCardId($inPlay, 42);
+        $imagination = self::findByCardId($inPlay, $imaginationId);
         self::assertSame('red', $imagination['color']);
         self::assertSame('blue', $imagination['base_color']);
 
-        $charity = self::findByCardId($inPlay, 3);
+        $charity = self::findByCardId($inPlay, $charityId);
         self::assertSame('red', $charity['color']);
         self::assertSame('white', $charity['base_color']);
     }
@@ -1366,12 +1408,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $suspicionId = $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
         $this->insertGameCard($gameId, 9, 'hand', $p2);
         $this->insertGameCard($gameId, 3, 'hand', $p3);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 78, ['player_ids' => [$p2, $p3]]);
+        $this->games->playMood($gameId, $p1, $suspicionId, ['player_ids' => [$p2, $p3]]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -1385,9 +1427,9 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testRecentEventsDescribeARoundsFinalScoresAndWinner(): void
     {
-        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1] = $this->buildThreePlayerFixture();
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
 
-        $this->games->playMood($gameId, $p1, 55, []); // Apathy, value 4
+        $this->games->playMood($gameId, $p1, $apathyId, []); // Apathy, value 4
         $this->games->pass($gameId, $p2);
         $this->games->pass($gameId, $p3);
 
@@ -1412,11 +1454,11 @@ final class GameServiceIntegrationTest extends TestCase
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
 
-        $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado
-        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- discarded as Bravado's own cost
+        $bravadoId = $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- discarded as Bravado's own cost
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 84, ['discard_mood_id' => 3]);
+        $this->games->playMood($gameId, $p1, $bravadoId, ['discard_mood_id' => $charityId]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -1443,12 +1485,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1); // seated so p1's single play doesn't wrap the turn order and auto-score the round
 
-        $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
-        $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence -- bottomed as Zeal's own cost
+        $zealId = $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
+        $benevolenceId = $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence -- bottomed as Zeal's own cost
         $this->insertGameCard($gameId, 9, 'deck', null, 0); // Discipline -- what actually gets drawn
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 106, ['hand_card_id' => 2]);
+        $this->games->playMood($gameId, $p1, $zealId, ['hand_card_id' => $benevolenceId]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -1476,10 +1518,10 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 3, []);
+        $this->games->playMood($gameId, $p1, $charityId, []);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -1506,12 +1548,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play
-        $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy -- played using it
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy -- played using it
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 3, []);
-        $this->games->playMood($gameId, $p1, 55, []);
+        $this->games->playMood($gameId, $p1, $charityId, []);
+        $this->games->playMood($gameId, $p1, $apathyId, []);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -1572,22 +1614,33 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4
-        $this->insertGameCard($gameId, 83, 'hand', $p1); // Boredom, value 4 -- p1's round-2 card
-        $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency, value 4 -- never played
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4
+        $boredomId = $this->insertGameCard($gameId, 83, 'hand', $p1); // Boredom, value 4 -- p1's round-2 card
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency, value 4 -- never played
         $this->insertGameCard($gameId, 27, 'deck', null, 0);
         $this->insertGameCard($gameId, 54, 'deck', null, 1);
 
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1, 'u2' => $u2, 'u3' => $u3];
+        return [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'u1' => $u1,
+            'u2' => $u2,
+            'u3' => $u3,
+            'apathyId' => $apathyId,
+            'boredomId' => $boredomId,
+            'complacencyId' => $complacencyId,
+        ];
     }
 
     public function testPlayMoodAdvancesTurnWithoutEndingRoundWhenPlaysRemain(): void
     {
-        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildThreePlayerFixture();
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
 
-        $result = $this->games->playMood($gameId, $p1, 55, []);
+        $result = $this->games->playMood($gameId, $p1, $apathyId, []);
 
         self::assertFalse($result['round_scored']);
         self::assertFalse($result['game_completed']);
@@ -1599,10 +1652,17 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testFullRoundCycleAssignsHurtFeelingsDrawsForLosersAndCompletesGame(): void
     {
-        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3] = $this->buildThreePlayerFixture();
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'apathyId' => $apathyId,
+            'boredomId' => $boredomId,
+        ] = $this->buildThreePlayerFixture();
 
         // Round 1: p1 plays a mood worth 4, p2 and p3 both pass (score 0).
-        $this->games->playMood($gameId, $p1, 55, []);
+        $this->games->playMood($gameId, $p1, $apathyId, []);
         $this->games->pass($gameId, $p2);
         $result = $this->games->pass($gameId, $p3);
 
@@ -1645,7 +1705,7 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p1, (int) $round2['current_turn_game_player_id']);
 
         // p1 plays their remaining card (Boredom, value 4) to win round 2 as well.
-        $this->games->playMood($gameId, $p1, 83, []);
+        $this->games->playMood($gameId, $p1, $boredomId, []);
 
         $roundAfterP1 = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $roundAfterP1['current_turn_game_player_id']);
@@ -1680,10 +1740,10 @@ final class GameServiceIntegrationTest extends TestCase
 
     public function testPlayingOutOfTurnRaisesRulesLevelException(): void
     {
-        ['gameId' => $gameId, 'p2' => $p2] = $this->buildThreePlayerFixture();
+        ['gameId' => $gameId, 'p2' => $p2, 'complacencyId' => $complacencyId] = $this->buildThreePlayerFixture();
 
         $this->expectException(IllegalPlayException::class);
-        $this->games->playMood($gameId, $p2, 5, []);
+        $this->games->playMood($gameId, $p2, $complacencyId, []);
     }
 
     /**
@@ -1711,19 +1771,30 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence, white
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, white -- shares Benevolence's color
-        $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal, red -- doesn't share
+        $benevolenceId = $this->insertGameCard($gameId, 2, 'hand', $p1); // Benevolence, white
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, white -- shares Benevolence's color
+        $zealId = $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal, red -- doesn't share
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        return ['gameId' => $gameId, 'p1' => $p1];
+        return [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'benevolenceId' => $benevolenceId,
+            'dignityId' => $dignityId,
+            'zealId' => $zealId,
+        ];
     }
 
     public function testRestrictedExtraPlayGrantIsEnforcedAfterReloadingFromTheDatabase(): void
     {
-        ['gameId' => $gameId, 'p1' => $p1] = $this->buildBenevolenceFixture();
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'benevolenceId' => $benevolenceId,
+            'dignityId' => $dignityId,
+        ] = $this->buildBenevolenceFixture();
 
-        $this->games->playMood($gameId, $p1, 2, []); // Benevolence -- grants a restricted extra play
+        $this->games->playMood($gameId, $p1, $benevolenceId, []); // Benevolence -- grants a restricted extra play
 
         $round = $this->fetchRound($gameId);
         self::assertSame(1, (int) $round['plays_remaining']);
@@ -1733,15 +1804,20 @@ final class GameServiceIntegrationTest extends TestCase
         // reusing any in-memory state from the play above) must still
         // reject Dignity as sharing Benevolence's color.
         $this->expectException(IllegalPlayException::class);
-        $this->games->playMood($gameId, $p1, 8, []);
+        $this->games->playMood($gameId, $p1, $dignityId, []);
     }
 
     public function testRestrictedExtraPlayGrantAllowsAQualifyingCardAfterReload(): void
     {
-        ['gameId' => $gameId, 'p1' => $p1] = $this->buildBenevolenceFixture();
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'benevolenceId' => $benevolenceId,
+            'zealId' => $zealId,
+        ] = $this->buildBenevolenceFixture();
 
-        $this->games->playMood($gameId, $p1, 2, []); // Benevolence -- grants a restricted extra play
-        $this->games->playMood($gameId, $p1, 106, []); // Zeal, red -- doesn't share Benevolence's color
+        $this->games->playMood($gameId, $p1, $benevolenceId, []); // Benevolence -- grants a restricted extra play
+        $this->games->playMood($gameId, $p1, $zealId, []); // Zeal, red -- doesn't share Benevolence's color
 
         $zoneStmt = $this->pdo->prepare('SELECT zone FROM game_cards WHERE game_id = :game_id AND card_id = 106');
         $zoneStmt->execute(['game_id' => $gameId]);
@@ -1770,17 +1846,17 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 4, 'hand', $p2); // Chivalry
+        $chivalryId = $this->insertGameCard($gameId, 4, 'hand', $p2); // Chivalry
         // p1 went first; it's now p2's turn -- p2 is a middle turn (not
         // the round's last), so the round stays in progress and
         // first_game_player_id isn't disturbed by this play.
         $this->insertGameRound($gameId, 1, $p1, $p2, 1);
 
-        $this->games->playMood($gameId, $p2, 4, []);
+        $this->games->playMood($gameId, $p2, $chivalryId, []);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertSame(5, $state->valueOf(4)); // p2 didn't go first this round
+        self::assertSame(5, $state->valueOf($chivalryId)); // p2 didn't go first this round
     }
 
     /**
@@ -1805,11 +1881,11 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+        $honorId = $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         // p1 plays Honor naming p3, then wins round 1 outright (3 vs 0/0).
-        $this->games->playMood($gameId, $p1, 15, ['target_player_id' => $p3]);
+        $this->games->playMood($gameId, $p1, $honorId, ['target_player_id' => $p3]);
         $this->games->pass($gameId, $p2);
         $result = $this->games->pass($gameId, $p3);
 
@@ -1844,12 +1920,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 51, 'hand', $p1); // Sneakiness, value 5
+        $sneakinessId = $this->insertGameCard($gameId, 51, 'hand', $p1); // Sneakiness, value 5
         $this->insertGameCard($gameId, 120, 'in_play', $p2); // Generosity, value 6 -- already ahead
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         // Before the swap, p2 leads 6 to 5; after it, p1 should win 6 to 5.
-        $this->games->playMood($gameId, $p1, 51, ['opponent_player_id' => $p2]);
+        $this->games->playMood($gameId, $p1, $sneakinessId, ['opponent_player_id' => $p2]);
         $result = $this->games->pass($gameId, $p2);
 
         self::assertTrue($result['round_scored']);
@@ -1888,11 +1964,11 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
         $this->insertGameCard($gameId, 3, 'deck', null, 0); // would be drawn if scoring weren't skipped
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 107, ['target_player_id' => $p2]);
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p2]);
         $result = $this->games->pass($gameId, $p2);
 
         self::assertTrue($result['round_scored']);
@@ -1943,12 +2019,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
-        $this->insertGameCard($gameId, 3, 'deck', null, 0); // p2's loser draw
-        $this->insertGameCard($gameId, 7, 'deck', null, 1); // p1's replacement draw
+        $bashfulnessId = $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
+        $p2DrawId = $this->insertGameCard($gameId, 3, 'deck', null, 0); // p2's loser draw
+        $p1ReplacementId = $this->insertGameCard($gameId, 7, 'deck', null, 1); // p1's replacement draw
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 30, []);
+        $this->games->playMood($gameId, $p1, $bashfulnessId, []);
         $result = $this->games->pass($gameId, $p2);
 
         self::assertTrue($result['round_scored']);
@@ -1956,10 +2032,10 @@ final class GameServiceIntegrationTest extends TestCase
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
 
-        self::assertFalse($state->isInPlay(30));
-        self::assertContains(7, $state->hand($p1));
-        self::assertContains(3, $state->hand($p2));
-        self::assertSame([30], $state->deck());
+        self::assertFalse($state->isInPlay($bashfulnessId));
+        self::assertContains($p1ReplacementId, $state->hand($p1));
+        self::assertContains($p2DrawId, $state->hand($p2));
+        self::assertSame([$bashfulnessId], $state->deck());
     }
 
     /**
@@ -1984,12 +2060,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
+        $bashfulnessId = $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
         $this->insertGameCard($gameId, 3, 'deck', null, 0); // p2's loser draw
         $this->insertGameCard($gameId, 7, 'deck', null, 1); // p1's replacement draw (Courage) -- must stay unnamed
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 30, []);
+        $this->games->playMood($gameId, $p1, $bashfulnessId, []);
         $this->games->pass($gameId, $p2);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
@@ -2019,10 +2095,10 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 60, 'hand', $p1); // Corruption, value 2
+        $corruptionId = $this->insertGameCard($gameId, 60, 'hand', $p1); // Corruption, value 2
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 60, ['mode' => 'double_win']);
+        $this->games->playMood($gameId, $p1, $corruptionId, ['mode' => 'double_win']);
         $result = $this->games->pass($gameId, $p2);
 
         self::assertTrue($result['round_scored']);
@@ -2056,13 +2132,13 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 36, 'hand', $p1); // Doubt
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, white -- revealed
-        $this->insertGameCard($gameId, 7, 'hand', $p2); // Courage, white -- would be banned next round
+        $doubtId = $this->insertGameCard($gameId, 36, 'hand', $p1); // Doubt
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, white -- revealed
+        $courageId = $this->insertGameCard($gameId, 7, 'hand', $p2); // Courage, white -- would be banned next round
         $this->insertGameCard($gameId, 55, 'deck', null, 0); // p1's replacement draw
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 36, ['reveal_card_ids' => [8]]);
+        $this->games->playMood($gameId, $p1, $doubtId, ['reveal_card_ids' => [$dignityId]]);
         $this->games->pass($gameId, $p2);
 
         $round2 = $this->fetchRound($gameId);
@@ -2072,7 +2148,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->pass($gameId, $p1); // advance to p2's turn without ending round 2
 
         $this->expectException(IllegalPlayException::class);
-        $this->games->playMood($gameId, $p2, 7, []);
+        $this->games->playMood($gameId, $p2, $courageId, []);
     }
 
     /**
@@ -2096,12 +2172,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 124, 'hand', $p1); // Hope, value 0
-        $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4 -- played with Hope's same-turn bonus
+        $hopeId = $this->insertGameCard($gameId, 124, 'hand', $p1); // Hope, value 0
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4 -- played with Hope's same-turn bonus
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 124, []);
-        $this->games->playMood($gameId, $p1, 55, []);
+        $this->games->playMood($gameId, $p1, $hopeId, []);
+        $this->games->playMood($gameId, $p1, $apathyId, []);
         $this->games->pass($gameId, $p2);
 
         $round2 = $this->fetchRound($gameId);
@@ -2130,12 +2206,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 102, 'hand', $p1); // Stubbornness, value 3
+        $stubbornnessId = $this->insertGameCard($gameId, 102, 'hand', $p1); // Stubbornness, value 3
         $this->insertGameCard($gameId, 66, 'in_play', $p2); // Hate, value 0
         $this->insertGameCard($gameId, 105, 'in_play', $p2); // Wrath, value 0 -- p2 now has 2 moods
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 102, []);
+        $this->games->playMood($gameId, $p1, $stubbornnessId, []);
         $this->games->pass($gameId, $p2);
 
         $round2 = $this->fetchRound($gameId);
@@ -2163,12 +2239,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 102, 'hand', $p1); // Stubbornness, value 3
+        $stubbornnessId = $this->insertGameCard($gameId, 102, 'hand', $p1); // Stubbornness, value 3
         $this->insertGameCard($gameId, 66, 'in_play', $p1); // Hate, value 0 -- p1 already has 1 mood before playing Stubbornness
         $this->insertGameCard($gameId, 105, 'in_play', $p2); // Wrath, value 0 -- p2 has exactly as many moods as p1 will, not more
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 102, []); // p1 now has 2 moods (Hate + Stubbornness) vs p2's 1
+        $this->games->playMood($gameId, $p1, $stubbornnessId, []); // p1 now has 2 moods (Hate + Stubbornness) vs p2's 1
         $this->games->pass($gameId, $p2);
 
         $round2 = $this->fetchRound($gameId);
@@ -2191,10 +2267,10 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 120, 'hand', $p1); // Generosity
+        $generosityId = $this->insertGameCard($gameId, 120, 'hand', $p1); // Generosity
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 120, ['target_player_id' => $p2]);
+        $this->games->playMood($gameId, $p1, $generosityId, ['target_player_id' => $p2]);
 
         $round = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
@@ -2221,10 +2297,10 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 125, 'hand', $p1); // Joy, value 3
+        $joyId = $this->insertGameCard($gameId, 125, 'hand', $p1); // Joy, value 3
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 125, []);
+        $this->games->playMood($gameId, $p1, $joyId, []);
         $this->games->pass($gameId, $p2);
 
         $round2 = $this->fetchRound($gameId);
@@ -2253,25 +2329,25 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 82, 'hand', $p1); // Arrogance
-        $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, white
+        $arroganceId = $this->insertGameCard($gameId, 82, 'hand', $p1); // Arrogance
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, white
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 82, ['opponent_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, $arroganceId, ['opponent_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
-        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_id' => 8]);
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_id' => $dignityId]);
 
         $registry = DefaultEffectRegistry::build();
         $repository = new BoardStateRepository($registry);
         $state = $repository->load($gameId);
-        self::assertSame($p1, $state->ownerOf(8));
+        self::assertSame($p1, $state->ownerOf($dignityId));
 
-        $state->moveInPlayToDiscard(82);
+        $state->moveInPlayToDiscard($arroganceId);
         $repository->save($gameId, $state);
 
         $reloaded = $repository->load($gameId);
-        self::assertSame($p2, $reloaded->ownerOf(8));
-        self::assertFalse($reloaded->isInPlay(82));
+        self::assertSame($p2, $reloaded->ownerOf($dignityId));
+        self::assertFalse($reloaded->isInPlay($arroganceId));
     }
 
     /**
@@ -2294,24 +2370,24 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play needed to also play Scorn this turn
-        $this->insertGameCard($gameId, 24, 'hand', $p1); // Scorn, value 2, white
-        $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white -- played next round to trigger the reaction
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play needed to also play Scorn this turn
+        $scornId = $this->insertGameCard($gameId, 24, 'hand', $p1); // Scorn, value 2, white
+        $courageId = $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white -- played next round to trigger the reaction
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 3, []);
-        $this->games->playMood($gameId, $p1, 24, ['target_mood_id' => 3]); // Scorn suppresses Charity
+        $this->games->playMood($gameId, $p1, $charityId, []);
+        $this->games->playMood($gameId, $p1, $scornId, ['target_mood_id' => $charityId]); // Scorn suppresses Charity
         $this->games->pass($gameId, $p2);
 
         $round2 = $this->fetchRound($gameId);
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p1, (int) $round2['first_game_player_id']); // p1 won round 1 (2 to 0)
 
-        $this->games->playMood($gameId, $p1, 7, ['scorn_suppress_target' => 24]); // Courage (white) reacts, suppressing Scorn itself
+        $this->games->playMood($gameId, $p1, $courageId, ['scorn_suppress_target' => $scornId]); // Courage (white) reacts, suppressing Scorn itself
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertTrue($state->isSuppressed(24));
+        self::assertTrue($state->isSuppressed($scornId));
     }
 
     public function testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
@@ -2328,18 +2404,18 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
-        $this->insertGameCard($gameId, 3, 'hand', $p2);
-        $this->insertGameCard($gameId, 7, 'hand', $p2);
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $card7Id = $this->insertGameCard($gameId, 7, 'hand', $p2);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 86, ['target_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertTrue($state->isInPlay(86)); // cost/grant already resolved -- only the target's answer is outstanding
-        self::assertSame([3, 7], $state->hand($p2));
+        self::assertTrue($state->isInPlay($compulsionId)); // cost/grant already resolved -- only the target's answer is outstanding
+        self::assertSame([$card3Id, $card7Id], $state->hand($p2));
 
         // The whole round is frozen -- not even the acting player can pass.
         try {
@@ -2349,14 +2425,14 @@ final class GameServiceIntegrationTest extends TestCase
             // expected
         }
 
-        $respondResult = $this->games->respondToDecision($gameId, $p2, ['given_card_id' => 3]);
+        $respondResult = $this->games->respondToDecision($gameId, $p2, ['given_card_id' => $card3Id]);
         self::assertArrayNotHasKey('pending_decision', $respondResult);
 
         $state = (new BoardStateRepository($registry))->load($gameId);
         $p1Hand = $state->hand($p1);
         $p2Hand = $state->hand($p2);
-        self::assertSame([3], $p1Hand);
-        self::assertSame([7], $p2Hand);
+        self::assertSame([$card3Id], $p1Hand);
+        self::assertSame([$card7Id], $p2Hand);
     }
 
     public function testRespondToDecisionRejectsAPlayerWithNoDecisionPending(): void
@@ -2396,18 +2472,18 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
         $this->insertGameCard($gameId, 3, 'hand', $p2);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $beforePlay = $this->games->getState($gameId, $u1)['round']['pending_decision'];
         self::assertNull($beforePlay);
 
-        $this->games->playMood($gameId, $p1, 86, ['target_player_id' => $p2]);
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
 
         $targetView = $this->games->getState($gameId, $u2)['round']['pending_decision'];
         self::assertSame($p1, $targetView['initiating_game_player_id']);
-        self::assertSame(86, $targetView['played_card_id']);
+        self::assertSame($compulsionId, $targetView['played_card_id']);
         self::assertSame('Compulsion', $targetView['played_card_name']);
         self::assertSame('compulsion_give_card', $targetView['decision_type']);
         self::assertSame($p2, $targetView['target_game_player_id']);
@@ -2437,17 +2513,17 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 67, 'hand', $p1); // Intimidation
-        $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency -- not the revealed card
-        $this->insertGameCard($gameId, 3, 'hand', $p2); // p2's only card -- guaranteed to be the one revealed
+        $intimidationId = $this->insertGameCard($gameId, 67, 'hand', $p1); // Intimidation
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency -- not the revealed card
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2); // p2's only card -- guaranteed to be the one revealed
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 67, ['target_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, $intimidationId, ['target_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
-        $this->games->respondToDecision($gameId, $p2, ['revealed_card_id' => 3]);
+        $this->games->respondToDecision($gameId, $p2, ['revealed_card_id' => $card3Id]);
 
         $this->expectException(IllegalPlayException::class);
-        $this->games->playMood($gameId, $p1, 5, []);
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
     }
 
     public function testInstabilityPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
@@ -2464,30 +2540,30 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 96, 'hand', $p1); // Instability
-        $this->insertGameCard($gameId, 9, 'in_play', $p1); // given in exchange
-        $this->insertGameCard($gameId, 3, 'in_play', $p2); // candidate
-        $this->insertGameCard($gameId, 7, 'in_play', $p2); // candidate
+        $instabilityId = $this->insertGameCard($gameId, 96, 'hand', $p1); // Instability
+        $givenId = $this->insertGameCard($gameId, 9, 'in_play', $p1); // given in exchange
+        $candidate3Id = $this->insertGameCard($gameId, 3, 'in_play', $p2); // candidate
+        $candidate7Id = $this->insertGameCard($gameId, 7, 'in_play', $p2); // candidate
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 96, [
-            'candidate_mood_ids' => [3, 7],
-            'given_mood_id' => 9,
+        $playResult = $this->games->playMood($gameId, $p1, $instabilityId, [
+            'candidate_mood_ids' => [$candidate3Id, $candidate7Id],
+            'given_mood_id' => $givenId,
         ]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertSame($p2, $state->ownerOf(3)); // not taken yet
-        self::assertSame($p2, $state->ownerOf(7));
+        self::assertSame($p2, $state->ownerOf($candidate3Id)); // not taken yet
+        self::assertSame($p2, $state->ownerOf($candidate7Id));
 
-        $respondResult = $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => 7]);
+        $respondResult = $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => $candidate7Id]);
         self::assertArrayNotHasKey('pending_decision', $respondResult);
 
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertSame($p1, $state->ownerOf(7));
-        self::assertSame($p2, $state->ownerOf(3)); // the other candidate is untouched
-        self::assertSame($p2, $state->ownerOf(9));
+        self::assertSame($p1, $state->ownerOf($candidate7Id));
+        self::assertSame($p2, $state->ownerOf($candidate3Id)); // the other candidate is untouched
+        self::assertSame($p2, $state->ownerOf($givenId));
     }
 
     /**
@@ -2511,38 +2587,38 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
-        $this->insertGameCard($gameId, 9, 'hand', $p2);
-        $this->insertGameCard($gameId, 3, 'hand', $p2);
-        $this->insertGameCard($gameId, 106, 'hand', $p3);
+        $suspicionId = $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $card9Id = $this->insertGameCard($gameId, 9, 'hand', $p2);
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $card106Id = $this->insertGameCard($gameId, 106, 'hand', $p3);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 78, ['player_ids' => [$p2, $p3]]);
+        $playResult = $this->games->playMood($gameId, $p1, $suspicionId, ['player_ids' => [$p2, $p3]]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         // p3 hasn't answered yet -- responding out of turn is rejected.
         try {
-            $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => 106]);
+            $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => $card106Id]);
             self::fail('Expected p3 to have no decision pending until p2 answers first');
         } catch (GameStateException) {
             // expected
         }
 
-        $firstRespondResult = $this->games->respondToDecision($gameId, $p2, ['discarded_card_id_' . $p2 => 9]);
+        $firstRespondResult = $this->games->respondToDecision($gameId, $p2, ['discarded_card_id_' . $p2 => $card9Id]);
         self::assertTrue($firstRespondResult['pending_decision'] ?? false);
 
         // The whole batch resolves together only once its last row is
         // answered -- p2's discard hasn't actually happened yet either.
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertSame([3, 9], $state->hand($p2));
-        self::assertSame([106], $state->hand($p3));
+        self::assertSame([$card9Id, $card3Id], $state->hand($p2));
+        self::assertSame([$card106Id], $state->hand($p3));
 
-        $finalRespondResult = $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => 106]);
+        $finalRespondResult = $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => $card106Id]);
         self::assertArrayNotHasKey('pending_decision', $finalRespondResult);
 
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertSame([3], $state->hand($p2));
+        self::assertSame([$card3Id], $state->hand($p2));
         self::assertSame([], $state->hand($p3));
         self::assertCount(2, $state->discardPile());
     }
@@ -2569,13 +2645,13 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
-        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
-        $this->insertGameCard($gameId, 53, 'in_play', $p2); // Ambition, black
-        $this->insertGameCard($gameId, 28, 'in_play', $p3); // Anxiety, blue
+        $disillusionmentId = $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
+        $ambitionId = $this->insertGameCard($gameId, 53, 'in_play', $p2); // Ambition, black
+        $anxietyId = $this->insertGameCard($gameId, 28, 'in_play', $p3); // Anxiety, blue
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 10, []);
+        $playResult = $this->games->playMood($gameId, $p1, $disillusionmentId, []);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $result1 = $this->games->respondToDecision($gameId, $p2, ['chosen_color_' . $p2 => 'black']);
@@ -2586,18 +2662,18 @@ final class GameServiceIntegrationTest extends TestCase
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertTrue($state->isInPlay(9)); // nothing discarded until the queue's last player answers
-        self::assertTrue($state->isInPlay(53));
-        self::assertTrue($state->isInPlay(28));
+        self::assertTrue($state->isInPlay($disciplineId)); // nothing discarded until the queue's last player answers
+        self::assertTrue($state->isInPlay($ambitionId));
+        self::assertTrue($state->isInPlay($anxietyId));
 
         $result3 = $this->games->respondToDecision($gameId, $p1, ['chosen_color_' . $p1 => 'black']);
         self::assertArrayNotHasKey('pending_decision', $result3);
 
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertTrue($state->isInPlay(10));
-        self::assertTrue($state->isInPlay(9)); // white, not chosen by anyone
-        self::assertFalse($state->isInPlay(53)); // black
-        self::assertFalse($state->isInPlay(28)); // blue
+        self::assertTrue($state->isInPlay($disillusionmentId));
+        self::assertTrue($state->isInPlay($disciplineId)); // white, not chosen by anyone
+        self::assertFalse($state->isInPlay($ambitionId)); // black
+        self::assertFalse($state->isInPlay($anxietyId)); // blue
     }
 
     /**
@@ -2621,27 +2697,27 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
-        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
-        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white
-        $this->insertGameCard($gameId, 8, 'in_play', $p3); // Dignity, white
+        $maliceId = $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p3); // Dignity, white
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 68, ['target_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, $maliceId, ['target_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertTrue($state->isInPlay(9)); // not discarded yet
-        self::assertTrue($state->isInPlay(3));
+        self::assertTrue($state->isInPlay($disciplineId)); // not discarded yet
+        self::assertTrue($state->isInPlay($charityId));
 
-        $respondResult = $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [9, 3]]);
+        $respondResult = $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [$disciplineId, $charityId]]);
         self::assertArrayNotHasKey('pending_decision', $respondResult);
 
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertFalse($state->isInPlay(9));
-        self::assertFalse($state->isInPlay(3));
-        self::assertFalse($state->isInPlay(8)); // shares white with the two chosen moods
+        self::assertFalse($state->isInPlay($disciplineId));
+        self::assertFalse($state->isInPlay($charityId));
+        self::assertFalse($state->isInPlay($dignityId)); // shares white with the two chosen moods
     }
 
     /**
@@ -2667,14 +2743,14 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
-        $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white -- chosen
-        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- chosen
+        $maliceId = $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white -- chosen
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- chosen
         $this->insertGameCard($gameId, 8, 'in_play', $p3); // Dignity, white -- cascade, never chosen
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 68, ['target_player_id' => $p2]);
-        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [9, 3]]);
+        $this->games->playMood($gameId, $p1, $maliceId, ['target_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [$disciplineId, $charityId]]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -2709,12 +2785,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 61, 'hand', $p1); // Cruelty
+        $crueltyId = $this->insertGameCard($gameId, 61, 'hand', $p1); // Cruelty
         $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline
         $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 61, ['opponent_player_ids' => [$p2]]);
+        $this->games->playMood($gameId, $p1, $crueltyId, ['opponent_player_ids' => [$p2]]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -2743,12 +2819,12 @@ final class GameServiceIntegrationTest extends TestCase
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
 
-        $this->insertGameCard($gameId, 123, 'hand', $p1); // Harmony
-        $this->insertGameCard($gameId, 3, 'discard', null); // Charity, already in the discard pile
+        $harmonyId = $this->insertGameCard($gameId, 123, 'hand', $p1); // Harmony
+        $charityId = $this->insertGameCard($gameId, 3, 'discard', null); // Charity, already in the discard pile
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 123, []);
-        $this->games->playMood($gameId, $p1, 3, []);
+        $this->games->playMood($gameId, $p1, $harmonyId, []);
+        $this->games->playMood($gameId, $p1, $charityId, []);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         // Most recent first -- Charity (from discard) was played second.
@@ -2776,13 +2852,13 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile
-        $this->insertGameCard($gameId, 9, 'hand', $p1); // discarded as Guile's cost
-        $this->insertGameCard($gameId, 8, 'hand', $p1); // discarded as Guile's cost
-        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity -- taken
+        $guileId = $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile
+        $card9Id = $this->insertGameCard($gameId, 9, 'hand', $p1); // discarded as Guile's cost
+        $card8Id = $this->insertGameCard($gameId, 8, 'hand', $p1); // discarded as Guile's cost
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity -- taken
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 40, ['discard_card_ids' => [9, 8], 'target_mood_id' => 3]);
+        $this->games->playMood($gameId, $p1, $guileId, ['discard_card_ids' => [$card9Id, $card8Id], 'target_mood_id' => $charityId]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertNotEmpty($events);
@@ -2810,22 +2886,22 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 82, 'hand', $p1); // Arrogance
-        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- qualifies
+        $arroganceId = $this->insertGameCard($gameId, 82, 'hand', $p1); // Arrogance
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- qualifies
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 82, ['opponent_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, $arroganceId, ['opponent_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
-        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_id' => 3]);
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_id' => $charityId]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
-        $charity = self::findByCardId($inPlay, 3);
+        $charity = self::findByCardId($inPlay, $charityId);
         self::assertSame(
             [
                 'original_owner_game_player_id' => $p2,
                 'original_owner_name' => 'tempown2',
-                'source_card_id' => 82,
+                'source_card_id' => $arroganceId,
                 'source_card_name' => 'Arrogance',
                 'reverts' => 'when_source_leaves_play',
             ],
@@ -2838,11 +2914,11 @@ final class GameServiceIntegrationTest extends TestCase
         $registry = DefaultEffectRegistry::build();
         $repository = new BoardStateRepository($registry);
         $state = $repository->load($gameId);
-        $state->moveInPlayToDiscard(82);
+        $state->moveInPlayToDiscard($arroganceId);
         $repository->save($gameId, $state);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
-        $charity = self::findByCardId($inPlay, 3);
+        $charity = self::findByCardId($inPlay, $charityId);
         self::assertNull($charity['temporary_ownership']);
         self::assertSame($p2, $charity['owner_game_player_id']);
     }
@@ -2866,25 +2942,25 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
-        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         // Which mood to give away is a pending decision the acting player
         // (not an opponent) answers immediately after Betrayal enters play
         // -- see BetrayalEffect's own docblock.
-        $playResult = $this->games->playMood($gameId, $p1, 56, ['recipient_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
-        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 3]);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $charityId]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
-        $charity = self::findByCardId($inPlay, 3);
+        $charity = self::findByCardId($inPlay, $charityId);
         self::assertSame(
             [
                 'original_owner_game_player_id' => $p1,
                 'original_owner_name' => 'tempown3',
-                'source_card_id' => 56,
+                'source_card_id' => $betrayalId,
                 'source_card_name' => 'Betrayal',
                 'reverts' => 'after_scoring',
             ],
@@ -2915,10 +2991,10 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal -- p1's only mood
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal -- p1's only mood
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $playResult = $this->games->playMood($gameId, $p1, 56, ['recipient_player_id' => $p2]);
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
 
         $pendingDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
@@ -2926,16 +3002,16 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p1, $pendingDecision['target_game_player_id']);
         self::assertTrue($pendingDecision['is_you']);
 
-        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 56]);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $betrayalId]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
-        $betrayal = self::findByCardId($inPlay, 56);
+        $betrayal = self::findByCardId($inPlay, $betrayalId);
         self::assertSame($p2, $betrayal['owner_game_player_id']);
         self::assertSame(
             [
                 'original_owner_game_player_id' => $p1,
                 'original_owner_name' => 'selfbetray1',
-                'source_card_id' => 56,
+                'source_card_id' => $betrayalId,
                 'source_card_name' => 'Betrayal',
                 'reverts' => 'after_scoring',
             ],
@@ -2973,12 +3049,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
-        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity -- given away
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 56, ['recipient_player_id' => $p2]);
-        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 3]);
+        $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $charityId]);
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertCount(2, $events);
@@ -3049,14 +3125,14 @@ final class GameServiceIntegrationTest extends TestCase
 
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
 
-        $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado
-        $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity, value 1 -- discarded as cost
+        $bravadoId = $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity, value 1 -- discarded as cost
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $before = self::findByGamePlayerId($this->games->getState($gameId, $u1)['players'], $p1);
         self::assertSame(1, $before['total_score']); // just Charity
 
-        $this->games->playMood($gameId, $p1, 84, ['discard_mood_id' => 3]);
+        $this->games->playMood($gameId, $p1, $bravadoId, ['discard_mood_id' => $charityId]);
 
         $after = self::findByGamePlayerId($this->games->getState($gameId, $u1)['players'], $p1);
         self::assertSame(3, $after['total_score']); // Charity gone, Bravado (value 3) now in play
@@ -3071,9 +3147,16 @@ final class GameServiceIntegrationTest extends TestCase
      */
     public function testTotalScoreSurvivesARoundScoringWhenNothingLeavesPlay(): void
     {
-        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'u1' => $u1] = $this->buildThreePlayerFixture();
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'u1' => $u1,
+            'apathyId' => $apathyId,
+        ] = $this->buildThreePlayerFixture();
 
-        $this->games->playMood($gameId, $p1, 55, []); // Apathy, value 4 -- no ability
+        $this->games->playMood($gameId, $p1, $apathyId, []); // Apathy, value 4 -- no ability
         $this->games->pass($gameId, $p2);
         $result = $this->games->pass($gameId, $p3);
         self::assertTrue($result['round_scored']);
@@ -3115,12 +3198,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 89, 'hand', $p1); // Exhilaration
-        $this->insertGameCard($gameId, 55, 'in_play', $p1); // Apathy, value 4 -- sacrificed for the cost
+        $exhilarationId = $this->insertGameCard($gameId, 89, 'hand', $p1); // Exhilaration
+        $apathyId = $this->insertGameCard($gameId, 55, 'in_play', $p1); // Apathy, value 4 -- sacrificed for the cost
         $this->insertGameCard($gameId, 106, 'in_play', $p1); // Zeal, value 3 -- survives, doubled
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 89, ['discard_mood_id' => 55]);
+        $this->games->playMood($gameId, $p1, $exhilarationId, ['discard_mood_id' => $apathyId]);
         $result = $this->games->pass($gameId, $p2);
 
         self::assertTrue($result['round_scored']);
@@ -3150,18 +3233,18 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 85, 'hand', $p1); // Chaos
-        $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
+        $chaosId = $this->insertGameCard($gameId, 85, 'hand', $p1); // Chaos
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 85, []);
+        $this->games->playMood($gameId, $p1, $chaosId, []);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
 
-        self::assertTrue($state->isInPlay(85));
-        self::assertTrue($state->isInPlay(3));
-        foreach ([$state->ownerOf(85), $state->ownerOf(3)] as $owner) {
+        self::assertTrue($state->isInPlay($chaosId));
+        self::assertTrue($state->isInPlay($charityId));
+        foreach ([$state->ownerOf($chaosId), $state->ownerOf($charityId)] as $owner) {
             self::assertContains($owner, [$p1, $p2]);
         }
     }
@@ -3190,23 +3273,23 @@ final class GameServiceIntegrationTest extends TestCase
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
         $p3 = $this->insertGamePlayer($gameId, $u3, 2);
 
-        $this->insertGameCard($gameId, 132, 'hand', $p1); // Vulnerability, base 1 / dice 7
-        $this->insertGameCard($gameId, 8, 'hand', $p2); // Dignity
-        $this->insertGameCard($gameId, 3, 'hand', $p2); // Charity, value 1 -- discarded to pay Dignity's cost
+        $vulnerabilityId = $this->insertGameCard($gameId, 132, 'hand', $p1); // Vulnerability, base 1 / dice 7
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p2); // Dignity
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p2); // Charity, value 1 -- discarded to pay Dignity's cost
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 132, []);
+        $this->games->playMood($gameId, $p1, $vulnerabilityId, []);
 
         $registry = DefaultEffectRegistry::build();
         $repository = new BoardStateRepository($registry);
-        self::assertSame(1, $repository->load($gameId)->valueOf(132)); // nothing discarded yet
+        self::assertSame(1, $repository->load($gameId)->valueOf($vulnerabilityId)); // nothing discarded yet
 
-        $this->games->playMood($gameId, $p2, 8, ['discard_card_id' => 3]);
+        $this->games->playMood($gameId, $p2, $dignityId, ['discard_card_id' => $charityId]);
 
         // p2's discard, from a separate request, has to survive the reload
         // for p1's Vulnerability to reflect it -- the round isn't over yet
         // (p3 hasn't gone), so this can be observed directly.
-        self::assertSame(7, $repository->load($gameId)->valueOf(132));
+        self::assertSame(7, $repository->load($gameId)->valueOf($vulnerabilityId));
 
         $result = $this->games->pass($gameId, $p3);
         self::assertTrue($result['round_scored']);
@@ -3214,7 +3297,7 @@ final class GameServiceIntegrationTest extends TestCase
         $round2 = $this->fetchRound($gameId);
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame(0, (int) $round2['discarded_this_round']);
-        self::assertSame(1, $repository->load($gameId)->valueOf(132)); // reset for the new round
+        self::assertSame(1, $repository->load($gameId)->valueOf($vulnerabilityId)); // reset for the new round
     }
 
     public function testEncouragementsBoostSurvivesReload(): void
@@ -3231,16 +3314,16 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
-        $this->insertGameCard($gameId, 9, 'in_play', $p1); // Discipline, base 6 / dice 3
+        $encouragementId = $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p1); // Discipline, base 6 / dice 3
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->games->playMood($gameId, $p1, 11, ['target_mood_id' => 9]);
+        $this->games->playMood($gameId, $p1, $encouragementId, ['target_mood_id' => $disciplineId]);
 
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
 
-        self::assertSame(6, $state->valueOf(9)); // higher of base(6)/dice(3)
+        self::assertSame(6, $state->valueOf($disciplineId)); // higher of base(6)/dice(3)
     }
 
     /**
@@ -3269,14 +3352,15 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
         $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $cardId = $this->insertGameCard($gameId, 1, 'hand', $p1);
 
-        $insertOpenBatch = function () use ($gameId, $roundId, $p1): void {
+        $insertOpenBatch = function () use ($gameId, $roundId, $p1, $cardId): void {
             $stmt = $this->pdo->prepare(
                 'INSERT INTO game_pending_decision_batches
                     (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices)
-                 VALUES (:game_id, :round_id, 1, 0, :initiator, \'{}\', \'{}\')'
+                 VALUES (:game_id, :round_id, :card_id, 0, :initiator, \'{}\', \'{}\')'
             );
-            $stmt->execute(['game_id' => $gameId, 'round_id' => $roundId, 'initiator' => $p1]);
+            $stmt->execute(['game_id' => $gameId, 'round_id' => $roundId, 'card_id' => $cardId, 'initiator' => $p1]);
         };
 
         $insertOpenBatch(); // the "winner" of the race
@@ -3307,7 +3391,7 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $p2 = $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm, value 0
+        $enthusiasmId = $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm, value 0
         $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, base value 3
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
@@ -3320,7 +3404,7 @@ final class GameServiceIntegrationTest extends TestCase
         $state = $this->games->getState($gameId, $u1);
         self::assertTrue($state['round']['pending_decision']['is_you']);
         self::assertSame('enthusiasm_extra_score', $state['round']['pending_decision']['decision_type']);
-        self::assertSame(116, $state['round']['pending_decision']['played_card_id']);
+        self::assertSame($enthusiasmId, $state['round']['pending_decision']['played_card_id']);
         self::assertSame([$p1 => 3, $p2 => 0], $state['round']['scoring_preview']['scores']); // undecided reads as declined
 
         $result = $this->games->respondToDecision($gameId, $p1, ['take_bonus' => true]);

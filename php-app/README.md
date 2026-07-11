@@ -958,14 +958,16 @@ two.
   methods (Altruism, Conviction, Corruption, Doubt, Hate, Paranoia,
   Rationalization, Zeal) needed any change -- every call site already
   passed exactly the information `BoardState` needs to route correctly.
-- `startGame()` shuffles and deals starting hands from one pool exactly as
-  before, then for a duel splits the *remaining* shuffled cards round-robin
-  into the two players' decks (rather than dealing each player an
-  independently-shuffled full pool), because `game_cards`' `UNIQUE KEY
-  uq_game_cards_card (game_id, card_id)` constraint makes a duplicate-card
-  independent-pool model structurally impossible without a schema change
-  -- this matches how a physical "Duel" variant would split one deck
-  rather than duplicate it.
+- `startGame()` gives each duel player their own *complete* deck, built and
+  shuffled completely independently -- the same `buildStandardDeckCardIds()`
+  (a random 45-card draw for `deck_type: 'standard'`) or `range(1,
+  TOTAL_CARDS)` (the full 133-card pool for `'one_of_each'`) a single-player
+  game uses, called once per player rather than once for the whole table --
+  with each player's starting hand dealt from their own pool, not a shared
+  one. This means the *same* catalog card can legitimately end up in both
+  players' pools at once (certain for `'one_of_each'`, likely for
+  `'standard'`) -- see "Card identity: catalog id vs. per-game instance id"
+  below for how the engine tells two such cards apart.
 - Persistence reuses `game_cards.owner_game_player_id` (already nullable,
   already present) for both zones: `null` for a shared deck/discard row,
   the owning player's `game_player_id` for a duel deck row or any
@@ -977,6 +979,44 @@ two.
 - `GameService::getState()`'s `deck_count` is the *viewing* player's own
   deck size in a duel (it differs per player) and the shared pool's size
   otherwise, unchanged from before.
+
+### Card identity: catalog id vs. per-game instance id
+
+Every other game format keeps `cards.id` (1-133, "the catalog id") unique
+per game -- a shared or split-shared deck can never contain the same
+printed card twice, so catalog id alone was always enough to identify a
+specific physical card within a game. Duel's independent-per-player decks
+break that: since each player draws from their *own* full pool, the same
+catalog card can now exist twice in one game simultaneously (one per
+player), and `game_cards` no longer enforces otherwise (its old `UNIQUE KEY
+uq_game_cards_card (game_id, card_id)` was dropped in migration `0013` in
+favor of a plain index).
+
+Card identity throughout the whole system -- `BoardState`'s hands/decks/
+discard pile/in-play zone, every choice a player submits (`hand_card_id`,
+`target_mood_id`, `discard_card_ids`, Creativity's `copy_card_id`, etc.),
+and every `card_id` field the API returns -- is therefore `game_cards.id`
+(the row's own surrogate primary key, which already existed solely to
+resolve `suppression_source_game_card_id`'s self-reference before this),
+not the catalog id. `copied_card_id` (Creativity "playing as a copy of a
+mood currently in play") is a per-game instance id for the same reason --
+it names a specific physical card on the board, not a printed card in the
+abstract.
+
+`BoardState::catalogRow(int $cardId)` is the *only* place in the whole
+Rules engine that ever reads catalog data (name/color/base value/rules
+text) directly -- no `Effects/*.php` class touches a catalog array itself,
+every one of them goes through `catalogRow()`/`valueOf()`/`colorOf()` --
+which is what let this become a one-method change: a new `$catalogCardIdFor`
+constructor param (`array<int, int>`, instance id => catalog id) that
+`catalogRow()` consults, falling back to treating `$cardId` as already
+being a catalog id when no mapping entry exists. That fallback means every
+game/test where instance and catalog id never diverge (i.e. everything
+except a duel with a genuinely duplicated card) needs no mapping at all --
+confirmed by the ~350 pure in-memory Rules-layer tests, none of which
+supply `$catalogCardIdFor`, all of which kept passing unmodified.
+`BoardStateRepository::load()` builds the real mapping for a live game from
+each loaded `game_cards` row's own `id`/`card_id` pair.
 
 ## Tests
 

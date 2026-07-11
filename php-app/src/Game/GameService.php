@@ -94,8 +94,8 @@ final class GameService
     private const PASSION_DECISION_TYPE = 'passion_score_opponent_mood';
     private const SCORING_DECISION_TYPES = [self::ENTHUSIASM_DECISION_TYPE, self::PASSION_DECISION_TYPE];
 
-    /** @var ?array<int, string> card_id => name, memoized per instance by cardCatalogNames() */
-    private ?array $cardNames = null;
+    /** @var array<int, array<int, string>> gameId => (card_id => name), memoized per instance by cardNamesFor() */
+    private array $cardNamesByGame = [];
 
     public function __construct(
         private readonly BoardStateRepository $boardStates,
@@ -159,9 +159,6 @@ final class GameService
             throw new GameStateException("Game {$gameId} needs at least " . self::MIN_PLAYERS . ' players to start');
         }
 
-        $cardIds = $game['deck_type'] === 'standard' ? $this->buildStandardDeckCardIds() : range(1, self::TOTAL_CARDS);
-        shuffle($cardIds);
-
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
@@ -171,40 +168,57 @@ final class GameService
                  VALUES (:game_id, :card_id, :zone, :owner, :deck_position)'
             );
 
-            foreach ($playerIds as $playerId) {
-                for ($i = 0; $i < self::STARTING_HAND_SIZE; $i++) {
-                    $insertCard->execute([
-                        'game_id' => $gameId,
-                        'card_id' => array_shift($cardIds),
-                        'zone' => 'hand',
-                        'owner' => $playerId,
-                        'deck_position' => null,
-                    ]);
-                }
-            }
-
-            // 'duel' splits the same shuffled remainder round-robin into
-            // one deck per player (createGame() already rejected any
-            // 'duel' game without exactly 2 players) instead of the usual
-            // single shared pool -- see BoardState::$hasSeparateDecks.
-            // Deliberately still drawn from one shuffle rather than two
-            // independently-shuffled pools: the catalog's own uq_game_cards_card
-            // constraint means a given card id can only ever sit in one
-            // player's deck at a time anyway, matching how a physical
-            // "Duel" variant splits a single deck rather than duplicating it.
+            // 'duel' gives each player their OWN complete deck -- built,
+            // and shuffled, independently per player by the exact same
+            // rules a normal single-player deck uses -- rather than
+            // splitting one shared pool (createGame() already rejected any
+            // 'duel' game without exactly 2 players; see
+            // BoardState::$hasSeparateDecks). The same catalog card can
+            // therefore legitimately end up in both players' pools at
+            // once; a card's identity within the game is its own
+            // game_cards.id, not its catalog card_id -- see
+            // BoardState::$catalogCardIdFor.
             if ($game['format'] === 'duel') {
-                $deckPositionByPlayer = array_fill_keys($playerIds, 0);
-                foreach (array_values($cardIds) as $i => $cardId) {
-                    $ownerId = $playerIds[$i % count($playerIds)];
-                    $insertCard->execute([
-                        'game_id' => $gameId,
-                        'card_id' => $cardId,
-                        'zone' => 'deck',
-                        'owner' => $ownerId,
-                        'deck_position' => $deckPositionByPlayer[$ownerId]++,
-                    ]);
+                foreach ($playerIds as $playerId) {
+                    $playerCardIds = $game['deck_type'] === 'standard' ? $this->buildStandardDeckCardIds() : range(1, self::TOTAL_CARDS);
+                    shuffle($playerCardIds);
+
+                    for ($i = 0; $i < self::STARTING_HAND_SIZE; $i++) {
+                        $insertCard->execute([
+                            'game_id' => $gameId,
+                            'card_id' => array_shift($playerCardIds),
+                            'zone' => 'hand',
+                            'owner' => $playerId,
+                            'deck_position' => null,
+                        ]);
+                    }
+
+                    foreach (array_values($playerCardIds) as $position => $cardId) {
+                        $insertCard->execute([
+                            'game_id' => $gameId,
+                            'card_id' => $cardId,
+                            'zone' => 'deck',
+                            'owner' => $playerId,
+                            'deck_position' => $position,
+                        ]);
+                    }
                 }
             } else {
+                $cardIds = $game['deck_type'] === 'standard' ? $this->buildStandardDeckCardIds() : range(1, self::TOTAL_CARDS);
+                shuffle($cardIds);
+
+                foreach ($playerIds as $playerId) {
+                    for ($i = 0; $i < self::STARTING_HAND_SIZE; $i++) {
+                        $insertCard->execute([
+                            'game_id' => $gameId,
+                            'card_id' => array_shift($cardIds),
+                            'zone' => 'hand',
+                            'owner' => $playerId,
+                            'deck_position' => null,
+                        ]);
+                    }
+                }
+
                 foreach (array_values($cardIds) as $position => $cardId) {
                     $insertCard->execute([
                         'game_id' => $gameId,
@@ -1286,7 +1300,7 @@ final class GameService
         }
         unset($player);
 
-        $cardIds = array_keys($this->cardCatalogNames());
+        $names = $this->cardNamesFor($gameId);
 
         if ($roundRow !== false) {
             $currentTurnGamePlayerId = $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null;
@@ -1296,7 +1310,7 @@ final class GameService
                 'current_turn_game_player_id' => $currentTurnGamePlayerId,
                 'plays_remaining' => (int) $roundRow['plays_remaining'],
                 'play_grants' => array_map(
-                    fn (?array $restriction) => $this->describePlayGrant($restriction),
+                    fn (?array $restriction) => $this->describePlayGrant($restriction, $names),
                     $state->pendingPlayGrants(),
                 ),
                 'first_game_player_id' => (int) $roundRow['first_game_player_id'],
@@ -1310,14 +1324,13 @@ final class GameService
         }
 
         $response['you']['hand'] = array_map(
-            fn (int $cardId) => $this->serializeCard($state, $cardId, $viewerGamePlayerId),
+            fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
             $state->hand($viewerGamePlayerId)
         );
 
-        $names = $this->cardCatalogNames();
         $playerNames = array_column($players, 'username', 'game_player_id');
         foreach ($state->moodsInPlay() as $cardId => $mood) {
-            $serialized = $this->serializeCard($state, $cardId);
+            $serialized = $this->serializeCard($state, $cardId, $names);
             $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
             $response['in_play'][] = [
                 ...$serialized,
@@ -1343,7 +1356,7 @@ final class GameService
         // cards right now -- see MoodPlayService::isPlayable() and
         // BoardState::grantAllows()'s 'source' => 'discard' handling.
         $response['discard_pile'] = array_map(
-            fn (int $cardId) => $this->serializeCard($state, $cardId, $viewerGamePlayerId),
+            fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
             $state->discardPile()
         );
 
@@ -1386,7 +1399,7 @@ final class GameService
         $stmt->execute();
 
         $playerNames = array_column($players, 'username', 'game_player_id');
-        $cardNames = $this->cardCatalogNames();
+        $cardNames = $this->cardNamesFor($gameId);
 
         return array_map(
             fn (array $row) => [
@@ -1428,7 +1441,7 @@ final class GameService
         // absence. Same two event types as $playedFromSuffix, for the same
         // reason (only those two ever announce a card actually being played).
         $grantUsed = $details['grant_used'] ?? null;
-        $grantUsedSuffix = $grantUsed !== null ? ' (using ' . $this->describeGrantDetails($grantUsed) . ')' : '';
+        $grantUsedSuffix = $grantUsed !== null ? ' (using ' . $this->describeGrantDetails($grantUsed, $cardNames) . ')' : '';
 
         $description = match ($row['event_type']) {
             'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
@@ -1521,7 +1534,7 @@ final class GameService
         $grantsCreated = $details['grants_created'] ?? [];
         if ($grantsCreated !== []) {
             $grantParts = array_map(
-                fn (?array $restriction) => "{$actor} was granted " . $this->describeGrantDetails($restriction ?? []),
+                fn (?array $restriction) => "{$actor} was granted " . $this->describeGrantDetails($restriction ?? [], $cardNames),
                 $grantsCreated,
             );
             $description .= '; ' . implode('; ', $grantParts);
@@ -1678,9 +1691,10 @@ final class GameService
 
     /**
      * @param ?array{type?: string, values?: int[], source?: string, sourceCardId?: int} $restriction
+     * @param array<int, string> $cardNames
      * @return array{description:string, source_card_id:?int, source_card_name:?string}
      */
-    private function describePlayGrant(?array $restriction): array
+    private function describePlayGrant(?array $restriction, array $cardNames): array
     {
         if ($restriction === null) {
             // Only ever startTurn()'s own base allowance (1, or 2 with Hurt
@@ -1690,17 +1704,18 @@ final class GameService
         }
 
         return [
-            'description' => ucfirst($this->describeGrantDetails($restriction)),
+            'description' => ucfirst($this->describeGrantDetails($restriction, $cardNames)),
             'source_card_id' => $restriction['sourceCardId'] ?? null,
-            'source_card_name' => $this->sourceCardNameFor($restriction),
+            'source_card_name' => $this->sourceCardNameFor($restriction, $cardNames),
         ];
     }
 
-    private function sourceCardNameFor(array $restriction): ?string
+    /** @param array<int, string> $cardNames */
+    private function sourceCardNameFor(array $restriction, array $cardNames): ?string
     {
         $sourceCardId = $restriction['sourceCardId'] ?? null;
 
-        return $sourceCardId !== null ? ($this->cardCatalogNames()[$sourceCardId] ?? 'a card') : null;
+        return $sourceCardId !== null ? ($cardNames[$sourceCardId] ?? 'a card') : null;
     }
 
     /**
@@ -1717,11 +1732,11 @@ final class GameService
      * so the "Your normal turn" case never gets here by accident).
      *
      * @param array{type?: string, values?: int[], source?: string, sourceCardId?: int} $restriction
+     * @param array<int, string> $cardNames
      */
-    private function describeGrantDetails(array $restriction): string
+    private function describeGrantDetails(array $restriction, array $cardNames): string
     {
-        $cardNames = $this->cardCatalogNames();
-        $sourceCardName = $this->sourceCardNameFor($restriction);
+        $sourceCardName = $this->sourceCardNameFor($restriction, $cardNames);
 
         $zoneNote = ($restriction['source'] ?? 'hand') === 'discard' ? ' from the discard pile' : '';
 
@@ -1758,12 +1773,12 @@ final class GameService
      * (MoodPlayService::isPlayable()) -- true by default for an in-play
      * card being merely displayed, since nothing there ever reads it.
      *
+     * @param array<int, string> $names
      * @return array{card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
-    private function serializeCard(BoardState $state, int $cardId, ?int $reactingViewerId = null): array
+    private function serializeCard(BoardState $state, int $cardId, array $names, ?int $reactingViewerId = null): array
     {
         $catalog = $state->catalogRow($cardId);
-        $names = $this->cardCatalogNames();
         $inPlay = $state->isInPlay($cardId);
 
         // A Creativity copy's dice value (like its color/value) comes from
@@ -1958,18 +1973,30 @@ final class GameService
         return $fields;
     }
 
-    /** @return array<int, string> card_id => name */
-    private function cardCatalogNames(): array
+    /**
+     * A card's own game_cards.id is now its identity (see
+     * BoardState::$catalogCardIdFor's docblock -- a 'duel' game gives each
+     * player their own complete deck, so the same catalog card can exist
+     * twice in one game), so a name lookup has to be scoped to one game's
+     * own cards rather than the catalog's 1-133 ids directly.
+     *
+     * @return array<int, string> game_cards.id => name
+     */
+    private function cardNamesFor(int $gameId): array
     {
-        if ($this->cardNames === null) {
-            $stmt = Connection::get()->query('SELECT id, name FROM cards');
-            $this->cardNames = [];
+        if (!isset($this->cardNamesByGame[$gameId])) {
+            $stmt = Connection::get()->prepare(
+                'SELECT gc.id, c.name FROM game_cards gc JOIN cards c ON c.id = gc.card_id WHERE gc.game_id = :game_id'
+            );
+            $stmt->execute(['game_id' => $gameId]);
+            $names = [];
             foreach ($stmt->fetchAll() as $row) {
-                $this->cardNames[(int) $row['id']] = $row['name'];
+                $names[(int) $row['id']] = $row['name'];
             }
+            $this->cardNamesByGame[$gameId] = $names;
         }
 
-        return $this->cardNames;
+        return $this->cardNamesByGame[$gameId];
     }
 
     private function totalWinsFor(int $gameId, int $playerId): int
@@ -2139,7 +2166,7 @@ final class GameService
         $result = [
             'initiating_game_player_id' => (int) $batchRow['initiating_game_player_id'],
             'played_card_id' => $playedCardId,
-            'played_card_name' => $this->cardCatalogNames()[$playedCardId] ?? null,
+            'played_card_name' => $this->cardNamesFor((int) $batchRow['game_id'])[$playedCardId] ?? null,
             'decision_type' => $decisionRow['decision_type'],
             'target_game_player_id' => $targetGamePlayerId,
             'is_you' => $isYou,

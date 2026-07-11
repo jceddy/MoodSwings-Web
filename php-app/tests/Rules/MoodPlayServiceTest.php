@@ -640,6 +640,35 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame([], $state->discardPile());
     }
 
+    public function testAngerTreatsTwoPhysicalCardsSharingACatalogIdAsDistinctTargets(): void
+    {
+        // 1001 and 1002 are two different physical copies of catalog card 7
+        // (Courage, white, value 1) -- the scenario a 'duel' game's two
+        // independently-built decks can now produce. array_unique() on the
+        // submitted target ids was always correct in principle, but under
+        // the old catalog-id-as-identity model this setup itself was
+        // impossible (two moods with the same catalog id could never both
+        // be in play at once -- see BoardStateTest's own version of this
+        // scenario), so this proves the whole path -- both physical cards
+        // targeted, both actually discarded -- works end to end.
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [80], 2 => [1001], 3 => [1002]],
+            catalogCardIdFor: [1001 => 7, 1002 => 7],
+        );
+        $state->moveHandToInPlay(2, 1001);
+        $state->moveHandToInPlay(3, 1002);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 80, new PlayerChoices(['target_mood_ids' => [1001, 1002]]));
+
+        self::assertFalse($state->isInPlay(1001));
+        self::assertFalse($state->isInPlay(1002));
+        self::assertEqualsCanonicalizing([1001, 1002], $state->discardPile());
+    }
+
     public function testSelfLoathingDiscardsChosenOwnMoodsAsItsCost(): void
     {
         $state = $this->boardState(hands: [1 => [75, 9]]);
