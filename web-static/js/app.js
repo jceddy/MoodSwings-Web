@@ -76,10 +76,16 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText) {
     return apiRequest('/games', {
         method: 'POST',
-        body: JSON.stringify({ opponent_user_ids: opponentUserIds, format, wins_needed: winsNeeded, deck_type: deckType }),
+        body: JSON.stringify({
+            opponent_user_ids: opponentUserIds,
+            format,
+            wins_needed: winsNeeded,
+            deck_type: deckType,
+            decklist_text: decklistText,
+        }),
     });
 }
 

@@ -54,7 +54,7 @@ instead.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`one_of_each`, see below). `400` if that's more than 4 players or an opponent id doesn't exist, or a `duel` game doesn't seat *exactly* 2 players total -- see "Duel: separate per-player decks" below. Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`one_of_each`, see below). `decklist_text` is required when `deck_type` is `custom` (see "Custom decklists" below) and ignored otherwise. `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total, `deck_type` is `custom` with `format: 'duel'`, or the decklist itself is invalid (unparseable line, unrecognized card name, too few cards for the table) -- see "Duel: separate per-player decks" and "Custom decklists" below. Returns `{"game_id"}`. |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
@@ -1038,7 +1038,7 @@ game too.
 `startGame()` when the deck is actually assembled -- nothing about which
 cards a game ends up with is decided before then) picks which pool of
 cards a game draws from, via `GameService::deckCardIdsFor()`'s dispatch to
-one of four builders:
+one of five builders:
 
 - `structure` (the default) -- `buildStructureDeckCardIds()` assembles a
   randomly-drawn, singleton 45-card deck matching a new physical box's own
@@ -1065,17 +1065,77 @@ one of four builders:
   so no id can ever exceed its cap while every id still has an equal
   chance of being picked, and `max_copies=1` (Mythic/Rare) degenerates to
   an ordinary without-replacement draw.
+- `custom` -- the creator supplies their own decklist (see "Custom
+  decklists" below) instead of one of the algorithmically-assembled pools
+  above; `customDeckCardIds()` just reads back the card ids
+  `createGame()` already parsed and validated. Only supported for
+  Traditional (non-`duel`) games.
 - `one_of_each` -- the full 133-card pool, one copy of every printed card,
   unchanged from the only option that existed before `deck_type` did.
 
 `structure`, `power`, and `one_of_each` are always singleton within one
-deck (no repeated card ids); `jceddys_75` is the one exception, by design.
+deck (no repeated card ids); `jceddys_75` and `custom` are the exceptions
+-- `custom`'s repeat behavior is whatever the creator's own decklist says.
 `deck_type` was named `standard` before `power` existed, when there was
 only one alternative to `one_of_each` to distinguish it from; it was
 renamed `structure` once a second small-deck option needed a name of its
 own too. A game created before that rename still has `deck_type =
 'standard'` rows in the database migrated forward to `'structure'` by
 migration `0014`, so no existing game's own deck type silently changed.
+
+### Custom decklists
+
+`deck_type: 'custom'` lets a Traditional game's creator supply their own
+decklist -- either uploaded as a text file or pasted into a form field,
+both of which just become the same `decklist_text` string by the time it
+reaches `createGame()`. Only supported for `format: 'standard'`
+(`GameStateException` if `format: 'duel'` -- a duel already needs each
+player to have their own *algorithmically-built* deck, and letting one
+player supply a decklist for both would break that symmetry).
+
+Parsing and validation both happen once, at `createGame()` time, via
+`DecklistParser` (`src/Game/DecklistParser.php`) -- a pure, DB-free class
+(the catalog's own case-insensitive name-to-id map is constructor-injected
+by `GameService::parseCustomDecklist()`, which builds it from a plain
+`SELECT id, name FROM cards`) so the format's own grammar is fully
+unit-testable without a database. The fully-resolved outcome -- an
+optional deck name plus the flat list of catalog card ids (one entry per
+copy) -- is what actually gets stored, in `games.custom_deck_name` /
+`games.custom_deck_card_ids` (migration `0018`), not the raw decklist
+text itself; `startGame()` never re-parses anything, it just reads the
+already-resolved ids back via `customDeckCardIds()`. This also means a
+decklist error (an unrecognized card, too few cards for the table) surfaces
+immediately as a `400` from `POST /games`, rather than only once the game
+is actually started.
+
+The decklist format is line-oriented:
+
+- An optional `About` block, only recognized as the file's very first
+  line, holds `<field name> <field data>` metadata lines until a blank
+  line ends it. The only field currently read is `Name` (truncated to 120
+  characters, matching `custom_deck_name`'s column width) -- any other
+  field is silently ignored rather than rejected, so a decklist exported
+  by some other tool with extra metadata fields still parses. No `About`
+  block (or no `Name` line within it) leaves the deck name `null`, and the
+  client shows "Uploaded Deck" in that case (see `web-static/js/game.js`'s
+  `renderBoard()`).
+- Each remaining line up to the next blank line is one card entry: an
+  optional leading `<count>` (default 1 if omitted), the card name, and an
+  optional trailing `(SET CODE)` and/or card number -- both silently
+  ignored today (only one set exists), but accepted so a decklist copied
+  from an export tool that includes them still parses. Card names resolve
+  case-insensitively against the catalog's own `UNIQUE KEY uq_cards_name`.
+- A single blank line ends the main deck. Everything after it (an optional
+  `Sideboard` header line, plus more card lines in the same format) is
+  parsed no further and simply discarded -- sideboards aren't supported by
+  any game feature yet, so there's nothing to do with them.
+
+The minimum card count follows the same "15 cards, plus 15 more per player
+beyond the first two" rule the feature was specified with -- `15 * (N -
+1)` for `N` players, i.e. 15/30/45/60 for 2/3/4 players (`self::MAX_PLAYERS`
+caps `N` at 4 anyway). `DecklistParser` itself is player-count-agnostic
+(it has no idea how many players the game has); `GameService::createGame()`
+checks the resolved card count against that formula after parsing.
 
 ### Game timestamps
 

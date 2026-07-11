@@ -338,6 +338,128 @@ final class GameServiceIntegrationTest extends TestCase
         })($cardIds));
     }
 
+    public function testCreateGameCanRequestACustomDecklistInstead(): void
+    {
+        $creator = $this->insertUser('custom-alice');
+        $bob = $this->insertUser('custom-bob');
+
+        $decklistText = <<<'DECK'
+            About
+            Name My Awesome Deck
+
+            1 Altruism
+            1 Benevolence
+            1 Charity
+            1 Chivalry
+            1 Complacency
+            1 Conviction
+            1 Courage
+            1 Dignity
+            1 Discipline
+            1 Disillusionment
+            1 Encouragement
+            1 Faith
+            1 Friendliness
+            1 Guilt
+            1 Honor
+            DECK;
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', decklistText: $decklistText);
+        $game = $this->fetchGame($gameId);
+        self::assertSame('custom', $game['deck_type']);
+        self::assertSame('My Awesome Deck', $game['custom_deck_name']);
+        self::assertSame(range(1, 15), array_map(intval(...), json_decode($game['custom_deck_card_ids'], true)));
+
+        $this->games->startGame($gameId);
+
+        $cardIdsStmt = $this->pdo->prepare('SELECT card_id FROM game_cards WHERE game_id = :game_id');
+        $cardIdsStmt->execute(['game_id' => $gameId]);
+        $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        sort($cardIds);
+        self::assertSame(range(1, 15), $cardIds);
+    }
+
+    public function testCreateGameRejectsACustomDecklistForADuelGame(): void
+    {
+        $u1 = $this->insertUser('customduel1');
+        $u2 = $this->insertUser('customduel2');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not supported for duel games');
+
+        $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'custom', decklistText: '1 Altruism');
+    }
+
+    public function testCreateGameRejectsACustomDecklistBelowTheMinimumCardCountForThePlayerCount(): void
+    {
+        $creator = $this->insertUser('custom-few-alice');
+        $bob = $this->insertUser('custom-few-bob');
+        $carol = $this->insertUser('custom-few-carol');
+
+        // 3 players need at least 30 cards (15 * (playerCount - 1)) -- this
+        // decklist only has 15.
+        $decklistText = "1 Altruism\n1 Benevolence\n1 Charity\n1 Chivalry\n1 Complacency\n"
+            . "1 Conviction\n1 Courage\n1 Dignity\n1 Discipline\n1 Disillusionment\n"
+            . "1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Honor";
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 30 are required for 3 players');
+
+        $this->games->createGame($creator, [$creator, $bob, $carol], deckType: 'custom', decklistText: $decklistText);
+    }
+
+    public function testCreateGameRejectsACustomDecklistWithAnUnrecognizedCard(): void
+    {
+        $creator = $this->insertUser('custom-bad-alice');
+        $bob = $this->insertUser('custom-bad-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Unrecognized card');
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', decklistText: 'Not A Real Card Name');
+    }
+
+    public function testCreateGameRejectsACustomDeckTypeWithNoDecklistText(): void
+    {
+        $creator = $this->insertUser('custom-empty-alice');
+        $bob = $this->insertUser('custom-empty-bob');
+
+        $this->expectException(GameStateException::class);
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'custom');
+    }
+
+    public function testGetStateExposesTheCustomDeckName(): void
+    {
+        $creator = $this->insertUser('custom-state-alice');
+        $bob = $this->insertUser('custom-state-bob');
+
+        $decklistText = "About\nName State Test Deck\n\n1 Altruism\n1 Benevolence\n1 Charity\n1 Chivalry\n1 Complacency\n"
+            . "1 Conviction\n1 Courage\n1 Dignity\n1 Discipline\n1 Disillusionment\n"
+            . "1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Honor";
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', decklistText: $decklistText);
+
+        $state = $this->games->getState($gameId, $creator);
+        self::assertSame('State Test Deck', $state['game']['custom_deck_name']);
+    }
+
+    public function testGetStateHasANullCustomDeckNameWhenTheDecklistDidntSpecifyOne(): void
+    {
+        $creator = $this->insertUser('custom-state-noname-alice');
+        $bob = $this->insertUser('custom-state-noname-bob');
+
+        $decklistText = "1 Altruism\n1 Benevolence\n1 Charity\n1 Chivalry\n1 Complacency\n"
+            . "1 Conviction\n1 Courage\n1 Dignity\n1 Discipline\n1 Disillusionment\n"
+            . "1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Honor";
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', decklistText: $decklistText);
+
+        $state = $this->games->getState($gameId, $creator);
+        self::assertNull($state['game']['custom_deck_name']);
+    }
+
     public function testCreateGameRejectsADuelWithMoreThanTwoPlayers(): void
     {
         $u1 = $this->insertUser('dueltoomany1');

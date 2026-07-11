@@ -195,6 +195,7 @@
         structure: 'Structure',
         power: 'Power',
         jceddys_75: 'jceddy\'s 75 Card',
+        custom: 'Custom Decklist',
         one_of_each: 'One of Each Card',
     };
 
@@ -211,12 +212,33 @@
         structure: 'A 45-card deck matching a new physical box’s printed rarity mix: 23 common, 14 uncommon, 6 rare, and 2 mythic moods.',
         power: 'A fast 15-card deck: 1 random mythic mood plus 14 other random moods.',
         jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
+        custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
     function updateDeckTypeDescription() {
         const deckType = document.getElementById('new-game-deck-type').value;
         document.getElementById('new-game-deck-type-description').textContent = DECK_TYPE_DESCRIPTIONS[deckType] || '';
+        document.getElementById('new-game-decklist-fields').hidden = deckType !== 'custom';
+    }
+
+    // 'custom' decklists aren't supported for duel games (enforced
+    // server-side by GameService::createGame()) -- disabling the option
+    // here prevents choosing a combination the server would just reject,
+    // matching updateOpponentSelectionLimit()'s own proactive-prevention
+    // approach for format-dependent constraints. Falls back to 'structure'
+    // if 'custom' was already selected when the format switches to duel.
+    function updateDeckTypeAvailability() {
+        const deckTypeSelect = document.getElementById('new-game-deck-type');
+        const isDuel = document.getElementById('new-game-format').value === 'duel';
+        const customOption = deckTypeSelect.querySelector('option[value="custom"]');
+
+        customOption.disabled = isDuel;
+        if (isDuel && deckTypeSelect.value === 'custom') {
+            deckTypeSelect.value = 'structure';
+        }
+
+        updateDeckTypeDescription();
     }
 
     async function refreshLobby() {
@@ -269,12 +291,25 @@
     }
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
+    document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
+
+    // Reading an uploaded decklist file into the textarea lets both input
+    // methods (file upload or pasted text) share the same submit-time
+    // field, rather than createGame() needing to know which one was used.
+    document.getElementById('new-game-decklist-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-game-decklist-text').value = await file.text();
+    });
 
     document.getElementById('new-game-button').addEventListener('click', async () => {
         newGameError.hidden = true;
         newGameForm.reset();
-        updateDeckTypeDescription();
+        updateDeckTypeAvailability();
 
         const { ok, body } = await listFriends();
         const friends = ok ? body.friends : [];
@@ -315,7 +350,8 @@
 
         const format = document.getElementById('new-game-format').value;
         const deckType = document.getElementById('new-game-deck-type').value;
-        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType);
+        const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
+        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText);
 
         if (!ok) {
             newGameError.textContent = body.message || 'Could not create the game.';
@@ -469,8 +505,16 @@
     }
 
     function renderBoard(state) {
+        // A custom decklist's own name (or "Uploaded Deck" if none was
+        // specified) replaces "<deck type> deck" entirely here, rather than
+        // being appended to it -- the deck name itself is what identifies
+        // the deck in this case, the same role "Structure deck" etc. plays
+        // for the algorithmically-assembled pools.
+        const deckDescription = state.game.deck_type === 'custom'
+            ? (state.game.custom_deck_name || 'Uploaded Deck')
+            : deckTypeLabel(state.game.deck_type) + ' deck';
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckTypeLabel(state.game.deck_type) + ' deck)';
+            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
 
         const inProgressArea = document.getElementById('in-progress-area');
         const startButton = document.getElementById('start-game-button');

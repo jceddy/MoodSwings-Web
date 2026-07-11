@@ -131,7 +131,7 @@ final class GameService
     }
 
     /** @param int[] $userIds seat order follows array order */
-    public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3, string $deckType = 'structure'): int
+    public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3, string $deckType = 'structure', ?string $decklistText = null): int
     {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -140,17 +140,29 @@ final class GameService
             throw new GameStateException('A duel game must have exactly 2 players');
         }
 
+        $customDeckName = null;
+        $customDeckCardIds = null;
+        if ($deckType === 'custom') {
+            if ($format === 'duel') {
+                throw new GameStateException('Custom decklists are not supported for duel games');
+            }
+
+            ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->parseCustomDecklist($decklistText, count($userIds));
+        }
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
         try {
             $insertGame = $pdo->prepare(
-                "INSERT INTO games (format, deck_type, status, created_by_user_id, wins_needed)
-                 VALUES (:format, :deck_type, 'waiting', :created_by, :wins_needed)"
+                "INSERT INTO games (format, deck_type, custom_deck_name, custom_deck_card_ids, status, created_by_user_id, wins_needed)
+                 VALUES (:format, :deck_type, :custom_deck_name, :custom_deck_card_ids, 'waiting', :created_by, :wins_needed)"
             );
             $insertGame->execute([
                 'format' => $format,
                 'deck_type' => $deckType,
+                'custom_deck_name' => $customDeckName,
+                'custom_deck_card_ids' => $customDeckCardIds !== null ? json_encode($customDeckCardIds) : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
             ]);
@@ -170,6 +182,41 @@ final class GameService
         }
 
         return $gameId;
+    }
+
+    /**
+     * Parses and fully validates a 'custom' deck_type's decklist text at
+     * createGame() time (rather than re-parsing at startGame() time), so a
+     * decklist error -- an unrecognized card, too few cards for the table
+     * -- surfaces immediately instead of only once the game is started. The
+     * minimum card count follows the same "15 per player, but the first
+     * two players share the first 15" shape a physical two-player game
+     * already needs: 15 for 2 players, 30 for 3, 45 for 4.
+     *
+     * @return array{name: ?string, cardIds: int[]}
+     */
+    private function parseCustomDecklist(?string $decklistText, int $playerCount): array
+    {
+        if ($decklistText === null || trim($decklistText) === '') {
+            throw new GameStateException('A custom decklist is required when deck_type is "custom"');
+        }
+
+        $catalogStmt = Connection::get()->query('SELECT id, name FROM cards');
+        $catalogIdsByName = [];
+        foreach ($catalogStmt->fetchAll() as $row) {
+            $catalogIdsByName[mb_strtolower($row['name'])] = (int) $row['id'];
+        }
+
+        $parsed = (new DecklistParser($catalogIdsByName))->parse($decklistText);
+
+        $minimumCards = 15 * ($playerCount - 1);
+        if (count($parsed['cardIds']) < $minimumCards) {
+            throw new GameStateException(
+                "The decklist has only " . count($parsed['cardIds']) . " card(s), but at least {$minimumCards} are required for {$playerCount} players"
+            );
+        }
+
+        return $parsed;
     }
 
     public function startGame(int $gameId): void
@@ -205,7 +252,7 @@ final class GameService
             // BoardState::$catalogCardIdFor.
             if ($game['format'] === 'duel') {
                 foreach ($playerIds as $playerId) {
-                    $playerCardIds = $this->deckCardIdsFor($game['deck_type']);
+                    $playerCardIds = $this->deckCardIdsFor($game);
                     shuffle($playerCardIds);
 
                     for ($i = 0; $i < self::STARTING_HAND_SIZE; $i++) {
@@ -229,7 +276,7 @@ final class GameService
                     }
                 }
             } else {
-                $cardIds = $this->deckCardIdsFor($game['deck_type']);
+                $cardIds = $this->deckCardIdsFor($game);
                 shuffle($cardIds);
 
                 foreach ($playerIds as $playerId) {
@@ -284,16 +331,32 @@ final class GameService
      * by both the duel and non-duel branches of startGame() so each only
      * has to say *what* to build it for, not *how*.
      *
+     * @param array<string, mixed> $game
      * @return int[]
      */
-    private function deckCardIdsFor(string $deckType): array
+    private function deckCardIdsFor(array $game): array
     {
-        return match ($deckType) {
+        return match ($game['deck_type']) {
             'structure' => $this->buildStructureDeckCardIds(),
             'power' => $this->buildPowerDeckCardIds(),
             'jceddys_75' => $this->buildJceddys75DeckCardIds(),
+            'custom' => $this->customDeckCardIds($game),
             default => range(1, self::TOTAL_CARDS), // 'one_of_each'
         };
+    }
+
+    /**
+     * The 'custom' deck_type's card pool: the fully-resolved catalog card
+     * ids createGame() already parsed and validated from the creator's
+     * decklist text (see parseCustomDecklist()), persisted as
+     * custom_deck_card_ids so it never needs re-parsing.
+     *
+     * @param array<string, mixed> $game
+     * @return int[]
+     */
+    private function customDeckCardIds(array $game): array
+    {
+        return array_map(intval(...), json_decode((string) $game['custom_deck_card_ids'], true));
     }
 
     /**
@@ -1334,6 +1397,7 @@ final class GameService
                 'id' => $gameId,
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
+                'custom_deck_name' => $game['custom_deck_name'],
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
                 'created_at' => $game['created_at'],
@@ -1412,6 +1476,7 @@ final class GameService
                 'id' => $gameId,
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
+                'custom_deck_name' => $game['custom_deck_name'],
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
