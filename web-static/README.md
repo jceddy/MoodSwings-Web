@@ -318,7 +318,12 @@ routed to the PHP app).
     tracked server-side for Chivalry/Honor/Triumph-style effects but
     previously never surfaced to the client) with its own "— went first
     this round" tag, independent of (and possibly a different player
-    from) whoever the "— on turn" tag currently marks.
+    from) whoever the "— on turn" tag currently marks. In games of 3+
+    players, whoever holds Hurt Feelings (`state.round.hurt_feelings_game_player_id`,
+    already tracked server-side to grant that player 2 plays instead of 1
+    this round, but previously never surfaced to the client either) gets
+    its own "— has Hurt Feelings (2 plays this round)" tag, so the extra
+    play they're about to get isn't a surprise.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
