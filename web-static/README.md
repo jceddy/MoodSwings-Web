@@ -31,8 +31,17 @@ routed to the PHP app).
     `change` as well as the format `<select>`'s: switching to Duel with 2
     friends already checked auto-unchecks the second one and disables the
     rest, and switching back to Traditional re-enables them, so you can't
-    submit a Duel request the server will just reject with a 400. Polls
-    `GET /games` every 4 seconds while the lobby is
+    submit a Duel request the server will just reject with a 400. The
+    dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power, One
+    of Each Card, in that order, matching `deck_type`'s own three values --
+    see "Deck types" in `php-app/README.md`) has a plain-language
+    description shown right below it (`#new-game-deck-type-description`,
+    `updateDeckTypeDescription()`) that updates live as the selection
+    changes, and once more when the dialog itself opens (`newGameForm.
+    reset()` resets the `<select>` back to its default, Structure, first)
+    so the description shown always matches what's actually selected,
+    never a stale one left over from the last time the dialog was open.
+    Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just

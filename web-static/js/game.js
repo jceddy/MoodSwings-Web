@@ -192,12 +192,29 @@
     // underscore-splitting capitalization ("one_of_each" would become "One
     // Of Each", capitalizing "Of"), so this is a fixed lookup instead.
     const DECK_TYPE_LABELS = {
-        standard: 'Standard',
+        structure: 'Structure',
+        power: 'Power',
         one_of_each: 'One of Each Card',
     };
 
     function deckTypeLabel(deckType) {
         return DECK_TYPE_LABELS[deckType] || deckType;
+    }
+
+    // Plain-language explanation shown under the New Game dialog's own
+    // Deck dropdown (see updateDeckTypeDescription()) -- kept in sync with
+    // GameService::buildStructureDeckCardIds()/buildPowerDeckCardIds()'s
+    // own actual card counts, since those are the numbers a player is
+    // actually choosing between here.
+    const DECK_TYPE_DESCRIPTIONS = {
+        structure: 'A 45-card deck matching a new physical box’s printed rarity mix: 23 common, 14 uncommon, 6 rare, and 2 mythic moods.',
+        power: 'A fast 15-card deck: 1 random mythic mood plus 14 other random moods.',
+        one_of_each: 'The full 133-card pool — one copy of every printed mood.',
+    };
+
+    function updateDeckTypeDescription() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        document.getElementById('new-game-deck-type-description').textContent = DECK_TYPE_DESCRIPTIONS[deckType] || '';
     }
 
     async function refreshLobby() {
@@ -250,10 +267,12 @@
     }
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
 
     document.getElementById('new-game-button').addEventListener('click', async () => {
         newGameError.hidden = true;
         newGameForm.reset();
+        updateDeckTypeDescription();
 
         const { ok, body } = await listFriends();
         const friends = ok ? body.friends : [];

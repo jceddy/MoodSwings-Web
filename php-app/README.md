@@ -54,7 +54,7 @@ instead.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `standard` -- see below). `400` if that's more than 4 players or an opponent id doesn't exist, or a `duel` game doesn't seat *exactly* 2 players total -- see "Duel: separate per-player decks" below. Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`one_of_each`, see below). `400` if that's more than 4 players or an opponent id doesn't exist, or a `duel` game doesn't seat *exactly* 2 players total -- see "Duel: separate per-player decks" below. Returns `{"game_id"}`. |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in, most recently active first, each with `players` (`user_id`/`username`/`seat_order`) and `is_your_turn`. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
@@ -969,6 +969,37 @@ exposed) and the deck's order (only `deck_count` is), while leaving the
 discard pile fully visible since it's public information in the physical
 game too.
 
+### Deck types
+
+`deck_type` (chosen once at `createGame()` time, like `format`, and read by
+`startGame()` when the deck is actually assembled -- nothing about which
+cards a game ends up with is decided before then) picks which pool of
+cards a game draws from, via `GameService::deckCardIdsFor()`'s dispatch to
+one of three builders:
+
+- `structure` (the default) -- `buildStructureDeckCardIds()` assembles a
+  randomly-drawn, singleton 45-card deck matching a new physical box's own
+  printed rarity distribution (`STRUCTURE_DECK_RARITY_COUNTS`: 23 common,
+  14 uncommon, 6 rare, 2 mythic), one rarity at a time so the mix is exact
+  rather than merely likely.
+- `power` -- `buildPowerDeckCardIds()` assembles a smaller, faster
+  15-card deck: exactly one random Mythic (drawn first, on its own, so
+  it's guaranteed rather than merely likely) plus
+  `POWER_DECK_NON_MYTHIC_COUNT` (14) more cards drawn uniformly at random
+  from every non-Mythic card in the catalog pooled together -- unlike
+  `structure`, nothing beyond that single Mythic is guaranteed about the
+  other 14's own rarity mix.
+- `one_of_each` -- the full 133-card pool, one copy of every printed card,
+  unchanged from the only option that existed before `deck_type` did.
+
+All three are always singleton within one deck (no repeated card ids) --
+`deck_type` was named `standard` before `power` existed, when there was
+only one alternative to `one_of_each` to distinguish it from; it was
+renamed `structure` once a second small-deck option needed a name of its
+own too. A game created before that rename still has `deck_type =
+'standard'` rows in the database migrated forward to `'structure'` by
+migration `0014`, so no existing game's own deck type silently changed.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` is the one physical rules difference `format` actually
@@ -1007,15 +1038,16 @@ two.
   Rationalization, Zeal) needed any change -- every call site already
   passed exactly the information `BoardState` needs to route correctly.
 - `startGame()` gives each duel player their own *complete* deck, built and
-  shuffled completely independently -- the same `buildStandardDeckCardIds()`
-  (a random 45-card draw for `deck_type: 'standard'`) or `range(1,
-  TOTAL_CARDS)` (the full 133-card pool for `'one_of_each'`) a single-player
-  game uses, called once per player rather than once for the whole table --
-  with each player's starting hand dealt from their own pool, not a shared
-  one. This means the *same* catalog card can legitimately end up in both
-  players' pools at once (certain for `'one_of_each'`, likely for
-  `'standard'`) -- see "Card identity: catalog id vs. per-game instance id"
-  below for how the engine tells two such cards apart.
+  shuffled completely independently -- `deckCardIdsFor()`'s own dispatch
+  (`buildStructureDeckCardIds()`, `buildPowerDeckCardIds()`, or
+  `range(1, TOTAL_CARDS)` for `'one_of_each'` -- see "Deck types" below), the
+  exact same one a single-player game uses, called once per player rather
+  than once for the whole table -- with each player's starting hand dealt
+  from their own pool, not a shared one. This means the *same* catalog card
+  can legitimately end up in both players' pools at once (certain for
+  `'one_of_each'`, likely for `'structure'`/`'power'`) -- see "Card
+  identity: catalog id vs. per-game instance id" below for how the engine
+  tells two such cards apart.
 - Persistence reuses `game_cards.owner_game_player_id` (already nullable,
   already present) for both zones: `null` for a shared deck/discard row,
   the owning player's `game_player_id` for a duel deck row or any

@@ -163,8 +163,8 @@ final class GameServiceIntegrationTest extends TestCase
         // deckType is pinned to 'one_of_each' here so this test's own
         // deck-count math (133 total, one of every printed card) stays
         // meaningful regardless of which deck_type createGame() defaults
-        // to -- see testCreateGameDealsAStandardDeckByDefault() for the
-        // 'standard' deck_type's own (smaller, rarity-weighted) math.
+        // to -- see testCreateGameDealsAStructureDeckByDefault() for the
+        // 'structure' deck_type's own (smaller, rarity-weighted) math.
         $gameId = $this->games->createGame($creator, [$creator, $bob, $carol], deckType: 'one_of_each');
         $this->games->startGame($gameId);
 
@@ -196,9 +196,9 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
     }
 
-    public function testCreateGameDealsAStandardDeckByDefault(): void
+    public function testCreateGameDealsAStructureDeckByDefault(): void
     {
-        // 'standard' -- 23 common/14 uncommon/6 rare/2 mythic (45 total),
+        // 'structure' -- 23 common/14 uncommon/6 rare/2 mythic (45 total),
         // matching a new physical box's own printed rarity distribution --
         // is deck_type's default, unlike the full 133-card 'one_of_each'
         // pool every game used before this existed (see
@@ -208,7 +208,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('deck-bob');
 
         $gameId = $this->games->createGame($creator, [$creator, $bob]);
-        self::assertSame('standard', $this->fetchGame($gameId)['deck_type']);
+        self::assertSame('structure', $this->fetchGame($gameId)['deck_type']);
 
         $this->games->startGame($gameId);
 
@@ -217,7 +217,7 @@ final class GameServiceIntegrationTest extends TestCase
         $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
 
         self::assertCount(45, $cardIds);
-        self::assertCount(45, array_unique($cardIds), 'a standard deck must be singleton -- no repeated card ids');
+        self::assertCount(45, array_unique($cardIds), 'a structure deck must be singleton -- no repeated card ids');
 
         $placeholders = implode(',', array_fill(0, count($cardIds), '?'));
         $rarityStmt = $this->pdo->prepare("SELECT rarity, COUNT(*) AS n FROM cards WHERE id IN ({$placeholders}) GROUP BY rarity");
@@ -230,6 +230,32 @@ final class GameServiceIntegrationTest extends TestCase
             'rare' => 6,
             'mythic' => 2,
         ], array_map(intval(...), $countsByRarity));
+    }
+
+    public function testCreateGameCanRequestThePowerDeckInstead(): void
+    {
+        $creator = $this->insertUser('power-alice');
+        $bob = $this->insertUser('power-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'power');
+        self::assertSame('power', $this->fetchGame($gameId)['deck_type']);
+
+        $this->games->startGame($gameId);
+
+        $cardIdsStmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id");
+        $cardIdsStmt->execute(['game_id' => $gameId]);
+        $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        self::assertCount(15, $cardIds);
+        self::assertCount(15, array_unique($cardIds), 'a power deck must be singleton -- no repeated card ids');
+
+        $placeholders = implode(',', array_fill(0, count($cardIds), '?'));
+        $rarityStmt = $this->pdo->prepare("SELECT rarity, COUNT(*) AS n FROM cards WHERE id IN ({$placeholders}) GROUP BY rarity");
+        $rarityStmt->execute($cardIds);
+        $countsByRarity = array_column($rarityStmt->fetchAll(), 'n', 'rarity');
+
+        self::assertSame(1, (int) ($countsByRarity['mythic'] ?? 0), 'a power deck must have exactly one mythic');
+        self::assertSame(14, array_sum($countsByRarity) - (int) ($countsByRarity['mythic'] ?? 0));
     }
 
     public function testCreateGameCanRequestTheOneOfEachDeckInstead(): void
@@ -333,12 +359,12 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p1CatalogIds, $p2CatalogIds);
     }
 
-    public function testStartGameGivesEachDuelPlayerTheirOwnIndependentStandardDeck(): void
+    public function testStartGameGivesEachDuelPlayerTheirOwnIndependentStructureDeck(): void
     {
-        $u1 = $this->insertUser('duelstandard1');
-        $u2 = $this->insertUser('duelstandard2');
+        $u1 = $this->insertUser('duelstructure1');
+        $u2 = $this->insertUser('duelstructure2');
 
-        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'standard');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'structure');
         $this->games->startGame($gameId);
 
         $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
@@ -350,7 +376,7 @@ final class GameServiceIntegrationTest extends TestCase
         $deckStmt->execute(['game_id' => $gameId]);
         $counts = array_column($deckStmt->fetchAll(), 'n', 'owner_game_player_id');
 
-        // 45-card standard deck (23 common + 14 uncommon + 6 rare + 2
+        // 45-card structure deck (23 common + 14 uncommon + 6 rare + 2
         // mythic), minus the 5-card starting hand, independently built for
         // each player -- not a 45-card pool shared/split between them.
         self::assertSame(45 - 5, (int) $counts[$p1]);

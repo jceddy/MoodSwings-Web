@@ -55,18 +55,25 @@ final class GameService
     private const MAX_PLAYERS = 4;
 
     /**
-     * The 'standard' deck_type's own card pool: a randomly-assembled,
+     * The 'structure' deck_type's own card pool: a randomly-assembled,
      * singleton (no duplicates) 45-card deck matching a new physical box's
      * printed rarity distribution, rather than the full 133-card
      * one-of-everything pool ('one_of_each') that was the only option
-     * before this existed. See buildStandardDeckCardIds().
+     * before this existed. See buildStructureDeckCardIds().
      */
-    private const STANDARD_DECK_RARITY_COUNTS = [
+    private const STRUCTURE_DECK_RARITY_COUNTS = [
         'common' => 23,
         'uncommon' => 14,
         'rare' => 6,
         'mythic' => 2,
     ];
+
+    /**
+     * The 'power' deck_type's own non-Mythic card count -- see
+     * buildPowerDeckCardIds(), which pairs this many random non-Mythic
+     * cards with exactly one random Mythic (15 total).
+     */
+    private const POWER_DECK_NON_MYTHIC_COUNT = 14;
 
     /**
      * Default for $gameLockTimeoutSeconds below: how long playMood()/
@@ -107,7 +114,7 @@ final class GameService
     }
 
     /** @param int[] $userIds seat order follows array order */
-    public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3, string $deckType = 'standard'): int
+    public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3, string $deckType = 'structure'): int
     {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -181,7 +188,7 @@ final class GameService
             // BoardState::$catalogCardIdFor.
             if ($game['format'] === 'duel') {
                 foreach ($playerIds as $playerId) {
-                    $playerCardIds = $game['deck_type'] === 'standard' ? $this->buildStandardDeckCardIds() : range(1, self::TOTAL_CARDS);
+                    $playerCardIds = $this->deckCardIdsFor($game['deck_type']);
                     shuffle($playerCardIds);
 
                     for ($i = 0; $i < self::STARTING_HAND_SIZE; $i++) {
@@ -205,7 +212,7 @@ final class GameService
                     }
                 }
             } else {
-                $cardIds = $game['deck_type'] === 'standard' ? $this->buildStandardDeckCardIds() : range(1, self::TOTAL_CARDS);
+                $cardIds = $this->deckCardIdsFor($game['deck_type']);
                 shuffle($cardIds);
 
                 foreach ($playerIds as $playerId) {
@@ -255,12 +262,29 @@ final class GameService
     }
 
     /**
-     * Assembles a 'standard' deck_type's card pool: STANDARD_DECK_RARITY_COUNTS'
+     * The card pool for one player's deck (or, for a non-duel game, the
+     * whole table's shared deck) given the game's own deck_type -- shared
+     * by both the duel and non-duel branches of startGame() so each only
+     * has to say *what* to build it for, not *how*.
+     *
+     * @return int[]
+     */
+    private function deckCardIdsFor(string $deckType): array
+    {
+        return match ($deckType) {
+            'structure' => $this->buildStructureDeckCardIds(),
+            'power' => $this->buildPowerDeckCardIds(),
+            default => range(1, self::TOTAL_CARDS), // 'one_of_each'
+        };
+    }
+
+    /**
+     * Assembles a 'structure' deck_type's card pool: STRUCTURE_DECK_RARITY_COUNTS'
      * worth of cards per rarity, each drawn without replacement from every
      * card of that rarity in the catalog (so always singleton -- no card
      * id ever appears twice), chosen uniformly at random rather than
      * favoring any particular subset. The catalog currently has more of
-     * every rarity than STANDARD_DECK_RARITY_COUNTS asks for (e.g. 48
+     * every rarity than STRUCTURE_DECK_RARITY_COUNTS asks for (e.g. 48
      * common prints for the 23 this needs), so this never has to fall
      * back to allowing duplicates -- if a future catalog change ever left
      * a rarity short, array_rand() below would throw rather than silently
@@ -268,12 +292,12 @@ final class GameService
      *
      * @return int[]
      */
-    private function buildStandardDeckCardIds(): array
+    private function buildStructureDeckCardIds(): array
     {
         $pdo = Connection::get();
 
         $cardIds = [];
-        foreach (self::STANDARD_DECK_RARITY_COUNTS as $rarity => $count) {
+        foreach (self::STRUCTURE_DECK_RARITY_COUNTS as $rarity => $count) {
             $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity');
             $stmt->execute(['rarity' => $rarity]);
             $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
@@ -282,6 +306,38 @@ final class GameService
             foreach ($chosenKeys as $key) {
                 $cardIds[] = $rarityCardIds[$key];
             }
+        }
+
+        return $cardIds;
+    }
+
+    /**
+     * Assembles a 'power' deck_type's card pool: one random Mythic plus
+     * POWER_DECK_NON_MYTHIC_COUNT cards drawn uniformly at random from
+     * every non-Mythic card in the catalog (commons/uncommons/rares pooled
+     * together, unlike buildStructureDeckCardIds()'s own per-rarity split
+     * -- "power" only guarantees the single Mythic, not any particular mix
+     * of the rest) -- a small, mythic-guaranteed deck for a faster,
+     * higher-power game.
+     *
+     * @return int[]
+     */
+    private function buildPowerDeckCardIds(): array
+    {
+        $pdo = Connection::get();
+
+        $mythicStmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity');
+        $mythicStmt->execute(['rarity' => 'mythic']);
+        $mythicCardIds = array_map(intval(...), $mythicStmt->fetchAll(PDO::FETCH_COLUMN));
+        $cardIds = [$mythicCardIds[array_rand($mythicCardIds)]];
+
+        $nonMythicStmt = $pdo->prepare("SELECT id FROM cards WHERE rarity != 'mythic'");
+        $nonMythicStmt->execute();
+        $nonMythicCardIds = array_map(intval(...), $nonMythicStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $chosenKeys = (array) array_rand($nonMythicCardIds, self::POWER_DECK_NON_MYTHIC_COUNT);
+        foreach ($chosenKeys as $key) {
+            $cardIds[] = $nonMythicCardIds[$key];
         }
 
         return $cardIds;
