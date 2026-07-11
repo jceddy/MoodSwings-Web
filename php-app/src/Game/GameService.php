@@ -462,7 +462,7 @@ final class GameService
      */
     public function playMood(int $gameId, int $gamePlayerId, int $cardId, array $choices): array
     {
-        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $cardId, $choices): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $cardId, $choices): array {
             $round = $this->currentRound($gameId);
             $roundId = (int) $round['id'];
             $this->assertNoPendingDecision($roundId);
@@ -494,12 +494,16 @@ final class GameService
 
             return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
         });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
     }
 
     /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
     public function pass(int $gameId, int $gamePlayerId): array
     {
-        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
             $round = $this->currentRound($gameId);
             $this->assertNoPendingDecision((int) $round['id']);
 
@@ -511,6 +515,10 @@ final class GameService
 
             return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
         });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
     }
 
     /**
@@ -526,7 +534,7 @@ final class GameService
      */
     public function respondToDecision(int $gameId, int $gamePlayerId, array $choices): array
     {
-        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $choices): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $choices): array {
             $round = $this->currentRound($gameId);
             $roundId = (int) $round['id'];
 
@@ -677,6 +685,10 @@ final class GameService
             // a second time, with nothing new to say.
             return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
         });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
     }
 
     /**
@@ -1258,16 +1270,25 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
 
+        // Waiting/in-progress games always sort above completed (or
+        // abandoned) ones, regardless of recency -- a finished game is
+        // never more actionable than an active one, no matter how old the
+        // active one is. Within each of those two tiers, most-recently-
+        // active first (last_move_at, falling back to started_at, then
+        // created_at for a game nothing has happened in yet).
         $gameIdsStmt = $pdo->prepare(
-            'SELECT g.id FROM games g
+            "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              WHERE gp.user_id = :user_id
-             ORDER BY COALESCE(g.started_at, g.created_at) DESC, g.id DESC'
+             ORDER BY
+                 (g.status IN ('waiting', 'in_progress')) DESC,
+                 COALESCE(g.last_move_at, g.started_at, g.created_at) DESC,
+                 g.id DESC"
         );
         $gameIdsStmt->execute(['user_id' => $userId]);
         $gameIds = array_map(intval(...), $gameIdsStmt->fetchAll(PDO::FETCH_COLUMN));
@@ -1317,6 +1338,8 @@ final class GameService
                 'wins_needed' => (int) $game['wins_needed'],
                 'created_at' => $game['created_at'],
                 'started_at' => $game['started_at'],
+                'last_move_at' => $game['last_move_at'],
+                'completed_at' => $game['completed_at'],
                 'players' => $players,
                 'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
             ];
@@ -2224,6 +2247,27 @@ final class GameService
         }
 
         return $game;
+    }
+
+    /**
+     * Stamps games.last_move_at with the current time -- called once, after
+     * playMood()/pass()/respondToDecision() has already run to completion
+     * (wrapping the whole withGameLock() call rather than threading a call
+     * through every nested private method those three delegate to), so a
+     * request that throws before reaching that point never counts as a
+     * move. A standalone statement outside of whatever transaction(s) the
+     * call just committed -- harmless to run a moment after those commit,
+     * and far simpler than plumbing this into finishPlay()/advanceTurn()/
+     * scoreRoundAndAdvance()'s own several internal transactions, all of
+     * which already return successfully by the time this runs. See
+     * listGamesForUser(), which sorts the lobby by this column (falling
+     * back to started_at/created_at) so a stalled game doesn't outrank an
+     * actively-progressing one.
+     */
+    private function touchLastMoveAt(int $gameId): void
+    {
+        Connection::get()->prepare('UPDATE games SET last_move_at = NOW() WHERE id = :game_id')
+            ->execute(['game_id' => $gameId]);
     }
 
     /** @return int[] game_players.id, ordered by seat_order */

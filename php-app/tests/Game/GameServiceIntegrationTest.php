@@ -656,10 +656,79 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($gameId, $summary['id']);
         self::assertSame('in_progress', $summary['status']);
         self::assertCount(2, $summary['players']);
+        self::assertNotNull($summary['created_at']);
+        self::assertNotNull($summary['started_at']);
+        self::assertNull($summary['last_move_at'], 'no move has happened yet');
+        self::assertNull($summary['completed_at'], 'the game has not finished yet');
 
         // Exactly one of the two players is on turn; the flag should
         // disagree between their two lists.
         self::assertNotSame($creatorGames[0]['is_your_turn'], $bobGames[0]['is_your_turn']);
+    }
+
+    public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void
+    {
+        $creator = $this->insertUser('sortorder-alice');
+        $bob = $this->insertUser('sortorder-bob');
+
+        // An old completed game -- most recently *active* of the three (its
+        // own completed_at/last_move_at are the newest timestamps here),
+        // but should still sort below both a stale waiting game and a
+        // stale in-progress one, since neither of those is actionable and
+        // this one no longer is.
+        $completedId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($completedId);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), last_move_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $this->games->gamePlayerIdFor($completedId, $creator), 'id' => $completedId]);
+
+        // A waiting game created before either of the other two.
+        $waitingId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->pdo->prepare('UPDATE games SET created_at = DATE_SUB(NOW(), INTERVAL 1 DAY) WHERE id = :id')
+            ->execute(['id' => $waitingId]);
+
+        // An in-progress game, also older than the completed one, with no
+        // last_move_at of its own yet (falls back to started_at).
+        $inProgressId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($inProgressId);
+        $this->pdo->prepare('UPDATE games SET started_at = DATE_SUB(NOW(), INTERVAL 1 HOUR) WHERE id = :id')
+            ->execute(['id' => $inProgressId]);
+
+        $gameIds = array_column($this->games->listGamesForUser($creator), 'id');
+
+        self::assertSame(
+            [$inProgressId, $waitingId, $completedId],
+            $gameIds,
+            'in-progress and waiting games must both sort above the completed one, regardless of raw recency',
+        );
+    }
+
+    public function testPassStampsLastMoveAtButAnIllegalPassDoesNot(): void
+    {
+        $creator = $this->insertUser('lastmove-alice');
+        $bob = $this->insertUser('lastmove-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+
+        self::assertNull($this->fetchGame($gameId)['last_move_at'], 'a freshly-started game has had no moves yet');
+
+        $round = $this->fetchRound($gameId);
+        $currentTurnPlayerId = (int) $round['current_turn_game_player_id'];
+        $turnOrder = [(int) $this->games->gamePlayerIdFor($gameId, $creator), (int) $this->games->gamePlayerIdFor($gameId, $bob)];
+        $notOnTurnPlayerId = $turnOrder[0] === $currentTurnPlayerId ? $turnOrder[1] : $turnOrder[0];
+
+        // Rejected before ever reaching the point that would stamp
+        // last_move_at -- an illegal attempt is not a move.
+        try {
+            $this->games->pass($gameId, $notOnTurnPlayerId);
+            self::fail('expected GameStateException for passing out of turn');
+        } catch (GameStateException) {
+        }
+        self::assertNull($this->fetchGame($gameId)['last_move_at']);
+
+        $this->games->pass($gameId, $currentTurnPlayerId);
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
     }
 
     public function testGetStateRejectsAViewerWhoIsNotSeated(): void

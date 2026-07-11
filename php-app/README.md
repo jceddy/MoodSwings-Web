@@ -54,8 +54,8 @@ instead.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`one_of_each`, see below). `400` if that's more than 4 players or an opponent id doesn't exist, or a `duel` game doesn't seat *exactly* 2 players total -- see "Duel: separate per-player decks" below. Returns `{"game_id"}`. |
-| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in, most recently active first, each with `players` (`user_id`/`username`/`seat_order`) and `is_your_turn`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`one_of_each`, see below). `400` if that's more than 4 players or an opponent id doesn't exist, or a `duel` game doesn't seat *exactly* 2 players total -- see "Duel: separate per-player decks" below. Returns `{"game_id"}`. |
+| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
@@ -1068,6 +1068,25 @@ renamed `structure` once a second small-deck option needed a name of its
 own too. A game created before that rename still has `deck_type =
 'standard'` rows in the database migrated forward to `'structure'` by
 migration `0014`, so no existing game's own deck type silently changed.
+
+### Game timestamps
+
+`games` tracks four points in a game's life, each set exactly once by a
+single well-defined transition rather than inferred after the fact:
+`created_at` (the row's own default, `createGame()`), `started_at`
+(`startGame()`, once hands are dealt and round 1 begins), `last_move_at`
+(`touchLastMoveAt()`, after every successful `playMood()`/`pass()`/
+`respondToDecision()` call -- see that method's own docblock for why it
+wraps the whole call rather than threading through every nested private
+method those three delegate to, and why a request that throws before
+completing never counts as a move), and `completed_at` (alongside
+`winner_game_player_id`, once a player reaches `wins_needed`). All four are
+`NULL` until their own transition happens, and `listGamesForUser()` is
+`SELECT *`-backed (`fetchGame()`), so any of them being unset for a given
+game (e.g. `last_move_at` on a `waiting` game nothing has happened in yet)
+is expected, not a bug. `last_move_at` is also what the lobby list itself
+sorts by within its two status tiers -- see `GET /games` in the API table
+above.
 
 ### Duel: separate per-player decks
 
