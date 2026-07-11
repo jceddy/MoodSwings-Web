@@ -68,7 +68,10 @@ on `;`.
   fact. See that migration's comments for the reasoning behind each design
   choice (e.g. why Hurt Feelings is a round attribute and not a card, and
   why history is a separate event log rather than derived from the
-  current-state tables).
+  current-state tables). `games` tracks four points in its life --
+  `created_at`/`started_at`/`completed_at` from `0004` itself, plus
+  `last_move_at` (`0017`, stamped after every successful play/pass/decision
+  response) -- see "Game timestamps" in `php-app/README.md`.
   
   This covers the data model only — the actual rules engine (resolving
   each card's effect, turn/phase flow, scoring) is future work, built

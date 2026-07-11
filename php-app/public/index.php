@@ -402,7 +402,14 @@ if ($path === '/games' && $method === 'POST') {
     $userIds = array_values(array_unique([$currentUserId, ...$opponentUserIds]));
     $format = (string) ($body['format'] ?? 'standard');
     $winsNeeded = isset($body['wins_needed']) ? (int) $body['wins_needed'] : 3;
-    $deckType = (string) ($body['deck_type'] ?? 'standard');
+    // Matches GameService::createGame()'s own default -- 'standard' was
+    // deck_type's name before migration 0014 renamed it to 'structure' and
+    // narrowed the enum to no longer even accept 'standard'; this literal
+    // default here was missed at the time, so any request that omits
+    // deck_type entirely failed with a PDOException on the INSERT below,
+    // caught by the generic PDOException handler and misreported as
+    // "opponents could not be found" -- unrelated to the actual cause.
+    $deckType = (string) ($body['deck_type'] ?? 'structure');
 
     try {
         $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType);

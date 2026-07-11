@@ -21,7 +21,12 @@ routed to the PHP app).
     Progress" rather than the raw `in_progress` the API returns
     (`humanizeStatus()`, a generic snake_case-to-Title-Case transform, not
     a fixed per-status lookup table, so any future status value still
-    reads reasonably without needing an update here); a "New game" dialog
+    reads reasonably without needing an update here). The list itself is
+    rendered in whatever order the API returns (no client-side re-sort) --
+    `GET /games` always puts `waiting`/`in_progress` games above
+    `completed` ones regardless of recency, so a stalled active game never
+    gets buried below a long-finished one; see "Game timestamps" in
+    `php-app/README.md`. A "New game" dialog
     picks 1-3 friends (via `GET /friends`) plus a format, then calls
     `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
