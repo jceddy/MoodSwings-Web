@@ -138,7 +138,17 @@ routed to the PHP app).
     differs from whatever it's copying), owner, rules text, and — if it's
     currently suppressed — an indicator naming the suppressing mood, if the
     game tracks one, and whether the suppression lasts as long as that mood
-    stays in play or just until the end of the current round). A few more
+    stays in play or just until the end of the current round). An in-play
+    Creativity that's actually copying something displays AS the copied
+    mood rather than as Creativity everywhere on the board — its in-play
+    list entry, and this detail view's name/rules text, all read as e.g.
+    "Serenity," not "Creativity," matching how the rules engine itself
+    treats it — with a `[Creativity copy]` tag next to its in-play list
+    entry (`cardLabel()`, driven by `card.is_creativity_copy`) and its own
+    detail-view line ("A Creativity copy of Serenity.") so it's never
+    mistaken for the genuine card. A "blank" Creativity played without
+    copying anything (`is_creativity_copy` false) still just shows as
+    plain "Creativity." A few more
     reminder lines cover the game's other "one mood affects another" cases
     the same way: a mood whose printed dice value is currently overridden
     by Encouragement or Idealism shows "Affected by <that mood>", and a
