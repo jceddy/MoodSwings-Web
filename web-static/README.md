@@ -121,14 +121,18 @@ routed to the PHP app).
     differs from whatever it's copying), owner, rules text, and — if it's
     currently suppressed — an indicator naming the suppressing mood, if the
     game tracks one, and whether the suppression lasts as long as that mood
-    stays in play or just until the end of the current round). Two more
+    stays in play or just until the end of the current round). A few more
     reminder lines cover the game's other "one mood affects another" cases
     the same way: a mood whose printed dice value is currently overridden
     by Encouragement or Idealism shows "Affected by <that mood>", and a
     mood doing the suppressing/boosting itself shows "Affecting: <targets>"
     naming everything it's currently affecting (several at once for a
     mass-suppression card's "all" mode, or for Idealism's blanket "every
-    mood its owner controls"). A mood someone only holds temporarily
+    mood its owner controls"). An in-play Bliss shows a line of its own
+    naming the color of whatever was discarded to pay its cost (`state.
+    in_play[].bliss_discard_color`, `null`/absent for every other card),
+    since which color it's currently tripling is otherwise something you'd
+    have to remember from when it was played. A mood someone only holds temporarily
     (Arrogance's steal, or Betrayal's/Recklessness's "give it back later")
     shows a fourth reminder line: which card caused the change, who owned
     it originally, and when it reverts — "when <that card> leaves play" for
@@ -143,7 +147,14 @@ routed to the PHP app).
     (Angst/Harmony/Grief) or by Melancholy's "play from the discard pile as
     though it were your hand" — the same `is_playable` flag that already
     filters a hand card routes a click on one of those straight to the
-    ordinary Play/Cancel choices panel instead. While the viewer is the one
+    ordinary Play/Cancel choices panel instead. The viewer's own hand cards
+    make this same read-only-vs-Play/Cancel split whenever it isn't their
+    turn to act at all (not their turn, or a pending decision elsewhere is
+    freezing the round) — a card sitting in your own hand is never hidden
+    *from you*, only playing it is turn-gated, so the button stays clickable
+    and opens the detail view instead of going disabled, the same way a
+    discard-pile card that currently can't be played still opens its own
+    read-only view rather than nothing at all. While the viewer is the one
     a pending decision (see below) is actually waiting on, their own hand
     cards switch to opening this same read-only detail view rather than the
     choices panel too — the response panel, not the ordinary choices panel,
@@ -199,8 +210,15 @@ routed to the PHP app).
     (present only while one of these is being decided) shows every
     player's running score-so-far plus who's swapping with whom, right
     above the response panel, the same way suppression info is shown
-    before you decide how to respond to a card you don't recognize. A
-    "Recent plays" list at the bottom of the board shows the last 15
+    before you decide how to respond to a card you don't recognize.
+    `round.scoring_effects` is a related but separate, always-present
+    section rendered just above the in-play list (`#scoring-effects`,
+    `renderScoringEffects()`) — one plain-English line per in-play mood
+    whose ability changes how the round will score at all (Bliss,
+    Exhilaration, Enthusiasm, Passion, Sneakiness, Awe, Corruption), fully
+    formatted server-side the same way every other reminder text in this
+    app is, so there's nothing here to figure out mid-round rather than
+    only once a decision is already forced. A "Recent plays" list at the bottom of the board shows the last 15
     plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
     played Paranoia from hand (target player: Bob), revealing Charity from
     Bob's hand") — always naming which zone the card was actually played

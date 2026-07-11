@@ -498,6 +498,34 @@ own transaction (the common case, no decision needed) or directly inside
 `respondToDecision()`'s already-open one once the last outstanding
 scoring decision resolves.
 
+`round.scoring_effects` is a related but separate field: unlike
+`scoring_preview` (only present while an Enthusiasm/Passion decision is
+actually outstanding), this is always computed the moment a round exists,
+so a player can see how scoring will play out *before* the round even
+ends. Built by `GameService::scoringEffectEntries()`, it's one
+`{card_id, card_name, owner_game_player_id, description}` entry per
+in-play mood whose ability changes how this round scores — Bliss and
+Exhilaration (always, for as long as they stay in play), Enthusiasm and
+Passion (likewise, since their "you may" option recurs every round), and
+Sneakiness/Awe/Corruption (only for as long as their one-time
+round-scoped `effectState` tag stays set — `swapScoreWithPlayerId`/
+`skipScoringThisRound`/`awardsExtraWin` — since `applyScoreSwaps()`/
+`skipScoringAndAdvance()`/`consumeExtraWinMarker()` each clear their own
+tag once the round it covers actually scores, so a stale Sneakiness from
+three rounds ago never lingers here). None of this is hidden information
+— an in-play card and the choice it was played with are both already
+public — so every viewer sees the same list. The `effect_key` lookup goes
+through `BoardState::effectiveCardId()`, mirroring `RoundScorer::score()`'s
+own check, so a Creativity copy of one of these cards is picked up the
+same way it actually contributes to the score.
+
+Every in-play mood also carries `bliss_discard_color` — `null` for every
+card except an in-play Bliss, which reads it from its own `blissColor`
+`effectState` (the color of whatever was discarded to pay its cost,
+captured once at play time — see `BlissEffect::payToPlayCost()`) so the
+client can show *which* color it's currently tripling without the player
+having to remember what they discarded.
+
 Creativity's "play as a copy of any mood" choice (`copy_card_id`, read from
 the top-level choices, resolved entirely server-side in `MoodPlayService`)
 means any mood currently *in play* — visible on the table, not any of the
@@ -566,7 +594,7 @@ Every in-play mood also carries `is_suppressed` plus, when suppressed,
 `suppression_expiry` (`'while_source_in_play'` or `'end_of_round'`) and
 `suppressed_by_card_id`/`suppressed_by_name` — the suppressing mood's id
 and name, resolved from `BoardState`'s `suppressionSourceCardId`/
-`cardCatalogNames()`. A source is only ever present for a
+`GameService::cardNamesFor()`. A source is only ever present for a
 `'while_source_in_play'` suppression (Faith/Guilt/Meekness/Pacifism/Shame,
 and Scorn's own version, which uses `'end_of_round'` *with* a source);
 Repentance's blanket `'end_of_round'` suppression never tracks one, since
