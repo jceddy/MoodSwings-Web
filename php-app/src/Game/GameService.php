@@ -75,6 +75,23 @@ final class GameService
      */
     private const POWER_DECK_NON_MYTHIC_COUNT = 14;
 
+    /** The 'jceddys_75' deck_type's own five colors, one built independently per color -- see buildJceddys75DeckCardIds(). */
+    private const JCEDDYS_75_DECK_COLORS = ['white', 'blue', 'black', 'red', 'green'];
+
+    /**
+     * Per-rarity card count and max-copies-per-distinct-card cap for one
+     * color of a 'jceddys_75' deck -- 1 Mythic, 2 *different* Rares (a cap
+     * of 1 forces that), 4 Uncommons (up to 2 copies of any one), and 8
+     * Commons (up to 3 copies of any one): 15 cards per color, 75 total
+     * across JCEDDYS_75_DECK_COLORS. See buildJceddys75DeckCardIds().
+     */
+    private const JCEDDYS_75_DECK_RARITY_SPEC = [
+        'mythic' => ['count' => 1, 'max_copies' => 1],
+        'rare' => ['count' => 2, 'max_copies' => 1],
+        'uncommon' => ['count' => 4, 'max_copies' => 2],
+        'common' => ['count' => 8, 'max_copies' => 3],
+    ];
+
     /**
      * Default for $gameLockTimeoutSeconds below: how long playMood()/
      * pass()/respondToDecision() wait to acquire a game's lock (see
@@ -274,6 +291,7 @@ final class GameService
         return match ($deckType) {
             'structure' => $this->buildStructureDeckCardIds(),
             'power' => $this->buildPowerDeckCardIds(),
+            'jceddys_75' => $this->buildJceddys75DeckCardIds(),
             default => range(1, self::TOTAL_CARDS), // 'one_of_each'
         };
     }
@@ -341,6 +359,59 @@ final class GameService
         }
 
         return $cardIds;
+    }
+
+    /**
+     * Assembles a 'jceddys_75' deck_type's card pool: JCEDDYS_75_DECK_RARITY_SPEC's
+     * counts and per-card copy caps, applied independently per color (unlike
+     * buildStructureDeckCardIds()'s single pool spanning every color) --
+     * 15 cards per color, 75 total. The catalog currently has at least 3
+     * Mythics/6 Rares/8 Uncommons/9 Commons per color, comfortably above
+     * what every cap here ever needs (e.g. 4 Uncommons at up to 2 copies
+     * each only ever needs 2 distinct Uncommons to exist), so
+     * randomCardIdsWithCopyLimit() below never has to fall back to fewer
+     * cards than promised.
+     *
+     * @return int[]
+     */
+    private function buildJceddys75DeckCardIds(): array
+    {
+        $pdo = Connection::get();
+
+        $cardIds = [];
+        foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
+            foreach (self::JCEDDYS_75_DECK_RARITY_SPEC as $rarity => $spec) {
+                $cardIds = [
+                    ...$cardIds,
+                    ...$this->randomCardIdsWithCopyLimit($pdo, $color, $rarity, $spec['count'], $spec['max_copies']),
+                ];
+            }
+        }
+
+        return $cardIds;
+    }
+
+    /**
+     * $count random card ids matching $color/$rarity, allowing up to
+     * $maxCopies repeats of any single id -- built by expanding that
+     * color/rarity's own card pool into $maxCopies copies of each id,
+     * shuffling, then taking the first $count, so no id can ever appear
+     * more than $maxCopies times while every id still has an equal chance
+     * of being picked. $maxCopies=1 (jceddys_75's Mythic/Rare slots)
+     * degenerates to an ordinary without-replacement draw.
+     *
+     * @return int[]
+     */
+    private function randomCardIdsWithCopyLimit(PDO $pdo, string $color, string $rarity, int $count, int $maxCopies): array
+    {
+        $stmt = $pdo->prepare('SELECT id FROM cards WHERE color = :color AND rarity = :rarity');
+        $stmt->execute(['color' => $color, 'rarity' => $rarity]);
+        $poolCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $expandedPool = array_merge(...array_fill(0, $maxCopies, $poolCardIds));
+        shuffle($expandedPool);
+
+        return array_slice($expandedPool, 0, $count);
     }
 
     /**

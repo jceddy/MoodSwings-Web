@@ -1030,7 +1030,7 @@ game too.
 `startGame()` when the deck is actually assembled -- nothing about which
 cards a game ends up with is decided before then) picks which pool of
 cards a game draws from, via `GameService::deckCardIdsFor()`'s dispatch to
-one of three builders:
+one of four builders:
 
 - `structure` (the default) -- `buildStructureDeckCardIds()` assembles a
   randomly-drawn, singleton 45-card deck matching a new physical box's own
@@ -1044,10 +1044,24 @@ one of three builders:
   from every non-Mythic card in the catalog pooled together -- unlike
   `structure`, nothing beyond that single Mythic is guaranteed about the
   other 14's own rarity mix.
+- `jceddys_75` -- `buildJceddys75DeckCardIds()` assembles a 75-card deck
+  built independently per color (`JCEDDYS_75_DECK_COLORS`), 15 cards each:
+  1 random Mythic, 2 *different* random Rares, 4 random Uncommons (up to 2
+  copies of any one), and 8 random Commons (up to 3 copies of any one) --
+  `JCEDDYS_75_DECK_RARITY_SPEC`'s `count`/`max_copies` pairs. Unlike
+  `structure`'s/`power`'s always-singleton pools, this one deliberately
+  allows a bounded number of repeats within the Uncommon/Rare/Common tiers
+  (Mythics and Rares stay singleton -- a 1-copy cap forces that). Built by
+  `randomCardIdsWithCopyLimit()`: expand a color/rarity's own card pool
+  into `max_copies` copies of each id, shuffle, take the first `count` --
+  so no id can ever exceed its cap while every id still has an equal
+  chance of being picked, and `max_copies=1` (Mythic/Rare) degenerates to
+  an ordinary without-replacement draw.
 - `one_of_each` -- the full 133-card pool, one copy of every printed card,
   unchanged from the only option that existed before `deck_type` did.
 
-All three are always singleton within one deck (no repeated card ids) --
+`structure`, `power`, and `one_of_each` are always singleton within one
+deck (no repeated card ids); `jceddys_75` is the one exception, by design.
 `deck_type` was named `standard` before `power` existed, when there was
 only one alternative to `one_of_each` to distinguish it from; it was
 renamed `structure` once a second small-deck option needed a name of its

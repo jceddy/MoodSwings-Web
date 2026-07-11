@@ -194,6 +194,7 @@
     const DECK_TYPE_LABELS = {
         structure: 'Structure',
         power: 'Power',
+        jceddys_75: 'jceddy\'s 75 Card',
         one_of_each: 'One of Each Card',
     };
 
@@ -203,12 +204,13 @@
 
     // Plain-language explanation shown under the New Game dialog's own
     // Deck dropdown (see updateDeckTypeDescription()) -- kept in sync with
-    // GameService::buildStructureDeckCardIds()/buildPowerDeckCardIds()'s
-    // own actual card counts, since those are the numbers a player is
-    // actually choosing between here.
+    // GameService::buildStructureDeckCardIds()/buildPowerDeckCardIds()/
+    // buildJceddys75DeckCardIds()'s own actual card counts, since those are
+    // the numbers a player is actually choosing between here.
     const DECK_TYPE_DESCRIPTIONS = {
         structure: 'A 45-card deck matching a new physical box’s printed rarity mix: 23 common, 14 uncommon, 6 rare, and 2 mythic moods.',
         power: 'A fast 15-card deck: 1 random mythic mood plus 14 other random moods.',
+        jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 

@@ -258,6 +258,65 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(14, array_sum($countsByRarity) - (int) ($countsByRarity['mythic'] ?? 0));
     }
 
+    public function testCreateGameCanRequestJceddys75DeckInstead(): void
+    {
+        $creator = $this->insertUser('jceddy75-alice');
+        $bob = $this->insertUser('jceddy75-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'jceddys_75');
+        self::assertSame('jceddys_75', $this->fetchGame($gameId)['deck_type']);
+
+        $this->games->startGame($gameId);
+
+        $cardIdsStmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id");
+        $cardIdsStmt->execute(['game_id' => $gameId]);
+        $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        self::assertCount(75, $cardIds);
+
+        $uniqueCardIds = array_unique($cardIds);
+        $placeholders = implode(',', array_fill(0, count($uniqueCardIds), '?'));
+        $catalogStmt = $this->pdo->prepare("SELECT id, color, rarity FROM cards WHERE id IN ({$placeholders})");
+        $catalogStmt->execute(array_values($uniqueCardIds));
+        $catalogById = [];
+        foreach ($catalogStmt->fetchAll() as $row) {
+            $catalogById[(int) $row['id']] = $row;
+        }
+
+        // Every drawn id has to have actually resolved to a real catalog
+        // row -- rules out a stray id sneaking in from the wrong
+        // color/rarity pool. (The catalog itself only has one row per id,
+        // so this checks against $uniqueCardIds, not the full 75-long
+        // $cardIds -- which legitimately repeats ids within their cap.)
+        self::assertCount(count($uniqueCardIds), $catalogById);
+
+        $copiesById = array_count_values($cardIds);
+        $countsByColorRarity = [];
+        foreach ($cardIds as $cardId) {
+            $row = $catalogById[$cardId];
+            $key = $row['color'] . '/' . $row['rarity'];
+            $countsByColorRarity[$key] = ($countsByColorRarity[$key] ?? 0) + 1;
+
+            $maxCopies = match ($row['rarity']) {
+                'mythic', 'rare' => 1,
+                'uncommon' => 2,
+                'common' => 3,
+            };
+            self::assertLessThanOrEqual(
+                $maxCopies,
+                $copiesById[$cardId],
+                "card {$cardId} ({$row['rarity']}) appears {$copiesById[$cardId]} times, over its {$maxCopies}-copy cap",
+            );
+        }
+
+        foreach (['white', 'blue', 'black', 'red', 'green'] as $color) {
+            self::assertSame(1, $countsByColorRarity["{$color}/mythic"] ?? 0, "{$color} should have exactly 1 mythic");
+            self::assertSame(2, $countsByColorRarity["{$color}/rare"] ?? 0, "{$color} should have exactly 2 rares");
+            self::assertSame(4, $countsByColorRarity["{$color}/uncommon"] ?? 0, "{$color} should have exactly 4 uncommons");
+            self::assertSame(8, $countsByColorRarity["{$color}/common"] ?? 0, "{$color} should have exactly 8 commons");
+        }
+    }
+
     public function testCreateGameCanRequestTheOneOfEachDeckInstead(): void
     {
         $creator = $this->insertUser('ooe-alice');
