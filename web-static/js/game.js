@@ -501,6 +501,7 @@
         renderPendingDecision(pendingDecision);
         renderScoringPreview(state.round && state.round.scoring_preview);
         renderScoringEffects(state.round && state.round.scoring_effects);
+        renderBoardEffects(state.round && state.round.board_effects);
 
         renderList(
             document.getElementById('in-play-list'),
@@ -1226,6 +1227,21 @@
         const entries = effects || [];
         container.hidden = entries.length === 0;
         renderList(document.getElementById('scoring-effects-list'), { hidden: true }, entries, (effect) => {
+            const li = document.createElement('li');
+            li.textContent = effect.description;
+            return li;
+        });
+    }
+
+    // Board-wide, always-visible summary of every in-play mood whose
+    // ability reshapes every mood on the board (not just scoring) --
+    // currently just Imagination overriding every mood's color -- see
+    // GameService::boardEffectEntries().
+    function renderBoardEffects(effects) {
+        const container = document.getElementById('board-effects');
+        const entries = effects || [];
+        container.hidden = entries.length === 0;
+        renderList(document.getElementById('board-effects-list'), { hidden: true }, entries, (effect) => {
             const li = document.createElement('li');
             li.textContent = effect.description;
             return li;

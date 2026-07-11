@@ -1378,6 +1378,7 @@ final class GameService
                 'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId),
                 'scoring_preview' => $this->serializeScoringPreview($state, (int) $roundRow['id']),
                 'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
+                'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
             ];
             $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
         }
@@ -2384,6 +2385,55 @@ final class GameService
         $opponentName = $playerNames[$swapWithPlayerId] ?? 'a player';
 
         return "{$ownerName}'s {$cardName} will swap their round score with {$opponentName}'s.";
+    }
+
+    /**
+     * A board-wide summary of every in-play mood whose "while in play"
+     * ability reshapes every mood on the board (not just how scoring
+     * works, which scoringEffectEntries() above already covers) -- e.g.
+     * Imagination overriding every mood's color via
+     * BoardState::colorOf(). Sits alongside scoring_effects as its own
+     * always-visible list rather than folded into it, since this is about
+     * what a mood *is* right now, not what it's worth.
+     *
+     * @param array<int, string> $names
+     * @param array<int, string> $playerNames
+     * @return array<int, array{card_id:int, card_name:string, owner_game_player_id:int, description:string}>
+     */
+    private function boardEffectEntries(BoardState $state, array $names, array $playerNames): array
+    {
+        $entries = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            $ownerName = $playerNames[$mood->ownerId] ?? 'A player';
+            $cardName = $names[$mood->cardId] ?? 'a card';
+
+            $description = match ($effectKey) {
+                'imagination' => $this->imaginationBoardDescription($state, $mood, $ownerName, $cardName),
+                default => null,
+            };
+
+            if ($description !== null) {
+                $entries[] = [
+                    'card_id' => $mood->cardId,
+                    'card_name' => $cardName,
+                    'owner_game_player_id' => $mood->ownerId,
+                    'description' => $description,
+                ];
+            }
+        }
+
+        return $entries;
+    }
+
+    private function imaginationBoardDescription(BoardState $state, MoodInPlay $mood, string $ownerName, string $cardName): ?string
+    {
+        $color = $state->effectState($mood->cardId, 'color');
+        if ($color === null) {
+            return null;
+        }
+
+        return "{$ownerName}'s {$cardName} — all moods are {$color}.";
     }
 
     /**

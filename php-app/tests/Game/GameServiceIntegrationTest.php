@@ -1412,6 +1412,64 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull(self::findByCardId($inPlay, $courageId)['bliss_discard_color']);
     }
 
+    public function testGetStateExposesBoardEffectsForImaginationOverridingEveryMoodsColor(): void
+    {
+        $u1 = $this->insertUser('boardfx1');
+        $u2 = $this->insertUser('boardfx2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $imaginationId = $this->insertGameCard($gameId, 42, 'in_play', $p1); // Imagination
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- an unrelated card
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['color' => 'green']), 'id' => $imaginationId]);
+
+        $effects = $this->games->getState($gameId, $u1)['round']['board_effects'];
+
+        self::assertCount(1, $effects);
+        self::assertSame($imaginationId, $effects[0]['card_id']);
+        self::assertSame($p1, $effects[0]['owner_game_player_id']);
+        self::assertStringContainsString("boardfx1's Imagination", $effects[0]['description']);
+        self::assertStringContainsString('all moods are green', $effects[0]['description']);
+
+        // Scoring effects and board effects are separate lists -- Imagination
+        // doesn't touch scoring, so it shouldn't show up there, and Courage
+        // (an unrelated in-play card with no color-overriding ability of its
+        // own) shouldn't show up in either.
+        self::assertSame([], $this->games->getState($gameId, $u1)['round']['scoring_effects']);
+    }
+
+    public function testGetStateOmitsImaginationFromBoardEffectsBeforeItsColorIsChosen(): void
+    {
+        $u1 = $this->insertUser('boardfxpending1');
+        $u2 = $this->insertUser('boardfxpending2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        // No effect_state tagged at all -- e.g. a row inserted directly for
+        // test setup that never actually went through afterPlaying().
+        $this->insertGameCard($gameId, 42, 'in_play', $p1); // Imagination
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertSame([], $this->games->getState($gameId, $u1)['round']['board_effects']);
+    }
+
     public function testGetStateExposesEachDiscardPileCardsLastKnownOwnerToDisambiguateIdenticalCards(): void
     {
         $u1 = $this->insertUser('discardowner1');

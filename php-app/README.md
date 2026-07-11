@@ -566,6 +566,22 @@ captured once at play time — see `BlissEffect::payToPlayCost()`) so the
 client can show *which* color it's currently tripling without the player
 having to remember what they discarded.
 
+`round.board_effects` is `scoring_effects`' sibling for non-scoring
+board-wide reshaping: same `{card_id, card_name, owner_game_player_id,
+description}` shape, built by `GameService::boardEffectEntries()`, but for
+an in-play mood whose "while in play" ability changes what every mood *is*
+rather than what it's worth. Today that's just Imagination — "While in
+play, all moods are the chosen color and no other colors" — read from its
+own `color` `effectState` (set by `ImaginationEffect::afterPlaying()`, the
+same tag `BoardState::colorOf()` already consults for every color-counting
+effect); an in-play Imagination with no `color` tagged yet (a test-only
+state a real play can't produce) is simply omitted. The two lists are kept
+separate rather than merged because they answer different questions —
+`scoring_effects` is "how will this round's score come out,"
+`board_effects` is "what do the cards on the table actually look like
+right now" — so a future card that does both would appear in both lists,
+not force a shared description format to cover two different concerns.
+
 Creativity's "play as a copy of any mood" choice (`copy_card_id`, read from
 the top-level choices, resolved entirely server-side in `MoodPlayService`)
 means any mood currently *in play* — visible on the table, not any of the
