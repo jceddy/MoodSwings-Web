@@ -17,6 +17,20 @@ endpoints -- and renders it as e.g. "v0.1.0". Fetched with `cache:
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
 
+## Assets
+
+- `img/` -- Game-level art not tied to any specific printed card, e.g.
+  `hurt-feelings.webp` (Hurt Feelings is a marker/token, not a `cards` row
+  -- see migration `0003`'s own header comment for why -- so its art lives
+  here rather than under `img/cards/`).
+- `img/cards/<SET_CODE>/` -- Card art, one subfolder per Set, named after
+  that Set's own `code` column (`sets.code` -- see migration `0015` and
+  "Sets" in `database/README.md`). The official pool's art lives in
+  `img/cards/MSW/` (`MSW` = the "Mood Swings" Set `0015` seeds); a future
+  community/custom Set (see the "custom card sets" issue) would get its
+  own sibling folder here, named after whatever `code` it's registered
+  under, rather than mixing its art in with the official pool's.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
