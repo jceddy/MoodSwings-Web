@@ -6,6 +6,12 @@ body {
     color: #222;
 }
 
+footer {
+    margin-top: 2rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+
 .field {
     margin-bottom: 1rem;
 }

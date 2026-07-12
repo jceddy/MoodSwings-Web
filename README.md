@@ -12,6 +12,34 @@ This repository is organized into three independent projects:
 
 See each project's own README for setup and details.
 
+## Versioning
+
+The three sub-projects deploy together as one site (see "Deployment" below),
+so they share a single product version rather than each having their own —
+tracked in the [`VERSION`](VERSION) file at the repo root, currently
+`0.1.0`. Follows [Semantic Versioning](https://semver.org/)
+(`MAJOR.MINOR.PATCH`), interpreted for this project as:
+
+- **MAJOR** — a breaking change to the game/save data model that makes
+  existing in-progress games or saved decklists incompatible (e.g. a
+  migration that isn't purely additive), or a breaking change to the public
+  API surface.
+- **MINOR** — a backward-compatible new feature (a new card mechanic, game
+  format, deck type, etc.).
+- **PATCH** — a bug fix, or a change with no user-facing behavior at all
+  (docs, refactors, internal cleanup).
+
+Starting at `0.1.0` rather than `1.0.0` follows SemVer's own convention for
+initial development: the public API/data model can still change in
+backward-incompatible ways at any time before `1.0.0`, without that alone
+requiring a MAJOR bump.
+
+`VERSION` is bumped by hand as part of whatever PR the version change
+belongs to — there's no automated enforcement of when or by how much. The
+frontend fetches `VERSION` directly (a plain static file, deployed
+alongside `index.html`) to render the version indicator described in
+`web-static/README.md`.
+
 ## Deployment
 
 `.github/workflows/deploy.yml` deploys to Bluehost over FTP on every push to
