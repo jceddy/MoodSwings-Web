@@ -587,10 +587,18 @@
         // specified) replaces "<deck type> deck" entirely here, rather than
         // being appended to it -- the deck name itself is what identifies
         // the deck in this case, the same role "Structure deck" etc. plays
-        // for the algorithmically-assembled pools.
+        // for the algorithmically-assembled pools. custom_duel has no
+        // single game-wide deck (each player submits their own -- see the
+        // per-player "deck:" labels in the players list below), so the
+        // title shows the *viewer's own* submitted deck name instead of
+        // deckTypeLabel()'s generic "Custom Decklists (Duel) deck", which
+        // never actually named anything the viewer had chosen.
+        const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
         const deckDescription = state.game.deck_type === 'custom'
             ? (state.game.custom_deck_name || 'Uploaded Deck')
-            : deckTypeLabel(state.game.deck_type) + ' deck';
+            : state.game.deck_type === 'custom_duel'
+                ? (you && you.custom_deck_name || 'Uploaded Deck')
+                : deckTypeLabel(state.game.deck_type) + ' deck';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
 

@@ -99,11 +99,15 @@ routed to the PHP app).
     stays hidden until every player's own `deck_submitted` is true, since
     the server would just reject starting otherwise. Once a `custom_duel`
     game is actually in progress, each player's own row in the Players
-    list additionally shows `— deck: <name>` (or "Uploaded Deck") --
-    unlike every other deck_type, where the board title alone names the
-    one deck the whole table shares, a `custom_duel` game has no single
-    deck to name there, so each player's own label lives on their own row
-    instead. Clicking any hand
+    list additionally shows `— deck: <name>` (or "Uploaded Deck") -- since
+    unlike every other deck_type, a `custom_duel` game has no single deck
+    the whole table shares, each player having submitted their own. The
+    board title itself shows the *viewer's own* submitted deck name for a
+    `custom_duel` game (looked up from `state.players` by
+    `state.you.game_player_id`, the same `custom_deck_name` field the
+    per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
+    Decklists (Duel) deck", which never actually named anything the viewer
+    had chosen. Clicking any hand
     card opens a panel showing its name and rules text plus Play/Cancel, so
     it doubles as a quick way to inspect a card you don't recognize yet;
     cards with no ability worth asking about (roughly half the 127-card
