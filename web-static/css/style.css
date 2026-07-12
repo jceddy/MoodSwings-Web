@@ -219,7 +219,8 @@ body.game-page {
 }
 
 dialog#new-game-dialog,
-dialog#card-detail-dialog {
+dialog#card-detail-dialog,
+dialog#choices-panel {
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
@@ -265,7 +266,6 @@ dialog#art-preview-dialog {
     margin-bottom: 0.25rem;
 }
 
-#choices-panel,
 #pending-decision-panel {
     border: 1px solid #ccc;
     border-radius: 0.5rem;

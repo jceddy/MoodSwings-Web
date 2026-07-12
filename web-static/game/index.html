@@ -80,16 +80,15 @@
                 <h3>Your hand</h3>
                 <ul id="hand-list"></ul>
 
-                <div id="choices-panel" hidden>
-                    <h4>Play <span id="choices-card-name"></span></h4>
-                    <p id="choices-card-rules"></p>
+                <dialog id="choices-panel">
+                    <img id="choices-card-art" class="card-detail-art">
 
                     <div id="choices-fields"></div>
                     <p id="choices-validation" class="error" hidden></p>
 
                     <button id="play-card-button" type="button">Play card</button>
                     <button id="cancel-choice-button" type="button">Cancel</button>
-                </div>
+                </dialog>
 
                 <div id="pending-decision-panel" hidden>
                     <h4 id="pending-decision-title"></h4>

@@ -181,9 +181,19 @@ information the art itself carries.
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
     Decklists (Duel) deck", which never actually named anything the viewer
     had chosen. Clicking any hand
-    card opens a panel showing its name and rules text plus Play/Cancel, so
-    it doubles as a quick way to inspect a card you don't recognize yet;
-    cards with no ability worth asking about (roughly half the 127-card
+    card opens `#choices-panel` -- a `<dialog>` shown via `showModal()`,
+    the same overlay convention `#card-detail-dialog`/`#art-preview-dialog`
+    already use (see "Card art rendering" above) -- with an enlarged view
+    of the card's own art in place of a separate name/rules-text heading
+    (its `alt` text carries both, for accessibility) plus Play/Cancel, so
+    it doubles as a quick way to inspect a card you don't recognize yet.
+    Since `showModal()` makes everything outside the dialog inert, a
+    server-side rejection from actually submitting the play (caught after
+    the dialog's own client-side checks below already passed) surfaces
+    inside the dialog itself, reusing `#choices-validation`'s existing
+    spot, rather than the board's own `#board-error` -- which would be
+    invisible behind the dialog's backdrop until it closed. Cards with no
+    ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
     card to discard, a mode string, etc.), driven by each card's
