@@ -3112,6 +3112,117 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Regression test: computeFreshGrants() used to push a bare `null`
+     * for Hope's/Stubbornness's/a banked Generosity-Joy grant, identical
+     * to the base allowance's own `null` entries -- describePlayGrant()
+     * can't tell those apart, so the bonus play silently read "Your
+     * normal turn" instead of naming Hope as its source.
+     */
+    public function testPlayGrantDescriptionNamesHopeInsteadOfReadingAsANormalTurn(): void
+    {
+        $u1 = $this->insertUser('hopegrantname1');
+        $u2 = $this->insertUser('hopegrantname2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 124, 'in_play', $p1); // real Hope
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        // p2 passes -- the turn advances to p1, whose fresh grants should
+        // now include Hope's perpetual bonus.
+        $this->games->pass($gameId, $p2);
+
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+        self::assertCount(2, $playGrants);
+        self::assertSame('Your normal turn', $playGrants[0]['description']);
+        self::assertSame('An extra play from Hope', $playGrants[1]['description']);
+        self::assertSame($p1, $this->games->gamePlayerIdFor($gameId, $u1)); // sanity: p1 is who the grant belongs to
+        self::assertSame('Hope', $playGrants[1]['source_card_name']);
+    }
+
+    /**
+     * The exact bug report this fix addresses: a Creativity copying Hope
+     * grants the extra play (already correctly, via
+     * BoardState::countMoodsInPlayWithEffectiveKey()'s copy-aware
+     * effectiveCardId() lookup), but its description named no source at
+     * all before this fix -- it should read as coming from "Hope" (the
+     * copied identity), exactly the way the in-play list itself already
+     * displays that Creativity as Hope everywhere else.
+     */
+    public function testPlayGrantDescriptionNamesHopeWhenGrantedViaACreativityCopy(): void
+    {
+        $u1 = $this->insertUser('hopecreativity1');
+        $u2 = $this->insertUser('hopecreativity2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // The real Hope belongs to p2 (Creativity can copy any in-play
+        // mood, not just your own) -- p1's own bonus can only come from
+        // their Creativity, so there's no ambiguity about which physical
+        // card the grant is actually attributed to.
+        $hopeId = $this->insertGameCard($gameId, 124, 'in_play', $p2); // real Hope, owned by p2
+        $creativityId = $this->insertGameCard($gameId, 32, 'in_play', $p1); // p1's Creativity, copying p2's Hope
+        $this->pdo->prepare('UPDATE game_cards SET copied_card_id = :copied_card_id WHERE id = :id')
+            ->execute(['copied_card_id' => $hopeId, 'id' => $creativityId]);
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->games->pass($gameId, $p2);
+
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+        self::assertCount(2, $playGrants);
+        self::assertSame('Your normal turn', $playGrants[0]['description']);
+        self::assertSame('An extra play from Hope', $playGrants[1]['description']);
+        self::assertSame('Hope', $playGrants[1]['source_card_name']);
+        // Resolves to the copied Hope's own instance id -- same
+        // effectiveCardId() translation serializeCard() already uses so
+        // this Creativity displays (and here, is named) as "Hope"
+        // everywhere, not as "Creativity".
+        self::assertSame($hopeId, $playGrants[1]['source_card_id']);
+    }
+
+    public function testPlayGrantDescriptionNamesGraceWithItsDiscardRestriction(): void
+    {
+        $u1 = $this->insertUser('gracegrantname1');
+        $u2 = $this->insertUser('gracegrantname2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 121, 'in_play', $p1); // real Grace
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->games->pass($gameId, $p2);
+
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+        self::assertCount(2, $playGrants);
+        self::assertSame(
+            'An extra play from Grace from the discard pile (must share a color with one of your moods)',
+            $playGrants[1]['description'],
+        );
+        self::assertSame('Grace', $playGrants[1]['source_card_name']);
+    }
+
+    /**
      * Stubbornness's bonus depends on live mood counts checked fresh at
      * the start of each turn -- here p2's two pre-seeded moods outnumber
      * p1's one (Stubbornness itself) by the time round 2 starts, so p1's
@@ -3143,6 +3254,13 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p1, (int) $round2['first_game_player_id']); // p1 won round 1 (3 to 0)
         self::assertSame(2, (int) $round2['plays_remaining']); // base 1 + Stubbornness's bonus (p2 has more moods)
+
+        // Regression: the bonus grant used to be indistinguishable from
+        // the base allowance (both a bare `null`), reading as "Your
+        // normal turn" instead of naming Stubbornness.
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+        self::assertSame('Your normal turn', $playGrants[0]['description']);
+        self::assertSame('An extra play from Stubbornness', $playGrants[1]['description']);
     }
 
     /**
