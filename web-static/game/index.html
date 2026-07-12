@@ -166,28 +166,32 @@
                     </label>
                     <table>
                         <thead>
-                            <tr><th>Rarity</th><th>Max total (optional)</th><th>Max duplicates (optional)</th></tr>
+                            <tr><th>Rarity</th><th>Max total (optional)</th><th>Max duplicates (optional)</th><th>Even split across colors</th></tr>
                         </thead>
                         <tbody>
                             <tr>
                                 <td>Common</td>
                                 <td><input type="number" min="0" id="new-game-duel-rarity-limit-common"></td>
                                 <td><input type="number" min="0" id="new-game-duel-duplicate-limit-common"></td>
+                                <td><input type="checkbox" id="new-game-duel-even-distribution-common"></td>
                             </tr>
                             <tr>
                                 <td>Uncommon</td>
                                 <td><input type="number" min="0" id="new-game-duel-rarity-limit-uncommon"></td>
                                 <td><input type="number" min="0" id="new-game-duel-duplicate-limit-uncommon"></td>
+                                <td><input type="checkbox" id="new-game-duel-even-distribution-uncommon"></td>
                             </tr>
                             <tr>
                                 <td>Rare</td>
                                 <td><input type="number" min="0" id="new-game-duel-rarity-limit-rare"></td>
                                 <td><input type="number" min="0" id="new-game-duel-duplicate-limit-rare"></td>
+                                <td><input type="checkbox" id="new-game-duel-even-distribution-rare"></td>
                             </tr>
                             <tr>
                                 <td>Mythic</td>
                                 <td><input type="number" min="0" id="new-game-duel-rarity-limit-mythic"></td>
                                 <td><input type="number" min="0" id="new-game-duel-duplicate-limit-mythic"></td>
+                                <td><input type="checkbox" id="new-game-duel-even-distribution-mythic"></td>
                             </tr>
                         </tbody>
                     </table>

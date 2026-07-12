@@ -228,7 +228,7 @@
     const DUEL_RULES_PRESET_SUMMARIES = {
         structure: 'Exactly 45 cards: 23 common, 14 uncommon, 6 rare, 2 mythic. No duplicate cards.',
         power: 'At least 15 cards, at most 1 mythic. No duplicate cards.',
-        jceddys_75: 'Exactly 75 cards: 40 common (up to 3 copies of any one), 20 uncommon (up to 2 copies of any one), 10 rare, 5 mythic. No duplicate rare or mythic cards.',
+        jceddys_75: 'Exactly 75 cards: 40 common (up to 3 copies of any one), 20 uncommon (up to 2 copies of any one), 10 rare, 5 mythic. No duplicate rare or mythic cards. Every rarity split evenly across all 5 colors.',
     };
 
     function updateDeckTypeDescription() {
@@ -358,6 +358,16 @@
         return map;
     }
 
+    // Reads the four rarity rows' own "even split across colors"
+    // checkboxes into a plain list of checked rarity names -- matches
+    // DuelDeckRules's own $evenColorDistributionRarities shape (a rarity
+    // present in the list means the rule applies, absent means no
+    // requirement), unlike the two number-field rules above which are
+    // sent as {rarity: value} maps.
+    function collectEvenColorDistributionRarities() {
+        return RARITIES.filter((rarity) => document.getElementById('new-game-duel-even-distribution-' + rarity).checked);
+    }
+
     function collectDuelDeckRules() {
         const preset = document.getElementById('new-game-duel-rules-preset').value;
         if (preset !== 'user_defined') {
@@ -369,6 +379,7 @@
             min_cards: Number(document.getElementById('new-game-duel-min-cards').value) || 0,
             rarity_limits: collectRarityMap('new-game-duel-rarity-limit-'),
             duplicate_limits: collectRarityMap('new-game-duel-duplicate-limit-'),
+            even_color_distribution_rarities: collectEvenColorDistributionRarities(),
         };
     }
 
@@ -786,10 +797,14 @@
             .filter((rarity) => rules.duplicate_limits[rarity] !== undefined)
             .map((rarity) => 'at most ' + rules.duplicate_limits[rarity] + ' cop' + (rules.duplicate_limits[rarity] === 1 ? 'y' : 'ies') + ' of any ' + rarity + ' card')
             .join(', ');
+        const evenDistributionText = rules.even_color_distribution_rarities
+            .map((rarity) => rarity + ' cards split evenly across all 5 colors')
+            .join(', ');
         document.getElementById('duel-deck-rules-summary').textContent =
             'At least ' + rules.min_cards + ' cards.' +
             (rarityLimitsText ? ' At most ' + rarityLimitsText.replace(/^at most /, '') + '.' : '') +
-            (duplicateLimitsText ? ' At most ' + duplicateLimitsText.replace(/^at most /, '') + '.' : '');
+            (duplicateLimitsText ? ' At most ' + duplicateLimitsText.replace(/^at most /, '') + '.' : '') +
+            (evenDistributionText ? ' ' + evenDistributionText.charAt(0).toUpperCase() + evenDistributionText.slice(1) + '.' : '');
 
         renderList(
             document.getElementById('duel-deck-submission-status'),
