@@ -1843,6 +1843,15 @@ final class GameService
                 ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
+                // A permanent one-time "after playing this mood, ... this
+                // mood's value becomes N" trigger (Dignity, Delight, ...)
+                // has locked its value in via BoardState::setValueOverride()
+                // -- as opposed to a "while in play" card (Determination)
+                // whose value keeps being recomputed live by valueOf() and
+                // never touches 'valueOverride' at all. The frontend uses
+                // this to distinguish the two visually (see "Card art
+                // rendering" in web-static/README.md).
+                'value_locked' => array_key_exists('valueOverride', $mood->effectState),
                 'suppression_expiry' => $mood->suppressionExpiry,
                 'suppressed_by_card_id' => $mood->suppressionSourceCardId,
                 'suppressed_by_name' => $mood->suppressionSourceCardId !== null
@@ -2302,7 +2311,7 @@ final class GameService
      * card being merely displayed, since nothing there ever reads it.
      *
      * @param array<int, string> $names
-     * @return array{card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
+     * @return array{card_id:int,catalog_card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
     private function serializeCard(BoardState $state, int $cardId, array $names, ?int $reactingViewerId = null): array
     {
@@ -2342,6 +2351,12 @@ final class GameService
 
         return [
             'card_id' => $cardId,
+            // The catalog id (cards.id) this card's art asset is keyed by
+            // -- see web-static/README.md's "Assets" section. For a
+            // Creativity copy this is the COPIED card's catalog id,
+            // matching name/rules_text's own switch just below, so the
+            // art shown matches whatever mood is actually displayed.
+            'catalog_card_id' => $state->catalogCardId($isCreativityCopy ? $effectiveCardId : $cardId),
             'name' => $isCreativityCopy ? ($names[$effectiveCardId] ?? $diceValueCatalog['effectKey']) : ($names[$cardId] ?? $catalog['effectKey']),
             'color' => $color,
             // The printed color, ignoring Imagination's "while in play, all

@@ -205,7 +205,7 @@
     </dialog>
 
     <dialog id="card-detail-dialog">
-        <h3 id="card-detail-name"></h3>
+        <img id="card-detail-art" class="card-detail-art">
         <p id="card-detail-meta"></p>
         <p id="card-detail-creativity-copy" hidden></p>
         <p id="card-detail-suppression" hidden></p>
@@ -213,8 +213,15 @@
         <p id="card-detail-affected-by" hidden></p>
         <p id="card-detail-affecting" hidden></p>
         <p id="card-detail-bliss-color" hidden></p>
-        <p id="card-detail-rules"></p>
         <button id="card-detail-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Generic art-preview dialog for game-level art not tied to a
+         specific printed card (e.g. Hurt Feelings) -- see openArtPreview()
+         in game.js and "Assets" in web-static/README.md. -->
+    <dialog id="art-preview-dialog">
+        <img id="art-preview-image" class="art-preview-image">
+        <button id="art-preview-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="friends-dialog">
