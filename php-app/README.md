@@ -1384,6 +1384,18 @@ supply `$catalogCardIdFor`, all of which kept passing unmodified.
 `BoardStateRepository::load()` builds the real mapping for a live game from
 each loaded `game_cards` row's own `id`/`card_id` pair.
 
+`BoardState::catalogCardId(int $cardId): int` exposes that same resolution
+publicly (`catalogRow()` itself only returns the catalog *row*, not the id
+it resolved to) -- used by `GameService::serializeCard()` to add a
+`catalog_card_id` field to every serialized card, alongside the existing
+instance-id `card_id`. This is the one place the API surface needs a real
+catalog id: card art is keyed by `cards.id`, not by the per-game instance
+id (see "Assets" in `web-static/README.md`), so the frontend builds each
+card's art URL from `catalog_card_id` + a client-side slugification of
+`name`. For a Creativity copy, `catalog_card_id` resolves to the *copied*
+card's catalog id, matching `name`/`rules_text`'s own switch, so the art
+shown always matches whatever mood is actually being displayed.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises

@@ -36,6 +36,35 @@ README for what the version itself means and where it's bumped.
   `game_cards.card_id`), the name suffix is purely for a human browsing
   the folder.
 
+### Card art rendering
+
+`game.js`'s `cardArtUrl(card)` builds a card's art URL from two API fields
+`GameService::serializeCard()` returns -- `catalog_card_id` (see "Card
+identity: catalog id vs. per-game instance id" in `php-app/README.md`) and
+`name`, the latter slugified client-side by `slugify()` (lowercase,
+non-alphanumeric runs collapsed to a single hyphen, trimmed) to match the
+asset filenames above. The `MSW` set folder is hardcoded here rather than
+threaded through the API, since it's the only Set that exists today -- see
+the "custom card sets" issue for when that stops being true. `buildCardThumb()`
+is the shared element builder every card zone (hand, in-play, discard pile)
+uses in place of the old text-only buttons: a `<button class="card-thumb">`
+containing the art `<img>` (its `alt` text is `name + '. ' + rules_text`,
+covering what the printed art itself can't convey to a screen reader) plus
+whatever ISN'T part of the static art overlaid as small badges/captions on
+top of it -- a current value badge (only shown when `card.value` differs
+from `card.base_value`, since the printed value is already baked into the
+art otherwise), a "Copy" badge for an in-play Creativity copy, a
+"Suppressed" ribbon, and an owner/last-owner caption below the thumbnail
+for in-play and discard-pile cards. An unplayable hand card keeps the same
+dashed, lower-opacity `.not-playable` treatment the old text button had,
+just applied to the thumbnail instead. The card-detail dialog's enlarged
+`#card-detail-art` image replaces what used to be a `<h3>` name heading and
+a `<p>` rules-text paragraph -- both now conveyed only via that image's
+`alt` text -- while every other line in the dialog (color, value, alt
+value, suppression, ownership, "affecting"/"affected by", Bliss's discard
+color) stays plain text exactly as before, since none of that is
+information the art itself carries.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
@@ -221,7 +250,9 @@ README for what the version itself means and where it's bumped.
     otherwise polling would stay silently suspended until the panel was
     manually cancelled, even though the pass itself went through fine.
     Every mood in play is also clickable, opening a read-only detail view
-    (name, base value, alt value if it has one, current value if a
+    (an enlarged view of the card's own art in place of a separate name/
+    rules-text heading -- see "Card art rendering" above -- base value,
+    alt value if it has one, current value if a
     while-in-play effect has changed it, its printed color too if
     Imagination has recolored it (or, for a Creativity copy, if that
     differs from whatever it's copying), owner, rules text, and — if it's
@@ -432,9 +463,15 @@ README for what the version itself means and where it's bumped.
     from) whoever the "— on turn" tag currently marks. In games of 3+
     players, whoever holds Hurt Feelings (`state.round.hurt_feelings_game_player_id`,
     already tracked server-side to grant that player 2 plays instead of 1
-    this round, but previously never surfaced to the client either) gets
-    its own "— has Hurt Feelings (2 plays this round)" tag, so the extra
-    play they're about to get isn't a surprise.
+    this round, but previously never surfaced to the client either) gets a
+    small `img/hurt-feelings.webp` thumbnail next to their row instead of a
+    plain text tag, so the extra play they're about to get isn't a
+    surprise. Clicking it opens the same generic `#art-preview-dialog`
+    an enlarged card-art view uses (`openArtPreview()`) with an enlarged
+    view of that art, since Hurt Feelings is a round-level marker/token,
+    not a `cards` row (see migration `0003`'s own header comment), so it
+    has no `catalog_card_id`/`rules_text` to build a card-detail-dialog-style
+    view from.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
