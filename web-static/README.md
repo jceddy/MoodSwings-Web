@@ -6,6 +6,17 @@ Served directly by the web server, or proxied alongside the [`php-app`](../php-a
 backend (e.g. static assets served from this directory, API/dynamic requests
 routed to the PHP app).
 
+## Version indicator
+
+Every page has a `<footer>` with a `#app-version` span, populated by a
+self-invoking snippet at the bottom of `js/app.js` (the one script every
+page already loads) that fetches `/VERSION` -- a plain static text file
+deployed alongside `index.html`, not one of the PHP app's own `API_BASE`
+endpoints -- and renders it as e.g. "v0.1.0". Fetched with `cache:
+'no-store'` so a page loaded shortly after a deploy can't keep showing a
+stale, browser-cached version string. See "Versioning" in the top-level
+README for what the version itself means and where it's bumped.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

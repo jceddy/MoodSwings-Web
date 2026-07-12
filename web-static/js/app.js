@@ -128,3 +128,21 @@ function respondToDecision(gameId, choices) {
         body: JSON.stringify({ game_id: gameId, choices: choices || {} }),
     });
 }
+
+// Every page's own #app-version footer element (see the "Versioning"
+// section of the top-level README) is populated here rather than per-page,
+// since app.js is the one script every page already loads. VERSION is a
+// plain static file at the site root (deployed alongside index.html, not
+// under API_BASE), fetched with cache: 'no-store' so a page loaded shortly
+// after a deploy can't keep showing a browser-cached pre-deploy version.
+(function renderAppVersion() {
+    const el = document.getElementById('app-version');
+    if (!el) {
+        return;
+    }
+
+    fetch('/VERSION', { cache: 'no-store' })
+        .then((response) => (response.ok ? response.text() : Promise.reject()))
+        .then((version) => { el.textContent = 'v' + version.trim(); })
+        .catch(() => {}); // leave the element empty rather than showing a broken/stale value
+})();

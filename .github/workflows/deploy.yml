@@ -51,6 +51,13 @@ jobs:
           # Static site at the domain root.
           cp -R web-static/. dist/
 
+          # The repo-root VERSION file (see "Versioning" in the top-level
+          # README) is the single source of truth for the whole site's
+          # product version -- deployed alongside index.html so the
+          # frontend's own version indicator (web-static/js/app.js) can
+          # fetch it as a plain static file, no PHP round trip needed.
+          cp VERSION dist/VERSION
+
           # Bust browser caches on every deploy: filenames never change
           # between deploys, so a browser that already cached an old JS/CSS
           # file (e.g. from before a feature existed) can silently keep
