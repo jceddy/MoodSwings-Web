@@ -10,22 +10,26 @@ use PHPUnit\Framework\TestCase;
 
 final class DuelDeckRulesTest extends TestCase
 {
-    /** @return array<int, array{name: string, rarity: string}> */
+    /** @return array<int, array{name: string, rarity: string, color: string}> */
     private function catalog(): array
     {
+        $colors = ['white', 'blue', 'black', 'red', 'green'];
         $catalog = [];
-        // 1-10: common, 11-15: uncommon, 16-18: rare, 19-20: mythic.
+        // 1-10: common (2 per color, round-robin -- exactly even), 11-15:
+        // uncommon (1 per color -- exactly even), 16-18: rare (3 cards,
+        // can never split evenly across 5 colors), 19-20: mythic (2 cards,
+        // same).
         for ($id = 1; $id <= 10; $id++) {
-            $catalog[$id] = ['name' => "Common{$id}", 'rarity' => 'common'];
+            $catalog[$id] = ['name' => "Common{$id}", 'rarity' => 'common', 'color' => $colors[($id - 1) % 5]];
         }
         for ($id = 11; $id <= 15; $id++) {
-            $catalog[$id] = ['name' => "Uncommon{$id}", 'rarity' => 'uncommon'];
+            $catalog[$id] = ['name' => "Uncommon{$id}", 'rarity' => 'uncommon', 'color' => $colors[($id - 11) % 5]];
         }
         for ($id = 16; $id <= 18; $id++) {
-            $catalog[$id] = ['name' => "Rare{$id}", 'rarity' => 'rare'];
+            $catalog[$id] = ['name' => "Rare{$id}", 'rarity' => 'rare', 'color' => $colors[($id - 16) % 5]];
         }
         for ($id = 19; $id <= 20; $id++) {
-            $catalog[$id] = ['name' => "Mythic{$id}", 'rarity' => 'mythic'];
+            $catalog[$id] = ['name' => "Mythic{$id}", 'rarity' => 'mythic', 'color' => $colors[($id - 19) % 5]];
         }
 
         return $catalog;
@@ -112,6 +116,7 @@ final class DuelDeckRulesTest extends TestCase
         self::assertSame(45, $rules->minCards);
         self::assertSame(['common' => 23, 'uncommon' => 14, 'rare' => 6, 'mythic' => 2], $rules->rarityLimits);
         self::assertSame(['common' => 1, 'uncommon' => 1, 'rare' => 1, 'mythic' => 1], $rules->duplicateLimits);
+        self::assertSame([], $rules->evenColorDistributionRarities);
     }
 
     public function testPowerPresetRequiresAtLeastFifteenSingletonCardsWithAtMostOneMythic(): void
@@ -121,6 +126,7 @@ final class DuelDeckRulesTest extends TestCase
         self::assertSame(15, $rules->minCards);
         self::assertSame(['mythic' => 1], $rules->rarityLimits);
         self::assertSame(['common' => 1, 'uncommon' => 1, 'rare' => 1, 'mythic' => 1], $rules->duplicateLimits);
+        self::assertSame([], $rules->evenColorDistributionRarities);
     }
 
     public function testJceddys75PresetMatchesTheAggregateRaritySplitAcrossAllFiveColors(): void
@@ -130,6 +136,7 @@ final class DuelDeckRulesTest extends TestCase
         self::assertSame(75, $rules->minCards);
         self::assertSame(['mythic' => 5, 'rare' => 10, 'uncommon' => 20, 'common' => 40], $rules->rarityLimits);
         self::assertSame(['mythic' => 1, 'rare' => 1, 'uncommon' => 2, 'common' => 3], $rules->duplicateLimits);
+        self::assertSame(['common', 'uncommon', 'rare', 'mythic'], $rules->evenColorDistributionRarities);
     }
 
     public function testAnUnknownPresetNameThrows(): void
@@ -140,14 +147,58 @@ final class DuelDeckRulesTest extends TestCase
         DuelDeckRules::forPreset('nonsense');
     }
 
-    public function testToArrayRoundTripsTheThreeRuleValues(): void
+    public function testToArrayRoundTripsAllFourRuleValues(): void
     {
-        $rules = new DuelDeckRules(20, ['mythic' => 2], ['common' => 3]);
+        $rules = new DuelDeckRules(20, ['mythic' => 2], ['common' => 3], ['mythic']);
 
         self::assertSame([
             'min_cards' => 20,
             'rarity_limits' => ['mythic' => 2],
             'duplicate_limits' => ['common' => 3],
+            'even_color_distribution_rarities' => ['mythic'],
         ], $rules->toArray());
+    }
+
+    public function testValidateAcceptsAnExactlyEvenColorSplit(): void
+    {
+        $rules = new DuelDeckRules(10, [], [], ['common']);
+
+        // All 10 commons -- exactly 2 of each color.
+        $rules->validate(range(1, 10), $this->catalog());
+        $this->addToAssertionCount(1);
+    }
+
+    public function testValidateRejectsATotalThatCannotSplitEvenlyAcrossFiveColors(): void
+    {
+        $rules = new DuelDeckRules(9, [], [], ['common']);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("has 9 common card(s), which can't be split evenly across the 5 colors");
+
+        // 9 commons (id 10, green, omitted) -- not divisible by 5.
+        $rules->validate(range(1, 9), $this->catalog());
+    }
+
+    public function testValidateRejectsALopsidedColorSplitEvenWhenTheTotalDivides(): void
+    {
+        $rules = new DuelDeckRules(10, [], [], ['common']);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must have exactly 2 white common card(s) for an even distribution across colors (has 3)');
+
+        // 10 commons total (divisible by 5), but id 1 (white) doubled in
+        // place of id 10 (green) -- white=3, green=1, everything else=2.
+        $rules->validate([1, 1, 2, 3, 4, 5, 6, 7, 8, 9], $this->catalog());
+    }
+
+    public function testEvenColorDistributionIsPerRarityNotGlobal(): void
+    {
+        $rules = new DuelDeckRules(7, [], [], ['common']);
+
+        // 5 commons, one of each color (evenly split), plus 2 rares --
+        // rares can never split evenly across 5 colors (only 3 exist),
+        // but the rule only applies to 'common' here, so this is still fine.
+        $rules->validate([1, 2, 3, 4, 5, 16, 17], $this->catalog());
+        $this->addToAssertionCount(1);
     }
 }

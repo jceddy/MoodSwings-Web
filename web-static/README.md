@@ -71,10 +71,14 @@ routed to the PHP app).
     `DuelDeckRules::forPreset()` purely for display -- the actual values
     are always resolved server-side) or, for User-Defined, reveals editable
     fields: a minimum card count and, for each of the four rarities, an
-    optional max-total and max-duplicates input (`collectDuelDeckRules()`
-    reads all of this into the `duel_deck_rules` object sent to
-    `POST /games`) -- see "Custom decklists for Duel games" in
-    `php-app/README.md` for what these rules actually mean. Polls `GET /games` every 4 seconds while the lobby is
+    optional max-total input, an optional max-duplicates input, and an
+    "even split across colors" checkbox (`collectDuelDeckRules()` reads
+    all of this into the `duel_deck_rules` object sent to `POST /games`,
+    the checkboxes via `collectEvenColorDistributionRarities()` into a
+    plain list of checked rarity names rather than a `{rarity: value}`
+    map, since it's a flag rather than a count) -- see "Custom decklists
+    for Duel games" in `php-app/README.md` for what these rules actually
+    mean. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just

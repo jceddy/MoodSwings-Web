@@ -551,6 +551,13 @@ final class GameServiceIntegrationTest extends TestCase
             ['mythic' => 5, 'rare' => 10, 'uncommon' => 20, 'common' => 40],
             json_decode($game['custom_duel_rarity_limits'], true),
         );
+        // The jceddys_75 preset locks even-color-distribution on for all
+        // four rarities, matching the real generator's own "N per color,
+        // for every color" guarantee.
+        self::assertSame(
+            ['common', 'uncommon', 'rare', 'mythic'],
+            json_decode($game['custom_duel_even_color_distribution_rarities'], true),
+        );
     }
 
     public function testSubmitCustomDuelDeckRejectsTooFewCards(): void
@@ -588,6 +595,52 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectExceptionMessage('has 2 copies of "Charity" (common), but at most 1 copy of any common card are allowed');
 
         $this->games->submitCustomDuelDeck($gameId, $p1, "2 Charity\n1 Dignity\n1 Courage\n1 Complacency\n1 Chivalry\n1 Benevolence");
+    }
+
+    public function testSubmitCustomDuelDeckAcceptsAnEvenColorDistribution(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildCustomDuelFixture(
+            minCards: 7,
+            evenColorDistributionRarities: ['uncommon'],
+        );
+
+        // One uncommon of each color: Benevolence (white), Confusion
+        // (blue), Angst (black), Anger (red), Eagerness (green) -- plus 2
+        // common fillers to clear the 7-card floor (evenColorDistribution
+        // only applies to 'uncommon' here, so their colors don't matter).
+        $this->games->submitCustomDuelDeck($gameId, $p1, "1 Benevolence\n1 Confusion\n1 Angst\n1 Anger\n1 Eagerness\n1 Charity\n1 Dignity");
+
+        $p1Row = $this->pdo->prepare('SELECT custom_deck_card_ids FROM game_players WHERE id = :id');
+        $p1Row->execute(['id' => $p1]);
+        self::assertNotNull($p1Row->fetchColumn());
+    }
+
+    public function testSubmitCustomDuelDeckRejectsAnUnevenColorDistribution(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildCustomDuelFixture(
+            minCards: 7,
+            evenColorDistributionRarities: ['uncommon'],
+        );
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must have exactly 1 white uncommon card(s) for an even distribution across colors (has 2)');
+
+        // 2 white uncommons (Benevolence, Conviction) instead of 1 white + 1 green -- still 5 uncommons total (divisible by 5).
+        $this->games->submitCustomDuelDeck($gameId, $p1, "1 Benevolence\n1 Conviction\n1 Angst\n1 Anger\n1 Confusion\n1 Charity\n1 Dignity");
+    }
+
+    public function testSubmitCustomDuelDeckRejectsATotalThatCannotSplitEvenlyAcrossColors(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildCustomDuelFixture(
+            minCards: 7,
+            evenColorDistributionRarities: ['uncommon'],
+        );
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("has 4 uncommon card(s), which can't be split evenly across the 5 colors");
+
+        // Only 4 uncommons (no green) -- not divisible by 5 -- plus 3 common fillers.
+        $this->games->submitCustomDuelDeck($gameId, $p1, "1 Benevolence\n1 Confusion\n1 Angst\n1 Anger\n1 Charity\n1 Dignity\n1 Courage");
     }
 
     public function testSubmitCustomDuelDeckRejectsAPlayerNotSeatedInTheGame(): void
@@ -661,6 +714,7 @@ final class GameServiceIntegrationTest extends TestCase
             'min_cards' => 7,
             'rarity_limits' => ['common' => 7],
             'duplicate_limits' => [],
+            'even_color_distribution_rarities' => [],
         ], $before['game']['duel_deck_rules']);
         self::assertFalse($before['players'][0]['deck_submitted']);
         self::assertFalse($before['players'][1]['deck_submitted']);
@@ -682,8 +736,12 @@ final class GameServiceIntegrationTest extends TestCase
     /**
      * @return array{gameId: int, p1: int, p2: int, u1: int, u2: int}
      */
-    private function buildCustomDuelFixture(int $minCards, array $rarityLimits = [], array $duplicateLimits = []): array
-    {
+    private function buildCustomDuelFixture(
+        int $minCards,
+        array $rarityLimits = [],
+        array $duplicateLimits = [],
+        array $evenColorDistributionRarities = [],
+    ): array {
         $u1 = $this->insertUser('customduel-' . uniqid('u1'));
         $u2 = $this->insertUser('customduel-' . uniqid('u2'));
 
@@ -697,6 +755,7 @@ final class GameServiceIntegrationTest extends TestCase
                 'min_cards' => $minCards,
                 'rarity_limits' => $rarityLimits,
                 'duplicate_limits' => $duplicateLimits,
+                'even_color_distribution_rarities' => $evenColorDistributionRarities,
             ],
         );
 

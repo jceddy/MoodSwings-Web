@@ -135,7 +135,7 @@ final class GameService
 
     /**
      * @param int[] $userIds seat order follows array order
-     * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>} $duelDeckRules
+     * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>, even_color_distribution_rarities?: string[]} $duelDeckRules
      *        only meaningful when $deckType is 'custom_duel' -- see resolveDuelDeckRules().
      */
     public function createGame(
@@ -160,6 +160,7 @@ final class GameService
         $duelMinCards = null;
         $duelRarityLimits = null;
         $duelDuplicateLimits = null;
+        $duelEvenColorDistributionRarities = null;
 
         if ($deckType === 'custom') {
             if ($format === 'duel') {
@@ -177,6 +178,7 @@ final class GameService
             $duelMinCards = $rules->minCards;
             $duelRarityLimits = $rules->rarityLimits;
             $duelDuplicateLimits = $rules->duplicateLimits;
+            $duelEvenColorDistributionRarities = $rules->evenColorDistributionRarities;
         }
 
         $pdo = Connection::get();
@@ -187,10 +189,12 @@ final class GameService
                 "INSERT INTO games (
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
+                    custom_duel_even_color_distribution_rarities,
                     status, created_by_user_id, wins_needed
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
+                    :duel_even_color_distribution_rarities,
                     'waiting', :created_by, :wins_needed
                  )"
             );
@@ -203,6 +207,7 @@ final class GameService
                 'duel_min_cards' => $duelMinCards,
                 'duel_rarity_limits' => $duelRarityLimits !== null ? json_encode($duelRarityLimits) : null,
                 'duel_duplicate_limits' => $duelDuplicateLimits !== null ? json_encode($duelDuplicateLimits) : null,
+                'duel_even_color_distribution_rarities' => $duelEvenColorDistributionRarities !== null ? json_encode($duelEvenColorDistributionRarities) : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
             ]);
@@ -225,17 +230,17 @@ final class GameService
     }
 
     /**
-     * @return array{idsByName: array<string,int>, rowsById: array<int, array{name:string, rarity:string}>}
+     * @return array{idsByName: array<string,int>, rowsById: array<int, array{name:string, rarity:string, color:string}>}
      */
     private function loadCardCatalog(): array
     {
-        $stmt = Connection::get()->query('SELECT id, name, rarity FROM cards');
+        $stmt = Connection::get()->query('SELECT id, name, rarity, color FROM cards');
         $idsByName = [];
         $rowsById = [];
         foreach ($stmt->fetchAll() as $row) {
             $id = (int) $row['id'];
             $idsByName[mb_strtolower($row['name'])] = $id;
-            $rowsById[$id] = ['name' => $row['name'], 'rarity' => $row['rarity']];
+            $rowsById[$id] = ['name' => $row['name'], 'rarity' => $row['rarity'], 'color' => $row['color']];
         }
 
         return ['idsByName' => $idsByName, 'rowsById' => $rowsById];
@@ -274,14 +279,15 @@ final class GameService
      * Resolves createGame()'s own $duelDeckRules argument into an actual
      * DuelDeckRules instance -- either one of the three built-in presets
      * (DuelDeckRules::forPreset(), the values "locked in" verbatim
-     * regardless of whatever min_cards/rarity_limits/duplicate_limits the
-     * client also sent alongside the preset name) or, for 'user_defined'
-     * (the default when no preset key is given at all), the creator's own
-     * three rule values -- sanitizeRarityMap() drops anything that isn't
+     * regardless of whatever min_cards/rarity_limits/duplicate_limits/
+     * even_color_distribution_rarities the client also sent alongside the
+     * preset name) or, for 'user_defined' (the default when no preset key
+     * is given at all), the creator's own four rule values --
+     * sanitizeRarityMap()/sanitizeRarityList() drop anything that isn't
      * one of cards.rarity's own four values, and DuelDeckRules's own
      * constructor enforces the minimum min_cards floor.
      *
-     * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>} $duelDeckRules
+     * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>, even_color_distribution_rarities?: string[]} $duelDeckRules
      */
     private function resolveDuelDeckRules(?array $duelDeckRules): DuelDeckRules
     {
@@ -300,6 +306,7 @@ final class GameService
             $minCards,
             $this->sanitizeRarityMap($duelDeckRules['rarity_limits'] ?? null),
             $this->sanitizeRarityMap($duelDeckRules['duplicate_limits'] ?? null),
+            $this->sanitizeRarityList($duelDeckRules['even_color_distribution_rarities'] ?? null),
         );
     }
 
@@ -328,6 +335,24 @@ final class GameService
         }
 
         return $sanitized;
+    }
+
+    /**
+     * Keeps only the entries of $list that are one of cards.rarity's own
+     * four values (in that fixed order, deduplicated) -- used for
+     * DuelDeckRules's own $evenColorDistributionRarities, the same
+     * "silently drop anything not recognized" approach sanitizeRarityMap()
+     * takes for the other two rule maps.
+     *
+     * @return string[]
+     */
+    private function sanitizeRarityList(mixed $list): array
+    {
+        if (!is_array($list)) {
+            return [];
+        }
+
+        return array_values(array_intersect(self::RARITIES, $list));
     }
 
     /**
@@ -369,6 +394,7 @@ final class GameService
             (int) $game['custom_duel_min_cards'],
             (array) json_decode((string) $game['custom_duel_rarity_limits'], true),
             (array) json_decode((string) $game['custom_duel_duplicate_limits'], true),
+            (array) json_decode((string) $game['custom_duel_even_color_distribution_rarities'], true),
         );
         $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
 
@@ -1702,6 +1728,7 @@ final class GameService
                     'min_cards' => (int) $game['custom_duel_min_cards'],
                     'rarity_limits' => (array) json_decode((string) $game['custom_duel_rarity_limits'], true),
                     'duplicate_limits' => (array) json_decode((string) $game['custom_duel_duplicate_limits'], true),
+                    'even_color_distribution_rarities' => (array) json_decode((string) $game['custom_duel_even_color_distribution_rarities'], true),
                 ] : null,
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
