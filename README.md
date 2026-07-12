@@ -121,27 +121,25 @@ live, the same way as the initial setup above.
 
 ### Development environment setup
 
-Same steps as above, aimed at your dev domain/database instead, and using
-the `DEV_`-prefixed name of each secret/variable so it's entirely separate
-from production's:
+Same steps as above, aimed at your dev domain/database instead, using the
+`DEV_`-prefixed name of each secret/variable so FTP/DB credentials stay
+entirely separate from production's — except SMTP, which is intentionally
+shared: both `deploy.yml` and `deploy-dev.yml` read the same plain
+`SMTP_*` secrets, since it's just a transactional-email sender rather than
+something meaningfully different per environment, and dev verification
+emails going out from the same already-configured sender isn't a concern.
 
 1. A separate FTP account (or the same one, if it can already reach your
    dev domain's document root) for `DEV_FTP_SERVER`, `DEV_FTP_USERNAME`,
    `DEV_FTP_PASSWORD`.
-2. SMTP credentials for `DEV_SMTP_HOST`, `DEV_SMTP_PORT`,
-   `DEV_SMTP_USERNAME`, `DEV_SMTP_PASSWORD`, `DEV_SMTP_ENCRYPTION`,
-   `DEV_SMTP_FROM_ADDRESS`, `DEV_SMTP_FROM_NAME` — reusing the same
-   transactional-email account as production is fine, since it's just a
-   sender, not a separate mail domain.
-3. Add the same **secrets** as production's step 3, with the `DEV_` prefix:
-   `DEV_FTP_SERVER`/`DEV_FTP_USERNAME`/`DEV_FTP_PASSWORD`,
-   `DEV_DB_HOST`/`DEV_DB_PORT`/`DEV_DB_NAME`/`DEV_DB_USER`/`DEV_DB_PASSWORD`,
-   `DEV_SMTP_HOST`/`DEV_SMTP_PORT`/`DEV_SMTP_USERNAME`/`DEV_SMTP_PASSWORD`/
-   `DEV_SMTP_ENCRYPTION`/`DEV_SMTP_FROM_ADDRESS`/`DEV_SMTP_FROM_NAME`.
-4. Add the same **variables** as production's step 4, with the `DEV_`
-   prefix: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev domain's `/app`
-   URL), `DEV_SITE_URL` (your dev domain's base URL).
-5. Create a **separate** database for the dev domain (do not point it at
+2. Add the **secrets**: `DEV_FTP_SERVER`/`DEV_FTP_USERNAME`/
+   `DEV_FTP_PASSWORD`, `DEV_DB_HOST`/`DEV_DB_PORT`/`DEV_DB_NAME`/
+   `DEV_DB_USER`/`DEV_DB_PASSWORD`. No `DEV_SMTP_*` secrets are needed —
+   `deploy-dev.yml` reuses production's own `SMTP_*` secrets from step 3
+   above, so if those are already set, dev's email sending already works.
+3. Add the **variables**: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev
+   domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL).
+4. Create a **separate** database for the dev domain (do not point it at
    the production database) and apply `database/migrations/` to it the same
    way as production's step 5 — the two environments' data should stay
    fully independent, so testing on dev never risks live player data.
