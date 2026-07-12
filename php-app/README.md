@@ -1014,7 +1014,10 @@ request/response round trips with no process alive in between to hold a
   rules engine, persisting the result, and appending a `game_events` row,
   all within a single request. Turn advancement, round scoring (via
   `RoundScorer`), Hurt Feelings assignment (3+ player games only), losers
-  drawing a card, game completion once a player reaches `wins_needed`,
+  drawing a card (skipped entirely for the round that pushes the winner to
+  `wins_needed` -- there's no next round for that card to matter in, and a
+  player shouldn't draw one off the round that just ended the game), game
+  completion once a player reaches `wins_needed`,
   the round-scoring hooks described above (score swaps, after-scoring
   tags, Awe's skip-scoring branch, and Corruption's extra-win marker),
   and every fresh turn's play grants (`computeFreshGrants()`, layering

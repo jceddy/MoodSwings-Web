@@ -901,9 +901,19 @@ final class GameService
         );
         $updateRound->execute(['winner' => $winnerId, 'wins_awarded' => $winsAwarded, 'round_id' => $roundId]);
 
-        foreach (array_keys($scores) as $playerId) {
-            if ($playerId !== $winnerId) {
-                $state->drawCard($playerId);
+        // Computed here, before losers draw, so a round that pushes the
+        // winner to wins_needed can skip the draw entirely below -- no
+        // player should draw a card off the round that just ended the
+        // game (there's no next round for that card to matter in).
+        $totalWins = $this->totalWinsFor($gameId, $winnerId);
+        $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
+        $gameCompleting = $totalWins >= $winsNeeded;
+
+        if (!$gameCompleting) {
+            foreach (array_keys($scores) as $playerId) {
+                if ($playerId !== $winnerId) {
+                    $state->drawCard($playerId);
+                }
             }
         }
         $this->applyAfterScoringHooks($state, $winnerId);
@@ -925,10 +935,7 @@ final class GameService
             'winner_game_player_id' => $winnerId,
         ], $state);
 
-        $totalWins = $this->totalWinsFor($gameId, $winnerId);
-        $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
-
-        if ($totalWins >= $winsNeeded) {
+        if ($gameCompleting) {
             $completeGame = $pdo->prepare(
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id"
             );
