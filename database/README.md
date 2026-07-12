@@ -71,7 +71,10 @@ on `;`.
   current-state tables). `games` tracks four points in its life --
   `created_at`/`started_at`/`completed_at` from `0004` itself, plus
   `last_move_at` (`0017`, stamped after every successful play/pass/decision
-  response) -- see "Game timestamps" in `php-app/README.md`. `0018` adds
+  response) -- see "Game timestamps" in `php-app/README.md`. `0016` adds
+  `deck_type = 'jceddys_75'`, a fourth algorithmically-assembled pool (15
+  cards per color -- 1 Mythic, 2 Rares, 4 Uncommons, 8 Commons -- 75 total)
+  alongside `structure`/`power`/`one_of_each`. `0018` adds
   `deck_type = 'custom'` plus `custom_deck_name`/`custom_deck_card_ids`,
   letting a Traditional game's creator supply their own decklist instead of
   one of the algorithmically-assembled pools -- see "Custom decklists" in
@@ -81,8 +84,15 @@ on `;`.
   (the deck-building rules a Duel game's creator defines) and
   `custom_deck_name`/`custom_deck_card_ids` on `game_players` (each duel
   player's own submitted decklist, validated against those rules) -- see
-  "Custom decklists for Duel games" in `php-app/README.md`.
-  
-  This covers the data model only — the actual rules engine (resolving
-  each card's effect, turn/phase flow, scoring) is future work, built
-  incrementally against `cards.rules_text` and keyed off `cards.effect_key`.
+  "Custom decklists for Duel games" in `php-app/README.md`. `0020` adds
+  `custom_duel_even_color_distribution_rarities` on `games`, an optional
+  fourth `custom_duel` rule requiring a given rarity's cards be split evenly
+  across all 5 colors -- see "Custom decklists for Duel games" in
+  `php-app/README.md`.
+
+  This covers the data model only. The actual rules engine (resolving each
+  card's effect, turn/phase flow, scoring) lives in `php-app/` -- see its
+  own README, in particular `src/Rules/` (the card-effect/board-state
+  engine, built incrementally against `cards.rules_text` and keyed off
+  `cards.effect_key`) and `src/Game/GameService.php` (the game/session layer
+  on top of it).
