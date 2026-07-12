@@ -143,6 +143,9 @@ emails going out from the same already-configured sender isn't a concern.
    the production database) and apply `database/migrations/` to it the same
    way as production's step 5 — the two environments' data should stay
    fully independent, so testing on dev never risks live player data.
+   Since this is a brand-new database, `database/consolidated/`'s merged
+   script is the fastest way to do that in one paste — see "Applying
+   migrations" in `database/README.md`.
 
 Once these are set, a push to `development` (i.e. any feature PR merging
 into it) deploys automatically to the dev domain. As with production,
