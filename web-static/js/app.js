@@ -76,7 +76,7 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -85,7 +85,15 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText)
             wins_needed: winsNeeded,
             deck_type: deckType,
             decklist_text: decklistText,
+            duel_deck_rules: duelDeckRules,
         }),
+    });
+}
+
+function submitCustomDuelDeck(gameId, decklistText) {
+    return apiRequest('/games/decklist', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, decklist_text: decklistText }),
     });
 }
 

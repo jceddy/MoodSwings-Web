@@ -75,7 +75,13 @@ on `;`.
   `deck_type = 'custom'` plus `custom_deck_name`/`custom_deck_card_ids`,
   letting a Traditional game's creator supply their own decklist instead of
   one of the algorithmically-assembled pools -- see "Custom decklists" in
-  `php-app/README.md`.
+  `php-app/README.md`. `0019` adds `deck_type = 'custom_duel'` plus
+  `custom_duel_rules_preset`/`custom_duel_min_cards`/
+  `custom_duel_rarity_limits`/`custom_duel_duplicate_limits` on `games`
+  (the deck-building rules a Duel game's creator defines) and
+  `custom_deck_name`/`custom_deck_card_ids` on `game_players` (each duel
+  player's own submitted decklist, validated against those rules) -- see
+  "Custom decklists for Duel games" in `php-app/README.md`.
   
   This covers the data model only — the actual rules engine (resolving
   each card's effect, turn/phase flow, scoring) is future work, built

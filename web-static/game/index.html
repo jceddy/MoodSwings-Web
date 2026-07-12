@@ -39,6 +39,26 @@
             <h3>Players</h3>
             <ul id="players-list"></ul>
 
+            <div id="duel-deck-submission" hidden>
+                <h3>Duel deck-building rules</h3>
+                <p id="duel-deck-rules-summary"></p>
+
+                <h3>Deck submissions</h3>
+                <ul id="duel-deck-submission-status"></ul>
+
+                <div id="duel-deck-submit-form-container">
+                    <label>Upload a decklist file
+                        <input type="file" id="duel-deck-submit-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste your decklist
+                        <textarea id="duel-deck-submit-text" rows="10"></textarea>
+                    </label>
+                    <button id="duel-deck-submit-button" type="button">Submit deck</button>
+                    <p id="duel-deck-submit-error" class="error" hidden></p>
+                </div>
+                <p id="duel-deck-submitted-message" hidden></p>
+            </div>
+
             <div id="in-progress-area" hidden>
                 <div id="scoring-effects" hidden>
                     <h4>How scoring will be affected</h4>
@@ -113,6 +133,7 @@
                     <option value="power">Power</option>
                     <option value="jceddys_75">jceddy's 75 Card</option>
                     <option value="custom">Custom Decklist</option>
+                    <option value="custom_duel">Custom Decklists (Duel)</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -125,6 +146,52 @@
                 <label>Or paste your decklist
                     <textarea id="new-game-decklist-text" rows="10"></textarea>
                 </label>
+            </div>
+
+            <div id="new-game-duel-rules-fields" hidden>
+                <p>Each player will upload/paste their own decklist after the game is created. Choose the deck-building rules both players' decklists must satisfy:</p>
+                <label>Rules
+                    <select id="new-game-duel-rules-preset">
+                        <option value="structure">Structure</option>
+                        <option value="power">Power</option>
+                        <option value="jceddys_75">jceddy's 75 Card</option>
+                        <option value="user_defined">User-Defined</option>
+                    </select>
+                </label>
+                <p id="new-game-duel-rules-preset-summary"></p>
+
+                <div id="new-game-duel-rules-user-defined" hidden>
+                    <label>Minimum cards
+                        <input type="number" id="new-game-duel-min-cards" min="7" value="15">
+                    </label>
+                    <table>
+                        <thead>
+                            <tr><th>Rarity</th><th>Max total (optional)</th><th>Max duplicates (optional)</th></tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Common</td>
+                                <td><input type="number" min="0" id="new-game-duel-rarity-limit-common"></td>
+                                <td><input type="number" min="0" id="new-game-duel-duplicate-limit-common"></td>
+                            </tr>
+                            <tr>
+                                <td>Uncommon</td>
+                                <td><input type="number" min="0" id="new-game-duel-rarity-limit-uncommon"></td>
+                                <td><input type="number" min="0" id="new-game-duel-duplicate-limit-uncommon"></td>
+                            </tr>
+                            <tr>
+                                <td>Rare</td>
+                                <td><input type="number" min="0" id="new-game-duel-rarity-limit-rare"></td>
+                                <td><input type="number" min="0" id="new-game-duel-duplicate-limit-rare"></td>
+                            </tr>
+                            <tr>
+                                <td>Mythic</td>
+                                <td><input type="number" min="0" id="new-game-duel-rarity-limit-mythic"></td>
+                                <td><input type="number" min="0" id="new-game-duel-duplicate-limit-mythic"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
             <button type="submit">Create game</button>

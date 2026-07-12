@@ -460,6 +460,252 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($state['game']['custom_deck_name']);
     }
 
+    public function testCreateGameRejectsCustomDuelForNonDuelFormat(): void
+    {
+        $creator = $this->insertUser('customduel-nonduel-alice');
+        $bob = $this->insertUser('customduel-nonduel-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for duel games');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+        );
+    }
+
+    public function testCreateGameRejectsCustomDuelWithoutRules(): void
+    {
+        $u1 = $this->insertUser('customduel-norules1');
+        $u2 = $this->insertUser('customduel-norules2');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Duel deck-building rules are required');
+
+        $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'custom_duel');
+    }
+
+    public function testCreateGameRejectsAUserDefinedMinCardsBelowSeven(): void
+    {
+        $u1 = $this->insertUser('customduel-toofew1');
+        $u2 = $this->insertUser('customduel-toofew2');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot be lower than 7');
+
+        $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 5],
+        );
+    }
+
+    public function testCreateGameLocksCustomDuelRulesToTheStructurePreset(): void
+    {
+        $u1 = $this->insertUser('customduel-structure1');
+        $u2 = $this->insertUser('customduel-structure2');
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'structure'],
+        );
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('structure', $game['custom_duel_rules_preset']);
+        self::assertSame(45, (int) $game['custom_duel_min_cards']);
+        self::assertSame(
+            ['common' => 23, 'uncommon' => 14, 'rare' => 6, 'mythic' => 2],
+            json_decode($game['custom_duel_rarity_limits'], true),
+        );
+        self::assertSame(
+            ['common' => 1, 'uncommon' => 1, 'rare' => 1, 'mythic' => 1],
+            json_decode($game['custom_duel_duplicate_limits'], true),
+        );
+    }
+
+    public function testCreateGameLocksCustomDuelRulesToTheJceddys75PresetIgnoringAnyUserSuppliedValues(): void
+    {
+        $u1 = $this->insertUser('customduel-jceddy1');
+        $u2 = $this->insertUser('customduel-jceddy2');
+
+        // A preset name locks the values regardless of whatever the
+        // client also sent alongside it.
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'jceddys_75', 'min_cards' => 999, 'rarity_limits' => ['common' => 1]],
+        );
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame(75, (int) $game['custom_duel_min_cards']);
+        self::assertSame(
+            ['mythic' => 5, 'rare' => 10, 'uncommon' => 20, 'common' => 40],
+            json_decode($game['custom_duel_rarity_limits'], true),
+        );
+    }
+
+    public function testSubmitCustomDuelDeckRejectsTooFewCards(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildCustomDuelFixture(minCards: 10);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('has only 2 card(s), but at least 10 are required');
+
+        $this->games->submitCustomDuelDeck($gameId, $p1, "1 Charity\n1 Dignity");
+    }
+
+    public function testSubmitCustomDuelDeckRejectsExceedingARarityLimit(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildCustomDuelFixture(
+            minCards: 7,
+            rarityLimits: ['common' => 2],
+        );
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('has 3 common card(s), but at most 2 common card(s) are allowed');
+
+        // Charity/Chivalry/Complacency are common (3); Benevolence/Conviction/Encouragement/Faith are uncommon.
+        $this->games->submitCustomDuelDeck($gameId, $p1, "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith");
+    }
+
+    public function testSubmitCustomDuelDeckRejectsExceedingADuplicateLimit(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildCustomDuelFixture(
+            minCards: 7,
+            duplicateLimits: ['common' => 1],
+        );
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('has 2 copies of "Charity" (common), but at most 1 copy of any common card are allowed');
+
+        $this->games->submitCustomDuelDeck($gameId, $p1, "2 Charity\n1 Dignity\n1 Courage\n1 Complacency\n1 Chivalry\n1 Benevolence");
+    }
+
+    public function testSubmitCustomDuelDeckRejectsAPlayerNotSeatedInTheGame(): void
+    {
+        ['gameId' => $gameId] = $this->buildCustomDuelFixture(minCards: 7);
+        $outsider = $this->insertUser('customduel-outsider');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('is not seated');
+
+        $this->games->submitCustomDuelDeck($gameId, $outsider, '1 Charity');
+    }
+
+    public function testStartGameRejectsACustomDuelGameUntilBothPlayersHaveSubmittedADeck(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildCustomDuelFixture(minCards: 7);
+
+        $this->games->submitCustomDuelDeck($gameId, $p1, "1 Charity\n1 Chivalry\n1 Complacency\n1 Courage\n1 Dignity\n1 Discipline\n1 Loyalty");
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot start until every player has submitted a decklist');
+
+        $this->games->startGame($gameId);
+    }
+
+    public function testStartGameDealsEachCustomDuelPlayerTheirOwnSubmittedDeck(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildCustomDuelFixture(minCards: 7);
+
+        $this->games->submitCustomDuelDeck(
+            $gameId,
+            $p1,
+            "About\nName Alice's Deck\n\n1 Charity\n1 Chivalry\n1 Complacency\n1 Courage\n1 Dignity\n1 Discipline\n1 Loyalty",
+        );
+        $this->games->submitCustomDuelDeck(
+            $gameId,
+            $p2,
+            "About\nName Bob's Deck\n\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Kindness",
+        );
+
+        $this->games->startGame($gameId);
+
+        $p1CardsStmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id AND owner_game_player_id = :owner");
+        $p1CardsStmt->execute(['game_id' => $gameId, 'owner' => $p1]);
+        $p1CardIds = array_map(intval(...), $p1CardsStmt->fetchAll(PDO::FETCH_COLUMN));
+        sort($p1CardIds);
+        // Charity=3, Chivalry=4, Complacency=5, Courage=7, Dignity=8, Discipline=9, Loyalty=18.
+        self::assertSame([3, 4, 5, 7, 8, 9, 18], $p1CardIds);
+
+        $p2CardsStmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id AND owner_game_player_id = :owner");
+        $p2CardsStmt->execute(['game_id' => $gameId, 'owner' => $p2]);
+        $p2CardIds = array_map(intval(...), $p2CardsStmt->fetchAll(PDO::FETCH_COLUMN));
+        sort($p2CardIds);
+        // Benevolence=2, Conviction=6, Encouragement=11, Faith=12, Friendliness=13, Guilt=14, Kindness=17.
+        self::assertSame([2, 6, 11, 12, 13, 14, 17], $p2CardIds);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('in_progress', $game['status']);
+    }
+
+    public function testGetStateExposesDuelDeckRulesAndPerPlayerSubmissionStatus(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1, 'u2' => $u2] = $this->buildCustomDuelFixture(
+            minCards: 7,
+            rarityLimits: ['common' => 7],
+        );
+
+        $before = $this->games->getState($gameId, $u1);
+        self::assertSame([
+            'preset' => 'user_defined',
+            'min_cards' => 7,
+            'rarity_limits' => ['common' => 7],
+            'duplicate_limits' => [],
+        ], $before['game']['duel_deck_rules']);
+        self::assertFalse($before['players'][0]['deck_submitted']);
+        self::assertFalse($before['players'][1]['deck_submitted']);
+
+        $this->games->submitCustomDuelDeck(
+            $gameId,
+            $p1,
+            "About\nName Alice's Deck\n\n1 Charity\n1 Chivalry\n1 Complacency\n1 Courage\n1 Dignity\n1 Discipline\n1 Loyalty",
+        );
+
+        $after = $this->games->getState($gameId, $u1);
+        $p1State = $after['players'][0]['game_player_id'] === $p1 ? $after['players'][0] : $after['players'][1];
+        $p2State = $after['players'][0]['game_player_id'] === $p1 ? $after['players'][1] : $after['players'][0];
+        self::assertTrue($p1State['deck_submitted']);
+        self::assertSame("Alice's Deck", $p1State['custom_deck_name']);
+        self::assertFalse($p2State['deck_submitted']);
+    }
+
+    /**
+     * @return array{gameId: int, p1: int, p2: int, u1: int, u2: int}
+     */
+    private function buildCustomDuelFixture(int $minCards, array $rarityLimits = [], array $duplicateLimits = []): array
+    {
+        $u1 = $this->insertUser('customduel-' . uniqid('u1'));
+        $u2 = $this->insertUser('customduel-' . uniqid('u2'));
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: [
+                'preset' => 'user_defined',
+                'min_cards' => $minCards,
+                'rarity_limits' => $rarityLimits,
+                'duplicate_limits' => $duplicateLimits,
+            ],
+        );
+
+        $p1 = (int) $this->games->gamePlayerIdFor($gameId, $u1);
+        $p2 = (int) $this->games->gamePlayerIdFor($gameId, $u2);
+
+        return ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'u1' => $u1, 'u2' => $u2];
+    }
+
     public function testCreateGameRejectsADuelWithMoreThanTwoPlayers(): void
     {
         $u1 = $this->insertUser('dueltoomany1');

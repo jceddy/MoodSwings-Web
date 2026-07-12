@@ -411,14 +411,31 @@ if ($path === '/games' && $method === 'POST') {
     // "opponents could not be found" -- unrelated to the actual cause.
     $deckType = (string) ($body['deck_type'] ?? 'structure');
     $decklistText = isset($body['decklist_text']) ? (string) $body['decklist_text'] : null;
+    $duelDeckRules = is_array($body['duel_deck_rules'] ?? null) ? $body['duel_deck_rules'] : null;
 
     try {
-        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType, $decklistText);
+        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType, $decklistText, $duelDeckRules);
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\PDOException $e) {
         respond(400, ['status' => 'error', 'message' => 'One or more opponents could not be found.']);
+    }
+}
+
+if ($path === '/games/decklist' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $decklistText = (string) ($body['decklist_text'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->submitCustomDuelDeck($gameId, $gamePlayerId, $decklistText);
+        respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
