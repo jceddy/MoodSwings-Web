@@ -29,7 +29,12 @@ README for what the version itself means and where it's bumped.
   `img/cards/MSW/` (`MSW` = the "Mood Swings" Set `0015` seeds); a future
   community/custom Set (see the "custom card sets" issue) would get its
   own sibling folder here, named after whatever `code` it's registered
-  under, rather than mixing its art in with the official pool's.
+  under, rather than mixing its art in with the official pool's. Each
+  file is named `<cards.id>-<slugified-name>.webp` (e.g. `1-altruism.webp`
+  for Altruism, `cards.id` 1) -- the numeric id is what actually keys the
+  lookup (it's the real join key everywhere else, e.g.
+  `game_cards.card_id`), the name suffix is purely for a human browsing
+  the folder.
 
 ## Pages
 
