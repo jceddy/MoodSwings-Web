@@ -2311,6 +2311,45 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNotNull($game['completed_at']);
     }
 
+    public function testLoserDoesNotDrawACardWhenTheWinningRoundEndsTheGame(): void
+    {
+        $u1 = $this->insertUser('finalround-p1');
+        $u2 = $this->insertUser('finalround-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed)
+             VALUES ('standard', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4
+        $this->insertGameCard($gameId, 27, 'deck', null, 0); // would be p2's draw if the bug were present
+
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $apathyId, []);
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p1, $result['winner_game_player_id']);
+
+        // p2 lost the round that ended the game -- there's no next round
+        // for a "loser draws a card" bonus to matter in, so p2's hand must
+        // stay empty and the deck untouched.
+        $p2HandStmt = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'hand' AND owner_game_player_id = :owner");
+        $p2HandStmt->execute(['game_id' => $gameId, 'owner' => $p2]);
+        self::assertSame(0, (int) $p2HandStmt->fetchColumn());
+
+        $deckStmt = $this->pdo->prepare("SELECT card_id FROM game_cards WHERE game_id = :game_id AND zone = 'deck'");
+        $deckStmt->execute(['game_id' => $gameId]);
+        self::assertSame([27], array_map(intval(...), $deckStmt->fetchAll(PDO::FETCH_COLUMN)));
+    }
+
     public function testPassOutOfTurnIsRejected(): void
     {
         ['gameId' => $gameId, 'p2' => $p2] = $this->buildThreePlayerFixture();
