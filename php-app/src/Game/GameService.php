@@ -54,6 +54,9 @@ final class GameService
     private const MIN_PLAYERS = 2;
     private const MAX_PLAYERS = 4;
 
+    /** cards.rarity's own four values -- see DuelDeckRules. */
+    private const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
+
     /**
      * The 'structure' deck_type's own card pool: a randomly-assembled,
      * singleton (no duplicates) 45-card deck matching a new physical box's
@@ -130,9 +133,20 @@ final class GameService
     ) {
     }
 
-    /** @param int[] $userIds seat order follows array order */
-    public function createGame(int $createdByUserId, array $userIds, string $format = 'standard', int $winsNeeded = 3, string $deckType = 'structure', ?string $decklistText = null): int
-    {
+    /**
+     * @param int[] $userIds seat order follows array order
+     * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>} $duelDeckRules
+     *        only meaningful when $deckType is 'custom_duel' -- see resolveDuelDeckRules().
+     */
+    public function createGame(
+        int $createdByUserId,
+        array $userIds,
+        string $format = 'standard',
+        int $winsNeeded = 3,
+        string $deckType = 'structure',
+        ?string $decklistText = null,
+        ?array $duelDeckRules = null,
+    ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
@@ -142,12 +156,27 @@ final class GameService
 
         $customDeckName = null;
         $customDeckCardIds = null;
+        $duelRulesPreset = null;
+        $duelMinCards = null;
+        $duelRarityLimits = null;
+        $duelDuplicateLimits = null;
+
         if ($deckType === 'custom') {
             if ($format === 'duel') {
-                throw new GameStateException('Custom decklists are not supported for duel games');
+                throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
             }
 
             ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->parseCustomDecklist($decklistText, count($userIds));
+        } elseif ($deckType === 'custom_duel') {
+            if ($format !== 'duel') {
+                throw new GameStateException('The "custom_duel" deck type is only supported for duel games');
+            }
+
+            $rules = $this->resolveDuelDeckRules($duelDeckRules);
+            $duelRulesPreset = (string) ($duelDeckRules['preset'] ?? 'user_defined');
+            $duelMinCards = $rules->minCards;
+            $duelRarityLimits = $rules->rarityLimits;
+            $duelDuplicateLimits = $rules->duplicateLimits;
         }
 
         $pdo = Connection::get();
@@ -155,14 +184,25 @@ final class GameService
 
         try {
             $insertGame = $pdo->prepare(
-                "INSERT INTO games (format, deck_type, custom_deck_name, custom_deck_card_ids, status, created_by_user_id, wins_needed)
-                 VALUES (:format, :deck_type, :custom_deck_name, :custom_deck_card_ids, 'waiting', :created_by, :wins_needed)"
+                "INSERT INTO games (
+                    format, deck_type, custom_deck_name, custom_deck_card_ids,
+                    custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
+                    status, created_by_user_id, wins_needed
+                 ) VALUES (
+                    :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
+                    :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
+                    'waiting', :created_by, :wins_needed
+                 )"
             );
             $insertGame->execute([
                 'format' => $format,
                 'deck_type' => $deckType,
                 'custom_deck_name' => $customDeckName,
                 'custom_deck_card_ids' => $customDeckCardIds !== null ? json_encode($customDeckCardIds) : null,
+                'duel_rules_preset' => $duelRulesPreset,
+                'duel_min_cards' => $duelMinCards,
+                'duel_rarity_limits' => $duelRarityLimits !== null ? json_encode($duelRarityLimits) : null,
+                'duel_duplicate_limits' => $duelDuplicateLimits !== null ? json_encode($duelDuplicateLimits) : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
             ]);
@@ -185,6 +225,23 @@ final class GameService
     }
 
     /**
+     * @return array{idsByName: array<string,int>, rowsById: array<int, array{name:string, rarity:string}>}
+     */
+    private function loadCardCatalog(): array
+    {
+        $stmt = Connection::get()->query('SELECT id, name, rarity FROM cards');
+        $idsByName = [];
+        $rowsById = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $id = (int) $row['id'];
+            $idsByName[mb_strtolower($row['name'])] = $id;
+            $rowsById[$id] = ['name' => $row['name'], 'rarity' => $row['rarity']];
+        }
+
+        return ['idsByName' => $idsByName, 'rowsById' => $rowsById];
+    }
+
+    /**
      * Parses and fully validates a 'custom' deck_type's decklist text at
      * createGame() time (rather than re-parsing at startGame() time), so a
      * decklist error -- an unrecognized card, too few cards for the table
@@ -201,13 +258,7 @@ final class GameService
             throw new GameStateException('A custom decklist is required when deck_type is "custom"');
         }
 
-        $catalogStmt = Connection::get()->query('SELECT id, name FROM cards');
-        $catalogIdsByName = [];
-        foreach ($catalogStmt->fetchAll() as $row) {
-            $catalogIdsByName[mb_strtolower($row['name'])] = (int) $row['id'];
-        }
-
-        $parsed = (new DecklistParser($catalogIdsByName))->parse($decklistText);
+        $parsed = (new DecklistParser($this->loadCardCatalog()['idsByName']))->parse($decklistText);
 
         $minimumCards = 15 * ($playerCount - 1);
         if (count($parsed['cardIds']) < $minimumCards) {
@@ -217,6 +268,146 @@ final class GameService
         }
 
         return $parsed;
+    }
+
+    /**
+     * Resolves createGame()'s own $duelDeckRules argument into an actual
+     * DuelDeckRules instance -- either one of the three built-in presets
+     * (DuelDeckRules::forPreset(), the values "locked in" verbatim
+     * regardless of whatever min_cards/rarity_limits/duplicate_limits the
+     * client also sent alongside the preset name) or, for 'user_defined'
+     * (the default when no preset key is given at all), the creator's own
+     * three rule values -- sanitizeRarityMap() drops anything that isn't
+     * one of cards.rarity's own four values, and DuelDeckRules's own
+     * constructor enforces the minimum min_cards floor.
+     *
+     * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>} $duelDeckRules
+     */
+    private function resolveDuelDeckRules(?array $duelDeckRules): DuelDeckRules
+    {
+        if ($duelDeckRules === null) {
+            throw new GameStateException('Duel deck-building rules are required when deck_type is "custom_duel"');
+        }
+
+        $preset = (string) ($duelDeckRules['preset'] ?? 'user_defined');
+        if ($preset !== 'user_defined') {
+            return DuelDeckRules::forPreset($preset);
+        }
+
+        $minCards = (int) ($duelDeckRules['min_cards'] ?? 0);
+
+        return new DuelDeckRules(
+            $minCards,
+            $this->sanitizeRarityMap($duelDeckRules['rarity_limits'] ?? null),
+            $this->sanitizeRarityMap($duelDeckRules['duplicate_limits'] ?? null),
+        );
+    }
+
+    /**
+     * Keeps only the entries of $map keyed by one of cards.rarity's own
+     * four values, coercing each to an int -- a blank/missing/non-numeric
+     * entry for a rarity is dropped entirely (meaning "no restriction"),
+     * matching DuelDeckRules's own "missing key = unrestricted" contract,
+     * rather than accidentally treating an empty form field as a literal
+     * cap of 0.
+     *
+     * @return array<string,int>
+     */
+    private function sanitizeRarityMap(mixed $map): array
+    {
+        if (!is_array($map)) {
+            return [];
+        }
+
+        $sanitized = [];
+        foreach (self::RARITIES as $rarity) {
+            $value = $map[$rarity] ?? null;
+            if ($value !== null && $value !== '') {
+                $sanitized[$rarity] = (int) $value;
+            }
+        }
+
+        return $sanitized;
+    }
+
+    /**
+     * A 'custom_duel' game's own two players each call this -- while the
+     * game is still 'waiting' -- to submit their own decklist (same
+     * file/paste format as the 'custom' deck_type, see DecklistParser)
+     * against the deck-building rules the creator locked in at
+     * createGame() time (DuelDeckRules, stored on the games row).
+     * Re-submitting before the game starts overwrites the previous
+     * attempt outright -- there's no reason to keep a superseded one
+     * around, and startGame() only ever reads the latest. startGame()
+     * itself refuses to deal for this deck_type until both seats have a
+     * non-null custom_deck_card_ids.
+     */
+    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, string $decklistText): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'custom_duel') {
+            throw new GameStateException("Game {$gameId} does not use custom duel decklists");
+        }
+        if ($game['status'] !== 'waiting') {
+            throw new GameStateException("Game {$gameId} has already started -- decklists can no longer be submitted");
+        }
+
+        $ownerStmt = Connection::get()->prepare('SELECT COUNT(*) FROM game_players WHERE id = :id AND game_id = :game_id');
+        $ownerStmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
+        if ((int) $ownerStmt->fetchColumn() === 0) {
+            throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
+        }
+
+        if (trim($decklistText) === '') {
+            throw new GameStateException('A decklist is required');
+        }
+
+        $catalog = $this->loadCardCatalog();
+        $parsed = (new DecklistParser($catalog['idsByName']))->parse($decklistText);
+
+        $rules = new DuelDeckRules(
+            (int) $game['custom_duel_min_cards'],
+            (array) json_decode((string) $game['custom_duel_rarity_limits'], true),
+            (array) json_decode((string) $game['custom_duel_duplicate_limits'], true),
+        );
+        $rules->validate($parsed['cardIds'], $catalog['rowsById'], 'Your decklist');
+
+        $update = Connection::get()->prepare(
+            'UPDATE game_players SET custom_deck_name = :name, custom_deck_card_ids = :card_ids WHERE id = :id'
+        );
+        $update->execute([
+            'name' => $parsed['name'],
+            'card_ids' => json_encode($parsed['cardIds']),
+            'id' => $gamePlayerId,
+        ]);
+    }
+
+    /**
+     * A 'custom_duel' game's own startGame()-time gate: every seated
+     * player must have already called submitCustomDuelDeck() with a
+     * valid decklist -- unlike every other deck_type, there's no
+     * fallback deck for startGame() to generate if one hasn't.
+     *
+     * @param int[] $playerIds
+     * @return array<int, int[]> game_player id => resolved catalog card ids
+     */
+    private function requireCustomDuelDecksSubmitted(int $gameId, array $playerIds): array
+    {
+        $stmt = Connection::get()->prepare('SELECT id, custom_deck_card_ids FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+
+        $cardIdsByPlayer = [];
+        foreach ($stmt->fetchAll() as $row) {
+            if ($row['custom_deck_card_ids'] !== null) {
+                $cardIdsByPlayer[(int) $row['id']] = array_map(intval(...), json_decode((string) $row['custom_deck_card_ids'], true));
+            }
+        }
+
+        if (array_diff($playerIds, array_keys($cardIdsByPlayer)) !== []) {
+            throw new GameStateException("Game {$gameId} cannot start until every player has submitted a decklist");
+        }
+
+        return $cardIdsByPlayer;
     }
 
     public function startGame(int $gameId): void
@@ -230,6 +421,10 @@ final class GameService
         if (count($playerIds) < self::MIN_PLAYERS) {
             throw new GameStateException("Game {$gameId} needs at least " . self::MIN_PLAYERS . ' players to start');
         }
+
+        $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
+            ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
+            : [];
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -252,7 +447,9 @@ final class GameService
             // BoardState::$catalogCardIdFor.
             if ($game['format'] === 'duel') {
                 foreach ($playerIds as $playerId) {
-                    $playerCardIds = $this->deckCardIdsFor($game);
+                    $playerCardIds = $game['deck_type'] === 'custom_duel'
+                        ? $customDuelDeckCardIds[$playerId]
+                        : $this->deckCardIdsFor($game);
                     shuffle($playerCardIds);
 
                     for ($i = 0; $i < self::STARTING_HAND_SIZE; $i++) {
@@ -341,6 +538,13 @@ final class GameService
             'power' => $this->buildPowerDeckCardIds(),
             'jceddys_75' => $this->buildJceddys75DeckCardIds(),
             'custom' => $this->customDeckCardIds($game),
+            // Each 'custom_duel' player's own deck lives on their
+            // game_players row, not the games row this method reads --
+            // startGame() reads it directly via requireCustomDuelDecksSubmitted()
+            // and never reaches this method for that deck_type. A stray
+            // call here would silently hand back a nonsense deck (there's
+            // no single "the" custom_duel deck), so this fails loudly instead.
+            'custom_duel' => throw new \LogicException('deckCardIdsFor() cannot build a "custom_duel" deck -- each duel player\'s own deck must be read via requireCustomDuelDecksSubmitted()'),
             default => range(1, self::TOTAL_CARDS), // 'one_of_each'
         };
     }
@@ -1431,7 +1635,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.custom_deck_name, gp.custom_deck_card_ids, u.username FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -1466,6 +1670,15 @@ final class GameService
                 // (nothing dealt yet), the one status this function
                 // returns for before ever reaching that point.
                 'total_score' => 0,
+                // Only meaningful for deck_type = 'custom_duel' -- each
+                // player's own submitted decklist (see
+                // submitCustomDuelDeck()), null/false for every other
+                // deck_type since game_players.custom_deck_* is only ever
+                // written for that one. deck_submitted lets the waiting
+                // board show "waiting on Bob" without exposing Bob's own
+                // decklist contents before the game starts.
+                'custom_deck_name' => $row['custom_deck_name'],
+                'deck_submitted' => $row['custom_deck_card_ids'] !== null,
             ];
         }
 
@@ -1484,6 +1697,12 @@ final class GameService
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],
+                'duel_deck_rules' => $game['deck_type'] === 'custom_duel' ? [
+                    'preset' => $game['custom_duel_rules_preset'],
+                    'min_cards' => (int) $game['custom_duel_min_cards'],
+                    'rarity_limits' => (array) json_decode((string) $game['custom_duel_rarity_limits'], true),
+                    'duplicate_limits' => (array) json_decode((string) $game['custom_duel_duplicate_limits'], true),
+                ] : null,
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,

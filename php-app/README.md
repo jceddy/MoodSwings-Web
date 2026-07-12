@@ -54,7 +54,8 @@ instead.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`one_of_each`, see below). `decklist_text` is required when `deck_type` is `custom` (see "Custom decklists" below) and ignored otherwise. `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total, `deck_type` is `custom` with `format: 'duel'`, or the decklist itself is invalid (unparseable line, unrecognized card name, too few cards for the table) -- see "Duel: separate per-player decks" and "Custom decklists" below. Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "duel_deck_rules"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard`, `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`one_of_each`, see below). `decklist_text` is required when `deck_type` is `custom` (see "Custom decklists" below) and ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, the decklist itself is invalid (unparseable line, unrecognized card name, too few cards for the table), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset). Returns `{"game_id"}`. |
+| POST   | `/games/decklist` | `{"game_id", "decklist_text"}`                                  | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded). Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
@@ -1041,7 +1042,7 @@ game too.
 `startGame()` when the deck is actually assembled -- nothing about which
 cards a game ends up with is decided before then) picks which pool of
 cards a game draws from, via `GameService::deckCardIdsFor()`'s dispatch to
-one of five builders:
+one of six builders:
 
 - `structure` (the default) -- `buildStructureDeckCardIds()` assembles a
   randomly-drawn, singleton 45-card deck matching a new physical box's own
@@ -1073,12 +1074,22 @@ one of five builders:
   above; `customDeckCardIds()` just reads back the card ids
   `createGame()` already parsed and validated. Only supported for
   Traditional (non-`duel`) games.
+- `custom_duel` -- for `duel` games only: each of the two players supplies
+  their *own* decklist against deck-building rules the creator defines
+  (see "Custom decklists for Duel games" below) -- unlike every other
+  deck_type, `deckCardIdsFor()` explicitly refuses to build this one
+  (a `\LogicException`, not a `GameStateException` -- this is a
+  programmer error, not a user-facing one), since there's no single "the"
+  deck for a `custom_duel` game the way there is for every other type;
+  `startGame()` reads each player's own submitted deck directly instead.
 - `one_of_each` -- the full 133-card pool, one copy of every printed card,
   unchanged from the only option that existed before `deck_type` did.
 
 `structure`, `power`, and `one_of_each` are always singleton within one
 deck (no repeated card ids); `jceddys_75` and `custom` are the exceptions
 -- `custom`'s repeat behavior is whatever the creator's own decklist says.
+`custom_duel` is whatever each player's own decklist says, same as
+`custom`, but constrained by the creator's own rules (see below).
 `deck_type` was named `standard` before `power` existed, when there was
 only one alternative to `one_of_each` to distinguish it from; it was
 renamed `structure` once a second small-deck option needed a name of its
@@ -1139,6 +1150,101 @@ beyond the first two" rule the feature was specified with -- `15 * (N -
 caps `N` at 4 anyway). `DecklistParser` itself is player-count-agnostic
 (it has no idea how many players the game has); `GameService::createGame()`
 checks the resolved card count against that formula after parsing.
+
+### Custom decklists for Duel games
+
+`deck_type: 'custom_duel'` is Duel's own version of `custom` -- instead of
+the whole table sharing one creator-supplied decklist, each of the two
+duel players supplies their *own* (same file/paste format, same
+`DecklistParser`), and the creator additionally defines the deck-building
+*rules* both players' decklists must satisfy. Two structural differences
+from `custom` drive the rest of this section: there's no single decklist
+to parse at `createGame()` time (nothing is parsed until each player
+submits their own), and the rules themselves -- not just the resulting
+card ids -- have to be persisted, since `submitCustomDuelDeck()` needs
+them again for every later submission attempt.
+
+**Rules (`DuelDeckRules`, `src/Game/DuelDeckRules.php`)** -- a pure value
+object holding three things, matching exactly what the feature was
+specified with:
+
+- `minCards` -- the deck's own minimum card count, floored at 7
+  (`GameStateException` if lower -- enforced in the constructor, so it's
+  impossible to construct an under-the-floor instance at all, whether
+  from a preset or a user-defined value).
+- `rarityLimits` -- an optional-per-rarity `{rarity: max count}` map; a
+  missing rarity means no restriction on how many cards of that rarity
+  the deck can have.
+- `duplicateLimits` -- an optional-per-rarity `{rarity: max copies}` map;
+  a missing rarity means no restriction on how many copies of any single
+  card of that rarity the deck can have.
+
+`validate(cardIds, catalogById)` checks a resolved decklist against all
+three at once, throwing a `GameStateException` naming the exact violation
+(too few cards; too many of a rarity; too many copies of a named card) --
+the same "surface the real problem, not a generic rejection" approach
+`DecklistParser`'s own errors take.
+
+**Presets (`DuelDeckRules::forPreset()`)** -- the creator picks `structure`,
+`power`, `jceddys_75`, or `user_defined` (`games.custom_duel_rules_preset`,
+purely for display -- the *resolved* values are what's actually enforced).
+The first three approximate `buildStructureDeckCardIds()`/
+`buildPowerDeckCardIds()`/`buildJceddys75DeckCardIds()`'s own generators as
+closely as this three-field rule shape allows:
+
+- `structure` and `jceddys_75` land on an **exact** match. Both cap every
+  rarity, and set `minCards` to the *sum* of those caps -- a deck meeting
+  the minimum while respecting every individual cap is mathematically
+  forced to hit each cap exactly (if any rarity fell short, the total
+  couldn't reach `minCards` without another rarity exceeding its own
+  cap), so these two presets reproduce the generators' own exact rarity
+  splits without needing anything more expressive than "cap + minimum."
+  `jceddys_75`'s own per-color counts (1 Mythic/2 Rare/4 Uncommon/8
+  Common per color) are summed across all 5 colors into aggregate rarity
+  limits (5/10/20/40) -- this rule shape has no notion of color, only
+  rarity, so a `jceddys_75`-preset deck can't be checked for a *balanced*
+  color spread the way the real generator guarantees, only the aggregate
+  rarity split.
+- `power` is only an **approximation**: the real generator guarantees
+  exactly one Mythic among 15 singleton cards pooled from every other
+  rarity, but this rule shape has no way to *require* a rarity be present
+  (only cap it) -- the closest available rule is "at least 15 cards, at
+  most 1 Mythic, singleton," which a Mythic-less 15-card deck would still
+  pass even though the real Power generator could never produce one.
+
+Picking a preset locks its three values in verbatim at `createGame()`
+time, ignoring whatever `min_cards`/`rarity_limits`/`duplicate_limits` the
+client also sent alongside it (`GameService::resolveDuelDeckRules()`) --
+`user_defined` is the only preset where those client-supplied values are
+actually used, each rarity's entry sanitized by `sanitizeRarityMap()`
+(coerced to int; a blank/missing rarity is dropped rather than treated as
+a literal cap of 0).
+
+**Submission flow** -- `createGame()` only stores the resolved rules
+(`games.custom_duel_min_cards`/`custom_duel_rarity_limits`/
+`custom_duel_duplicate_limits`); the game sits in `waiting` with neither
+player's `game_players.custom_deck_card_ids` set yet. Each seated player
+calls `POST /games/decklist` (`GameService::submitCustomDuelDeck()`) with
+their own decklist text -- parsed via the same `DecklistParser` `custom`
+uses, then validated against the stored `DuelDeckRules` -- and the
+resolved name/card ids are written to that player's own `game_players`
+row. Re-submitting before the game starts simply overwrites the previous
+attempt (there's no reason to keep a superseded one around). `startGame()`
+refuses (`GameStateException`) to deal for a `custom_duel` game until
+*both* seats have a non-null `custom_deck_card_ids`
+(`requireCustomDuelDecksSubmitted()`) -- when it does deal, each player's
+own submitted cards are shuffled and dealt from independently, exactly
+like every other duel deck_type's own per-player pool, just sourced from
+that player's submission instead of a builder function.
+
+**State exposure** -- `getState()`'s own `game.duel_deck_rules` (`null`
+for every other deck_type) carries the resolved preset/min_cards/
+rarity_limits/duplicate_limits so a client can render/validate against
+them before submitting. Each entry in `players` carries that player's own
+`custom_deck_name` and a `deck_submitted` boolean -- deliberately *not*
+the decklist's own card ids or raw text, so a `custom_duel` game's waiting
+room can show "Alice submitted, waiting on Bob" without leaking either
+player's decklist contents to their opponent before the game starts.
 
 ### Game timestamps
 

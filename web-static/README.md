@@ -38,8 +38,9 @@ routed to the PHP app).
     rest, and switching back to Traditional re-enables them, so you can't
     submit a Duel request the server will just reject with a 400. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
-    jceddy's 75 Card, Custom Decklist, One of Each Card, in that order,
-    matching `deck_type`'s own five values -- see "Deck types" in
+    jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), One of Each
+    Card, in that order, matching `deck_type`'s own six values -- see
+    "Deck types" in
     `php-app/README.md`) has a plain-language
     description shown right below it (`#new-game-deck-type-description`,
     `updateDeckTypeDescription()`) that updates live as the selection
@@ -57,14 +58,48 @@ routed to the PHP app).
     `updateOpponentSelectionLimit()`'s own proactive approach) whenever
     Duel is selected, since custom decklists aren't supported for duel
     games, falling back to Structure if Custom Decklist was already
-    selected when the format switches. Polls `GET /games` every 4 seconds while the lobby is
+    selected when the format switches -- and, the other way round,
+    disables Custom Decklists (Duel) whenever Duel *isn't* selected, since
+    that option only makes sense for a duel. Selecting Custom Decklists
+    (Duel) reveals `#new-game-duel-rules-fields` instead of the decklist
+    fields -- no decklist is entered here at all, only the deck-building
+    *rules* both players' own decklists (submitted later, see the Board
+    bullet below) will have to satisfy. A `#new-game-duel-rules-preset`
+    dropdown (Structure/Power/jceddy's 75 Card/User-Defined) either shows a
+    read-only summary of that preset's locked-in values
+    (`DUEL_RULES_PRESET_SUMMARIES`, a client-side mirror of
+    `DuelDeckRules::forPreset()` purely for display -- the actual values
+    are always resolved server-side) or, for User-Defined, reveals editable
+    fields: a minimum card count and, for each of the four rarities, an
+    optional max-total and max-duplicates input (`collectDuelDeckRules()`
+    reads all of this into the `duel_deck_rules` object sent to
+    `POST /games`) -- see "Custom decklists for Duel games" in
+    `php-app/README.md` for what these rules actually mean. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just
     created (or one you created yourself from a second tab) shows up on
     its own, without needing a hard reload.
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
-    deck count, and your hand (via `GET /games/state`). Clicking any hand
+    deck count, and your hand (via `GET /games/state`). For a
+    `custom_duel` game still `waiting` to start, `renderDuelDeckSubmission()`
+    replaces the usual "Start game" gating with its own section
+    (`#duel-deck-submission`): the creator's own locked-in rules
+    (`state.game.duel_deck_rules`, summarized in plain language), each
+    player's submission status (`state.players[].deck_submitted` --
+    never the decklist contents themselves, so neither player can see the
+    other's decklist before the game starts), and, if the viewer hasn't
+    submitted yet, the same file-upload/paste form the Traditional
+    `custom` deck_type uses in the New Game dialog, wired to
+    `POST /games/decklist` instead of `POST /games`. "Start game" itself
+    stays hidden until every player's own `deck_submitted` is true, since
+    the server would just reject starting otherwise. Once a `custom_duel`
+    game is actually in progress, each player's own row in the Players
+    list additionally shows `— deck: <name>` (or "Uploaded Deck") --
+    unlike every other deck_type, where the board title alone names the
+    one deck the whole table shares, a `custom_duel` game has no single
+    deck to name there, so each player's own label lives on their own row
+    instead. Clicking any hand
     card opens a panel showing its name and rules text plus Play/Cancel, so
     it doubles as a quick way to inspect a card you don't recognize yet;
     cards with no ability worth asking about (roughly half the 127-card

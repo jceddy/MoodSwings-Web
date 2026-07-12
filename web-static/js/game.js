@@ -196,6 +196,7 @@
         power: 'Power',
         jceddys_75: 'jceddy\'s 75 Card',
         custom: 'Custom Decklist',
+        custom_duel: 'Custom Decklists (Duel)',
         one_of_each: 'One of Each Card',
     };
 
@@ -213,28 +214,62 @@
         power: 'A fast 15-card deck: 1 random mythic mood plus 14 other random moods.',
         jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
+        custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
+    };
+
+    const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
+
+    // Plain-language summaries of DuelDeckRules::forPreset()'s own locked
+    // values, shown read-only when a preset other than User-Defined is
+    // picked below -- purely descriptive, the actual values are resolved
+    // server-side (see GameService::resolveDuelDeckRules()) so there's no
+    // risk of these two ever disagreeing about what gets enforced.
+    const DUEL_RULES_PRESET_SUMMARIES = {
+        structure: 'Exactly 45 cards: 23 common, 14 uncommon, 6 rare, 2 mythic. No duplicate cards.',
+        power: 'At least 15 cards, at most 1 mythic. No duplicate cards.',
+        jceddys_75: 'Exactly 75 cards: 40 common (up to 3 copies of any one), 20 uncommon (up to 2 copies of any one), 10 rare, 5 mythic. No duplicate rare or mythic cards.',
     };
 
     function updateDeckTypeDescription() {
         const deckType = document.getElementById('new-game-deck-type').value;
         document.getElementById('new-game-deck-type-description').textContent = DECK_TYPE_DESCRIPTIONS[deckType] || '';
         document.getElementById('new-game-decklist-fields').hidden = deckType !== 'custom';
+        document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
+        if (deckType === 'custom_duel') {
+            updateDuelRulesPresetVisibility();
+        }
     }
 
-    // 'custom' decklists aren't supported for duel games (enforced
-    // server-side by GameService::createGame()) -- disabling the option
-    // here prevents choosing a combination the server would just reject,
-    // matching updateOpponentSelectionLimit()'s own proactive-prevention
-    // approach for format-dependent constraints. Falls back to 'structure'
-    // if 'custom' was already selected when the format switches to duel.
+    // Shows the locked-in summary for a built-in preset, or the editable
+    // fields for User-Defined -- mutually exclusive, matching
+    // updateDeckTypeDescription()'s own decklist-fields-vs-rules-fields
+    // toggle one level up.
+    function updateDuelRulesPresetVisibility() {
+        const preset = document.getElementById('new-game-duel-rules-preset').value;
+        const summaryEl = document.getElementById('new-game-duel-rules-preset-summary');
+
+        summaryEl.textContent = DUEL_RULES_PRESET_SUMMARIES[preset] || '';
+        summaryEl.hidden = preset === 'user_defined';
+        document.getElementById('new-game-duel-rules-user-defined').hidden = preset !== 'user_defined';
+    }
+
+    // 'custom' decklists aren't supported for duel games, and 'custom_duel'
+    // (each player supplying their own decklist against rules the creator
+    // defines) only makes sense FOR a duel -- both enforced server-side by
+    // GameService::createGame(), disabled here too so a doomed combination
+    // can't even be selected, matching updateOpponentSelectionLimit()'s own
+    // proactive-prevention approach for format-dependent constraints.
+    // Falls back to 'structure' if the now-disallowed option was selected.
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
         const isDuel = document.getElementById('new-game-format').value === 'duel';
         const customOption = deckTypeSelect.querySelector('option[value="custom"]');
+        const customDuelOption = deckTypeSelect.querySelector('option[value="custom_duel"]');
 
         customOption.disabled = isDuel;
-        if (isDuel && deckTypeSelect.value === 'custom') {
+        customDuelOption.disabled = !isDuel;
+        if ((isDuel && deckTypeSelect.value === 'custom') || (!isDuel && deckTypeSelect.value === 'custom_duel')) {
             deckTypeSelect.value = 'structure';
         }
 
@@ -293,6 +328,7 @@
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
+    document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
 
     // Reading an uploaded decklist file into the textarea lets both input
     // methods (file upload or pasted text) share the same submit-time
@@ -305,6 +341,36 @@
 
         document.getElementById('new-game-decklist-text').value = await file.text();
     });
+
+    // Reads the four rarity rows' own optional "max total"/"max
+    // duplicates" fields for the User-Defined preset -- a blank field
+    // means "no restriction for that rarity" (matches DuelDeckRules's own
+    // "missing key = unrestricted" contract), so it's simply omitted
+    // rather than sent as e.g. 0.
+    function collectRarityMap(idPrefix) {
+        const map = {};
+        for (const rarity of RARITIES) {
+            const value = document.getElementById(idPrefix + rarity).value;
+            if (value !== '') {
+                map[rarity] = Number(value);
+            }
+        }
+        return map;
+    }
+
+    function collectDuelDeckRules() {
+        const preset = document.getElementById('new-game-duel-rules-preset').value;
+        if (preset !== 'user_defined') {
+            return { preset };
+        }
+
+        return {
+            preset: 'user_defined',
+            min_cards: Number(document.getElementById('new-game-duel-min-cards').value) || 0,
+            rarity_limits: collectRarityMap('new-game-duel-rarity-limit-'),
+            duplicate_limits: collectRarityMap('new-game-duel-duplicate-limit-'),
+        };
+    }
 
     document.getElementById('new-game-button').addEventListener('click', async () => {
         newGameError.hidden = true;
@@ -351,7 +417,8 @@
         const format = document.getElementById('new-game-format').value;
         const deckType = document.getElementById('new-game-deck-type').value;
         const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
-        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText);
+        const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
+        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText, duelDeckRules);
 
         if (!ok) {
             newGameError.textContent = body.message || 'Could not create the game.';
@@ -528,9 +595,18 @@
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
                 const wentFirst = state.round && state.round.first_game_player_id === player.game_player_id;
                 const hasHurtFeelings = state.round && state.round.hurt_feelings_game_player_id === player.game_player_id;
+                // Each custom_duel player has their OWN deck (unlike every
+                // other deck_type, where one label covers the whole game --
+                // see the board title itself), so that label belongs on
+                // this per-player row instead once the game has actually
+                // started (in_play/hand card counts already differ per
+                // player here for the same reason).
+                const deckLabel = state.game.deck_type === 'custom_duel' && state.game.status !== 'waiting'
+                    ? ' — deck: ' + (player.custom_deck_name || 'Uploaded Deck')
+                    : '';
                 li.textContent = player.username + ' — seat ' + player.seat_order +
                     ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
-                    player.hand_count + ' card(s) in hand' +
+                    player.hand_count + ' card(s) in hand' + deckLabel +
                     (wentFirst ? ' — went first this round' : '') +
                     (isTurn ? ' — on turn' : '') +
                     (hasHurtFeelings ? ' — has Hurt Feelings (2 plays this round)' : '');
@@ -540,12 +616,21 @@
 
         if (state.game.status === 'waiting') {
             document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
-            startButton.hidden = false;
             inProgressArea.hidden = true;
+
+            if (state.game.deck_type === 'custom_duel') {
+                renderDuelDeckSubmission(state);
+                startButton.hidden = !state.players.every((p) => p.deck_submitted);
+            } else {
+                document.getElementById('duel-deck-submission').hidden = true;
+                startButton.hidden = false;
+            }
+
             return;
         }
 
         startButton.hidden = true;
+        document.getElementById('duel-deck-submission').hidden = true;
         inProgressArea.hidden = false;
 
         if (state.game.status === 'completed') {
@@ -681,6 +766,76 @@
             }
         );
     }
+
+    // The 'custom_duel' waiting-room view: shows the creator's own locked-
+    // in deck-building rules, both players' submission status (never the
+    // decklist contents themselves -- see deck_submitted's own docblock in
+    // GameService::getState()), and, if the viewer hasn't submitted yet, a
+    // file/textarea submission form matching the 'custom' deck_type's own
+    // (see #new-game-decklist-fields). Start game itself stays hidden
+    // until every player has submitted -- see renderBoard()'s own caller.
+    function renderDuelDeckSubmission(state) {
+        document.getElementById('duel-deck-submission').hidden = false;
+
+        const rules = state.game.duel_deck_rules;
+        const rarityLimitsText = RARITIES
+            .filter((rarity) => rules.rarity_limits[rarity] !== undefined)
+            .map((rarity) => 'at most ' + rules.rarity_limits[rarity] + ' ' + rarity)
+            .join(', ');
+        const duplicateLimitsText = RARITIES
+            .filter((rarity) => rules.duplicate_limits[rarity] !== undefined)
+            .map((rarity) => 'at most ' + rules.duplicate_limits[rarity] + ' cop' + (rules.duplicate_limits[rarity] === 1 ? 'y' : 'ies') + ' of any ' + rarity + ' card')
+            .join(', ');
+        document.getElementById('duel-deck-rules-summary').textContent =
+            'At least ' + rules.min_cards + ' cards.' +
+            (rarityLimitsText ? ' At most ' + rarityLimitsText.replace(/^at most /, '') + '.' : '') +
+            (duplicateLimitsText ? ' At most ' + duplicateLimitsText.replace(/^at most /, '') + '.' : '');
+
+        renderList(
+            document.getElementById('duel-deck-submission-status'),
+            { hidden: true }, // always exactly 2 players in a duel
+            state.players,
+            (player) => {
+                const li = document.createElement('li');
+                li.textContent = player.username + ' — ' +
+                    (player.deck_submitted ? 'submitted' + (player.custom_deck_name ? ' (' + player.custom_deck_name + ')' : '') : 'waiting for a decklist');
+                return li;
+            }
+        );
+
+        const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+        document.getElementById('duel-deck-submit-form-container').hidden = you.deck_submitted;
+        document.getElementById('duel-deck-submitted-message').hidden = !you.deck_submitted;
+        if (you.deck_submitted) {
+            document.getElementById('duel-deck-submitted-message').textContent =
+                'You submitted: ' + (you.custom_deck_name || 'Uploaded Deck');
+        }
+    }
+
+    document.getElementById('duel-deck-submit-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('duel-deck-submit-text').value = await file.text();
+    });
+
+    document.getElementById('duel-deck-submit-button').addEventListener('click', async () => {
+        const submitError = document.getElementById('duel-deck-submit-error');
+        submitError.hidden = true;
+
+        const decklistText = document.getElementById('duel-deck-submit-text').value;
+        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText);
+
+        if (!ok) {
+            submitError.textContent = body.message || 'Could not submit that decklist.';
+            submitError.hidden = false;
+            return;
+        }
+
+        await refreshBoard();
+    });
 
     document.getElementById('start-game-button').addEventListener('click', async () => {
         boardError.hidden = true;
