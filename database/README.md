@@ -27,6 +27,18 @@ was already provisioned before this (i.e. you'd previously run the old
 `schema.sql`), you don't need to run it — just start from whatever
 migration comes next.
 
+**Standing up a brand-new database** (e.g. the dev domain's own database —
+see "Development environment setup" in the top-level README): rather than
+pasting/running 20+ individual migration files by hand, paste
+[`consolidated/0001-0020_consolidated.sql`](consolidated/0001-0020_consolidated.sql)
+once instead — every statement from `0001` through `0020`, in order,
+followed by a `schema_migrations` table pre-populated with all 20
+filenames so a later `composer migrate` correctly picks up from `0021`
+onward rather than re-running any of them. Only use it against a genuinely
+empty database (see the file's own header for why); once your schema
+history grows past `0020`, apply whichever migrations came after it
+individually, the same as always.
+
 ## Adding a new migration
 
 Add a new file named `NNNN_description.sql` (next sequential 4-digit
@@ -42,6 +54,12 @@ on `;`.
 
 - `migrations/` — Ordered `.sql` files, one per schema change, applied in
   filename order.
+- `consolidated/` — Point-in-time, hand-maintained snapshots merging a
+  range of `migrations/` files into one script for standing up a fresh
+  database in a single paste (see "Applying migrations" above). Outside
+  `migrations/` deliberately, so `bin/migrate.php` (which only globs
+  `*.sql` directly inside `migrations/`) never picks these up as if they
+  were migrations of their own.
 
 ## Schema overview
 
