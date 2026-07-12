@@ -1,19 +1,29 @@
-name: Deploy to Bluehost (production)
+name: Deploy to Bluehost (dev)
 
-# See "Branching & environments" in the top-level README: this is the
-# production deploy, triggered only by main -- feature work merges into
-# `development` instead (deploy-dev.yml, an otherwise-identical workflow
-# reading a separate set of DEV_-prefixed FTP/DB/APP_URL/SITE_URL
-# secrets/vars, but the same plain SMTP_* secrets below), and is promoted
-# to main only via a periodic `development` -> `main` PR.
+# Mirrors deploy.yml (production, triggered by main) exactly, aside from
+# which branch triggers it and which set of secrets/vars it reads for
+# FTP/DB/APP_URL/SITE_URL -- entirely separate DEV_-prefixed names there,
+# so setting up (or getting wrong) the dev environment's credentials can
+# never touch the already-configured, already-live production FTP/DB
+# secrets deploy.yml itself reads. SMTP is the one deliberate exception:
+# both workflows read the same plain SMTP_* secrets, since it's just a
+# transactional-email sender, not something that differs meaningfully
+# between environments (and dev verification emails going out from the
+# same configured sender is expected, not a leak of anything sensitive).
+# See "Branching & environments" in the top-level README for the
+# promotion flow this supports: feature PRs merge into `development`
+# (auto-deploying here), and periodically a PR from `development` into
+# `main` promotes a batch of changes to production on a more controlled
+# schedule.
 on:
   push:
-    branches: [main]
+    branches: [development]
 
 env:
   # Must be >= the "php": ">=8.1" requirement in php-app/composer.json, and
-  # should match the PHP version set for your domain in cPanel's MultiPHP
-  # Manager so the deployed code actually runs the way it was built.
+  # should match the PHP version set for your dev domain in cPanel's
+  # MultiPHP Manager so the deployed code actually runs the way it was
+  # built.
   PHP_VERSION: '8.1'
 
 jobs:
@@ -36,12 +46,12 @@ jobs:
 
       - name: Assemble deploy artifact
         env:
-          DB_HOST: ${{ secrets.DB_HOST }}
-          DB_PORT: ${{ secrets.DB_PORT }}
-          DB_NAME: ${{ secrets.DB_NAME }}
-          DB_USER: ${{ secrets.DB_USER }}
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
-          APP_URL: ${{ vars.APP_URL }}
+          DB_HOST: ${{ secrets.DEV_DB_HOST }}
+          DB_PORT: ${{ secrets.DEV_DB_PORT }}
+          DB_NAME: ${{ secrets.DEV_DB_NAME }}
+          DB_USER: ${{ secrets.DEV_DB_USER }}
+          DB_PASSWORD: ${{ secrets.DEV_DB_PASSWORD }}
+          APP_URL: ${{ vars.DEV_APP_URL }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -122,17 +132,17 @@ jobs:
       - name: Deploy to Bluehost via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ vars.FTP_SERVER_DIR || '/public_html/' }}
+          server: ${{ secrets.DEV_FTP_SERVER }}
+          username: ${{ secrets.DEV_FTP_USERNAME }}
+          password: ${{ secrets.DEV_FTP_PASSWORD }}
+          server-dir: ${{ vars.DEV_FTP_SERVER_DIR || '/public_html/' }}
           local-dir: ./dist/
           exclude: |
             **/.git*
             **/.git*/**
 
       - name: Smoke test deployed health endpoint
-        if: ${{ vars.SITE_URL != '' }}
+        if: ${{ vars.DEV_SITE_URL != '' }}
         env:
-          SITE_URL: ${{ vars.SITE_URL }}
+          SITE_URL: ${{ vars.DEV_SITE_URL }}
         run: curl -fsS "$SITE_URL/app/health"
