@@ -1843,6 +1843,15 @@ final class GameService
                 ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
+                // A permanent one-time "after playing this mood, ... this
+                // mood's value becomes N" trigger (Dignity, Delight, ...)
+                // has locked its value in via BoardState::setValueOverride()
+                // -- as opposed to a "while in play" card (Determination)
+                // whose value keeps being recomputed live by valueOf() and
+                // never touches 'valueOverride' at all. The frontend uses
+                // this to distinguish the two visually (see "Card art
+                // rendering" in web-static/README.md).
+                'value_locked' => array_key_exists('valueOverride', $mood->effectState),
                 'suppression_expiry' => $mood->suppressionExpiry,
                 'suppressed_by_card_id' => $mood->suppressionSourceCardId,
                 'suppressed_by_name' => $mood->suppressionSourceCardId !== null

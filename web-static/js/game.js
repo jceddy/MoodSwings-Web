@@ -500,6 +500,19 @@
             suppressedBadge.className = 'card-thumb__badge card-thumb__badge--suppressed';
             suppressedBadge.textContent = 'Suppressed';
             button.appendChild(suppressedBadge);
+            // Tapped-card convention: rotate the art 90deg (the badge above
+            // stays upright so the state is still readable, not just
+            // visual) -- see "Card art rendering" in web-static/README.md.
+            button.classList.add('card-thumb--suppressed');
+        }
+
+        if (card.value_locked) {
+            // A permanent "after playing this mood, ... this mood's value
+            // becomes N" trigger (Dignity, Delight, ...) has locked in its
+            // alt value, as opposed to a "while in play" card (Determination)
+            // whose value is only ever recomputed live -- rotated 180deg to
+            // distinguish the two at a glance, per table convention.
+            button.classList.add('card-thumb--value-locked');
         }
 
         if (notPlayable) {

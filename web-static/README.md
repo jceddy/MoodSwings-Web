@@ -57,7 +57,21 @@ art otherwise), a "Copy" badge for an in-play Creativity copy, a
 "Suppressed" ribbon, and an owner/last-owner caption below the thumbnail
 for in-play and discard-pile cards. An unplayable hand card keeps the same
 dashed, lower-opacity `.not-playable` treatment the old text button had,
-just applied to the thumbnail instead. The card-detail dialog's enlarged
+just applied to the thumbnail instead. Two tabletop conventions are
+conveyed by rotating the art itself (badges/captions are siblings of the
+`<img>`, not children of it, so they always stay upright and legible --
+the rotation is a visual reinforcement of the badge, never a replacement
+for it): a suppressed in-play mood's `.card-thumb--suppressed` class
+rotates it 90 degrees, and a mood whose `value_locked` flag is true --
+a permanent "after playing this mood" trigger (Dignity, Delight, ...)
+has locked in its alt value, as opposed to a continuously-recomputed
+"while in play" value (Determination) -- see `value_locked` in
+`php-app/README.md` -- gets its own `.card-thumb--value-locked` class,
+rotating it 180 degrees. Both classes
+can apply at once (a suppressed, value-locked mood), for which a third
+CSS rule (`.card-thumb--suppressed.card-thumb--value-locked`) rotates
+270 degrees rather than letting the two `transform`s silently clobber
+each other. The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
 a `<p>` rules-text paragraph -- both now conveyed only via that image's
 `alt` text -- while every other line in the dialog (color, value, alt

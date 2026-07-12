@@ -686,6 +686,17 @@ the suppression doesn't need to watch for anything leaving play to know
 when to lift — it just expires at the round boundary regardless
 (`BoardState::clearEndOfRoundSuppressions()`).
 
+Every in-play mood also carries `value_locked` -- true once a permanent
+one-time "after playing this mood, ... this mood's value becomes N"
+trigger (Dignity, Delight, Cynicism, and 7 other cards -- every one that
+calls `BoardState::setValueOverride()`) has actually fired, as opposed to
+a continuously recomputed "while in play" value (Determination): both
+kinds of card can end up with `value === alt_value`, but only the former
+locks it in via `effectState['valueOverride']`, which `valueOf()` checks
+first and unconditionally returns once set. The frontend uses this to
+rotate the card art 180 degrees, matching a suppressed mood's own 90
+degree rotation -- see "Card art rendering" in `web-static/README.md`.
+
 Suppression isn't the only "one in-play mood affects another" relationship
 worth surfacing: a mood with a printed dice value (`has_dice_value`) can
 have it overridden by Encouragement (one specific chosen mood,
