@@ -1457,30 +1457,66 @@ final class GameService
      * card is actually played) is granted separately, in MoodPlayService,
      * since it isn't tied to a turn boundary at all.
      *
-     * @return array<int, ?array{type?: string, values?: int[], source?: string}>
+     * Every one of these four carries 'sourceCardId' (via
+     * effectiveSourceCardId(), which follows a Creativity copy back to
+     * whatever it's actually copying -- e.g. a Creativity currently
+     * copying Hope resolves to Hope's own instance id here, the same way
+     * serializeCard() already shows that Creativity as "Hope" everywhere
+     * else) so describePlayGrant() can name the actual source instead of
+     * folding it into the base allowance's own "Your normal turn" -- a
+     * bare null grant is reserved *only* for $baseCount's own entries.
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
      */
     private function computeFreshGrants(BoardState $state, int $playerId, int $baseCount): array
     {
         $grants = array_fill(0, $baseCount, null);
 
-        if ($state->playerHasMoodInPlay($playerId, 'hope')) {
-            $grants[] = null;
+        $hopeSourceCardId = $this->effectiveSourceCardId($state, $playerId, 'hope');
+        if ($hopeSourceCardId !== null) {
+            $grants[] = ['sourceCardId' => $hopeSourceCardId];
         }
-        if ($state->playerHasMoodInPlay($playerId, 'grace')) {
-            $grants[] = ['type' => 'shares_color_with_your_moods', 'source' => 'discard'];
+
+        $graceSourceCardId = $this->effectiveSourceCardId($state, $playerId, 'grace');
+        if ($graceSourceCardId !== null) {
+            $grants[] = ['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'sourceCardId' => $graceSourceCardId];
         }
-        if ($state->playerHasMoodInPlay($playerId, 'stubbornness') && $this->anotherPlayerHasMoreMoods($state, $playerId)) {
-            $grants[] = null;
+
+        $stubbornnessSourceCardId = $this->effectiveSourceCardId($state, $playerId, 'stubbornness');
+        if ($stubbornnessSourceCardId !== null && $this->anotherPlayerHasMoreMoods($state, $playerId)) {
+            $grants[] = ['sourceCardId' => $stubbornnessSourceCardId];
         }
 
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->effectState($mood->cardId, 'banksExtraPlayForPlayerId') === $playerId) {
                 $state->clearEffectState($mood->cardId, 'banksExtraPlayForPlayerId');
-                $grants[] = null;
+                $grants[] = ['sourceCardId' => $state->effectiveCardId($mood->cardId)];
             }
         }
 
         return $grants;
+    }
+
+    /**
+     * The instance id of $playerId's own in-play mood whose EFFECTIVE
+     * (copy-aware) effect key is $effectKey, or null if they have none --
+     * the same effectiveCardId()-per-mood scan
+     * BoardState::countMoodsInPlayWithEffectiveKey() does, except this
+     * returns the resolved id itself (for a play grant's own
+     * 'sourceCardId') rather than just a count. Effect keys this is
+     * called with (hope/grace/stubbornness) are all singleton in
+     * practice, so "first match" is never actually ambiguous.
+     */
+    private function effectiveSourceCardId(BoardState $state, int $playerId, string $effectKey): ?int
+    {
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            $effectiveCardId = $state->effectiveCardId($mood->cardId);
+            if ($state->catalogRow($effectiveCardId)['effectKey'] === $effectKey) {
+                return $effectiveCardId;
+            }
+        }
+
+        return null;
     }
 
     private function anotherPlayerHasMoreMoods(BoardState $state, int $playerId): bool

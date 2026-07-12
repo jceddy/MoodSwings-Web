@@ -967,11 +967,21 @@ available, not just that one is. This needed `grantExtraPlay()` itself to
 start tracking provenance: it now takes an optional `$sourceCardId`,
 folded into the stored restriction descriptor as `'sourceCardId'` --
 passed by all 21 of its call sites (every card that ever grants an extra
-play) but never read by `grantAllows()` itself, purely a UI concern. The
-one grant this never applies to is `startTurn()`'s own base allowance (1,
-or 2 with Hurt Feelings) -- it's stored as a bare `null`, same as always,
-which `describePlayGrant()` reads as "Your normal turn" rather than a
-granted extra play from any specific card. `round.play_grants` itself
+play) but never read by `grantAllows()` itself, purely a UI concern.
+`computeFreshGrants()` -- which recomputes Hope/Grace/Stubbornness's
+perpetual grants and any banked Generosity/Joy grant fresh at the start of
+every turn, bypassing `grantExtraPlay()` entirely since there's no one-time
+card play to attribute the bonus to -- attaches the same `sourceCardId` to
+each of those via a small `effectiveSourceCardId()` helper, so they name
+their source exactly like any other grant instead of collapsing into "Your
+normal turn". That helper resolves through `BoardState::effectiveCardId()`,
+so a Creativity currently copying Hope attributes its bonus play to the
+copied Hope's own instance id, matching how `serializeCard()` already shows
+that same Creativity as "Hope" everywhere else. The one grant this never
+applies to is `startTurn()`'s own base allowance (1, or 2 with Hurt
+Feelings) -- it's stored as a bare `null`, which `describePlayGrant()`
+reads as "Your normal turn" rather than a granted extra play from any
+specific card. `round.play_grants` itself
 always describes whoever's turn it currently is, not the viewer
 specifically -- the frontend's own "Plays left" indicator stays hidden
 entirely unless it's actually the viewer's turn (see `web-static/README.md`),
