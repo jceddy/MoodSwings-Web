@@ -158,11 +158,16 @@ function respondToDecision(gameId, choices) {
 // page loaded shortly after a deploy can't keep showing a browser-cached
 // pre-deploy value. Shared by the footer indicator below and by
 // startVersionWatcher(); resolves to null (rather than rejecting) on any
-// failure so callers don't need their own try/catch.
+// failure -- including a response that doesn't actually look like a
+// MAJOR.MINOR.PATCH version, e.g. an error page's HTML served with a 200,
+// or a truncated/empty body from a mid-deploy read -- so callers don't
+// need their own try/catch or shape validation, and never mistake garbage
+// for a genuine version change.
 function fetchDeployedVersion() {
     return fetch('/VERSION', { cache: 'no-store' })
         .then((response) => (response.ok ? response.text() : Promise.reject()))
         .then((version) => version.trim())
+        .then((version) => (/^\d+\.\d+\.\d+$/.test(version) ? version : Promise.reject()))
         .catch(() => null);
 }
 
@@ -202,8 +207,24 @@ function startVersionWatcher(intervalMs = 60000) {
             return;
         }
 
-        const version = await fetchDeployedVersion();
-        if (version !== null && version !== versionAtLoad) {
+        const firstCheck = await fetchDeployedVersion();
+        if (firstCheck === null || firstCheck === versionAtLoad) {
+            return; // unchanged, or the fetch itself failed -- nothing to act on
+        }
+
+        // The deploy pipeline uploads files one at a time over FTP, not as
+        // one atomic swap (see "Deployment" in the top-level README), so a
+        // single differing fetch could just be this poll's bad luck landing
+        // mid-deploy rather than a genuinely finished new version -- and
+        // reloading into that same half-deployed moment is exactly how a
+        // stale/inconsistent value could flash up right after an
+        // auto-refresh. Confirm the new value is still there and unchanged
+        // a few seconds later before actually reloading; if it isn't
+        // (mid-deploy noise), this just waits for the next poll instead of
+        // acting on a possibly-transient reading.
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const confirmed = await fetchDeployedVersion();
+        if (confirmed !== null && confirmed === firstCheck && confirmed !== versionAtLoad) {
             window.location.reload();
         }
     }, intervalMs);
