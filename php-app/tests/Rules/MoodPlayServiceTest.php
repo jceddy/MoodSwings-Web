@@ -35,6 +35,29 @@ final class MoodPlayServiceTest extends TestCase
         );
     }
 
+    /**
+     * Same shape as boardState(), plus Open Team Play's own team_id map
+     * (playerId => team_id) so BoardState::isTeammate() has something to
+     * compare -- see the various "*RejectsTargetingATeammate" tests below.
+     *
+     * @param array<int, int> $teamIdByPlayer
+     */
+    private function teamBoardState(array $teamIdByPlayer, array $hands = [], array $deck = [], array $discard = []): BoardState
+    {
+        return new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3, 4],
+            $hands,
+            $deck,
+            $discard,
+            hasSeparateDecks: false,
+            discardOwners: [],
+            catalogCardIdFor: [],
+            teamIdByPlayer: $teamIdByPlayer,
+        );
+    }
+
     public function testCannotPlayOutOfTurn(): void
     {
         $state = $this->boardState(hands: [1 => [3]]);
@@ -497,6 +520,19 @@ final class MoodPlayServiceTest extends TestCase
         ]));
     }
 
+    public function testGuileCannotTargetATeammatesMood(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [40, 55, 106], 2 => [56]]);
+        $state->moveHandToInPlay(2, 56); // Betrayal, owned by player 2 (player 1's teammate)
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 40, new PlayerChoices([
+            'discard_card_ids' => [55, 106],
+            'target_mood_id' => 56,
+        ]));
+    }
+
     public function testEnvyCannotBePlayedWithNoMoodsAlreadyInPlay(): void
     {
         $state = $this->boardState(hands: [1 => [64]]);
@@ -520,6 +556,23 @@ final class MoodPlayServiceTest extends TestCase
         self::assertFalse($state->isInPlay(9));
         self::assertSame([9], $state->discardPile());
         self::assertSame(4, $state->valueOf(64)); // base 0 + 2 * 2 moods
+    }
+
+    public function testEnvyIgnoresATeammatesMoodsWhenFindingTheMoodiestOpponent(): void
+    {
+        $state = $this->teamBoardState(
+            [1 => 0, 2 => 0, 3 => 1, 4 => 1],
+            hands: [1 => [64, 9], 2 => [55, 106], 3 => [80]],
+        );
+        $state->moveHandToInPlay(1, 9); // the mood player 1 will sacrifice as Envy's cost
+        $state->moveHandToInPlay(2, 55);
+        $state->moveHandToInPlay(2, 106); // player 2 is a TEAMMATE with 2 moods -- must not count
+        $state->moveHandToInPlay(3, 80); // player 3 is the only real opponent, with 1 mood
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 64, new PlayerChoices(['discard_mood_id' => 9]));
+
+        self::assertSame(2, $state->valueOf(64)); // base 0 + 2 * 1 mood (teammate's 2 moods ignored)
     }
 
     public function testSadnessValueScalesWithDiscardPileSize(): void
@@ -564,6 +617,21 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(7, $state->valueOf(118));
         self::assertTrue($state->isInHand(2, 56));
         self::assertFalse($state->isInHand(1, 56));
+    }
+
+    // Fascination's printed text says "another player," not "opponent" --
+    // Open Team Play doesn't restrict it, so giving the card to your own
+    // teammate is (and must stay) legal. See php-app/README.md's "Open
+    // Team Play" section.
+    public function testFascinationCanGiveToATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [118, 56], 2 => []]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 118, new PlayerChoices(['give_card_id' => 56, 'recipient_player_id' => 2]));
+
+        self::assertSame(7, $state->valueOf(118));
+        self::assertTrue($state->isInHand(2, 56));
     }
 
     public function testFascinationRejectsNonQualifyingCardColor(): void
@@ -1256,6 +1324,16 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(3, $state->valueOf(81));
     }
 
+    public function testAnimosityValueIsBaseInTeamPlayWhenOnlyATeammateHasThreeOrMoreCardsInHand(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [81], 2 => [9, 55, 56]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 81, new PlayerChoices([]));
+
+        self::assertSame(3, $state->valueOf(81), "a teammate's hand size doesn't count -- only a real opponent's does");
+    }
+
     public function testCelebrationValueIs7WhenOwnerHasMoreDistinctColorsThanEveryOtherPlayer(): void
     {
         $state = $this->boardState(hands: [1 => [109, 3], 2 => [9]]);
@@ -1368,6 +1446,22 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(5, $state->valueOf(130)); // base 3 + 1 * 2 remaining hand cards
     }
 
+    // Sloth already only ever reads its own owner's hand -- a teammate's
+    // (fully visible, in Open Team Play) hand size must not add to it.
+    // See php-app/README.md's "Open Team Play" section.
+    public function testSlothIgnoresATeammatesHandSizeInTeamPlay(): void
+    {
+        $state = $this->teamBoardState(
+            [1 => 0, 2 => 0, 3 => 1, 4 => 1],
+            hands: [1 => [130, 3, 7], 2 => [9, 55, 56, 106]],
+        );
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 130, new PlayerChoices([]));
+
+        self::assertSame(5, $state->valueOf(130)); // base 3 + 1 * 2 remaining hand cards -- teammate's 4 cards don't count
+    }
+
     public function testLoveValueIs12WhenAllFiveColorsArePresent(): void
     {
         $state = $this->boardState(hands: [1 => [127], 2 => [3, 42, 56], 3 => [106]]);
@@ -1453,6 +1547,18 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 50, new PlayerChoices(['hand_mood_ids' => [3, 7], 'target_mood_id' => 8]));
     }
 
+    public function testRegretCannotTargetATeammatesMood(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [50, 3, 7], 2 => [9]]);
+        $state->moveHandToInPlay(1, 3);
+        $state->moveHandToInPlay(1, 7);
+        $state->moveHandToInPlay(2, 9); // player 2 is player 1's teammate
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 50, new PlayerChoices(['hand_mood_ids' => [3, 7], 'target_mood_id' => 9]));
+    }
+
     public function testRegretCannotBePlayedWithFewerThanTwoMoods(): void
     {
         $state = $this->boardState(hands: [1 => [50, 3]]);
@@ -1499,6 +1605,17 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 61, new PlayerChoices(['opponent_player_ids' => [1]]));
     }
 
+    public function testCrueltyRejectsTargetingATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [61], 2 => [9, 3]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(2, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 61, new PlayerChoices(['opponent_player_ids' => [2]]));
+    }
+
     public function testIndecisivenessReturnsARandomMoodFromEachQualifyingOpponentToTheirHand(): void
     {
         $state = $this->boardState(hands: [1 => [43], 2 => [9, 3]]);
@@ -1510,6 +1627,17 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertCount(1, $state->moodsOwnedBy(2));
         self::assertCount(1, $state->hand(2));
+    }
+
+    public function testIndecisivenessRejectsTargetingATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [43], 2 => [9, 3]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(2, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 43, new PlayerChoices(['opponent_player_ids' => [2]]));
     }
 
     public function testRejectionDiscardsAQualifyingPairSharingAColor(): void
@@ -2018,6 +2146,21 @@ final class MoodPlayServiceTest extends TestCase
         self::assertFalse($state->isInHand(1, 9));
     }
 
+    // Condescension's printed text says "another player," not "opponent"
+    // -- Open Team Play doesn't restrict it, so giving the card to your
+    // own teammate is (and must stay) legal. See php-app/README.md's
+    // "Open Team Play" section.
+    public function testCondescensionCanGiveToATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [58, 9], 2 => []]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 58, new PlayerChoices(['give_card_id' => 9, 'recipient_player_id' => 2]));
+
+        self::assertSame(6, $state->valueOf(58));
+        self::assertTrue($state->isInHand(2, 9));
+    }
+
     public function testCondescensionDoesNothingWhenDeclined(): void
     {
         $state = $this->boardState(hands: [1 => [58]]);
@@ -2037,6 +2180,15 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertSame(6, $state->valueOf(62));
         self::assertTrue($state->isInHand(2, 9));
+    }
+
+    public function testCynicismRejectsGivingToATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [62]], discard: [9]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 62, new PlayerChoices(['discard_card_id' => 9, 'recipient_player_id' => 2]));
     }
 
     public function testCynicismDoesNothingWhenDeclined(): void
@@ -2139,6 +2291,31 @@ final class MoodPlayServiceTest extends TestCase
         self::assertFalse($state->isInPlay(9));
         self::assertFalse($state->isInPlay(3));
         self::assertFalse($state->isInPlay(8)); // shares white with the two chosen moods
+    }
+
+    // Malice's printed text says "choose any player," with no "opponent"
+    // or "other player" restriction at all -- it already permits
+    // targeting yourself in every format, and Open Team Play doesn't add
+    // any restriction against a teammate either. See php-app/README.md's
+    // "Open Team Play" section.
+    public function testMaliceCanTargetATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [68], 2 => [9, 3]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(2, 3);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 68, $choices);
+        self::assertTrue($result->isPending);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 68, 1, $choices, $choices, 0,
+            ['chosen_mood_ids' => new PlayerChoices(['chosen_mood_ids' => [9, 3]])],
+        );
+
+        self::assertFalse($state->isInPlay(9));
+        self::assertFalse($state->isInPlay(3));
     }
 
     public function testMaliceRejectsATargetWithFewerThanTwoMoods(): void
@@ -2731,6 +2908,15 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 51, new PlayerChoices(['opponent_player_id' => 1]));
     }
 
+    public function testSneakinessRejectsTargetingATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [51]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 51, new PlayerChoices(['opponent_player_id' => 2]));
+    }
+
     public function testAweTagsFirstPlayerOverrideAndSkipScoring(): void
     {
         $state = $this->boardState(hands: [1 => [107]]);
@@ -3191,6 +3377,31 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
     }
 
+    // Grace's own grant only ever checks the OWNER's own in-play moods
+    // (BoardState::sharesColorWithOwnMoods() is always scoped to whoever
+    // is trying to use the grant) -- a teammate's matching-colored mood
+    // must not count, even though Open Team Play makes their hand/moods
+    // fully visible. See php-app/README.md's "Open Team Play" section.
+    public function testGraceIgnoresATeammatesMatchingColorMood(): void
+    {
+        $state = $this->teamBoardState(
+            [1 => 0, 2 => 0, 3 => 1, 4 => 1],
+            hands: [1 => [121], 2 => [5]], // Grace (green) for p1, Complacency (white) for teammate p2
+            discard: [9], // Discipline, white
+        );
+        $state->moveHandToInPlay(2, 5); // teammate's own white mood, already in play
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 121, new PlayerChoices([]));
+        self::assertSame(1, $state->playsRemaining()); // the grant exists...
+
+        // ...but doesn't cover a white discard card: p1's own moods are
+        // all green (just Grace itself), and the teammate's white mood
+        // doesn't count.
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 9, new PlayerChoices([]));
+    }
+
     public function testStubbornnessHasNoImmediateEffect(): void
     {
         $state = $this->boardState(hands: [1 => [102]]);
@@ -3219,6 +3430,15 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->expectException(InvalidChoiceException::class);
         $this->plays->playMood($state, 1, 120, new PlayerChoices(['target_player_id' => 1]));
+    }
+
+    public function testGenerosityRejectsTargetingATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [120]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 120, new PlayerChoices(['target_player_id' => 2]));
     }
 
     public function testJoyTagsItselfForANextTurnGrant(): void
@@ -3503,6 +3723,33 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 86, new PlayerChoices(['target_player_id' => 1]));
     }
 
+    // Compulsion's printed text says "choose another player," not
+    // "opponent" -- Open Team Play doesn't restrict it, so targeting your
+    // own teammate is (and must stay) legal. See php-app/README.md's
+    // "Open Team Play" section.
+    public function testCompulsionCanTargetATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [86], 2 => [3, 7]]);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 86, $choices);
+
+        self::assertTrue($result->isPending);
+        $this->plays->resolvePendingDecisions(
+            $state,
+            86,
+            1,
+            $choices,
+            $choices,
+            0,
+            ['given_card_id' => new PlayerChoices(['given_card_id' => 3])],
+        );
+
+        self::assertSame([3], $state->hand(1));
+        self::assertSame([7], $state->hand(2));
+    }
+
     public function testIntimidationPausesForTheTargetsOwnChoiceThenGrantsItAsAnExtraPlay(): void
     {
         $state = $this->boardState(hands: [1 => [67], 2 => [3]]);
@@ -3530,6 +3777,27 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 3, new PlayerChoices([]));
 
         self::assertTrue($state->isInPlay(3));
+    }
+
+    // Intimidation's printed text says "another player," not "opponent" --
+    // Open Team Play doesn't restrict it, so targeting your own teammate
+    // is (and must stay) legal. See php-app/README.md's "Open Team Play"
+    // section.
+    public function testIntimidationCanTargetATeammate(): void
+    {
+        $state = $this->teamBoardState([1 => 0, 2 => 0, 3 => 1, 4 => 1], hands: [1 => [67], 2 => [3]]);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 67, $choices);
+        self::assertTrue($result->isPending);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 67, 1, $choices, $choices, 0,
+            ['revealed_card_id' => new PlayerChoices(['revealed_card_id' => 3])],
+        );
+
+        self::assertContains(3, $state->hand(1));
     }
 
     public function testIntimidationsGrantOnlyAllowsTheRevealedCard(): void

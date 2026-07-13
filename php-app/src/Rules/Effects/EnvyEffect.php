@@ -15,7 +15,9 @@ use MoodSwings\Rules\PlayerChoices;
  * mood's value increases by 2 for each mood your moodiest opponent (the
  * opponent with the most moods) has." The cost targets a mood you already
  * have in play (Envy itself isn't in play yet when its cost is paid), so
- * it's illegal to play at all with zero moods already on the board.
+ * it's illegal to play at all with zero moods already on the board. In
+ * Open Team Play, a teammate isn't an opponent and so can never be the
+ * "moodiest opponent" -- see BoardState::isTeammate().
  */
 final class EnvyEffect extends AbstractMoodEffect
 {
@@ -42,7 +44,7 @@ final class EnvyEffect extends AbstractMoodEffect
 
         $moodiestOpponentCount = 0;
         foreach ($state->playerOrder() as $playerId) {
-            if ($playerId !== $ownerId) {
+            if ($playerId !== $ownerId && !$state->isTeammate($ownerId, $playerId)) {
                 $moodiestOpponentCount = max($moodiestOpponentCount, count($state->moodsOwnedBy($playerId)));
             }
         }

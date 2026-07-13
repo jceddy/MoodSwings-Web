@@ -15,6 +15,9 @@ use MoodSwings\Rules\PlayerChoices;
  * their moods into the discard pile." The rules specify a genuinely
  * random mood, unlike cards that let a targeted player choose -- so this
  * is fully resolvable here rather than needing another player's input.
+ * You may not choose yourself (you're not your own opponent), and in
+ * Open Team Play you may not choose a teammate either, for the same
+ * reason -- see BoardState::isTeammate().
  */
 final class CrueltyEffect extends AbstractMoodEffect
 {
@@ -25,7 +28,7 @@ final class CrueltyEffect extends AbstractMoodEffect
         $chosenPlayers = array_unique($choices->ints('opponent_player_ids'));
 
         foreach ($chosenPlayers as $opponentId) {
-            if ($opponentId === $playerId) {
+            if ($opponentId === $playerId || $state->isTeammate($playerId, $opponentId)) {
                 throw new InvalidChoiceException('Cruelty can only target opponents');
             }
             if (count($state->moodsOwnedBy($opponentId)) < self::MINIMUM_MOODS) {

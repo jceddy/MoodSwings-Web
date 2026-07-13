@@ -5257,6 +5257,109 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p3, (int) $round['current_turn_game_player_id']);
     }
 
+    /**
+     * Regression test: Chivalry/Triumph care about whoever PERSONALLY
+     * took turn 1 this round, not which TEAM went first. game_rounds.
+     * first_game_player_id, for a team game, only identifies a
+     * representative member of the first team (here, p1) -- it can be a
+     * completely different player than team_turn_1_game_player_id (the
+     * team's own live choice of who actually goes, here p2). Chivalry
+     * previously compared its owner against first_game_player_id
+     * directly, so if the owner happened to BE that representative (p1)
+     * but their TEAMMATE (p2) was the one who actually took turn 1, it
+     * incorrectly read as "the owner went first" -- exactly the bug
+     * reported live: a Chivalry owned by p1 scored 3 (base) instead of 5
+     * (alt) even though p1 personally did not go first.
+     */
+    public function testChivalryAndTriumphCareWhoPersonallyWentFirstNotWhichTeamDid(): void
+    {
+        $u1 = $this->insertUser('chiv_p1');
+        $u2 = $this->insertUser('chiv_p2');
+        $u3 = $this->insertUser('chiv_p3');
+        $u4 = $this->insertUser('chiv_p4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 0);
+        $this->insertTeamGamePlayer($gameId, $u3, 2, 1);
+        $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $chivalryId = $this->insertGameCard($gameId, 4, 'hand', $p1); // white, base 3, alt 5
+        $triumphId = $this->insertGameCard($gameId, 104, 'hand', $p2); // red, base 3, alt 5 -- the mirror image
+
+        $roundId = $this->insertTeamGameRound($gameId, 1, $p1); // p1 is team 0's representative...
+        // ...but p2 (p1's own teammate) was the one team 0 actually chose
+        // to take turn 1, and has already done so -- it's now p1's own
+        // forced turn 3.
+        $this->pdo->prepare(
+            'UPDATE game_rounds SET team_turn_1_game_player_id = :turn1, current_turn_game_player_id = :current, plays_remaining = 1 WHERE id = :id'
+        )->execute(['turn1' => $p2, 'current' => $p1, 'id' => $roundId]);
+
+        $this->games->playMood($gameId, $p1, $chivalryId, []);
+
+        $state = $this->games->getState($gameId, $u1);
+        $chivalryCard = array_values(array_filter($state['in_play'], fn (array $c) => $c['card_id'] === $chivalryId))[0];
+        self::assertSame(5, $chivalryCard['value'], 'p1 did NOT personally go first (p2 did) -- Chivalry must read 5, not 3');
+
+        // Play Triumph too (p2's own card) -- p2 DID personally go first,
+        // so Triumph (the mirror image) must read its OWN alt value 5.
+        $this->pdo->prepare('UPDATE game_rounds SET current_turn_game_player_id = :current WHERE id = :id')
+            ->execute(['current' => $p2, 'id' => $roundId]);
+        $this->games->playMood($gameId, $p2, $triumphId, []);
+
+        $state = $this->games->getState($gameId, $u1);
+        $triumphCard = array_values(array_filter($state['in_play'], fn (array $c) => $c['card_id'] === $triumphId))[0];
+        self::assertSame(5, $triumphCard['value'], 'p2 DID personally go first -- Triumph must read 5');
+    }
+
+    /**
+     * Stubbornness's own card text says "if ANOTHER PLAYER has more
+     * moods than you," not "opponent" -- Open Team Play doesn't restrict
+     * it (see php-app/README.md's "Open Team Play" section), so a
+     * teammate having more moods must still grant the bonus play, exactly
+     * as it always did before team format existed.
+     */
+    public function testStubbornnessGrantsABonusWhenATeammateHasMoreMoods(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+            'apathyId' => $apathyId,
+            'indifferenceId' => $indifferenceId,
+        ] = $this->buildTeamFixture();
+
+        // p1 already has Stubbornness in play (so its bonus can apply on
+        // a LATER turn of theirs -- it never applies on the turn it's
+        // played, see StubbornnessEffect's own docblock), and teammate p2
+        // already has 2 moods in play -- more than p1's own 1.
+        $this->insertGameCard($gameId, 102, 'in_play', $p1); // Stubbornness, value 3
+        $this->insertGameCard($gameId, 66, 'in_play', $p2); // Hate, value 0
+        $this->insertGameCard($gameId, 105, 'in_play', $p2); // Wrath, value 0 -- p2 now has 2 moods
+
+        // Team 0 decides p2 (not p1) goes first, so p1 gets the forced
+        // turn 3 later.
+        $this->games->proposeTeamDecision($gameId, $p1, $p2);
+        $this->games->confirmTeamDecision($gameId, $p2, true);
+        $this->games->playMood($gameId, $p2, $indifferenceId, []); // turn 1
+
+        // Team 1 decides p3 goes first.
+        $this->games->proposeTeamDecision($gameId, $p3, $p3);
+        $this->games->confirmTeamDecision($gameId, $p4, true);
+        $this->games->playMood($gameId, $p3, $apathyId, []); // turn 2 -- forced turn 3 (p1) follows
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id']);
+        self::assertSame(2, (int) $round['plays_remaining']); // base 1 + Stubbornness's bonus (teammate p2 has 2 moods > p1's 1)
+    }
+
     public function testGetStateExposesTeamInfoTeammateHandAndTeamDecision(): void
     {
         [

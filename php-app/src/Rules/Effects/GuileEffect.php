@@ -16,7 +16,8 @@ use MoodSwings\Rules\PlayerChoices;
  * in the engine with a mandatory "to play" cost -- canPayToPlayCost()
  * checks feasibility (are there two *other* hand cards to discard, since
  * Guile itself is still in hand at this point); payToPlayCost() then
- * validates the actual choice.
+ * validates the actual choice. You can't choose a teammate's mood in
+ * Open Team Play -- see BoardState::isTeammate().
  */
 final class GuileEffect extends AbstractMoodEffect
 {
@@ -53,7 +54,8 @@ final class GuileEffect extends AbstractMoodEffect
         if (!$state->isInPlay($targetCardId)) {
             throw new InvalidChoiceException("Card {$targetCardId} is not in play");
         }
-        if ($state->ownerOf($targetCardId) === $playerId) {
+        $targetOwnerId = $state->ownerOf($targetCardId);
+        if ($targetOwnerId === $playerId || $state->isTeammate($playerId, $targetOwnerId)) {
             throw new InvalidChoiceException("Guile can only target an opponent's mood");
         }
 

@@ -1461,6 +1461,59 @@ its own separate code path (`skipScoringAndAdvance()`, bypassing
 `finishScoringAndAdvance()` entirely) that needed its own team-aware
 branch too, for the same reason.
 
+**Card interactions** -- `BoardState::isTeammate(int $a, int $b): bool`
+(always `false` for every non-team game, and for a player compared
+against themselves) is the one new primitive the whole rules engine
+needed for team format: an existing `$playerId !== $ownerId`-style
+self-exclusion check just gets `&& !$state->isTeammate($ownerId,
+$playerId)` added alongside it wherever a card's printed text singles out
+an "opponent" specifically, since a teammate isn't one. `BoardStateRepository::load()`
+populates it from `game_players.team_id` (empty map for every other
+format). This isn't blanket "exclude teammates in team format" -- most
+"choose a player"/"choose another player" cards never said "opponent" in
+the first place and already included teammates as valid targets before
+team format existed, so those needed no change at all:
+
+- **Excludes a teammate** (the printed text says "opponent"):
+  Animosity (a teammate's hand size never triggers its bonus value),
+  Cruelty, Cynicism, Envy (a teammate is never the "moodiest opponent"),
+  Generosity, Guile, Indecisiveness, Regret, and Sneakiness.
+- **Already included a teammate, unchanged** (the printed text says
+  "another player"/"any player", never "opponent"): Compulsion,
+  Condescension, Fascination, Intimidation, and Malice (whose own
+  printed text has no restriction at all -- it already permitted
+  targeting yourself too, in every format).
+- **Never needed a fix** for a different reason: Sloth and Grace already
+  only ever look at whichever specific player's turn/hand is actually
+  being evaluated (`BoardState::hand($ownerId)` /
+  `sharesColorWithOwnMoods($cardId, $playerId)`), never "every other
+  player," so a teammate's hand/moods were never counted even before team
+  format existed. Stubbornness's own text says "if ANOTHER PLAYER has
+  more moods than you" -- no "opponent" wording -- so a teammate's higher
+  mood count correctly still grants its bonus, exactly as it always did.
+- **Chivalry/Triumph** care whether the OWNER personally went first this
+  round, not which team did -- a genuinely different bug, unrelated to
+  `isTeammate()`. `game_rounds.first_game_player_id`, for a team game,
+  only identifies a representative member of whichever team went first
+  (see `startGame()`'s own comment above); the actual player who took
+  turn 1 is `team_turn_1_game_player_id`. `BoardStateRepository::load()`
+  feeds Chivalry/Triumph's `roundFirstPlayerId()` from
+  `team_turn_1_game_player_id` once it's known (falling back to
+  `first_game_player_id` only for the brief window before either team has
+  decided anything, when nothing can be in play yet regardless). Getting
+  this wrong was a real bug caught live: a Chivalry owned by the round's
+  team-0 representative read as "you went first" (base value) even when
+  their own teammate -- not them -- was the one who'd actually taken
+  turn 1.
+
+Every one of the exclusions above (and Chivalry/Triumph's own fix) has
+PHPUnit coverage in `MoodPlayServiceTest`/`GameServiceIntegrationTest`.
+The player/mood-target cards that exclude a teammate also carry
+`excludes_teammate: true` on their own `choice_fields` entry (see
+`CardChoiceSchema.php`'s own docblock) so the New Game board's dropdown
+never even offers the teammate as a choice, rather than only rejecting it
+server-side once submitted.
+
 ### Game timestamps
 
 `games` tracks four points in a game's life, each set exactly once by a

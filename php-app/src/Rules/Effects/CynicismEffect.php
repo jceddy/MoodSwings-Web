@@ -13,7 +13,10 @@ use MoodSwings\Rules\PlayerChoices;
  * Cynicism: "After playing this mood, you may put a card from the
  * discard pile into an opponent's hand. If you do, this mood's value
  * becomes 6." Another one-time value override, this time costed from the
- * discard pile rather than the acting player's own hand or moods.
+ * discard pile rather than the acting player's own hand or moods. You
+ * may not choose yourself (you're not your own opponent), and in Open
+ * Team Play you may not choose a teammate either -- see
+ * BoardState::isTeammate().
  */
 final class CynicismEffect extends AbstractMoodEffect
 {
@@ -30,7 +33,7 @@ final class CynicismEffect extends AbstractMoodEffect
         }
 
         $recipientId = $choices->requireInt('recipient_player_id');
-        if ($recipientId === $playerId || !in_array($recipientId, $state->playerOrder(), true)) {
+        if ($recipientId === $playerId || $state->isTeammate($playerId, $recipientId) || !in_array($recipientId, $state->playerOrder(), true)) {
             throw new InvalidChoiceException("Player {$recipientId} is not a valid opponent");
         }
 

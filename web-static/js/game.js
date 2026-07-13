@@ -1372,6 +1372,14 @@
                 }
                 return currentState.players
                     .filter((p) => field.scope !== 'other' || p.game_player_id !== currentState.you.game_player_id)
+                    // excludes_teammate (see CardChoiceSchema.php's own
+                    // docblock): a handful of cards say "opponent," not
+                    // "another player" -- in Open Team Play, your own
+                    // teammate isn't a legal choice for these even though
+                    // scope: 'other' alone wouldn't exclude them. A no-op
+                    // outside team format, since teammate_game_player_id
+                    // is undefined there.
+                    .filter((p) => !field.excludes_teammate || p.game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
             case 'mood':
@@ -1392,6 +1400,11 @@
                         if (field.scope === 'other') return c.owner_game_player_id !== currentState.you.game_player_id;
                         return true;
                     })
+                    // excludes_teammate: see the 'player' case above --
+                    // same handful-of-cards exception, just excluding
+                    // moods the teammate owns instead of the teammate
+                    // themselves.
+                    .filter((c) => !field.excludes_teammate || c.owner_game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) + ' — ' + playerLabelFor(c.owner_game_player_id) }));
             case 'hand_card':
