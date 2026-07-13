@@ -158,7 +158,8 @@ body.game-page {
 #hand-list,
 #in-play-list,
 #discard-list,
-#teammate-hand-list {
+#teammate-hand-list,
+#initial-card-pass-fields {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
