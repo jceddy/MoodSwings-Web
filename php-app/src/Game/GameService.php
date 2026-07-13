@@ -2393,11 +2393,22 @@ final class GameService
             ];
         }
 
-        $winnerUsername = null;
-        if ($game['winner_game_player_id'] !== null) {
+        // Team-format games credit the whole winning team (both
+        // teammates' usernames), not just the representative
+        // winner_game_player_id -- see "Open Team Play" in
+        // php-app/README.md. Non-team games fall back to the single
+        // winner_game_player_id.
+        $winnerUsernames = [];
+        if ($game['winner_team_id'] !== null) {
+            foreach ($players as $player) {
+                if ($player['team_id'] === (int) $game['winner_team_id']) {
+                    $winnerUsernames[] = $player['username'];
+                }
+            }
+        } elseif ($game['winner_game_player_id'] !== null) {
             foreach ($players as $player) {
                 if ($player['game_player_id'] === (int) $game['winner_game_player_id']) {
-                    $winnerUsername = $player['username'];
+                    $winnerUsernames[] = $player['username'];
                 }
             }
         }
@@ -2418,7 +2429,10 @@ final class GameService
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
-                'winner_username' => $winnerUsername,
+                // Every winning username -- both teammates' for a
+                // team-format win, just the one player's otherwise. Empty
+                // until the game completes.
+                'winner_usernames' => $winnerUsernames,
                 // Only meaningful for format 'team' -- winner_game_player_id
                 // above is still set too (a representative teammate, for
                 // display), but this is the authoritative "which team

@@ -5398,4 +5398,66 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertFalse($stateForP3['team_decision']['can_propose']);
         self::assertFalse($stateForP3['team_decision']['can_confirm']);
     }
+
+    /**
+     * Regression test: a team-format game's completion must credit BOTH
+     * teammates on the winning team, not just whichever one happened to
+     * score higher that round (game['winner_game_player_id'] is still
+     * that single representative, for internal FK purposes -- see
+     * finishTeamScoringAndAdvance()'s own docblock -- but
+     * winner_usernames is what the frontend actually displays).
+     */
+    public function testGetStateCreditsBothTeammatesAsWinnersWhenTheGameCompletes(): void
+    {
+        $u1 = $this->insertUser('winteam-p1');
+        $u2 = $this->insertUser('winteam-p2');
+        $u3 = $this->insertUser('winteam-p3');
+        $u4 = $this->insertUser('winteam-p4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('team', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 0);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 1);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // white, value 4
+        $this->insertGameCard($gameId, 44, 'hand', $p2); // blue, value 4 -- p2 passes
+        $this->insertGameCard($gameId, 55, 'hand', $p3); // black, value 4 -- p3 passes
+        $this->insertGameCard($gameId, 83, 'hand', $p4); // red, value 4 -- p4 passes
+
+        // Skip the propose/confirm flow (covered elsewhere) -- go straight
+        // to turn 1 (p1) with turn 2 (p3) already decided, so the round
+        // runs p1 -> p3 -> p2 (team 0's forced remaining member) -> p4
+        // (team 1's forced remaining member) per advanceTeamTurn().
+        $roundId = $this->insertTeamGameRound($gameId, 1, $p1);
+        $this->pdo->prepare(
+            'UPDATE game_rounds SET current_turn_game_player_id = :p1, plays_remaining = 1, team_turn_1_game_player_id = :p1, team_turn_2_game_player_id = :p3 WHERE id = :round_id'
+        )->execute(['p1' => $p1, 'p3' => $p3, 'round_id' => $roundId]);
+
+        // Team 0 (p1 + p2) scores 4 to team 1's 0 -- an outright win that,
+        // with wins_needed = 1, also ends the game.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $this->games->pass($gameId, $p3);
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame(0, (int) $game['winner_team_id']);
+
+        // Every viewer -- including the losing team -- must see BOTH
+        // teammates on the winning team credited, not just whichever one
+        // scored higher.
+        foreach ([$u1, $u2, $u3, $u4] as $viewerUserId) {
+            $state = $this->games->getState($gameId, $viewerUserId);
+            self::assertEqualsCanonicalizing(['winteam-p1', 'winteam-p2'], $state['game']['winner_usernames']);
+        }
+    }
 }
