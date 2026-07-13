@@ -154,13 +154,16 @@ final class GameService
 
     /**
      * @param int[] $userIds seat order follows array order for every format
-     *        except 'team', where seating is instead derived from
-     *        $partnerUserId -- see seatOrderForTeamGame().
+     *        except 'team'/'closed_team', where seating is instead derived
+     *        from $partnerUserId -- see seatOrderForTeamGame()/
+     *        seatOrderForClosedTeamGame().
      * @param ?int $partnerUserId only meaningful (and required) when
-     *        $format is 'team': which of $userIds (other than
-     *        $createdByUserId) the creator sits next to as their partner --
-     *        see "Open Team Play" in php-app/README.md. The other two
-     *        players become the second team automatically.
+     *        $format is 'team' or 'closed_team': which of $userIds (other
+     *        than $createdByUserId) the creator pairs up with as their
+     *        partner -- adjacent seating for 'team' (see "Open Team Play"
+     *        in php-app/README.md), across-the-table seating for
+     *        'closed_team' (see "Closed Team Play"). The other two players
+     *        become the second team automatically.
      * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>, even_color_distribution_rarities?: string[]} $duelDeckRules
      *        only meaningful when $deckType is 'custom_duel' -- see resolveDuelDeckRules().
      */
@@ -180,7 +183,7 @@ final class GameService
         if ($format === 'duel' && count($userIds) !== 2) {
             throw new GameStateException('A duel game must have exactly 2 players');
         }
-        if ($format === 'team') {
+        if (self::isTeamFormat($format)) {
             if (count($userIds) !== self::TEAM_PLAYER_COUNT) {
                 throw new GameStateException('A team game must have exactly ' . self::TEAM_PLAYER_COUNT . ' players');
             }
@@ -188,7 +191,7 @@ final class GameService
                 throw new GameStateException('A team game requires choosing one of your opponents as your partner');
             }
             if ($deckType === 'power') {
-                throw new GameStateException('The "power" deck type is too small for Open Team Play\'s ' . self::MIN_TEAM_DECK_SIZE . '-card minimum -- choose a different deck type');
+                throw new GameStateException('The "power" deck type is too small for Team Play\'s ' . self::MIN_TEAM_DECK_SIZE . '-card minimum -- choose a different deck type');
             }
         }
 
@@ -254,15 +257,22 @@ final class GameService
             $insertPlayer = $pdo->prepare(
                 'INSERT INTO game_players (game_id, user_id, seat_order, team_id) VALUES (:game_id, :user_id, :seat_order, :team_id)'
             );
-            $seatedUserIds = $format === 'team'
-                ? $this->seatOrderForTeamGame($createdByUserId, (int) $partnerUserId, $userIds)
-                : array_values($userIds);
+            $seatedUserIds = match ($format) {
+                'team' => $this->seatOrderForTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
+                'closed_team' => $this->seatOrderForClosedTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
+                default => array_values($userIds),
+            };
             foreach ($seatedUserIds as $seatOrder => $userId) {
+                $teamId = match ($format) {
+                    'team' => (int) ($seatOrder >= 2),
+                    'closed_team' => $seatOrder % 2,
+                    default => null,
+                };
                 $insertPlayer->execute([
                     'game_id' => $gameId,
                     'user_id' => $userId,
                     'seat_order' => $seatOrder,
-                    'team_id' => $format === 'team' ? (int) ($seatOrder >= 2) : null,
+                    'team_id' => $teamId,
                 ]);
             }
 
@@ -293,6 +303,43 @@ final class GameService
         ));
 
         return [$createdByUserId, $partnerUserId, ...$others];
+    }
+
+    /**
+     * Reorders $userIds so partners sit ACROSS from each other -- creator
+     * (seat 0), then one of the other two opponents (seat 1), then the
+     * chosen $partnerUserId (seat 2), then the last opponent (seat 3) --
+     * so `team_id = seat_order % 2` pairs seats 0/2 and 1/3, exactly the
+     * across-the-table seating "Closed Team Play" in php-app/README.md
+     * calls for (unlike seatOrderForTeamGame()'s adjacent seats 0/1 vs
+     * 2/3). The array's own index becomes seat_order, matching every other
+     * format's "seat order follows array order" convention.
+     *
+     * @param int[] $userIds
+     * @return int[]
+     */
+    private function seatOrderForClosedTeamGame(int $createdByUserId, int $partnerUserId, array $userIds): array
+    {
+        $others = array_values(array_filter(
+            $userIds,
+            fn (int $userId): bool => $userId !== $createdByUserId && $userId !== $partnerUserId
+        ));
+
+        return [$createdByUserId, $others[0], $partnerUserId, $others[1]];
+    }
+
+    /**
+     * Whether $format is one of the two 4-player 2v2 team formats -- see
+     * "Open Team Play"/"Closed Team Play" in php-app/README.md. Most of
+     * createGame()'s validation, and GameService::finishScoringAndAdvance()'s/
+     * skipScoringAndAdvance()'s own team-aggregated-scoring branch, apply
+     * identically to both; only seating shape and turn-order mechanics
+     * (see seatOrderForTeamGame()/seatOrderForClosedTeamGame() and
+     * advanceTeamTurn()/applyClosedTeamLeaderDecision()) actually differ.
+     */
+    private static function isTeamFormat(string $format): bool
+    {
+        return $format === 'team' || $format === 'closed_team';
     }
 
     /**
@@ -621,6 +668,23 @@ final class GameService
 
                 $firstTeamId = $this->teamIdByGamePlayer($gameId)[$firstPlayerId];
                 $this->createTeamDecision($gameId, $roundId, $firstTeamId, 'turn_order', $this->teamMembers($gameId, $firstTeamId));
+            } elseif ($game['format'] === 'closed_team') {
+                // Round 1's leader is simply randomized here -- no team
+                // decision needed for it (see "Closed Team Play" in
+                // php-app/README.md) -- but the round still starts frozen:
+                // nobody may play until every player has completed this
+                // format's own pregame blind card pass (see
+                // submitInitialCardPass()), which unfreezes it, to
+                // $firstPlayerId, once all 4 have.
+                $insertRound = $pdo->prepare(
+                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+                     VALUES (:game_id, 1, :first_player, NULL, 0, :pending_play_grants, 'in_progress')"
+                );
+                $insertRound->execute([
+                    'game_id' => $gameId,
+                    'first_player' => $firstPlayerId,
+                    'pending_play_grants' => json_encode([]),
+                ]);
             } else {
                 $insertRound = $pdo->prepare(
                     "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -1081,6 +1145,154 @@ final class GameService
     }
 
     /**
+     * 'closed_team's own pregame mechanic -- see "Closed Team Play" in
+     * php-app/README.md: every player must pass exactly 2 of their
+     * starting hand cards to their teammate, face down, before round 1
+     * can begin. $cardIds must be exactly 2 distinct cards currently in
+     * $gamePlayerId's own hand. Inserting this player's own row locks
+     * their choice in immediately (it's never revisited), which is what
+     * actually makes the exchange blind: the moment their teammate's own
+     * row already exists too, this same call applies BOTH cards' transfer
+     * right here -- so by the time a player can see anything about what
+     * they received, their own choice was already committed. Once all 4
+     * players (both teams) have submitted, round 1's already-chosen
+     * first_game_player_id (set randomly by startGame()) is unfrozen the
+     * same way any other frozen round is.
+     *
+     * @param int[] $cardIds
+     * @return array{round_scored: bool, game_completed: bool, pending_decision: bool}
+     */
+    public function submitInitialCardPass(int $gameId, int $gamePlayerId, array $cardIds): array
+    {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $cardIds): array {
+            $game = $this->fetchGame($gameId);
+            if ($game['format'] !== 'closed_team') {
+                throw new GameStateException("Game {$gameId} isn't a Closed Team Play game");
+            }
+
+            $cardIds = array_values(array_unique(array_map(intval(...), $cardIds)));
+            if (count($cardIds) !== 2) {
+                throw new GameStateException('You must pass exactly 2 cards to your teammate');
+            }
+
+            $pdo = Connection::get();
+
+            $alreadySubmittedStmt = $pdo->prepare(
+                'SELECT 1 FROM game_initial_card_passes WHERE game_id = :game_id AND game_player_id = :player_id'
+            );
+            $alreadySubmittedStmt->execute(['game_id' => $gameId, 'player_id' => $gamePlayerId]);
+            if ($alreadySubmittedStmt->fetchColumn() !== false) {
+                throw new GameStateException('You have already passed your cards to your teammate');
+            }
+
+            $state = $this->boardStates->load($gameId);
+            foreach ($cardIds as $cardId) {
+                if (!$state->isInHand($gamePlayerId, $cardId)) {
+                    throw new GameStateException("Card {$cardId} isn't in your hand");
+                }
+            }
+
+            $pdo->prepare(
+                'INSERT INTO game_initial_card_passes (game_id, game_player_id, card_ids) VALUES (:game_id, :player_id, :card_ids)'
+            )->execute([
+                'game_id' => $gameId,
+                'player_id' => $gamePlayerId,
+                'card_ids' => json_encode($cardIds),
+            ]);
+
+            $teamId = $this->teamIdByGamePlayer($gameId)[$gamePlayerId];
+            $teammateId = $this->otherTeamMember($gameId, $teamId, $gamePlayerId);
+
+            $teammatePassStmt = $pdo->prepare(
+                'SELECT card_ids FROM game_initial_card_passes WHERE game_id = :game_id AND game_player_id = :player_id'
+            );
+            $teammatePassStmt->execute(['game_id' => $gameId, 'player_id' => $teammateId]);
+            $teammateCardIdsJson = $teammatePassStmt->fetchColumn();
+
+            if ($teammateCardIdsJson !== false) {
+                // Both members of this team have now submitted -- apply
+                // this team's own actual card transfer right away,
+                // independent of whether the OTHER team is done yet.
+                $teammateCardIds = array_map(intval(...), json_decode((string) $teammateCardIdsJson, true));
+                $this->transferHandCards($gamePlayerId, $cardIds, $teammateId);
+                $this->transferHandCards($teammateId, $teammateCardIds, $gamePlayerId);
+            }
+
+            $submittedCountStmt = $pdo->prepare('SELECT COUNT(*) FROM game_initial_card_passes WHERE game_id = :game_id');
+            $submittedCountStmt->execute(['game_id' => $gameId]);
+            $allSubmitted = (int) $submittedCountStmt->fetchColumn() >= self::TEAM_PLAYER_COUNT;
+
+            if ($allSubmitted) {
+                $roundStmt = $pdo->prepare(
+                    "SELECT * FROM game_rounds WHERE game_id = :game_id AND round_number = 1"
+                );
+                $roundStmt->execute(['game_id' => $gameId]);
+                $round = $roundStmt->fetch();
+
+                $firstPlayerId = (int) $round['first_game_player_id'];
+                $freshState = $this->boardStates->load($gameId);
+                $freshGrants = $this->computeFreshGrants($freshState, $firstPlayerId, 1);
+                $this->boardStates->save($gameId, $freshState);
+                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound());
+            }
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => !$allSubmitted];
+        });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
+    }
+
+    /**
+     * Reassigns $cardIds' owner_game_player_id straight in the database --
+     * submitInitialCardPass()'s own card transfer happens strictly between
+     * plays (nothing has loaded a BoardState for this round's actual turn
+     * order yet), so there's no in-memory hand to keep in sync; the next
+     * BoardStateRepository::load() picks up the new ownership fresh from
+     * game_cards, same as it does for every other zone change.
+     *
+     * @param int[] $cardIds
+     */
+    private function transferHandCards(int $fromGamePlayerId, array $cardIds, int $toGamePlayerId): void
+    {
+        $stmt = Connection::get()->prepare(
+            "UPDATE game_cards SET owner_game_player_id = :to_player
+             WHERE id = :card_id AND owner_game_player_id = :from_player AND zone = 'hand'"
+        );
+        foreach ($cardIds as $cardId) {
+            $stmt->execute(['to_player' => $toGamePlayerId, 'card_id' => $cardId, 'from_player' => $fromGamePlayerId]);
+        }
+    }
+
+    /**
+     * getState()'s own view of 'closed_team's pregame card-pass phase --
+     * null once all 4 players have submitted (at which point round 1 has
+     * already unfrozen, so there's nothing left to report). Which specific
+     * 2 cards each player chose is never exposed here -- only WHO has
+     * submitted, which reveals nothing about hand contents.
+     *
+     * @return ?array{you_submitted: bool, submitted_game_player_ids: int[]}
+     */
+    private function pendingInitialCardPass(int $gameId, int $viewerGamePlayerId): ?array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT game_player_id FROM game_initial_card_passes WHERE game_id = :game_id'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+        $submittedIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        if (count($submittedIds) >= self::TEAM_PLAYER_COUNT) {
+            return null;
+        }
+
+        return [
+            'you_submitted' => in_array($viewerGamePlayerId, $submittedIds, true),
+            'submitted_game_player_ids' => $submittedIds,
+        ];
+    }
+
+    /**
      * Either member of the deciding team may propose an answer -- who
      * plays next, or who receives the losing team's shared draw (see
      * "Open Team Play" in php-app/README.md) -- but it isn't locked in
@@ -1163,9 +1375,17 @@ final class GameService
             $pdo->prepare('UPDATE game_team_decisions SET resolved_at = NOW() WHERE id = :id')
                 ->execute(['id' => $decision['id']]);
 
-            return $decision['decision_type'] === 'turn_order'
-                ? $this->applyTurnOrderDecision($gameId, (int) $decision['game_round_id'], (int) $decision['proposed_game_player_id'])
-                : $this->applyDrawRecipientDecision($gameId, (int) $decision['game_round_id'], (int) $decision['proposed_game_player_id']);
+            if ($decision['decision_type'] !== 'turn_order') {
+                return $this->applyDrawRecipientDecision($gameId, (int) $decision['game_round_id'], (int) $decision['proposed_game_player_id']);
+            }
+
+            // 'closed_team' has only one live "who goes first" choice per
+            // round (the leader) rather than 'team's two forced turn
+            // placements -- see applyClosedTeamLeaderDecision()'s own
+            // docblock for how it differs from applyTurnOrderDecision().
+            return $this->fetchGame($gameId)['format'] === 'closed_team'
+                ? $this->applyClosedTeamLeaderDecision($gameId, (int) $decision['game_round_id'], (int) $decision['proposed_game_player_id'])
+                : $this->applyTurnOrderDecision($gameId, (int) $decision['game_round_id'], (int) $decision['proposed_game_player_id']);
         });
 
         $this->touchLastMoveAt($gameId);
@@ -1224,6 +1444,42 @@ final class GameService
             $secondTeamId = $firstTeamId === 0 ? 1 : 0;
             $this->createTeamDecision($gameId, $roundId, $secondTeamId, 'turn_order', $this->teamMembers($gameId, $secondTeamId));
         }
+
+        return ['round_scored' => false, 'game_completed' => false];
+    }
+
+    /**
+     * 'closed_team's own counterpart to applyTurnOrderDecision() -- much
+     * simpler, since this format only ever has ONE live "who goes first"
+     * choice per round (not Open Team Play's two forced turn placements):
+     * across-the-table seating (see seatOrderForClosedTeamGame()) already
+     * means a plain clockwise rotation alternates between teams on its
+     * own, so once the chosen leader is written straight into
+     * game_rounds.first_game_player_id (rather than a team_turn_1/2
+     * column -- 'closed_team' has no equivalent of those), the rest of the
+     * round just falls through to advanceTurn()'s ordinary non-'team'
+     * rotate() branch unchanged. Always unfreezes immediately (unlike
+     * applyTurnOrderDecision(), there's no "did the other team already
+     * answer early" case to check, since there's only one decision here)
+     * and never opens a second decision.
+     *
+     * @return array{round_scored: bool, game_completed: bool}
+     */
+    private function applyClosedTeamLeaderDecision(int $gameId, int $roundId, int $chosenGamePlayerId): array
+    {
+        $state = $this->boardStates->load($gameId);
+
+        // Hurt Feelings never applies in this format either (same as Open
+        // Team Play -- see "Closed Team Play" in php-app/README.md), so
+        // the base grant is always 1.
+        $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+        $this->boardStates->save($gameId, $state);
+        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+
+        Connection::get()->prepare('UPDATE game_rounds SET first_game_player_id = :chosen WHERE id = :round_id')
+            ->execute(['chosen' => $chosenGamePlayerId, 'round_id' => $roundId]);
+
+        $this->logEvent($gameId, $roundId, $chosenGamePlayerId, 'closed_team_leader_decided', null, ['game_player_id' => $chosenGamePlayerId], $state);
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -1619,7 +1875,7 @@ final class GameService
 
         $scores = $this->applyScoreSwaps($state, $this->scorer->score($state, $scoringDecisions));
 
-        if ($this->fetchGame($gameId)['format'] === 'team') {
+        if (self::isTeamFormat($this->fetchGame($gameId)['format'])) {
             return $this->finishTeamScoringAndAdvance($gameId, $round, $state, $scores);
         }
 
@@ -2174,12 +2430,13 @@ final class GameService
             }
         }
 
-        $isTeamFormat = $this->fetchGame($gameId)['format'] === 'team';
-        // Team format's own turn_order decision still needs computeFreshGrants()
-        // to run once the chosen player is actually known -- see
-        // applyTurnOrderDecision() -- so this skips it here rather than
-        // guessing for a player who isn't necessarily who Awe's own choice
-        // resolves to at the team level.
+        $isTeamFormat = self::isTeamFormat($this->fetchGame($gameId)['format']);
+        // Either team format's own turn_order decision still needs
+        // computeFreshGrants() to run once the chosen player is actually
+        // known -- see applyTurnOrderDecision()/applyClosedTeamLeaderDecision()
+        // -- so this skips it here rather than guessing for a player who
+        // isn't necessarily who Awe's own choice resolves to at the team
+        // level.
         $nextRoundGrants = $isTeamFormat ? [] : $this->computeFreshGrants($state, $nextFirstPlayer, 1);
 
         $pdo = Connection::get();
@@ -2445,12 +2702,17 @@ final class GameService
             'in_play' => [],
             'discard_pile' => [],
             'deck_count' => 0,
-            // Only populated for format 'team' -- see teamsSummary().
+            // Only populated for format 'team'/'closed_team'.
             'teams' => null,
-            // Only populated for format 'team', and only while a
-            // game_team_decisions row is still open -- see
-            // "Open Team Play" in php-app/README.md.
+            // Only populated for format 'team'/'closed_team', and only
+            // while a game_team_decisions row is still open -- see "Open
+            // Team Play"/"Closed Team Play" in php-app/README.md.
             'team_decision' => null,
+            // Only populated for format 'closed_team', and only until
+            // every player has submitted their pregame blind card pass --
+            // see submitInitialCardPass() and "Closed Team Play" in
+            // php-app/README.md.
+            'initial_card_pass' => null,
         ];
 
         if ($game['status'] !== 'in_progress' && $game['status'] !== 'completed') {
@@ -2520,11 +2782,15 @@ final class GameService
             $state->hand($viewerGamePlayerId)
         );
 
-        if ($game['format'] === 'team') {
-            // Open Team Play's whole "open information" premise -- see
-            // php-app/README.md -- your teammate's hand is visible to you
-            // (and vice versa) even though every other opponent's hand
-            // stays hand_count-only, same as always.
+        if (self::isTeamFormat($game['format'])) {
+            // Which player is your teammate is common to both team
+            // formats (derived purely from team_id, regardless of
+            // adjacent vs. across seating) -- but their HAND is only
+            // exposed for 'team' (Open Team Play's "open information"
+            // premise, see php-app/README.md); 'closed_team' identifies
+            // the teammate the same way but never populates
+            // teammate_hand, since that format's whole point is that
+            // hands stay private between teammates.
             foreach ($response['players'] as $player) {
                 if ($player['team_id'] === null) {
                     continue;
@@ -2533,10 +2799,12 @@ final class GameService
                     && $this->teamIdByGamePlayer($gameId)[$viewerGamePlayerId] === $player['team_id'];
                 if ($isTeammate) {
                     $response['you']['teammate_game_player_id'] = $player['game_player_id'];
-                    $response['you']['teammate_hand'] = array_map(
-                        fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $player['game_player_id']),
-                        $state->hand($player['game_player_id'])
-                    );
+                    if ($game['format'] === 'team') {
+                        $response['you']['teammate_hand'] = array_map(
+                            fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $player['game_player_id']),
+                            $state->hand($player['game_player_id'])
+                        );
+                    }
                     break;
                 }
             }
@@ -2570,6 +2838,10 @@ final class GameService
                     'can_propose' => $decision['phase'] === 'propose' && $isViewerCandidate,
                     'can_confirm' => $decision['phase'] === 'confirm' && $isViewerCandidate && $proposerId !== $viewerGamePlayerId,
                 ];
+            }
+
+            if ($game['format'] === 'closed_team') {
+                $response['initial_card_pass'] = $this->pendingInitialCardPass($gameId, $viewerGamePlayerId);
             }
         }
 

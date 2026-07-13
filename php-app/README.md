@@ -56,11 +56,12 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "duel_deck_rules"?, "partner_user_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`one_of_each`, see below). `decklist_text` is required when `deck_type` is `custom` (see "Custom decklists" below) and ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` (one of `opponent_user_ids`, seated next to you -- see "Open Team Play" below) and ignored otherwise. `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total, a `team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `deck_type` is `power` with `format: 'team'` (see "Open Team Play" below), the decklist itself is invalid (unparseable line, unrecognized card name, too few cards for the table), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "duel_deck_rules"?, "partner_user_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`one_of_each`, see below). `decklist_text` is required when `deck_type` is `custom` (see "Custom decklists" below) and ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total, a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist itself is invalid (unparseable line, unrecognized card name, too few cards for the table), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"}`                                  | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded). Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
-| POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
+| POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
+| POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). |
-| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id`/`you.teammate_hand` -- see "Open Team Play" below. |
+| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
@@ -1546,6 +1547,77 @@ actually took turn 1. `getState()`'s `round` now also exposes
 `went_first_game_player_id` (`BoardState::roundFirstPlayerId()` --
 the same value Chivalry/Triumph already keyed off of, so it also already
 accounts for an Honor override) and the frontend badge uses that instead.
+
+### Closed Team Play
+
+`format: 'closed_team'` (issue #87) is Open Team Play's sibling variant --
+the same 4-player 2v2 structure, sharing most of its schema
+(`game_players.team_id`, `winner_team_id`, the `game_team_decisions`
+table) and every card-effect exclusion (`BoardState::isTeammate()` is
+format-agnostic -- it only ever compares `team_id`, never seat adjacency,
+so all 9 teammate-excluding cards and the Chivalry/Triumph fix already
+work correctly here with zero changes). It differs in four concrete ways:
+
+1. **Seating** -- partners sit ACROSS the table (`seatOrderForClosedTeamGame()`:
+   creator seat 0, one opponent seat 1, the chosen partner seat 2, the
+   last opponent seat 3, `team_id = seat_order % 2`) rather than Open Team
+   Play's adjacent seats 0/1 vs. 2/3. This is the one piece that makes
+   everything else so much simpler: a plain clockwise seat rotation
+   already alternates between teams on its own, so this format needs NONE
+   of Open Team Play's `team_turn_1/2_game_player_id` machinery or
+   `advanceTeamTurn()`'s forced-turn logic -- `advanceTurn()`'s ordinary
+   non-`'team'` branch (`rotate($this->seatOrder($gameId),
+   $round['first_game_player_id'])`) already does the right thing
+   unmodified, PROVIDED `first_game_player_id` is kept accurate (see
+   "Turn order" below).
+2. **Turn order** -- round 1's leader is simply randomized
+   (`startGame()`'s own uniform `array_rand()` pick, same primitive every
+   non-team format already uses -- no `game_team_decisions` row exists for
+   round 1 at all). From round 2 onward, the winning team gets exactly
+   ONE live choice (who leads), reusing `game_team_decisions`'
+   `'turn_order'` propose/confirm machinery -- but resolved by
+   `applyClosedTeamLeaderDecision()` rather than Open Team Play's
+   `applyTurnOrderDecision()`: it writes the chosen player straight into
+   `game_rounds.first_game_player_id` (no `team_turn_1/2` columns exist
+   for this format) and unfreezes the round immediately, never opening a
+   second decision. `confirmTeamDecision()` picks between the two handlers
+   based on the game's own `format` whenever `decision_type` is
+   `'turn_order'`.
+3. **Pregame card pass** -- this format's own mechanic with no Open Team
+   Play analog: after everyone's dealt their 5-card starting hand, every
+   player must pass exactly 2 cards to their teammate, face down, BEFORE
+   seeing what their own teammate passed them. `POST /games/initial-pass`
+   -> `GameService::submitInitialCardPass()` inserts the caller's own row
+   into the new `game_initial_card_passes` table (migration `0023`) --
+   locking their choice in immediately, which is what actually makes the
+   exchange blind, since it can never be revised once their teammate's
+   hand becomes visible to them. The moment BOTH members of a team have a
+   row, that team's own actual transfer applies right then (a plain
+   `owner_game_player_id` reassignment on the 4 `game_cards` rows
+   involved -- independent of the other team's own pace); only once ALL 4
+   players have submitted does round 1's already-randomly-chosen leader
+   (from point 2 above) actually get unfrozen. `getState()`'s
+   `initial_card_pass` (`{you_submitted, submitted_game_player_ids}`,
+   `null` once everyone's done) lets the frontend show "choose 2 cards" or
+   "waiting for X, Y" without ever revealing which 2 cards anyone chose.
+4. **Information stays closed** -- unlike Open Team Play, `getState()`
+   never populates `you.teammate_hand` for this format (only
+   `you.teammate_game_player_id`, so the UI can still label who your
+   partner is without exposing their hand). The `teammate-hand-section`
+   in `web-static/game/index.html` simply never gets data to render for
+   `closed_team`, so no extra guard was needed there.
+
+Everything else -- team-aggregated scoring (`finishTeamScoringAndAdvance()`,
+already `team_id`-only and reused verbatim once its own format check
+widened to cover both formats), ties going to whichever team played first,
+the losing team's single shared draw (`applyDrawRecipientDecision()`,
+also reused verbatim), `winner_usernames` crediting both teammates, and
+the team-decision panel's viewer-aware "Your team's turn"/"Opposing
+team's turn" wording -- is exactly the same code Open Team Play already
+uses, gated by a shared `GameService::isTeamFormat($format)` predicate
+(`$format === 'team' || $format === 'closed_team'`) wherever the two
+formats' behavior is identical, rather than a second parallel
+implementation.
 
 ### Game timestamps
 
