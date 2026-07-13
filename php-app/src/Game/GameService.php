@@ -889,7 +889,7 @@ final class GameService
                     $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
                     if ($nextDecision !== null) {
                         $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], [], $state);
+                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
 
                         $pdo->commit();
 
@@ -1071,7 +1071,7 @@ final class GameService
             try {
                 $this->boardStates->save($gameId, $state);
                 $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], [], $state);
+                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
 
                 $pdo->commit();
             } catch (Throwable $e) {
@@ -1980,12 +1980,21 @@ final class GameService
         $grantUsed = $details['grant_used'] ?? null;
         $grantUsedSuffix = $grantUsed !== null ? ' (using ' . $this->describeGrantDetails($grantUsed, $cardNames) . ')' : '';
 
-        $description = match ($row['event_type']) {
-            'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
-            'turn_passed' => "{$actor} passed",
-            'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
-            'pending_decision_resolved' => "A response to {$cardName} was resolved",
-            'round_scored' => $this->describeRoundScored($details, $playerNames),
+        // A scoring-time pending_decision_created (Enthusiasm/Passion,
+        // tagged via 'scoring_trigger' at the two writeScoringDecisionBatch()
+        // call sites) is never a fresh play -- the card triggering it has
+        // already been sitting in play since some earlier turn -- so it
+        // gets its own phrasing instead of the "{actor} played {card}..."
+        // template every other pending_decision_created shares, which would
+        // otherwise misleadingly read as though the player just played a
+        // second copy of the same card.
+        $description = match (true) {
+            $row['event_type'] === 'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
+            $row['event_type'] === 'turn_passed' => "{$actor} passed",
+            $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
+            $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
+            $row['event_type'] === 'pending_decision_resolved' => "A response to {$cardName} was resolved",
+            $row['event_type'] === 'round_scored' => $this->describeRoundScored($details, $playerNames),
             default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 
@@ -2151,7 +2160,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'scoring_trigger'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 
