@@ -765,7 +765,7 @@
             (player) => {
                 const li = document.createElement('li');
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
-                const wentFirst = state.round && state.round.first_game_player_id === player.game_player_id;
+                const wentFirst = state.round && state.round.went_first_game_player_id === player.game_player_id;
                 const hasHurtFeelings = state.round && state.round.hurt_feelings_game_player_id === player.game_player_id;
                 // Each custom_duel player has their OWN deck (unlike every
                 // other deck_type, where one label covers the whole game --
