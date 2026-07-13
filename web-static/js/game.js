@@ -600,8 +600,14 @@
 
     // Lets a player double-check a card they don't recognize -- whether
     // it's their own or an opponent's -- without it affecting play, since
-    // in-play/discard-pile cards can't be acted on anyway.
-    function openCardDetail(card, ownerLabel) {
+    // in-play/discard-pile cards can't be acted on anyway. `selection`, when
+    // passed, additionally turns this into the Closed Team Play initial
+    // card-pass's own picker (see renderInitialCardPass()): { selected,
+    // disabled, onToggle } shows a Select/De-select button that calls
+    // onToggle() and closes the dialog -- disabled is computed by the
+    // caller (true once 2 OTHER cards are already selected, so an
+    // already-selected card can still always be de-selected).
+    function openCardDetail(card, ownerLabel, selection) {
         const artEl = document.getElementById('card-detail-art');
         artEl.src = cardArtUrl(card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
@@ -703,6 +709,20 @@
             blissColorEl.hidden = false;
         } else {
             blissColorEl.hidden = true;
+        }
+
+        const selectButton = document.getElementById('card-detail-select-button');
+        if (selection) {
+            selectButton.hidden = false;
+            selectButton.textContent = selection.selected ? 'De-select' : 'Select';
+            selectButton.disabled = selection.disabled;
+            selectButton.onclick = () => {
+                selection.onToggle();
+                cardDetailDialog.close();
+            };
+        } else {
+            selectButton.hidden = true;
+            selectButton.onclick = null;
         }
 
         cardDetailDialog.showModal();
@@ -1195,21 +1215,26 @@
             return;
         }
 
-        statusEl.textContent = "Choose 2 cards from your hand to pass to your teammate, face down -- you won't see what they passed you until you do.";
+        statusEl.textContent = "Choose 2 cards from your hand to pass to your teammate, face down -- you won't see what they passed you until you do. Tap a card to view it and select/de-select it.";
         fieldsContainer.innerHTML = '';
 
         (state.you.hand || []).forEach((card) => {
+            const selected = initialCardPassSelection.has(card.card_id);
             const thumb = buildCardThumb(card, {
-                onClick: () => {
-                    if (initialCardPassSelection.has(card.card_id)) {
-                        initialCardPassSelection.delete(card.card_id);
-                    } else if (initialCardPassSelection.size < 2) {
-                        initialCardPassSelection.add(card.card_id);
-                    }
-                    renderInitialCardPass(currentState);
-                },
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: !selected && initialCardPassSelection.size >= 2,
+                    onToggle: () => {
+                        if (initialCardPassSelection.has(card.card_id)) {
+                            initialCardPassSelection.delete(card.card_id);
+                        } else {
+                            initialCardPassSelection.add(card.card_id);
+                        }
+                        renderInitialCardPass(currentState);
+                    },
+                }),
             });
-            thumb.classList.toggle('selected', initialCardPassSelection.has(card.card_id));
+            thumb.classList.toggle('selected', selected);
             fieldsContainer.appendChild(thumb);
         });
 

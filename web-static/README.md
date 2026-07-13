@@ -353,13 +353,22 @@ information the art itself carries.
     `state.initial_card_pass`, `null` for every format except
     `closed_team`, and `null` there too once every player has submitted)
     is this format's own pregame step: while the viewer hasn't submitted
-    yet, it shows every hand card as a clickable thumbnail (reusing
-    `buildCardThumb()`, toggling a `.selected` CSS class -- purely
-    client-side state, tracked in a local `Set` of `card_id`s, never sent
-    until the submit button is pressed) letting them pick exactly 2 to
-    pass to their teammate, calling `submitInitialCardPass()` (`POST
-    /games/initial-pass`); once submitted, it shows a read-only "Waiting
-    for X, Y to pass their cards" status instead (built from
+    yet, it shows every hand card as a clickable thumbnail in a horizontal
+    row (reusing `buildCardThumb()`). Selection itself isn't done by
+    clicking the thumbnail directly -- that instead opens the same
+    `#card-detail-dialog` used to inspect in-play/discard-pile/opponent
+    cards elsewhere (`openCardDetail()`), passed an optional third
+    `selection` argument (`{ selected, disabled, onToggle }`) that reveals
+    a `#card-detail-select-button` reading "Select" or "De-select"
+    (disabled once 2 *other* cards are already picked, so an
+    already-selected card can always still be de-selected); clicking it
+    calls `onToggle()` and closes the dialog. The chosen 2 card_ids are
+    tracked purely client-side in a local `Set`, never sent until the
+    submit button is pressed -- the row thumbnail itself still gets the
+    same `.selected` CSS class/border used elsewhere once picked. Calling
+    `submitInitialCardPass()` (`POST /games/initial-pass`) sends the pair;
+    once submitted, the panel shows a read-only "Waiting for X, Y to pass
+    their cards" status instead (built from
     `state.initial_card_pass.submitted_game_player_ids`, which players
     have or haven't submitted yet -- never which 2 cards anyone chose).
     See "Closed Team Play" in `php-app/README.md`.
