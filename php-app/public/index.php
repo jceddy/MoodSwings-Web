@@ -22,6 +22,7 @@ use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Mail\Mailer;
+use MoodSwings\Maintenance\MaintenanceGate;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\SessionRepository;
@@ -181,6 +182,23 @@ if ($path === '/health' && $method === 'GET') {
     }
 }
 
+// /health is exempt above because the deploy workflows' post-deploy smoke
+// test (curl -fsS ".../app/health", no continue-on-error) would hard-fail
+// every migration-containing deploy otherwise -- "deploy code, apply the
+// migration by hand shortly after" is the documented, intentional
+// production workflow (see database/README.md). /verify-email is exempt
+// here too, but not skipped: unlike every other route it renders an HTML
+// page for a human clicking an emailed link rather than JSON for our own
+// JS, so its own route block below checks the gate itself and responds via
+// respondHtml() instead of the generic JSON 503 here.
+if ($path !== '/health' && $path !== '/verify-email') {
+    $maintenanceMessage = MaintenanceGate::activeMessage();
+    if ($maintenanceMessage !== null) {
+        header('Retry-After: 120');
+        respond(503, ['status' => 'maintenance', 'message' => $maintenanceMessage]);
+    }
+}
+
 $auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository());
 
 if ($path === '/register' && $method === 'POST') {
@@ -248,6 +266,11 @@ if ($path === '/resend-verification' && $method === 'POST') {
 }
 
 if ($path === '/verify-email' && $method === 'GET') {
+    $maintenanceMessage = MaintenanceGate::activeMessage();
+    if ($maintenanceMessage !== null) {
+        respondHtml(503, 'Maintenance - MoodSwings-Web', 'Under maintenance', $maintenanceMessage);
+    }
+
     $token = (string) ($_GET['token'] ?? '');
 
     try {

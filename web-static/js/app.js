@@ -3,7 +3,18 @@
 // relative to that prefix regardless of which domain this is served from.
 const API_BASE = '/app';
 
+// Set once the app has redirected to /maintenance.html so that any request
+// still in flight from a setInterval poll (e.g. game.js's board polling)
+// doesn't keep hitting the server or re-writing sessionStorage during the
+// brief window before window.location.href actually navigates away --
+// that assignment doesn't stop script execution synchronously.
+let redirectingToMaintenance = false;
+
 async function apiRequest(path, options = {}) {
+    if (redirectingToMaintenance) {
+        return new Promise(() => {}); // never resolves; a navigation is already in flight
+    }
+
     try {
         const response = await fetch(API_BASE + path, {
             credentials: 'same-origin',
@@ -16,6 +27,19 @@ async function apiRequest(path, options = {}) {
             body = await response.json();
         } catch (e) {
             // Non-JSON response body; leave body empty.
+        }
+
+        if (response.status === 503 && body.status === 'maintenance') {
+            redirectingToMaintenance = true;
+            try {
+                sessionStorage.setItem('maintenanceMessage', body.message || '');
+                sessionStorage.setItem('maintenanceReturnTo', window.location.pathname);
+            } catch (e) {
+                // sessionStorage unavailable (e.g. private browsing) --
+                // maintenance.js falls back to a hardcoded message/path.
+            }
+            window.location.href = '/maintenance.html';
+            return new Promise(() => {}); // never resolves -- avoids the caller's post-await code running mid-navigation
         }
 
         return { ok: response.ok, status: response.status, body };

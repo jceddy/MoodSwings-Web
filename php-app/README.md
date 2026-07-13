@@ -38,11 +38,13 @@ database.
 All responses are JSON with a `status` field (`ok` or `error`), except
 `/verify-email` — that one's opened directly from an emailed link by a
 human rather than called by our own JS, so it renders an HTML page
-instead.
+instead. Every route except `/health` can also return `503` with
+`{"status": "maintenance", "message"}` (or, for `/verify-email`, an HTML
+maintenance page) — see "Maintenance mode" below.
 
 | Method | Path            | Body                                                          | Notes |
 | ------ | --------------- | -------------------------------------------------------------- | ----- |
-| GET    | `/health`       | —                                                                | Checks DB connectivity. |
+| GET    | `/health`       | —                                                                | Checks DB connectivity. Exempt from maintenance mode (see below) — always reflects real DB health, never `503` for a pending migration. |
 | POST   | `/register`     | `{"username", "email", "password", "phone_number"?}`             | Creates an unverified user and emails a verification link. Username: 3-32 chars (letters/numbers/`_`/`-`); email: valid format; password: 8-72 chars; phone (optional): 7-20 chars, digits/`+`/`-`/`.`/spaces/parens. `409` on duplicate username/email, `400` on validation failure, `502` if the verification email can't be sent (registration is rolled back so you can retry). |
 | GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with just a manual link (no auto-redirect) if the token is invalid/expired. |
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
@@ -89,6 +91,54 @@ which varies by host and isn't always what cPanel's error log page shows.
 `src/` already has a deny-all `.htaccess` from the deploy workflow, so
 that file isn't web-accessible; check it via cPanel's File Manager or FTP,
 not a browser.
+
+## Maintenance mode
+
+Production applies database migrations by hand (see "Deployment" in the
+top-level README — GitHub Actions can't reach Bluehost's MySQL directly),
+typically shortly after a code deploy rather than atomically with it.
+`src/Maintenance/MaintenanceGate.php` closes that gap: every request
+(except `/health`, see below) compares the deployed `VERSION` file against
+a `version` value stored in the `schema_version` table (`database/README.md`)
+and, on any mismatch, responds `503` with `{"status": "maintenance",
+"message": "..."}` instead of running the route — see `apiRequest()` in
+`web-static/js/app.js` for how the frontend reacts to that. A missing
+`schema_version` table (the state right after this feature's own migration
+deploys but before it's been applied) or any other DB error also triggers
+maintenance mode — self-bootstrapping, and exactly the condition this
+feature exists to catch. An unreadable `VERSION` file instead fails
+*open* (allows traffic), since blocking every user over an unrelated
+file-read glitch would be worse than the problem being solved. This makes
+`database/README.md`'s migration convention a hard requirement: any
+change that includes a migration must also bump `VERSION`, and the
+migration itself must update `schema_version` to match as its *last*
+statement.
+
+`/health` is deliberately exempt — the deploy workflows' post-deploy smoke
+test (`curl -fsS ".../app/health"`, no `continue-on-error`) would hard-fail
+every migration-containing deploy otherwise, even though "deploy code,
+apply the migration by hand shortly after" is the documented, intentional
+workflow. `/verify-email` is also exempt from the generic JSON gate, but
+not skipped — since it renders an HTML page for a human clicking an
+emailed link rather than JSON for our own JS, its own route block checks
+`MaintenanceGate::activeMessage()` itself and responds via `respondHtml()`
+instead.
+
+`MaintenanceGate::check(string $deployedVersion): ?string` takes the
+deployed version as a parameter (rather than only reading the real file)
+so the comparison itself is unit/integration-testable without touching the
+real repo-root `VERSION` file — see `tests/Maintenance/MaintenanceGateTest.php`.
+The real production entry point, `activeMessage()`, resolves `VERSION`'s
+path relative to its own file location, trying both the deployed layout
+(`dist/VERSION`, a sibling of `dist/src`) and a local-checkout layout
+(`VERSION` one level above `php-app/`) — see the class's own docblock for
+why a single hardcoded `dirname()` depth (e.g. copying `bin/migrate.php`'s)
+doesn't work here, since `bin/` and `src/Maintenance/` sit at different
+relative depths from the repo root. A DB failure on the check (table
+missing vs. genuinely unreachable) is logged to `src/maintenance-errors.log`
+(same non-web-accessible-location precedent as `mail-errors.log` above) so
+the two remain distinguishable after the fact, even though both produce
+the same generic client-facing message.
 
 ## Rules engine
 
@@ -1426,6 +1476,17 @@ with their defaults):
 TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=3306 TEST_DB_NAME=moodswings_test \
 TEST_DB_USER=root TEST_DB_PASSWORD= vendor/bin/phpunit
 ```
+
+`MaintenanceGateTest` (see "Maintenance mode" above) follows the same
+pattern, but drops/recreates `schema_version` itself in `setUp()`/`tearDown()`
+rather than assuming it's already present, since "the table doesn't exist"
+is itself one of the states under test. Its `testActiveMessageReadsTheRealVersionFile`
+case exercises the real `deployedVersion()`/`activeMessage()` path against
+whatever `VERSION` file is actually on disk, rather than only the
+injected-string `check()` path — the two resolve `VERSION`'s location
+differently (see `MaintenanceGate`'s docblock), so this is the one test
+that would have caught the path-resolution bug an earlier draft of that
+class had.
 
 The test suite truncates `users`/`sessions`/`email_verifications`/
 `friendships` in that database before each test, so never point it at a

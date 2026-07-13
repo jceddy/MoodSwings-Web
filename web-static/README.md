@@ -12,10 +12,38 @@ Every page has a `<footer>` with a `#app-version` span, populated by a
 self-invoking snippet at the bottom of `js/app.js` (the one script every
 page already loads) that fetches `/VERSION` -- a plain static text file
 deployed alongside `index.html`, not one of the PHP app's own `API_BASE`
-endpoints -- and renders it as e.g. "v0.1.0". Fetched with `cache:
+endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 'no-store'` so a page loaded shortly after a deploy can't keep showing a
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
+
+## Maintenance mode
+
+`apiRequest()` (`js/app.js`) -- the single fetch wrapper every API-calling
+function funnels through -- checks every response for `status: 503` with
+`body.status === 'maintenance'` (see "Maintenance mode" in
+`php-app/README.md`). On a match, it stashes the server's message and the
+current page's path in `sessionStorage` (`maintenanceMessage`/
+`maintenanceReturnTo`), redirects to `/maintenance.html`, and returns a
+Promise that never resolves -- deliberately, so whatever the caller was
+about to do with the response (e.g. `login.js` un-hiding the login form)
+never runs while the page is already mid-navigation away. A module-level
+`redirectingToMaintenance` flag short-circuits any further `apiRequest()`
+calls once that's happened, since `window.location.href` doesn't stop
+script execution synchronously -- without it, an in-flight `setInterval`
+poll (e.g. `game.js`'s board polling) could fire another request and
+re-write `sessionStorage` during the brief window before the browser
+actually navigates.
+
+`maintenance.html` reads the stashed message/return path in `js/maintenance.js`
+(falling back to a hardcoded message and `/` if visited directly, e.g.
+bookmarked), wires a retry button, and polls a raw `fetch('/app/me')`
+(bypassing `apiRequest()`, so the poll itself can't re-trigger the redirect
+logic) every 15 seconds -- once that stops returning `503`, it redirects
+back to the stashed return path automatically. `register.html` makes an
+otherwise-unused `getCurrentUser()` call on load (matching `login.js`/
+`game.js`'s own first action) purely so `apiRequest()` gets a chance to
+catch a maintenance window before the visitor ever submits the form.
 
 ## Assets
 
@@ -86,6 +114,9 @@ information the art itself carries.
   `/game/`. Links to `register.html`.
 - `register.html` — Registration form. On success, shows a message to check
   email for the verification link (login is blocked until verified).
+- `maintenance.html` — Shown during a maintenance window (see "Maintenance
+  mode" above); not linked from anywhere, reached only via `apiRequest()`'s
+  redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
   "Friends" button (see below), and the game lobby/board itself:

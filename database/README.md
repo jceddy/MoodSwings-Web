@@ -50,6 +50,18 @@ seeds data (like `0003`'s card catalog `INSERT`s), make sure none of the
 values contain a literal semicolon — since `bin/migrate.php` splits files
 on `;`.
 
+**Every migration that changes the schema must also bump the root
+[`VERSION`](../VERSION) file, and must end with an `UPDATE schema_version
+SET version = 'X.Y.Z' WHERE id = 1;` matching that same bump** (see
+"Application/system" below and `MaintenanceGate` in `php-app/README.md`).
+This must be the file's **last statement** — MySQL/InnoDB DDL isn't
+transactional (every `ALTER`/`CREATE` implicitly commits on its own), and
+production migrations are pasted by hand into phpMyAdmin with no
+atomicity guarantee, so a partial/failed paste needs to leave
+`schema_version` still reporting the *old* version (keeping the app in
+maintenance mode) rather than falsely reporting the new one against a
+half-migrated schema.
+
 ## Layout
 
 - `migrations/` — Ordered `.sql` files, one per schema change, applied in
@@ -114,3 +126,11 @@ on `;`.
   engine, built incrementally against `cards.rules_text` and keyed off
   `cards.effect_key`) and `src/Game/GameService.php` (the game/session layer
   on top of it).
+- **Application/system** (`0021`): `schema_version` — a single row
+  (`id = 1`) recording which `VERSION` the currently-applied schema
+  satisfies. Compared against the deployed `VERSION` file on every request
+  by `MaintenanceGate` (see `php-app/README.md`), so the app shows a
+  maintenance page instead of running against a schema a migration hasn't
+  been manually applied to yet — see "Adding a new migration" above for the
+  convention every future schema-changing migration must follow to keep
+  this working.
