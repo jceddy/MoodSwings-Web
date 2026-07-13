@@ -161,7 +161,7 @@
             clearInterval(pollTimer);
         }
         pollTimer = setInterval(() => {
-            if (!choicesPanel.open && pendingDecisionPanel.hidden) {
+            if (choicesPanel.hidden && pendingDecisionPanel.hidden) {
                 refreshBoard();
             }
         }, 4000);
@@ -1009,7 +1009,7 @@
         // showBoard()'s pollTimer) and the board silently goes stale
         // until the player happens to notice and clicks Cancel.
         selectedCard = null;
-        choicesPanel.close();
+        choicesPanel.hidden = true;
         announceOutcome(body);
         await refreshBoard();
     });
@@ -1434,11 +1434,6 @@
         const artEl = document.getElementById('choices-card-art');
         artEl.src = cardArtUrl(card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
-        // <dialog> has no visible heading anymore now that the art itself
-        // conveys the card -- an explicit aria-label keeps the dialog's
-        // accessible name meaningful for screen readers instead of falling
-        // back to reading its contents with no announced purpose.
-        choicesPanel.setAttribute('aria-label', 'Play ' + card.name);
 
         const fieldsContainer = document.getElementById('choices-fields');
         fieldsContainer.innerHTML = '';
@@ -1458,7 +1453,7 @@
         }
 
         updatePlayButtonEnabled();
-        choicesPanel.showModal();
+        choicesPanel.hidden = false;
     }
 
     document.getElementById('cancel-choice-button').addEventListener('click', () => {
@@ -1466,7 +1461,7 @@
         creativityBaseFields = null;
         creativityNoCopyExtraFields = [];
         creativityCopyFieldNodes = [];
-        choicesPanel.close();
+        choicesPanel.hidden = true;
     });
 
     // -- Pending decisions ---------------------------------------------
@@ -1685,13 +1680,13 @@
         const { ok, body } = await playCard(currentGameId, card.card_id, choices);
 
         if (!ok) {
-            // boardError lives outside <dialog id="choices-panel">, which
-            // is now a real showModal() overlay -- everything behind its
-            // ::backdrop is inert, so a rejection message set there would
-            // be invisible until the dialog closed. choices-validation is
-            // already inside the dialog (used for client-side field
-            // checks in updatePlayButtonEnabled()), so a server-side
-            // rejection reuses that same spot instead.
+            // choices-validation already sits right next to the Play
+            // button (used for client-side field checks in
+            // updatePlayButtonEnabled()), so a server-side rejection
+            // reuses that same spot instead of board-error -- which is
+            // easy to miss, sitting above the hand, while the player's
+            // attention is still on the choices panel they were just
+            // filling in.
             const validationMessage = document.getElementById('choices-validation');
             validationMessage.textContent = body.message || 'Could not play that card.';
             validationMessage.hidden = false;
@@ -1699,7 +1694,7 @@
         }
 
         selectedCard = null;
-        choicesPanel.close();
+        choicesPanel.hidden = true;
         announceOutcome(body);
         await refreshBoard();
     }

@@ -181,19 +181,20 @@ information the art itself carries.
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
     Decklists (Duel) deck", which never actually named anything the viewer
     had chosen. Clicking any hand
-    card opens `#choices-panel` -- a `<dialog>` shown via `showModal()`,
-    the same overlay convention `#card-detail-dialog`/`#art-preview-dialog`
-    already use (see "Card art rendering" above) -- with an enlarged view
-    of the card's own art in place of a separate name/rules-text heading
-    (its `alt` text carries both, for accessibility) plus Play/Cancel, so
-    it doubles as a quick way to inspect a card you don't recognize yet.
-    Since `showModal()` makes everything outside the dialog inert, a
-    server-side rejection from actually submitting the play (caught after
-    the dialog's own client-side checks below already passed) surfaces
-    inside the dialog itself, reusing `#choices-validation`'s existing
-    spot, rather than the board's own `#board-error` -- which would be
-    invisible behind the dialog's backdrop until it closed. Cards with no
-    ability worth asking about (roughly half the 127-card
+    card opens `#choices-panel` inline, underneath the hand -- a plain
+    block element (not a `<dialog>`/overlay, deliberately: an overlay was
+    tried and reverted, since it made the rest of the board -- in-play
+    moods, discard pile, opponents' state -- harder to reference while
+    still choosing a target) showing an enlarged view of the card's own
+    art in place of a separate name/rules-text heading (its `alt` text
+    carries both, for accessibility) plus whatever choice fields it
+    needs and Play/Cancel. A server-side rejection from actually
+    submitting the play (caught after the panel's own client-side checks
+    below already passed) surfaces inside the panel itself, reusing
+    `#choices-validation`'s existing spot right next to the Play button,
+    rather than the board's own `#board-error` above the hand -- easy to
+    miss while attention is still on the fields just below it. Cards with
+    no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
     card to discard, a mode string, etc.), driven by each card's
