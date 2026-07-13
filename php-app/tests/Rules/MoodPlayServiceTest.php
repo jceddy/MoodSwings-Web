@@ -2930,7 +2930,7 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(6, $state->valueOf(92), 'the bonus resumes once it is back with whoever actually played it, still the same round');
     }
 
-    public function testPrideGrantsExtraPlaysToMatchTheChosenPlayersMoodCount(): void
+    public function testPridePausesForYourOwnChoiceThenGrantsExtraPlaysToMatchTheChosenPlayersMoodCount(): void
     {
         $state = $this->boardState(hands: [1 => [22, 4, 9], 2 => [5, 32, 55]]);
         $state->moveHandToInPlay(2, 5);
@@ -2938,9 +2938,25 @@ final class MoodPlayServiceTest extends TestCase
         $state->moveHandToInPlay(2, 55);
         $state->startTurn(1);
 
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 22, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(1, $result->pendingDecisions);
+        // Unlike an opponent-answered decision, Pride's own choice of
+        // which player to target is the ACTING player's -- Pride is
+        // already in play by the time this offer is built, so its own
+        // mood correctly counts toward "more moods than you".
+        self::assertSame(1, $result->pendingDecisions[0]->targetPlayerId);
+        self::assertSame([2], $result->pendingDecisions[0]->field['candidate_player_ids']);
+        self::assertSame(0, $state->playsRemaining());
+
         // Pride itself already counts, so player 1 has 1 mood vs player 2's
         // 3 -- a gap of 2 extra plays.
-        $this->plays->playMood($state, 1, 22, new PlayerChoices(['target_player_id' => 2]));
+        $this->plays->resolvePendingDecisions(
+            $state, 22, 1, $choices, $choices, 0,
+            ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+        );
         self::assertSame(2, $state->playsRemaining());
 
         $this->plays->playMood($state, 1, 4, new PlayerChoices([]));
@@ -2951,24 +2967,64 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
+    /**
+     * Even though the candidate list offered by pendingDecisionsFor() is
+     * already correctly filtered (see the test above), resolveDecisions()
+     * still validates its own answer defensively -- a malicious/buggy
+     * client could submit a player id that was never actually offered.
+     * Player 3 has the same mood count as player 1 once Pride is counted,
+     * so only player 2 is a legitimate candidate; the answer targets
+     * player 3 anyway.
+     */
     public function testPrideRejectsAPlayerWithoutMoreMoods(): void
     {
-        $state = $this->boardState(hands: [1 => [22], 2 => [5]]);
+        $state = $this->boardState(hands: [1 => [22], 2 => [5, 55], 3 => [32]]);
         $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 55);
+        $state->moveHandToInPlay(3, 32);
         $state->startTurn(1);
 
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 22, $choices);
+        // Player 1 has 1 mood once Pride is counted; player 2 has 2 (qualifies),
+        // player 3 has 1 (tied, does not qualify).
+        self::assertSame([2], $result->pendingDecisions[0]->field['candidate_player_ids']);
+
         $this->expectException(InvalidChoiceException::class);
-        $this->plays->playMood($state, 1, 22, new PlayerChoices(['target_player_id' => 2]));
+        $this->plays->resolvePendingDecisions(
+            $state, 22, 1, $choices, $choices, 0,
+            ['target_player_id' => new PlayerChoices(['target_player_id' => 3])],
+        );
     }
 
-    public function testPrideDoesNothingWhenDeclined(): void
+    public function testPrideDoesNothingWhenNoPlayerHasMoreMoods(): void
     {
         $state = $this->boardState(hands: [1 => [22]]);
         $state->startTurn(1);
 
-        $this->plays->playMood($state, 1, 22, new PlayerChoices([]));
+        $result = $this->plays->playMood($state, 1, 22, new PlayerChoices([]));
 
+        self::assertFalse($result->isPending);
         self::assertTrue($state->isInPlay(22));
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testPrideDoesNothingWhenTheOfferIsDeclined(): void
+    {
+        $state = $this->boardState(hands: [1 => [22], 2 => [5, 32]]);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 32);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 22, $choices);
+        self::assertTrue($result->isPending);
+
+        $this->plays->resolvePendingDecisions(
+            $state, 22, 1, $choices, $choices, 0,
+            ['target_player_id' => new PlayerChoices(['target_player_id' => null])],
+        );
+
         self::assertSame(0, $state->playsRemaining());
     }
 

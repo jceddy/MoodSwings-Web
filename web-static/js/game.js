@@ -7,6 +7,7 @@
 
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
+    startVersionWatcher();
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
@@ -448,6 +449,88 @@
             (card.is_creativity_copy ? ' [Creativity copy]' : '');
     }
 
+    // Mirrors the naming convention documented in web-static/README.md's
+    // "Assets" section: <cards.id>-<slugified-name>.webp, one folder per
+    // Set. Only the 'MSW' set exists today, so its folder is hardcoded
+    // here rather than threaded through the API -- see the "custom card
+    // sets" issue for when that stops being true.
+    function slugify(name) {
+        return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    }
+
+    function cardArtUrl(card) {
+        return '../img/cards/MSW/' + card.catalog_card_id + '-' + slugify(card.name) + '.webp';
+    }
+
+    // Builds a card-art thumbnail in place of the old text-only button --
+    // the printed art already conveys name/color/base value/rules text (all
+    // included as alt text for accessibility), so only whatever ISN'T part
+    // of the static art -- a value currently different from what's printed,
+    // suppression, an owner caption, or a disabled state -- needs to be
+    // overlaid on top of it.
+    function buildCardThumb(card, { caption, onClick, notPlayable = false } = {}) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'card-thumb';
+        if (onClick) {
+            button.addEventListener('click', onClick);
+        }
+
+        const img = document.createElement('img');
+        img.className = 'card-thumb__art';
+        img.src = cardArtUrl(card);
+        img.alt = card.name + '. ' + (card.rules_text || 'No ability.');
+        button.appendChild(img);
+
+        if (card.value !== card.base_value) {
+            const valueBadge = document.createElement('span');
+            valueBadge.className = 'card-thumb__badge card-thumb__badge--value';
+            valueBadge.textContent = card.value;
+            button.appendChild(valueBadge);
+        }
+
+        if (card.is_creativity_copy) {
+            const copyBadge = document.createElement('span');
+            copyBadge.className = 'card-thumb__badge card-thumb__badge--copy';
+            copyBadge.textContent = 'Copy';
+            button.appendChild(copyBadge);
+        }
+
+        if (card.is_suppressed) {
+            const suppressedBadge = document.createElement('span');
+            suppressedBadge.className = 'card-thumb__badge card-thumb__badge--suppressed';
+            suppressedBadge.textContent = 'Suppressed';
+            button.appendChild(suppressedBadge);
+            // Tapped-card convention: rotate the art 90deg (the badge above
+            // stays upright so the state is still readable, not just
+            // visual) -- see "Card art rendering" in web-static/README.md.
+            button.classList.add('card-thumb--suppressed');
+        }
+
+        if (card.value_locked) {
+            // A permanent "after playing this mood, ... this mood's value
+            // becomes N" trigger (Dignity, Delight, ...) has locked in its
+            // alt value, as opposed to a "while in play" card (Determination)
+            // whose value is only ever recomputed live -- rotated 180deg to
+            // distinguish the two at a glance, per table convention.
+            button.classList.add('card-thumb--value-locked');
+        }
+
+        if (notPlayable) {
+            button.classList.add('not-playable');
+            button.title = "This card can't be played right now";
+        }
+
+        if (caption) {
+            const captionEl = document.createElement('span');
+            captionEl.className = 'card-thumb__caption';
+            captionEl.textContent = caption;
+            button.appendChild(captionEl);
+        }
+
+        return button;
+    }
+
     function playerLabelFor(gamePlayerId) {
         const player = currentState.players.find((p) => p.game_player_id === gamePlayerId);
         return player ? player.username : '?';
@@ -457,7 +540,9 @@
     // it's their own or an opponent's -- without it affecting play, since
     // in-play/discard-pile cards can't be acted on anyway.
     function openCardDetail(card, ownerLabel) {
-        document.getElementById('card-detail-name').textContent = card.name;
+        const artEl = document.getElementById('card-detail-art');
+        artEl.src = cardArtUrl(card);
+        artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
 
         let meta = card.color + ', base value ' + card.base_value;
         // base_color only differs from color while Imagination is in play
@@ -558,12 +643,28 @@
             blissColorEl.hidden = true;
         }
 
-        document.getElementById('card-detail-rules').textContent = card.rules_text || 'No ability.';
         cardDetailDialog.showModal();
     }
 
     document.getElementById('card-detail-close-button').addEventListener('click', () => {
         cardDetailDialog.close();
+    });
+
+    // Generic enlarged-art viewer for game-level art not tied to a specific
+    // printed card (e.g. Hurt Feelings) -- see "Assets" in
+    // web-static/README.md for why that art doesn't live under
+    // img/cards/ and so has no catalog_card_id/rules_text to build a
+    // card-detail-dialog-style view from.
+    const artPreviewDialog = document.getElementById('art-preview-dialog');
+    function openArtPreview(src, alt) {
+        const imageEl = document.getElementById('art-preview-image');
+        imageEl.src = src;
+        imageEl.alt = alt;
+        artPreviewDialog.showModal();
+    }
+
+    document.getElementById('art-preview-close-button').addEventListener('click', () => {
+        artPreviewDialog.close();
     });
 
     async function refreshBoard() {
@@ -623,12 +724,35 @@
                 const deckLabel = state.game.deck_type === 'custom_duel' && state.game.status !== 'waiting'
                     ? ' — deck: ' + (player.custom_deck_name || 'Uploaded Deck')
                     : '';
-                li.textContent = player.username + ' — seat ' + player.seat_order +
+                const infoEl = document.createElement('span');
+                infoEl.textContent = player.username + ' — seat ' + player.seat_order +
                     ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
                     player.hand_count + ' card(s) in hand' + deckLabel +
                     (wentFirst ? ' — went first this round' : '') +
-                    (isTurn ? ' — on turn' : '') +
-                    (hasHurtFeelings ? ' — has Hurt Feelings (2 plays this round)' : '');
+                    (isTurn ? ' — on turn' : '');
+                li.appendChild(infoEl);
+
+                // A small Hurt Feelings art thumbnail replaces the old plain
+                // text tag -- Hurt Feelings is a round-level marker/token,
+                // not a cards row (see migration 0003's header comment), so
+                // its art lives at img/hurt-feelings.webp rather than under
+                // img/cards/ and has no catalog_card_id to build a
+                // card-detail-dialog-style view from; clicking it opens the
+                // same generic art-preview dialog used for that reason.
+                if (hasHurtFeelings) {
+                    const alt = player.username + ' has Hurt Feelings this round (2 plays).';
+                    const thumb = document.createElement('button');
+                    thumb.type = 'button';
+                    thumb.className = 'hurt-feelings-thumb';
+                    thumb.title = alt;
+                    thumb.addEventListener('click', () => openArtPreview('../img/hurt-feelings.webp', alt));
+                    const img = document.createElement('img');
+                    img.src = '../img/hurt-feelings.webp';
+                    img.alt = 'Hurt Feelings';
+                    thumb.appendChild(img);
+                    li.appendChild(thumb);
+                }
+
                 return li;
             }
         );
@@ -675,10 +799,10 @@
                 const owner = state.players.find((p) => p.game_player_id === card.owner_game_player_id);
                 const ownerLabel = owner ? owner.username : '?';
                 const li = document.createElement('li');
-                li.appendChild(actionButton(
-                    cardLabel(card) + ' — ' + ownerLabel + (card.is_suppressed ? ' (suppressed)' : ''),
-                    () => openCardDetail(card, ownerLabel)
-                ));
+                li.appendChild(buildCardThumb(card, {
+                    caption: ownerLabel,
+                    onClick: () => openCardDetail(card, ownerLabel),
+                }));
                 return li;
             }
         );
@@ -695,8 +819,8 @@
             // last_owner_name disambiguates two players' identical catalog
             // cards both sitting in the shared discard pile at once (see
             // the 'discard_card' case in fieldOptions() below) -- shown
-            // here too so the plain list itself isn't ambiguous either.
-            const label = cardLabel(card) + (card.last_owner_name ? ' — ' + card.last_owner_name : '');
+            // here too so the thumbnail itself isn't ambiguous either.
+            const caption = card.last_owner_name || null;
             // Almost always just informational (a discard-pile card can't
             // normally be played), but Angst/Harmony/Grief's discard-sourced
             // extra play, or Melancholy's "play from the discard pile as
@@ -706,9 +830,9 @@
             // route straight to the same Play/Cancel panel a hand card
             // uses instead of the read-only detail view in that case.
             if (canAct && card.is_playable) {
-                li.appendChild(actionButton(label, () => handleHandCardClick(card)));
+                li.appendChild(buildCardThumb(card, { caption, onClick: () => handleHandCardClick(card) }));
             } else {
-                li.appendChild(actionButton(label, () => openCardDetail(card)));
+                li.appendChild(buildCardThumb(card, { caption, onClick: () => openCardDetail(card) }));
             }
             return li;
         });
@@ -723,7 +847,7 @@
         renderList(document.getElementById('hand-list'), { hidden: true }, state.you.hand || [], (card) => {
             const li = document.createElement('li');
             if (respondingToDecision) {
-                li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
                 return li;
             }
             // Whether it's the viewer's own turn or not, a card sitting in
@@ -734,22 +858,21 @@
             // already get instead of disabling the button outright, the
             // same split the discard-pile list above already makes.
             if (!canAct) {
-                li.appendChild(actionButton(cardLabel(card), () => openCardDetail(card)));
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
                 return li;
             }
-            li.appendChild(actionButton(cardLabel(card), () => handleHandCardClick(card)));
             // is_playable reflects whether some outstanding play grant this
             // turn actually covers this specific card (e.g. Intimidation's
             // grant only covers the one card it revealed) and, if the card
             // has a "to play" cost, whether that cost is payable at all --
-            // see MoodPlayService::isPlayable(). The hand button itself
-            // stays clickable either way, so the card's rules text can
-            // still be inspected -- only the panel's own Play button
-            // (see updatePlayButtonEnabled()) is actually gated on this.
-            if (!card.is_playable) {
-                li.lastChild.classList.add('not-playable');
-                li.lastChild.title = "This card can't be played right now";
-            }
+            // see MoodPlayService::isPlayable(). The hand thumbnail stays
+            // clickable either way, so the card's rules text can still be
+            // inspected -- only the panel's own Play button (see
+            // updatePlayButtonEnabled()) is actually gated on this.
+            li.appendChild(buildCardThumb(card, {
+                onClick: () => handleHandCardClick(card),
+                notPlayable: !card.is_playable,
+            }));
             return li;
         });
 
@@ -1012,21 +1135,22 @@
         if (!filter) return true;
         if (filter.min_hand_count !== undefined && player.hand_count < filter.min_hand_count) return false;
         if (filter.min_mood_count !== undefined && moodCountFor(player.game_player_id) < filter.min_mood_count) return false;
-        if (filter.more_moods_than_viewer) {
-            // The card being played will itself already be in play by the
-            // time the server checks this (afterPlaying always runs once
-            // this card is in play -- see PrideEffect), so the viewer's
-            // live count needs a +1 to match what the server compares
-            // against.
-            const viewerCountAfterThisPlay = moodCountFor(currentState.you.game_player_id) + 1;
-            if (moodCountFor(player.game_player_id) <= viewerCountAfterThisPlay) return false;
-        }
         return true;
     }
 
     function fieldOptions(field, card) {
         switch (field.type) {
             case 'player':
+                // candidate_player_ids (e.g. Pride's pending decision) is a
+                // server-computed exact candidate list, sourced from the
+                // real post-play board -- takes priority over scope/filter
+                // narrowing the same way 'mood'/candidate_card_ids does
+                // below, since it's already authoritative.
+                if (field.candidate_player_ids) {
+                    return currentState.players
+                        .filter((p) => field.candidate_player_ids.includes(p.game_player_id))
+                        .map((p) => ({ value: p.game_player_id, label: p.username }));
+                }
                 return currentState.players
                     .filter((p) => field.scope !== 'other' || p.game_player_id !== currentState.you.game_player_id)
                     .filter((p) => matchesPlayerFilter(p, field.filter))
@@ -1309,8 +1433,9 @@
         creativityCopyFieldNodes = [];
 
         boardError.hidden = true;
-        document.getElementById('choices-card-name').textContent = cardLabel(card);
-        document.getElementById('choices-card-rules').textContent = card.rules_text;
+        const artEl = document.getElementById('choices-card-art');
+        artEl.src = cardArtUrl(card);
+        artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
 
         const fieldsContainer = document.getElementById('choices-fields');
         fieldsContainer.innerHTML = '';
@@ -1557,8 +1682,16 @@
         const { ok, body } = await playCard(currentGameId, card.card_id, choices);
 
         if (!ok) {
-            boardError.textContent = body.message || 'Could not play that card.';
-            boardError.hidden = false;
+            // choices-validation already sits right next to the Play
+            // button (used for client-side field checks in
+            // updatePlayButtonEnabled()), so a server-side rejection
+            // reuses that same spot instead of board-error -- which is
+            // easy to miss, sitting above the hand, while the player's
+            // attention is still on the choices panel they were just
+            // filling in.
+            const validationMessage = document.getElementById('choices-validation');
+            validationMessage.textContent = body.message || 'Could not play that card.';
+            validationMessage.hidden = false;
             return;
         }
 

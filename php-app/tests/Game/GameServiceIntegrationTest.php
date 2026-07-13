@@ -1262,6 +1262,96 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertFalse($byCardId[$charityId]['has_dice_value']);
     }
 
+    /**
+     * value_locked distinguishes a permanent one-time "after playing this
+     * mood, ... this mood's value becomes N" trigger (Dignity here) from a
+     * continuously recomputed "while in play" value -- see
+     * BoardState::setValueOverride() and "Card art rendering" in
+     * web-static/README.md, which uses this to rotate the card art 180deg.
+     */
+    public function testGetStateMarksValueLockedTrueOnceDignitysAfterPlayingTriggerFires(): void
+    {
+        $u1 = $this->insertUser('valuelocked1');
+        $u2 = $this->insertUser('valuelocked2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity: base 3, dice/alt 5
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1 -- qualifies
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $dignityId, ['discard_card_id' => $charityId]);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        self::assertSame(5, $inPlay[0]['value']);
+        self::assertTrue($inPlay[0]['value_locked']);
+    }
+
+    public function testGetStateLeavesValueLockedFalseWhenDignitysTriggerIsDeclined(): void
+    {
+        $u1 = $this->insertUser('valuenotlocked1');
+        $u2 = $this->insertUser('valuenotlocked2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity: base 3, dice/alt 5
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $dignityId, []); // no discard offered
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        self::assertSame(3, $inPlay[0]['value']);
+        self::assertFalse($inPlay[0]['value_locked']);
+    }
+
+    /**
+     * Determination's alt value is a "while in play" condition, recomputed
+     * live every time (see valueOf()) rather than ever stored via
+     * setValueOverride() -- value_locked must stay false even while its
+     * live value happens to equal alt_value, unlike Dignity's permanent
+     * trigger above.
+     */
+    public function testGetStateLeavesValueLockedFalseForDeterminationsWhileInPlayValue(): void
+    {
+        $u1 = $this->insertUser('determination1');
+        $u2 = $this->insertUser('determination2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $determinationId = $this->insertGameCard($gameId, 112, 'hand', $p1); // Determination: base 3, dice/alt 6, green
+        $this->insertGameCard($gameId, 118, 'in_play', $p1); // Fascination, green
+        $this->insertGameCard($gameId, 133, 'in_play', $p1); // Wonder, green -- 3rd green mood triggers the threshold
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $determinationId, []);
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $determination = array_values(array_filter($inPlay, fn (array $card): bool => $card['card_id'] === $determinationId))[0];
+        self::assertSame(6, $determination['value']); // dynamically at alt_value...
+        self::assertFalse($determination['value_locked']); // ...but never locked in
+    }
+
     public function testGetStateAppendsScornsReactionFieldFilteredByEachHandCardsOwnColor(): void
     {
         $u1 = $this->insertUser('scornreact1');
@@ -4520,6 +4610,41 @@ final class GameServiceIntegrationTest extends TestCase
             $scores[(int) $row['game_player_id']] = (int) $row['score'];
         }
         self::assertSame([$p1 => 6, $p2 => 0], $scores); // base 3 + Enthusiasm's own bonus (3)
+    }
+
+    /**
+     * Enthusiasm/Passion's own scoring-time pending_decision_created event
+     * needs different phrasing than every other pending_decision_created
+     * event -- the card triggering it has already been sitting in play
+     * since some earlier turn, not just played this instant, so
+     * "{actor} played Enthusiasm ..., waiting on a response" (the template
+     * every other one of these events uses) would misleadingly read as
+     * though the player just played a second copy of the card.
+     */
+    public function testEnthusiasmsScoringDecisionEventDoesNotReadAsASecondPlay(): void
+    {
+        $u1 = $this->insertUser('enthlog1');
+        $u2 = $this->insertUser('enthlog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+
+        $description = $this->games->getState($gameId, $u1)['recent_events'][0]['description'];
+
+        self::assertStringNotContainsString('played Enthusiasm', $description);
+        self::assertSame("Enthusiasm's scoring effect triggered, waiting on a response from enthlog1", $description);
     }
 
     public function testEnthusiasmAddsNoBonusWhenDeclined(): void

@@ -1,5 +1,11 @@
-name: Deploy to Bluehost
+name: Deploy to Bluehost (production)
 
+# See "Branching & environments" in the top-level README: this is the
+# production deploy, triggered only by main -- feature work merges into
+# `development` instead (deploy-dev.yml, an otherwise-identical workflow
+# reading a separate set of DEV_-prefixed FTP/DB/APP_URL/SITE_URL
+# secrets/vars, but the same plain SMTP_* secrets below), and is promoted
+# to main only via a periodic `development` -> `main` PR.
 on:
   push:
     branches: [main]

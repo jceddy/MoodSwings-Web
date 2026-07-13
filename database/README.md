@@ -27,6 +27,18 @@ was already provisioned before this (i.e. you'd previously run the old
 `schema.sql`), you don't need to run it — just start from whatever
 migration comes next.
 
+**Standing up a brand-new database** (e.g. the dev domain's own database —
+see "Development environment setup" in the top-level README): rather than
+pasting/running 20+ individual migration files by hand, paste
+[`consolidated/0001-0020_consolidated.sql`](consolidated/0001-0020_consolidated.sql)
+once instead — every statement from `0001` through `0020`, in order,
+followed by a `schema_migrations` table pre-populated with all 20
+filenames so a later `composer migrate` correctly picks up from `0021`
+onward rather than re-running any of them. Only use it against a genuinely
+empty database (see the file's own header for why); once your schema
+history grows past `0020`, apply whichever migrations came after it
+individually, the same as always.
+
 ## Adding a new migration
 
 Add a new file named `NNNN_description.sql` (next sequential 4-digit
@@ -38,10 +50,28 @@ seeds data (like `0003`'s card catalog `INSERT`s), make sure none of the
 values contain a literal semicolon — since `bin/migrate.php` splits files
 on `;`.
 
+**Every migration that changes the schema must also bump the root
+[`VERSION`](../VERSION) file, and must end with an `UPDATE schema_version
+SET version = 'X.Y.Z' WHERE id = 1;` matching that same bump** (see
+"Application/system" below and `MaintenanceGate` in `php-app/README.md`).
+This must be the file's **last statement** — MySQL/InnoDB DDL isn't
+transactional (every `ALTER`/`CREATE` implicitly commits on its own), and
+production migrations are pasted by hand into phpMyAdmin with no
+atomicity guarantee, so a partial/failed paste needs to leave
+`schema_version` still reporting the *old* version (keeping the app in
+maintenance mode) rather than falsely reporting the new one against a
+half-migrated schema.
+
 ## Layout
 
 - `migrations/` — Ordered `.sql` files, one per schema change, applied in
   filename order.
+- `consolidated/` — Point-in-time, hand-maintained snapshots merging a
+  range of `migrations/` files into one script for standing up a fresh
+  database in a single paste (see "Applying migrations" above). Outside
+  `migrations/` deliberately, so `bin/migrate.php` (which only globs
+  `*.sql` directly inside `migrations/`) never picks these up as if they
+  were migrations of their own.
 
 ## Schema overview
 
@@ -96,3 +126,11 @@ on `;`.
   engine, built incrementally against `cards.rules_text` and keyed off
   `cards.effect_key`) and `src/Game/GameService.php` (the game/session layer
   on top of it).
+- **Application/system** (`0021`): `schema_version` — a single row
+  (`id = 1`) recording which `VERSION` the currently-applied schema
+  satisfies. Compared against the deployed `VERSION` file on every request
+  by `MaintenanceGate` (see `php-app/README.md`), so the app shows a
+  maintenance page instead of running against a schema a migration hasn't
+  been manually applied to yet — see "Adding a new migration" above for the
+  convention every future schema-changing migration must follow to keep
+  this working.

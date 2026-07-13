@@ -3,7 +3,18 @@
 // relative to that prefix regardless of which domain this is served from.
 const API_BASE = '/app';
 
+// Set once the app has redirected to /maintenance.html so that any request
+// still in flight from a setInterval poll (e.g. game.js's board polling)
+// doesn't keep hitting the server or re-writing sessionStorage during the
+// brief window before window.location.href actually navigates away --
+// that assignment doesn't stop script execution synchronously.
+let redirectingToMaintenance = false;
+
 async function apiRequest(path, options = {}) {
+    if (redirectingToMaintenance) {
+        return new Promise(() => {}); // never resolves; a navigation is already in flight
+    }
+
     try {
         const response = await fetch(API_BASE + path, {
             credentials: 'same-origin',
@@ -16,6 +27,19 @@ async function apiRequest(path, options = {}) {
             body = await response.json();
         } catch (e) {
             // Non-JSON response body; leave body empty.
+        }
+
+        if (response.status === 503 && body.status === 'maintenance') {
+            redirectingToMaintenance = true;
+            try {
+                sessionStorage.setItem('maintenanceMessage', body.message || '');
+                sessionStorage.setItem('maintenanceReturnTo', window.location.pathname);
+            } catch (e) {
+                // sessionStorage unavailable (e.g. private browsing) --
+                // maintenance.js falls back to a hardcoded message/path.
+            }
+            window.location.href = '/maintenance.html';
+            return new Promise(() => {}); // never resolves -- avoids the caller's post-await code running mid-navigation
         }
 
         return { ok: response.ok, status: response.status, body };
@@ -129,20 +153,79 @@ function respondToDecision(gameId, choices) {
     });
 }
 
+// VERSION is a plain static file at the site root (deployed alongside
+// index.html, not under API_BASE), fetched with cache: 'no-store' so a
+// page loaded shortly after a deploy can't keep showing a browser-cached
+// pre-deploy value. Shared by the footer indicator below and by
+// startVersionWatcher(); resolves to null (rather than rejecting) on any
+// failure -- including a response that doesn't actually look like a
+// MAJOR.MINOR.PATCH version, e.g. an error page's HTML served with a 200,
+// or a truncated/empty body from a mid-deploy read -- so callers don't
+// need their own try/catch or shape validation, and never mistake garbage
+// for a genuine version change.
+function fetchDeployedVersion() {
+    return fetch('/VERSION', { cache: 'no-store' })
+        .then((response) => (response.ok ? response.text() : Promise.reject()))
+        .then((version) => version.trim())
+        .then((version) => (/^\d+\.\d+\.\d+$/.test(version) ? version : Promise.reject()))
+        .catch(() => null);
+}
+
 // Every page's own #app-version footer element (see the "Versioning"
 // section of the top-level README) is populated here rather than per-page,
-// since app.js is the one script every page already loads. VERSION is a
-// plain static file at the site root (deployed alongside index.html, not
-// under API_BASE), fetched with cache: 'no-store' so a page loaded shortly
-// after a deploy can't keep showing a browser-cached pre-deploy version.
+// since app.js is the one script every page already loads.
 (function renderAppVersion() {
     const el = document.getElementById('app-version');
     if (!el) {
         return;
     }
 
-    fetch('/VERSION', { cache: 'no-store' })
-        .then((response) => (response.ok ? response.text() : Promise.reject()))
-        .then((version) => { el.textContent = 'v' + version.trim(); })
-        .catch(() => {}); // leave the element empty rather than showing a broken/stale value
+    fetchDeployedVersion().then((version) => {
+        if (version !== null) {
+            el.textContent = 'v' + version;
+        }
+        // else leave the element empty rather than showing a broken/stale value
+    });
 })();
+
+// Detects a new deploy landing while a session is already open (e.g. a
+// player leaves the game page open across a deploy) and force-reloads so
+// the page picks up the new JS/CSS/HTML instead of continuing to run
+// whatever was cached at load time -- see "Version watcher" in
+// web-static/README.md. Only started by pages with an active session
+// (game.js) -- not login.js/register.js, which don't stay open long
+// enough for this to matter and redirect away as soon as a session exists
+// anyway.
+function startVersionWatcher(intervalMs = 60000) {
+    let versionAtLoad = null;
+    fetchDeployedVersion().then((version) => { versionAtLoad = version; });
+
+    setInterval(async () => {
+        // No baseline yet, or a maintenance redirect is already in flight
+        // -- either way, nothing to compare against or act on right now.
+        if (versionAtLoad === null || redirectingToMaintenance) {
+            return;
+        }
+
+        const firstCheck = await fetchDeployedVersion();
+        if (firstCheck === null || firstCheck === versionAtLoad) {
+            return; // unchanged, or the fetch itself failed -- nothing to act on
+        }
+
+        // The deploy pipeline uploads files one at a time over FTP, not as
+        // one atomic swap (see "Deployment" in the top-level README), so a
+        // single differing fetch could just be this poll's bad luck landing
+        // mid-deploy rather than a genuinely finished new version -- and
+        // reloading into that same half-deployed moment is exactly how a
+        // stale/inconsistent value could flash up right after an
+        // auto-refresh. Confirm the new value is still there and unchanged
+        // a few seconds later before actually reloading; if it isn't
+        // (mid-deploy noise), this just waits for the next poll instead of
+        // acting on a possibly-transient reading.
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+        const confirmed = await fetchDeployedVersion();
+        if (confirmed !== null && confirmed === firstCheck && confirmed !== versionAtLoad) {
+            window.location.reload();
+        }
+    }, intervalMs);
+}

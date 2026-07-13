@@ -12,10 +12,143 @@ Every page has a `<footer>` with a `#app-version` span, populated by a
 self-invoking snippet at the bottom of `js/app.js` (the one script every
 page already loads) that fetches `/VERSION` -- a plain static text file
 deployed alongside `index.html`, not one of the PHP app's own `API_BASE`
-endpoints -- and renders it as e.g. "v0.1.0". Fetched with `cache:
+endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 'no-store'` so a page loaded shortly after a deploy can't keep showing a
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
+
+## Maintenance mode
+
+`apiRequest()` (`js/app.js`) -- the single fetch wrapper every API-calling
+function funnels through -- checks every response for `status: 503` with
+`body.status === 'maintenance'` (see "Maintenance mode" in
+`php-app/README.md`). On a match, it stashes the server's message and the
+current page's path in `sessionStorage` (`maintenanceMessage`/
+`maintenanceReturnTo`), redirects to `/maintenance.html`, and returns a
+Promise that never resolves -- deliberately, so whatever the caller was
+about to do with the response (e.g. `login.js` un-hiding the login form)
+never runs while the page is already mid-navigation away. A module-level
+`redirectingToMaintenance` flag short-circuits any further `apiRequest()`
+calls once that's happened, since `window.location.href` doesn't stop
+script execution synchronously -- without it, an in-flight `setInterval`
+poll (e.g. `game.js`'s board polling) could fire another request and
+re-write `sessionStorage` during the brief window before the browser
+actually navigates.
+
+`maintenance.html` reads the stashed message/return path in `js/maintenance.js`
+(falling back to a hardcoded message and `/` if visited directly, e.g.
+bookmarked), wires a retry button, and polls a raw `fetch('/app/me')`
+(bypassing `apiRequest()`, so the poll itself can't re-trigger the redirect
+logic) every 15 seconds -- once that stops returning `503`, it redirects
+back to the stashed return path automatically. `register.html` makes an
+otherwise-unused `getCurrentUser()` call on load (matching `login.js`/
+`game.js`'s own first action) purely so `apiRequest()` gets a chance to
+catch a maintenance window before the visitor ever submits the form.
+
+### Version watcher
+
+Separately from maintenance mode above (which reacts to a *pending*
+deploy), `startVersionWatcher()` (`js/app.js`) reacts to a deploy that's
+already *landed* while a session was left open -- e.g. a player leaves the
+game page open across a deploy, whose HTML/JS/CSS never re-fetch on their
+own once loaded. `game/index.html`'s top-level IIFE calls it once the
+session is confirmed (right where `#game-main` is un-hidden); `index.html`/
+`register.html` don't, since neither is a page a visitor stays on long
+enough for this to matter, and both redirect away the moment a session
+exists anyway.
+
+It records the deployed `VERSION` at the moment it starts, then re-fetches
+`/VERSION` (via the same `fetchDeployedVersion()` helper the footer
+indicator uses) every 60 seconds; a value that differs from what was
+recorded at start means a new deploy has landed since this page loaded, and
+triggers a plain `window.location.reload()` -- the simplest way to pick up
+new static assets, since a hard reload always re-fetches everything the
+page references rather than trying to hot-swap individual scripts/styles.
+Skips its check (rather than reloading) while `apiRequest()`'s own
+`redirectingToMaintenance` flag is set, since a maintenance redirect is
+already in flight at that point and a second, unrelated reload would just
+race it. No special handling for an in-progress play -- a version bump is
+expected to be infrequent enough, and the check interval coarse enough,
+that this is an acceptable trade-off against the complexity of trying to
+defer the reload until the board is idle.
+
+A single differing fetch isn't enough to trigger a reload on its own,
+though: the deploy pipeline uploads files one at a time over FTP, not as
+one atomic swap (see "Deployment" in the top-level README), so a poll can
+land mid-deploy and see a real but transient value that's about to be
+overwritten again a moment later. Reloading straight into that window is
+exactly how a stale/inconsistent version could flash up right after an
+auto-refresh. So a differing value is only acted on after a second fetch,
+3 seconds later, confirms the same value is still there -- if it isn't
+(mid-deploy noise, or the value reverted), the check just waits for the
+next regular poll instead. `fetchDeployedVersion()` itself also verifies
+the response actually looks like a `MAJOR.MINOR.PATCH` version before
+returning it, resolving to `null` (indistinguishable from a failed fetch)
+for anything else -- an error page's HTML served with a stray `200`, or a
+truncated/empty body from a mid-write read, so neither the footer nor the
+watcher can ever mistake garbage content for a genuine version change.
+
+## Assets
+
+- `img/` -- Game-level art not tied to any specific printed card, e.g.
+  `hurt-feelings.webp` (Hurt Feelings is a marker/token, not a `cards` row
+  -- see migration `0003`'s own header comment for why -- so its art lives
+  here rather than under `img/cards/`).
+- `img/cards/<SET_CODE>/` -- Card art, one subfolder per Set, named after
+  that Set's own `code` column (`sets.code` -- see migration `0015` and
+  "Sets" in `database/README.md`). The official pool's art lives in
+  `img/cards/MSW/` (`MSW` = the "Mood Swings" Set `0015` seeds); a future
+  community/custom Set (see the "custom card sets" issue) would get its
+  own sibling folder here, named after whatever `code` it's registered
+  under, rather than mixing its art in with the official pool's. Each
+  file is named `<cards.id>-<slugified-name>.webp` (e.g. `1-altruism.webp`
+  for Altruism, `cards.id` 1) -- the numeric id is what actually keys the
+  lookup (it's the real join key everywhere else, e.g.
+  `game_cards.card_id`), the name suffix is purely for a human browsing
+  the folder.
+
+### Card art rendering
+
+`game.js`'s `cardArtUrl(card)` builds a card's art URL from two API fields
+`GameService::serializeCard()` returns -- `catalog_card_id` (see "Card
+identity: catalog id vs. per-game instance id" in `php-app/README.md`) and
+`name`, the latter slugified client-side by `slugify()` (lowercase,
+non-alphanumeric runs collapsed to a single hyphen, trimmed) to match the
+asset filenames above. The `MSW` set folder is hardcoded here rather than
+threaded through the API, since it's the only Set that exists today -- see
+the "custom card sets" issue for when that stops being true. `buildCardThumb()`
+is the shared element builder every card zone (hand, in-play, discard pile)
+uses in place of the old text-only buttons: a `<button class="card-thumb">`
+containing the art `<img>` (its `alt` text is `name + '. ' + rules_text`,
+covering what the printed art itself can't convey to a screen reader) plus
+whatever ISN'T part of the static art overlaid as small badges/captions on
+top of it -- a current value badge (only shown when `card.value` differs
+from `card.base_value`, since the printed value is already baked into the
+art otherwise), a "Copy" badge for an in-play Creativity copy, a
+"Suppressed" ribbon, and an owner/last-owner caption below the thumbnail
+for in-play and discard-pile cards. An unplayable hand card keeps the same
+dashed, lower-opacity `.not-playable` treatment the old text button had,
+just applied to the thumbnail instead. Two tabletop conventions are
+conveyed by rotating the art itself (badges/captions are siblings of the
+`<img>`, not children of it, so they always stay upright and legible --
+the rotation is a visual reinforcement of the badge, never a replacement
+for it): a suppressed in-play mood's `.card-thumb--suppressed` class
+rotates it 90 degrees, and a mood whose `value_locked` flag is true --
+a permanent "after playing this mood" trigger (Dignity, Delight, ...)
+has locked in its alt value, as opposed to a continuously-recomputed
+"while in play" value (Determination) -- see `value_locked` in
+`php-app/README.md` -- gets its own `.card-thumb--value-locked` class,
+rotating it 180 degrees. Both classes
+can apply at once (a suppressed, value-locked mood), for which a third
+CSS rule (`.card-thumb--suppressed.card-thumb--value-locked`) rotates
+270 degrees rather than letting the two `transform`s silently clobber
+each other. The card-detail dialog's enlarged
+`#card-detail-art` image replaces what used to be a `<h3>` name heading and
+a `<p>` rules-text paragraph -- both now conveyed only via that image's
+`alt` text -- while every other line in the dialog (color, value, alt
+value, suppression, ownership, "affecting"/"affected by", Bliss's discard
+color) stays plain text exactly as before, since none of that is
+information the art itself carries.
 
 ## Pages
 
@@ -24,6 +157,9 @@ README for what the version itself means and where it's bumped.
   `/game/`. Links to `register.html`.
 - `register.html` — Registration form. On success, shows a message to check
   email for the verification link (login is blocked until verified).
+- `maintenance.html` — Shown during a maintenance window (see "Maintenance
+  mode" above); not linked from anywhere, reached only via `apiRequest()`'s
+  redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
   "Friends" button (see below), and the game lobby/board itself:
@@ -119,9 +255,20 @@ README for what the version itself means and where it's bumped.
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
     Decklists (Duel) deck", which never actually named anything the viewer
     had chosen. Clicking any hand
-    card opens a panel showing its name and rules text plus Play/Cancel, so
-    it doubles as a quick way to inspect a card you don't recognize yet;
-    cards with no ability worth asking about (roughly half the 127-card
+    card opens `#choices-panel` inline, underneath the hand -- a plain
+    block element (not a `<dialog>`/overlay, deliberately: an overlay was
+    tried and reverted, since it made the rest of the board -- in-play
+    moods, discard pile, opponents' state -- harder to reference while
+    still choosing a target) showing an enlarged view of the card's own
+    art in place of a separate name/rules-text heading (its `alt` text
+    carries both, for accessibility) plus whatever choice fields it
+    needs and Play/Cancel. A server-side rejection from actually
+    submitting the play (caught after the panel's own client-side checks
+    below already passed) surfaces inside the panel itself, reusing
+    `#choices-validation`'s existing spot right next to the Play button,
+    rather than the board's own `#board-error` above the hand -- easy to
+    miss while attention is still on the fields just below it. Cards with
+    no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
     card to discard, a mode string, etc.), driven by each card's
@@ -202,7 +349,9 @@ README for what the version itself means and where it's bumped.
     otherwise polling would stay silently suspended until the panel was
     manually cancelled, even though the pass itself went through fine.
     Every mood in play is also clickable, opening a read-only detail view
-    (name, base value, alt value if it has one, current value if a
+    (an enlarged view of the card's own art in place of a separate name/
+    rules-text heading -- see "Card art rendering" above -- base value,
+    alt value if it has one, current value if a
     while-in-play effect has changed it, its printed color too if
     Imagination has recolored it (or, for a Creativity copy, if that
     differs from whatever it's copying), owner, rules text, and — if it's
@@ -288,7 +437,15 @@ README for what the version itself means and where it's bumped.
     acting player answers their own "which of my own moods (Instability
     itself included) do I give back" step once that resolves, with no
     frontend changes needed for either card: the response panel already
-    renders any decision, self-targeted or not, the same way. Suspicion, Disillusionment, Avoidance,
+    renders any decision, self-targeted or not, the same way. Pride uses
+    this same self-targeted, immediately-shown pending decision for a
+    different reason again: "more moods than you" can't be compared
+    correctly until Pride itself is in play and counted, so the field's
+    candidate players are computed server-side against the real post-play
+    board and sent down as `candidate_player_ids` — a dropdown field option
+    source `fieldOptions()` handles the same way it already does for
+    Instability's own `candidate_card_ids`, just for players instead of
+    moods. Suspicion, Disillusionment, Avoidance,
     Confusion, and Fury all queue one decision per player (Disillusionment's
     queue starts with the next player in turn order and wraps around to
     the acting player themselves last; Avoidance's, Confusion's, and
@@ -413,9 +570,15 @@ README for what the version itself means and where it's bumped.
     from) whoever the "— on turn" tag currently marks. In games of 3+
     players, whoever holds Hurt Feelings (`state.round.hurt_feelings_game_player_id`,
     already tracked server-side to grant that player 2 plays instead of 1
-    this round, but previously never surfaced to the client either) gets
-    its own "— has Hurt Feelings (2 plays this round)" tag, so the extra
-    play they're about to get isn't a surprise.
+    this round, but previously never surfaced to the client either) gets a
+    small `img/hurt-feelings.webp` thumbnail next to their row instead of a
+    plain text tag, so the extra play they're about to get isn't a
+    surprise. Clicking it opens the same generic `#art-preview-dialog`
+    an enlarged card-art view uses (`openArtPreview()`) with an enlarged
+    view of that art, since Hurt Feelings is a round-level marker/token,
+    not a `cards` row (see migration `0003`'s own header comment), so it
+    has no `catalog_card_id`/`rules_text` to build a card-detail-dialog-style
+    view from.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits

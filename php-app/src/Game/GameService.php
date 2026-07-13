@@ -889,7 +889,7 @@ final class GameService
                     $nextDecision = $this->nextUnresolvedScoringDecision($state, $roundId, $turnOrder);
                     if ($nextDecision !== null) {
                         $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], [], $state);
+                        $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
 
                         $pdo->commit();
 
@@ -1071,7 +1071,7 @@ final class GameService
             try {
                 $this->boardStates->save($gameId, $state);
                 $this->writeScoringDecisionBatch($gameId, $roundId, $state, $nextDecision);
-                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], [], $state);
+                $this->logEvent($gameId, $roundId, $nextDecision['ownerId'], 'pending_decision_created', $nextDecision['cardId'], ['scoring_trigger' => true], $state);
 
                 $pdo->commit();
             } catch (Throwable $e) {
@@ -1843,6 +1843,15 @@ final class GameService
                 ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
+                // A permanent one-time "after playing this mood, ... this
+                // mood's value becomes N" trigger (Dignity, Delight, ...)
+                // has locked its value in via BoardState::setValueOverride()
+                // -- as opposed to a "while in play" card (Determination)
+                // whose value keeps being recomputed live by valueOf() and
+                // never touches 'valueOverride' at all. The frontend uses
+                // this to distinguish the two visually (see "Card art
+                // rendering" in web-static/README.md).
+                'value_locked' => array_key_exists('valueOverride', $mood->effectState),
                 'suppression_expiry' => $mood->suppressionExpiry,
                 'suppressed_by_card_id' => $mood->suppressionSourceCardId,
                 'suppressed_by_name' => $mood->suppressionSourceCardId !== null
@@ -1971,12 +1980,21 @@ final class GameService
         $grantUsed = $details['grant_used'] ?? null;
         $grantUsedSuffix = $grantUsed !== null ? ' (using ' . $this->describeGrantDetails($grantUsed, $cardNames) . ')' : '';
 
-        $description = match ($row['event_type']) {
-            'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
-            'turn_passed' => "{$actor} passed",
-            'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
-            'pending_decision_resolved' => "A response to {$cardName} was resolved",
-            'round_scored' => $this->describeRoundScored($details, $playerNames),
+        // A scoring-time pending_decision_created (Enthusiasm/Passion,
+        // tagged via 'scoring_trigger' at the two writeScoringDecisionBatch()
+        // call sites) is never a fresh play -- the card triggering it has
+        // already been sitting in play since some earlier turn -- so it
+        // gets its own phrasing instead of the "{actor} played {card}..."
+        // template every other pending_decision_created shares, which would
+        // otherwise misleadingly read as though the player just played a
+        // second copy of the same card.
+        $description = match (true) {
+            $row['event_type'] === 'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
+            $row['event_type'] === 'turn_passed' => "{$actor} passed",
+            $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
+            $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
+            $row['event_type'] === 'pending_decision_resolved' => "A response to {$cardName} was resolved",
+            $row['event_type'] === 'round_scored' => $this->describeRoundScored($details, $playerNames),
             default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 
@@ -2142,7 +2160,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'scoring_trigger'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 
@@ -2302,7 +2320,7 @@ final class GameService
      * card being merely displayed, since nothing there ever reads it.
      *
      * @param array<int, string> $names
-     * @return array{card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
+     * @return array{card_id:int,catalog_card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
     private function serializeCard(BoardState $state, int $cardId, array $names, ?int $reactingViewerId = null): array
     {
@@ -2342,6 +2360,12 @@ final class GameService
 
         return [
             'card_id' => $cardId,
+            // The catalog id (cards.id) this card's art asset is keyed by
+            // -- see web-static/README.md's "Assets" section. For a
+            // Creativity copy this is the COPIED card's catalog id,
+            // matching name/rules_text's own switch just below, so the
+            // art shown matches whatever mood is actually displayed.
+            'catalog_card_id' => $state->catalogCardId($isCreativityCopy ? $effectiveCardId : $cardId),
             'name' => $isCreativityCopy ? ($names[$effectiveCardId] ?? $diceValueCatalog['effectKey']) : ($names[$cardId] ?? $catalog['effectKey']),
             'color' => $color,
             // The printed color, ignoring Imagination's "while in play, all

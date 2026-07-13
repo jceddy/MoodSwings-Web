@@ -216,11 +216,14 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertSame(1, CardChoiceSchema::forEffectKey('curiosity')[0]['filter']['min_hand_count']);
     }
 
-    public function testMoreMoodsThanViewerFilterForPride(): void
+    public function testPrideExposesNoImmediateFields(): void
     {
-        $fields = CardChoiceSchema::forEffectKey('pride');
-
-        self::assertTrue($fields[0]['filter']['more_moods_than_viewer']);
+        // Which player to target isn't an ordinary up-front field -- the
+        // candidate list depends on Pride's own mood count, which isn't
+        // knowable until Pride is actually in play. See PrideEffect, which
+        // defers this choice to a pending decision the acting player
+        // answers immediately after Pride has actually entered play.
+        self::assertSame([], CardChoiceSchema::forEffectKey('pride'));
     }
 
     public function testValuesFilterDistinguishesEachHandDiscardValueBoostCard(): void

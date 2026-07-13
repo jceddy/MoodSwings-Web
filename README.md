@@ -12,12 +12,32 @@ This repository is organized into three independent projects:
 
 See each project's own README for setup and details.
 
+## Branching & environments
+
+Two long-lived branches, each deploying to its own domain:
+
+- **`development`** — the integration branch. Feature/fix PRs merge here.
+  Every merge auto-deploys to the dev domain via
+  `.github/workflows/deploy-dev.yml`, so the dev site always reflects the
+  latest merged work.
+- **`main`** — production. Deploys to the live domain via
+  `.github/workflows/deploy.yml`, unchanged from before `development`
+  existed. `main` only moves forward via a periodic `development` -> `main`
+  pull request, promoting a batch of already-merged, already-dev-tested
+  changes to production on a controlled schedule rather than on every
+  individual merge.
+
+The two deploy workflows are otherwise identical (same build/artifact
+steps) and read entirely separate `DEV_`-prefixed secrets/variables (see
+"Development environment setup" below) so configuring, or misconfiguring,
+the dev environment can never touch production's already-live credentials.
+
 ## Versioning
 
 The three sub-projects deploy together as one site (see "Deployment" below),
 so they share a single product version rather than each having their own —
 tracked in the [`VERSION`](VERSION) file at the repo root, currently
-`0.1.0`. Follows [Semantic Versioning](https://semver.org/)
+`0.2.0`. Follows [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`), interpreted for this project as:
 
 - **MAJOR** — a breaking change to the game/save data model that makes
@@ -40,18 +60,38 @@ frontend fetches `VERSION` directly (a plain static file, deployed
 alongside `index.html`) to render the version indicator described in
 `web-static/README.md`.
 
+**Hard requirement: any change that includes a database migration must also
+bump `VERSION`.** The deployed app compares `VERSION` against a version
+value stored in the database (`schema_version`, see `database/README.md`)
+on every request, and shows a maintenance page on any mismatch — see
+`MaintenanceGate` in `php-app/README.md`. This exists because production
+has no CI access to the database (migrations are applied by hand, see
+"Deployment" below); without it, a deploy that shipped code depending on a
+not-yet-applied migration would run silently against a stale schema instead
+of visibly blocking traffic until the migration catches up.
+
 ## Deployment
 
 `.github/workflows/deploy.yml` deploys to Bluehost over FTP on every push to
-`main`. It merges `web-static/` and `php-app/` into a single site: static
-files serve from the domain root, and the PHP app is reachable under `/app`
-(e.g. `/app/health`) via `php-app/public/.htaccess`'s rewrite rule.
+`main` (production); `.github/workflows/deploy-dev.yml` does the same on
+every push to `development` (dev), reading its own separate set of secrets
+— see "Branching & environments" above. Both merge `web-static/` and
+`php-app/` into a single site: static files serve from the domain root, and
+the PHP app is reachable under `/app` (e.g. `/app/health`) via
+`php-app/public/.htaccess`'s rewrite rule.
 
 Every `<script src="...">`/`<link href="...">` referencing a `.js`/`.css`
 file gets `?v=<short commit SHA>` appended during the build, so browsers
 that already cached an old version of a script (from before a page's
 markup last changed) reliably fetch the new one instead of silently
 keeping the stale cached copy.
+
+Deploys aren't atomic: the FTP action uploads changed files one at a time,
+so for the (typically brief) duration of a deploy, different requests can
+hit a mix of old and new files rather than a single consistent before/after
+state. Anything reacting to a deploy having landed (e.g. `web-static/js/app.js`'s
+version watcher, see `web-static/README.md`) needs to account for this
+rather than assuming the first sign of change is already the final state.
 
 ### One-time setup
 
@@ -95,4 +135,37 @@ to `main` deploys automatically. Deploys only push application files —
 whenever a PR adds a new file under `database/migrations/`, apply it to the
 production database yourself before (or right after) that PR's changes go
 live, the same way as the initial setup above.
+
+### Development environment setup
+
+Same steps as above, aimed at your dev domain/database instead, using the
+`DEV_`-prefixed name of each secret/variable so FTP/DB credentials stay
+entirely separate from production's — except SMTP, which is intentionally
+shared: both `deploy.yml` and `deploy-dev.yml` read the same plain
+`SMTP_*` secrets, since it's just a transactional-email sender rather than
+something meaningfully different per environment, and dev verification
+emails going out from the same already-configured sender isn't a concern.
+
+1. A separate FTP account (or the same one, if it can already reach your
+   dev domain's document root) for `DEV_FTP_SERVER`, `DEV_FTP_USERNAME`,
+   `DEV_FTP_PASSWORD`.
+2. Add the **secrets**: `DEV_FTP_SERVER`/`DEV_FTP_USERNAME`/
+   `DEV_FTP_PASSWORD`, `DEV_DB_HOST`/`DEV_DB_PORT`/`DEV_DB_NAME`/
+   `DEV_DB_USER`/`DEV_DB_PASSWORD`. No `DEV_SMTP_*` secrets are needed —
+   `deploy-dev.yml` reuses production's own `SMTP_*` secrets from step 3
+   above, so if those are already set, dev's email sending already works.
+3. Add the **variables**: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev
+   domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL).
+4. Create a **separate** database for the dev domain (do not point it at
+   the production database) and apply `database/migrations/` to it the same
+   way as production's step 5 — the two environments' data should stay
+   fully independent, so testing on dev never risks live player data.
+   Since this is a brand-new database, `database/consolidated/`'s merged
+   script is the fastest way to do that in one paste — see "Applying
+   migrations" in `database/README.md`.
+
+Once these are set, a push to `development` (i.e. any feature PR merging
+into it) deploys automatically to the dev domain. As with production,
+apply any new migration to the dev database yourself when a PR merges into
+`development` — before, or right after, its own dev deploy goes live.
 

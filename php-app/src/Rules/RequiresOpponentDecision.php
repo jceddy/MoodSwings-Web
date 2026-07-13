@@ -9,10 +9,15 @@ namespace MoodSwings\Rules;
  * decision from a player OTHER than the one who played the card --
  * Arrogance, Compulsion, Instability, Intimidation, Malice, Suspicion,
  * Disillusionment -- or from EVERY qualifying player, including the
- * acting player themselves -- Avoidance, Confusion, Fury. MoodPlayService
- * checks for this interface instead of calling afterPlaying() directly;
- * every other effect (the vast majority) is untouched by this and just
- * implements MoodEffect as before.
+ * acting player themselves -- Avoidance, Confusion, Fury -- or ONLY from
+ * the acting player themselves, deferred because the played card's own
+ * board effect (its own presence as a candidate, for Betrayal/Instability;
+ * the mood-count comparison its candidates depend on, for Pride) isn't
+ * available until after the card has actually entered play -- Betrayal,
+ * Instability (as a second step), Pride. MoodPlayService checks for this
+ * interface instead of calling afterPlaying() directly; every other
+ * effect (the vast majority) is untouched by this and just implements
+ * MoodEffect as before.
  *
  * Deliberately standalone rather than extending MoodEffect: every
  * implementer still extends AbstractMoodEffect (so it inherits the usual

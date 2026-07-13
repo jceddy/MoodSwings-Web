@@ -245,6 +245,18 @@ final class BoardState
         return $this->catalog[$catalogId] ?? throw new InvalidArgumentException("Unknown card id {$catalogId}");
     }
 
+    /**
+     * The catalog id (cards.id) $cardId's printed data resolves to -- see
+     * catalogRow() and $catalogCardIdFor's own docblock. Exposed separately
+     * so callers that need the catalog id itself (e.g. to look up a card's
+     * art asset, which is keyed by cards.id -- see web-static/README.md's
+     * "Assets" section) don't have to re-derive it from catalogRow().
+     */
+    public function catalogCardId(int $cardId): int
+    {
+        return $this->catalogCardIdFor[$cardId] ?? $cardId;
+    }
+
     /** @return int[] */
     public function playerOrder(): array
     {

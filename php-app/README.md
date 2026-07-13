@@ -38,11 +38,13 @@ database.
 All responses are JSON with a `status` field (`ok` or `error`), except
 `/verify-email` — that one's opened directly from an emailed link by a
 human rather than called by our own JS, so it renders an HTML page
-instead.
+instead. Every route except `/health` can also return `503` with
+`{"status": "maintenance", "message"}` (or, for `/verify-email`, an HTML
+maintenance page) — see "Maintenance mode" below.
 
 | Method | Path            | Body                                                          | Notes |
 | ------ | --------------- | -------------------------------------------------------------- | ----- |
-| GET    | `/health`       | —                                                                | Checks DB connectivity. |
+| GET    | `/health`       | —                                                                | Checks DB connectivity. Exempt from maintenance mode (see below) — always reflects real DB health, never `503` for a pending migration. |
 | POST   | `/register`     | `{"username", "email", "password", "phone_number"?}`             | Creates an unverified user and emails a verification link. Username: 3-32 chars (letters/numbers/`_`/`-`); email: valid format; password: 8-72 chars; phone (optional): 7-20 chars, digits/`+`/`-`/`.`/spaces/parens. `409` on duplicate username/email, `400` on validation failure, `502` if the verification email can't be sent (registration is rolled back so you can retry). |
 | GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with just a manual link (no auto-redirect) if the token is invalid/expired. |
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
@@ -89,6 +91,54 @@ which varies by host and isn't always what cPanel's error log page shows.
 `src/` already has a deny-all `.htaccess` from the deploy workflow, so
 that file isn't web-accessible; check it via cPanel's File Manager or FTP,
 not a browser.
+
+## Maintenance mode
+
+Production applies database migrations by hand (see "Deployment" in the
+top-level README — GitHub Actions can't reach Bluehost's MySQL directly),
+typically shortly after a code deploy rather than atomically with it.
+`src/Maintenance/MaintenanceGate.php` closes that gap: every request
+(except `/health`, see below) compares the deployed `VERSION` file against
+a `version` value stored in the `schema_version` table (`database/README.md`)
+and, on any mismatch, responds `503` with `{"status": "maintenance",
+"message": "..."}` instead of running the route — see `apiRequest()` in
+`web-static/js/app.js` for how the frontend reacts to that. A missing
+`schema_version` table (the state right after this feature's own migration
+deploys but before it's been applied) or any other DB error also triggers
+maintenance mode — self-bootstrapping, and exactly the condition this
+feature exists to catch. An unreadable `VERSION` file instead fails
+*open* (allows traffic), since blocking every user over an unrelated
+file-read glitch would be worse than the problem being solved. This makes
+`database/README.md`'s migration convention a hard requirement: any
+change that includes a migration must also bump `VERSION`, and the
+migration itself must update `schema_version` to match as its *last*
+statement.
+
+`/health` is deliberately exempt — the deploy workflows' post-deploy smoke
+test (`curl -fsS ".../app/health"`, no `continue-on-error`) would hard-fail
+every migration-containing deploy otherwise, even though "deploy code,
+apply the migration by hand shortly after" is the documented, intentional
+workflow. `/verify-email` is also exempt from the generic JSON gate, but
+not skipped — since it renders an HTML page for a human clicking an
+emailed link rather than JSON for our own JS, its own route block checks
+`MaintenanceGate::activeMessage()` itself and responds via `respondHtml()`
+instead.
+
+`MaintenanceGate::check(string $deployedVersion): ?string` takes the
+deployed version as a parameter (rather than only reading the real file)
+so the comparison itself is unit/integration-testable without touching the
+real repo-root `VERSION` file — see `tests/Maintenance/MaintenanceGateTest.php`.
+The real production entry point, `activeMessage()`, resolves `VERSION`'s
+path relative to its own file location, trying both the deployed layout
+(`dist/VERSION`, a sibling of `dist/src`) and a local-checkout layout
+(`VERSION` one level above `php-app/`) — see the class's own docblock for
+why a single hardcoded `dirname()` depth (e.g. copying `bin/migrate.php`'s)
+doesn't work here, since `bin/` and `src/Maintenance/` sit at different
+relative depths from the repo root. A DB failure on the check (table
+missing vs. genuinely unreachable) is logged to `src/maintenance-errors.log`
+(same non-web-accessible-location precedent as `mail-errors.log` above) so
+the two remain distinguishable after the fact, even though both produce
+the same generic client-facing message.
 
 ## Rules engine
 
@@ -209,8 +259,9 @@ Instability/Betrayal/Recklessness/Arrogance/Avoidance/Chaos'
 `giveInPlayToPlayer()` no longer qualifies for its new owner even though
 it's the same round, and the bonus resumes if it's ever handed back to
 whoever actually played it), a variable-count
-extra-play grant sized to close a mood-count gap with a chosen opponent
-computed once at play time (Pride), a widening of which zone a
+extra-play grant sized to close a mood-count gap with a chosen opponent,
+computed once the acting player's own deferred choice of who to target is
+answered (Pride — see `RequiresOpponentDecision` below), a widening of which zone a
 player's *normal* plays (not just bonus ones) can draw from, special-
 cased by `effect_key` inside `BoardState::grantAllows()` the same way
 `colorOf()` special-cases Imagination (Melancholy), and a color ban
@@ -338,7 +389,8 @@ translated by `writePendingBatch()`'s own catch into the same
 `GameStateException` the non-racing check throws, rather than silently
 creating a second, simultaneously-open batch.
 
-`BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer, for
+`BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer (of
+twelve, now that `PrideEffect` is a twelfth -- see below), for
 a different reason than the other ten: nothing about Betrayal's own printed
 text ("give one of your moods to another player") excludes giving Betrayal
 itself away, but that mood can't be offered as an ordinary `choice_fields`
@@ -383,6 +435,30 @@ asked once the exchange is initiated (no further "may" once two candidates
 are chosen), so `resolveDecisions()` only skips the whole thing when
 `pendingDecisionsFor()` itself already returned `[]` for a fully-declined
 play.
+
+`PrideEffect` is a twelfth implementer, self-targeted the same way as
+Betrayal/Instability's own deferred step, but for a different reason again:
+nothing about Pride's own card was ever unofferable the way Betrayal/
+Instability's were -- the problem is the *candidate list of players*.
+"More moods than you" can't be evaluated correctly at the moment an
+ordinary choices panel would be filled out, since Pride is still in hand
+one mood short of what its own comparison needs -- a player who currently
+has strictly more moods, but would only tie once Pride itself counts,
+would otherwise look like a legal target. (An earlier version of this
+choice stayed an ordinary up-front `choice_fields` entry with a
+hand-written `more_moods_than_viewer` filter in `game.js` that manually
+added 1 to the viewer's own count to compensate -- correct, but a fragile
+duplicate of `PrideEffect`'s own arithmetic that had to be kept in sync by
+hand.) `pendingDecisionsFor()` now builds the qualifying player list
+against the real post-play board (Pride already counted) and sends it down
+explicitly as the field's own `candidate_player_ids` -- a new
+`fieldOptions()` case in `game.js`, mirroring the `candidate_card_ids`
+handling Instability's own multi-select field already needed -- so the
+frontend never has to duplicate the comparison at all. `required: false`
+(Pride's own "you may choose" — omitted entirely if nobody currently
+qualifies, per `pendingDecisionsFor()` returning `[]`), so declining is
+answered the same way Enthusiasm's/Passion's own optional scoring
+decisions already are: submit no value for the field.
 
 Migration 0011 only ever closed the pending-batch-specific half of a
 broader gap: `playMood()`/`pass()`/`respondToDecision()` each load a
@@ -547,6 +623,19 @@ own transaction (the common case, no decision needed) or directly inside
 `respondToDecision()`'s already-open one once the last outstanding
 scoring decision resolves.
 
+Sharing the `pending_decision_created` event type with every mid-play
+decision above means Enthusiasm's/Passion's own event needs different
+`describeEvent()` phrasing, not the same one: the card triggering it has
+been sitting in play since some earlier turn, not just played this
+instant, so the ordinary "{actor} played {card} ..., waiting on a
+response" template would misleadingly read as though the player just
+played a second copy of the card. Both `writeScoringDecisionBatch()` call
+sites (the round-end check above and the "another scoring decision still
+outstanding" chain inside `respondToDecision()`) tag their own
+`logEvent()` call with `['scoring_trigger' => true]` instead of `[]`,
+which `describeEvent()` checks to pick "{card}'s scoring effect
+triggered, waiting on a response from {actor}" instead.
+
 `round.scoring_effects` is a related but separate field: unlike
 `scoring_preview` (only present while an Enthusiasm/Passion decision is
 actually outstanding), this is always computed the moment a round exists,
@@ -685,6 +774,17 @@ Repentance's blanket `'end_of_round'` suppression never tracks one, since
 the suppression doesn't need to watch for anything leaving play to know
 when to lift — it just expires at the round boundary regardless
 (`BoardState::clearEndOfRoundSuppressions()`).
+
+Every in-play mood also carries `value_locked` -- true once a permanent
+one-time "after playing this mood, ... this mood's value becomes N"
+trigger (Dignity, Delight, Cynicism, and 7 other cards -- every one that
+calls `BoardState::setValueOverride()`) has actually fired, as opposed to
+a continuously recomputed "while in play" value (Determination): both
+kinds of card can end up with `value === alt_value`, but only the former
+locks it in via `effectState['valueOverride']`, which `valueOf()` checks
+first and unconditionally returns once set. The frontend uses this to
+rotate the card art 180 degrees, matching a suppressed mood's own 90
+degree rotation -- see "Card art rendering" in `web-static/README.md`.
 
 Suppression isn't the only "one in-play mood affects another" relationship
 worth surfacing: a mood with a printed dice value (`has_dice_value`) can
@@ -1384,6 +1484,18 @@ supply `$catalogCardIdFor`, all of which kept passing unmodified.
 `BoardStateRepository::load()` builds the real mapping for a live game from
 each loaded `game_cards` row's own `id`/`card_id` pair.
 
+`BoardState::catalogCardId(int $cardId): int` exposes that same resolution
+publicly (`catalogRow()` itself only returns the catalog *row*, not the id
+it resolved to) -- used by `GameService::serializeCard()` to add a
+`catalog_card_id` field to every serialized card, alongside the existing
+instance-id `card_id`. This is the one place the API surface needs a real
+catalog id: card art is keyed by `cards.id`, not by the per-game instance
+id (see "Assets" in `web-static/README.md`), so the frontend builds each
+card's art URL from `catalog_card_id` + a client-side slugification of
+`name`. For a Creativity copy, `catalog_card_id` resolves to the *copied*
+card's catalog id, matching `name`/`rules_text`'s own switch, so the art
+shown always matches whatever mood is actually being displayed.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises
@@ -1403,6 +1515,17 @@ with their defaults):
 TEST_DB_HOST=127.0.0.1 TEST_DB_PORT=3306 TEST_DB_NAME=moodswings_test \
 TEST_DB_USER=root TEST_DB_PASSWORD= vendor/bin/phpunit
 ```
+
+`MaintenanceGateTest` (see "Maintenance mode" above) follows the same
+pattern, but drops/recreates `schema_version` itself in `setUp()`/`tearDown()`
+rather than assuming it's already present, since "the table doesn't exist"
+is itself one of the states under test. Its `testActiveMessageReadsTheRealVersionFile`
+case exercises the real `deployedVersion()`/`activeMessage()` path against
+whatever `VERSION` file is actually on disk, rather than only the
+injected-string `check()` path — the two resolve `VERSION`'s location
+differently (see `MaintenanceGate`'s docblock), so this is the one test
+that would have caught the path-resolution bug an earlier draft of that
+class had.
 
 The test suite truncates `users`/`sessions`/`email_verifications`/
 `friendships` in that database before each test, so never point it at a

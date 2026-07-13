@@ -82,9 +82,7 @@ body.game-page {
 }
 
 #lobby-view li,
-#players-list li,
-#in-play-list li,
-#discard-list li {
+#players-list li {
     padding: 0.4rem 0;
     border-bottom: 1px solid #eee;
 }
@@ -93,19 +91,131 @@ body.game-page {
     margin-left: 1rem;
 }
 
-#hand-list {
+#players-list li {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+#hand-list,
+#in-play-list,
+#discard-list {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
 }
 
-#hand-list li {
+#hand-list li,
+#in-play-list li,
+#discard-list li {
     list-style: none;
 }
 
-#hand-list button.not-playable {
+/* -- Card art thumbnails (hand/in-play/discard) --------------------- */
+
+.card-thumb {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.15rem;
+    width: 5.5rem;
+    position: relative;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+}
+
+.card-thumb__art {
+    display: block;
+    width: 100%;
+    height: auto;
+    border: 1px solid #ccc;
+    border-radius: 0.4rem;
+    transition: transform 0.15s ease;
+}
+
+.card-thumb.not-playable {
     opacity: 0.5;
+}
+
+.card-thumb.not-playable .card-thumb__art {
     border-style: dashed;
+}
+
+/* Tabletop conventions: a suppressed in-play mood is rotated 90deg like a
+   tapped card; a mood whose value has been permanently locked in by an
+   "after playing this mood" trigger (as opposed to a continuously
+   recomputed "while in play" value) is rotated 180deg. Only the art
+   itself rotates -- badges/captions stay upright and readable. */
+.card-thumb--suppressed .card-thumb__art {
+    transform: rotate(90deg);
+}
+
+.card-thumb--value-locked .card-thumb__art {
+    transform: rotate(180deg);
+}
+
+.card-thumb--suppressed.card-thumb--value-locked .card-thumb__art {
+    transform: rotate(270deg);
+}
+
+.card-thumb__badge {
+    position: absolute;
+    font-size: 0.65rem;
+    font-weight: bold;
+    line-height: 1.2;
+    padding: 0.1rem 0.35rem;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.75);
+    color: #fff;
+}
+
+.card-thumb__badge--value {
+    top: 0.25rem;
+    right: 0.25rem;
+}
+
+.card-thumb__badge--copy {
+    top: 0.25rem;
+    left: 0.25rem;
+    background: #0a5b8a;
+}
+
+.card-thumb__badge--suppressed {
+    left: 0.25rem;
+    right: 0.25rem;
+    bottom: 0.25rem;
+    text-align: center;
+    background: #b00020;
+}
+
+.card-thumb__caption {
+    font-size: 0.7rem;
+    color: #444;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* -- Hurt Feelings art thumbnail (players list) ---------------------- */
+
+.hurt-feelings-thumb {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    line-height: 0;
+}
+
+.hurt-feelings-thumb img {
+    height: 1.75rem;
+    width: auto;
+    border-radius: 0.25rem;
+    border: 1px solid #ccc;
+    vertical-align: middle;
 }
 
 dialog#new-game-dialog,
@@ -116,6 +226,33 @@ dialog#card-detail-dialog {
     padding: 1.5rem;
     border: 1px solid #ccc;
     border-radius: 0.5rem;
+}
+
+dialog#art-preview-dialog {
+    box-sizing: border-box;
+    max-width: 24rem;
+    width: 90%;
+    padding: 1.5rem;
+    border: 1px solid #ccc;
+    border-radius: 0.5rem;
+    text-align: center;
+}
+
+.card-detail-art {
+    display: block;
+    width: 100%;
+    max-width: 20rem;
+    margin: 0 auto 1rem;
+    border: 1px solid #ccc;
+    border-radius: 0.5rem;
+}
+
+.art-preview-image {
+    display: block;
+    width: 100%;
+    border: 1px solid #ccc;
+    border-radius: 0.5rem;
+    margin-bottom: 1rem;
 }
 
 #card-detail-suppression {
