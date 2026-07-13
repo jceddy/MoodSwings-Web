@@ -187,7 +187,13 @@ body.game-page {
 
 .card-thumb__art {
     display: block;
-    width: 100%;
+    /* Fixed to .card-thumb's own base width (not 100%) so the art always
+       renders at the same size regardless of how wide its container is --
+       .card-thumb--suppressed below widens that container for extra
+       horizontal breathing room around a rotated card, not to make the art
+       itself bigger; 100% here would have scaled (and, via height: auto,
+       stretched taller) the art to match. */
+    width: 5.5rem;
     height: auto;
     border: 1px solid var(--color-border);
     border-radius: 0.4rem;
