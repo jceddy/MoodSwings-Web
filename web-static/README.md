@@ -17,6 +17,47 @@ endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
 
+## Dark mode
+
+Three modes, chosen via a `<select id="theme-select">` in every page's own
+`<footer>` (`system`/`light`/`dark`, defaulting to `system`): honor the
+OS/browser's `prefers-color-scheme` preference, force light, or force dark
+regardless of what the OS says. Full theming (more than light/dark, a
+"themes" concept) was scoped out of this pass -- see the "Implement dark
+mode and/or themes" issue's own notes -- this only covers the two-mode
+case plus the system default.
+
+The color switch itself is CSS-only, in `css/style.css`: a `:root` block
+defines light-mode custom properties (`--color-bg`, `--color-text`,
+`--color-border`, etc.) that every other rule reads from rather than
+hardcoding colors directly, plus a `color-scheme: light` declaration so
+native form controls/scrollbars/default link colors follow along without
+being restyled by hand. A `prefers-color-scheme: dark` media query
+overrides those properties (and flips `color-scheme` to `dark`) whenever
+the OS prefers dark -- but only when `documentElement` doesn't carry
+`data-theme="light"`, so an explicit "Light" selection can still force
+light mode against a dark OS. A separate `:root[data-theme="dark"]` rule
+applies the same dark overrides unconditionally, forcing dark mode against
+a light OS. This means the "System" default needs no JavaScript to react
+live to an OS-level theme change -- the media query alone re-evaluates
+automatically -- only the two explicit overrides need `data-theme` set at
+all.
+
+Getting that attribute set before first paint (so an explicit preference
+never flashes the wrong theme first) needs to happen before `js/app.js`
+even loads, since that script tag sits at the bottom of `<body>`. Each
+page duplicates a tiny inline `<script>` at the top of its own `<head>`
+that reads `themePreference` from `localStorage` and sets
+`document.documentElement.dataset.theme` synchronously -- inlined and
+repeated per page rather than factored into a shared external file, since
+an external script would itself add back the network-round-trip delay
+this exists to avoid. `js/app.js`'s own `initThemeSelect()` IIFE only
+needs to keep the footer `<select>` in sync with that same stored
+preference and write a new one back to `localStorage` (plus update
+`data-theme` immediately) on `change` -- it doesn't need to set the
+attribute on load, since the inline per-page script already did that job
+by the time this file runs.
+
 ## Maintenance mode
 
 `apiRequest()` (`js/app.js`) -- the single fetch wrapper every API-calling
