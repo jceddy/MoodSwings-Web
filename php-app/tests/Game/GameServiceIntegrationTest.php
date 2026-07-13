@@ -4612,6 +4612,41 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame([$p1 => 6, $p2 => 0], $scores); // base 3 + Enthusiasm's own bonus (3)
     }
 
+    /**
+     * Enthusiasm/Passion's own scoring-time pending_decision_created event
+     * needs different phrasing than every other pending_decision_created
+     * event -- the card triggering it has already been sitting in play
+     * since some earlier turn, not just played this instant, so
+     * "{actor} played Enthusiasm ..., waiting on a response" (the template
+     * every other one of these events uses) would misleadingly read as
+     * though the player just played a second copy of the card.
+     */
+    public function testEnthusiasmsScoringDecisionEventDoesNotReadAsASecondPlay(): void
+    {
+        $u1 = $this->insertUser('enthlog1');
+        $u2 = $this->insertUser('enthlog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+
+        $description = $this->games->getState($gameId, $u1)['recent_events'][0]['description'];
+
+        self::assertStringNotContainsString('played Enthusiasm', $description);
+        self::assertSame("Enthusiasm's scoring effect triggered, waiting on a response from enthlog1", $description);
+    }
+
     public function testEnthusiasmAddsNoBonusWhenDeclined(): void
     {
         $u1 = $this->insertUser('enth3');

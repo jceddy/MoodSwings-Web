@@ -623,6 +623,19 @@ own transaction (the common case, no decision needed) or directly inside
 `respondToDecision()`'s already-open one once the last outstanding
 scoring decision resolves.
 
+Sharing the `pending_decision_created` event type with every mid-play
+decision above means Enthusiasm's/Passion's own event needs different
+`describeEvent()` phrasing, not the same one: the card triggering it has
+been sitting in play since some earlier turn, not just played this
+instant, so the ordinary "{actor} played {card} ..., waiting on a
+response" template would misleadingly read as though the player just
+played a second copy of the card. Both `writeScoringDecisionBatch()` call
+sites (the round-end check above and the "another scoring decision still
+outstanding" chain inside `respondToDecision()`) tag their own
+`logEvent()` call with `['scoring_trigger' => true]` instead of `[]`,
+which `describeEvent()` checks to pick "{card}'s scoring effect
+triggered, waiting on a response from {actor}" instead.
+
 `round.scoring_effects` is a related but separate field: unlike
 `scoring_preview` (only present while an Enthusiasm/Passion decision is
 actually outstanding), this is always computed the moment a round exists,
