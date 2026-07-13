@@ -421,7 +421,15 @@ information the art itself carries.
     acting player answers their own "which of my own moods (Instability
     itself included) do I give back" step once that resolves, with no
     frontend changes needed for either card: the response panel already
-    renders any decision, self-targeted or not, the same way. Suspicion, Disillusionment, Avoidance,
+    renders any decision, self-targeted or not, the same way. Pride uses
+    this same self-targeted, immediately-shown pending decision for a
+    different reason again: "more moods than you" can't be compared
+    correctly until Pride itself is in play and counted, so the field's
+    candidate players are computed server-side against the real post-play
+    board and sent down as `candidate_player_ids` — a dropdown field option
+    source `fieldOptions()` handles the same way it already does for
+    Instability's own `candidate_card_ids`, just for players instead of
+    moods. Suspicion, Disillusionment, Avoidance,
     Confusion, and Fury all queue one decision per player (Disillusionment's
     queue starts with the next player in turn order and wraps around to
     the acting player themselves last; Avoidance's, Confusion's, and

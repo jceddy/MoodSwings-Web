@@ -1135,21 +1135,22 @@
         if (!filter) return true;
         if (filter.min_hand_count !== undefined && player.hand_count < filter.min_hand_count) return false;
         if (filter.min_mood_count !== undefined && moodCountFor(player.game_player_id) < filter.min_mood_count) return false;
-        if (filter.more_moods_than_viewer) {
-            // The card being played will itself already be in play by the
-            // time the server checks this (afterPlaying always runs once
-            // this card is in play -- see PrideEffect), so the viewer's
-            // live count needs a +1 to match what the server compares
-            // against.
-            const viewerCountAfterThisPlay = moodCountFor(currentState.you.game_player_id) + 1;
-            if (moodCountFor(player.game_player_id) <= viewerCountAfterThisPlay) return false;
-        }
         return true;
     }
 
     function fieldOptions(field, card) {
         switch (field.type) {
             case 'player':
+                // candidate_player_ids (e.g. Pride's pending decision) is a
+                // server-computed exact candidate list, sourced from the
+                // real post-play board -- takes priority over scope/filter
+                // narrowing the same way 'mood'/candidate_card_ids does
+                // below, since it's already authoritative.
+                if (field.candidate_player_ids) {
+                    return currentState.players
+                        .filter((p) => field.candidate_player_ids.includes(p.game_player_id))
+                        .map((p) => ({ value: p.game_player_id, label: p.username }));
+                }
                 return currentState.players
                     .filter((p) => field.scope !== 'other' || p.game_player_id !== currentState.you.game_player_id)
                     .filter((p) => matchesPlayerFilter(p, field.filter))

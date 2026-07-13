@@ -259,8 +259,9 @@ Instability/Betrayal/Recklessness/Arrogance/Avoidance/Chaos'
 `giveInPlayToPlayer()` no longer qualifies for its new owner even though
 it's the same round, and the bonus resumes if it's ever handed back to
 whoever actually played it), a variable-count
-extra-play grant sized to close a mood-count gap with a chosen opponent
-computed once at play time (Pride), a widening of which zone a
+extra-play grant sized to close a mood-count gap with a chosen opponent,
+computed once the acting player's own deferred choice of who to target is
+answered (Pride — see `RequiresOpponentDecision` below), a widening of which zone a
 player's *normal* plays (not just bonus ones) can draw from, special-
 cased by `effect_key` inside `BoardState::grantAllows()` the same way
 `colorOf()` special-cases Imagination (Melancholy), and a color ban
@@ -388,7 +389,8 @@ translated by `writePendingBatch()`'s own catch into the same
 `GameStateException` the non-racing check throws, rather than silently
 creating a second, simultaneously-open batch.
 
-`BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer, for
+`BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer (of
+twelve, now that `PrideEffect` is a twelfth -- see below), for
 a different reason than the other ten: nothing about Betrayal's own printed
 text ("give one of your moods to another player") excludes giving Betrayal
 itself away, but that mood can't be offered as an ordinary `choice_fields`
@@ -433,6 +435,30 @@ asked once the exchange is initiated (no further "may" once two candidates
 are chosen), so `resolveDecisions()` only skips the whole thing when
 `pendingDecisionsFor()` itself already returned `[]` for a fully-declined
 play.
+
+`PrideEffect` is a twelfth implementer, self-targeted the same way as
+Betrayal/Instability's own deferred step, but for a different reason again:
+nothing about Pride's own card was ever unofferable the way Betrayal/
+Instability's were -- the problem is the *candidate list of players*.
+"More moods than you" can't be evaluated correctly at the moment an
+ordinary choices panel would be filled out, since Pride is still in hand
+one mood short of what its own comparison needs -- a player who currently
+has strictly more moods, but would only tie once Pride itself counts,
+would otherwise look like a legal target. (An earlier version of this
+choice stayed an ordinary up-front `choice_fields` entry with a
+hand-written `more_moods_than_viewer` filter in `game.js` that manually
+added 1 to the viewer's own count to compensate -- correct, but a fragile
+duplicate of `PrideEffect`'s own arithmetic that had to be kept in sync by
+hand.) `pendingDecisionsFor()` now builds the qualifying player list
+against the real post-play board (Pride already counted) and sends it down
+explicitly as the field's own `candidate_player_ids` -- a new
+`fieldOptions()` case in `game.js`, mirroring the `candidate_card_ids`
+handling Instability's own multi-select field already needed -- so the
+frontend never has to duplicate the comparison at all. `required: false`
+(Pride's own "you may choose" — omitted entirely if nobody currently
+qualifies, per `pendingDecisionsFor()` returning `[]`), so declining is
+answered the same way Enthusiasm's/Passion's own optional scoring
+decisions already are: submit no value for the field.
 
 Migration 0011 only ever closed the pending-batch-specific half of a
 broader gap: `playMood()`/`pass()`/`respondToDecision()` each load a
