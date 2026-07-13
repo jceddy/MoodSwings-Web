@@ -86,6 +86,13 @@ that already cached an old version of a script (from before a page's
 markup last changed) reliably fetch the new one instead of silently
 keeping the stale cached copy.
 
+Deploys aren't atomic: the FTP action uploads changed files one at a time,
+so for the (typically brief) duration of a deploy, different requests can
+hit a mix of old and new files rather than a single consistent before/after
+state. Anything reacting to a deploy having landed (e.g. `web-static/js/app.js`'s
+version watcher, see `web-static/README.md`) needs to account for this
+rather than assuming the first sign of change is already the final state.
+
 ### One-time setup
 
 1. In cPanel, create (or reuse) an FTP account for deploys and note its

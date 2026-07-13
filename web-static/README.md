@@ -72,6 +72,22 @@ expected to be infrequent enough, and the check interval coarse enough,
 that this is an acceptable trade-off against the complexity of trying to
 defer the reload until the board is idle.
 
+A single differing fetch isn't enough to trigger a reload on its own,
+though: the deploy pipeline uploads files one at a time over FTP, not as
+one atomic swap (see "Deployment" in the top-level README), so a poll can
+land mid-deploy and see a real but transient value that's about to be
+overwritten again a moment later. Reloading straight into that window is
+exactly how a stale/inconsistent version could flash up right after an
+auto-refresh. So a differing value is only acted on after a second fetch,
+3 seconds later, confirms the same value is still there -- if it isn't
+(mid-deploy noise, or the value reverted), the check just waits for the
+next regular poll instead. `fetchDeployedVersion()` itself also verifies
+the response actually looks like a `MAJOR.MINOR.PATCH` version before
+returning it, resolving to `null` (indistinguishable from a failed fetch)
+for anything else -- an error page's HTML served with a stray `200`, or a
+truncated/empty body from a mid-write read, so neither the footer nor the
+watcher can ever mistake garbage content for a genuine version change.
+
 ## Assets
 
 - `img/` -- Game-level art not tied to any specific printed card, e.g.
