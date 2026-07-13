@@ -1537,6 +1537,16 @@ neutral, correctly-attributed wording ("Opposing team's turn", "Waiting
 for teamdave's team to confirm...") when the viewer isn't a candidate on
 that decision.
 
+**Players list "went first this round" badge** -- had the same
+representative-vs-actual-player confusion as the Chivalry/Triumph bug
+above: it used to key off `round.first_game_player_id`, which for a team
+game only identifies a representative member of whichever TEAM went
+first, so the badge could land on either teammate rather than the one who
+actually took turn 1. `getState()`'s `round` now also exposes
+`went_first_game_player_id` (`BoardState::roundFirstPlayerId()` --
+the same value Chivalry/Triumph already keyed off of, so it also already
+accounts for an Honor override) and the frontend badge uses that instead.
+
 ### Game timestamps
 
 `games` tracks four points in a game's life, each set exactly once by a

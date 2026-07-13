@@ -2494,6 +2494,16 @@ final class GameService
                     $state->pendingPlayGrants(),
                 ),
                 'first_game_player_id' => (int) $roundRow['first_game_player_id'],
+                // Who ACTUALLY took turn 1 this round -- for format 'team',
+                // first_game_player_id above only identifies a
+                // representative member of whichever TEAM went first (see
+                // GameService::startGame()'s own comment), not necessarily
+                // the player who did; this is BoardState::roundFirstPlayerId()
+                // instead, the same field Chivalry/Triumph key off of (also
+                // honors an Honor override, and every non-team format's own
+                // first_game_player_id besides). See "Open Team Play" in
+                // php-app/README.md.
+                'went_first_game_player_id' => $state->roundFirstPlayerId(),
                 'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
                 'banned_colors' => $state->bannedColorsThisRound(),
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],

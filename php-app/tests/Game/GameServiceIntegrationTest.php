@@ -5305,6 +5305,7 @@ final class GameServiceIntegrationTest extends TestCase
         $state = $this->games->getState($gameId, $u1);
         $chivalryCard = array_values(array_filter($state['in_play'], fn (array $c) => $c['card_id'] === $chivalryId))[0];
         self::assertSame(5, $chivalryCard['value'], 'p1 did NOT personally go first (p2 did) -- Chivalry must read 5, not 3');
+        self::assertSame($p2, $state['round']['went_first_game_player_id'], 'the Players list "went first" badge must key off p2 (who actually went), not p1 (team 0\'s representative)');
 
         // Play Triumph too (p2's own card) -- p2 DID personally go first,
         // so Triumph (the mirror image) must read its OWN alt value 5.
