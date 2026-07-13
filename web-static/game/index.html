@@ -58,6 +58,11 @@
             <h3>Players</h3>
             <ul id="players-list"></ul>
 
+            <div id="team-scores" hidden>
+                <h3>Team scores</h3>
+                <ul id="team-scores-list"></ul>
+            </div>
+
             <div id="duel-deck-submission" hidden>
                 <h3>Duel deck-building rules</h3>
                 <p id="duel-deck-rules-summary"></p>
@@ -98,6 +103,19 @@
 
                 <h3>Your hand</h3>
                 <ul id="hand-list"></ul>
+
+                <div id="teammate-hand-section" hidden>
+                    <h3 id="teammate-hand-title">Teammate's hand</h3>
+                    <ul id="teammate-hand-list"></ul>
+                </div>
+
+                <div id="team-decision-panel" hidden>
+                    <h4 id="team-decision-title"></h4>
+                    <p id="team-decision-status"></p>
+                    <div id="team-decision-candidates"></div>
+                    <button id="team-decision-confirm-button" type="button" hidden>Approve</button>
+                    <button id="team-decision-reject-button" type="button" hidden>Reject</button>
+                </div>
 
                 <div id="choices-panel" hidden>
                     <img id="choices-card-art" class="card-detail-art">
@@ -142,8 +160,16 @@
                 <select id="new-game-format">
                     <option value="standard">Traditional</option>
                     <option value="duel">Duel</option>
+                    <option value="team">Open Team Play</option>
                 </select>
             </label>
+
+            <div id="new-game-team-fields" hidden>
+                <p>Open Team Play needs exactly 3 opponents (4 players total), seated as two teams of two. Choose which of them is your partner -- you'll sit next to them, see each other's hands, and share a score each round:</p>
+                <label>Your partner
+                    <select id="new-game-partner"></select>
+                </label>
+            </div>
 
             <label>Deck
                 <select id="new-game-deck-type">

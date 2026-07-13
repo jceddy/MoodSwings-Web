@@ -100,7 +100,7 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -110,7 +110,28 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             deck_type: deckType,
             decklist_text: decklistText,
             duel_deck_rules: duelDeckRules,
+            // Only meaningful for format 'team' -- see "Open Team Play" in
+            // web-static/README.md.
+            partner_user_id: partnerUserId,
         }),
+    });
+}
+
+// Open Team Play's own turn_order/draw_recipient decisions -- see
+// "Open Team Play" in web-static/README.md. Either teammate proposes;
+// the OTHER teammate then confirms (approve) or rejects via the same
+// endpoint, distinguished by `action`.
+function proposeTeamDecision(gameId, proposedGamePlayerId) {
+    return apiRequest('/games/team-decision', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'propose', proposed_game_player_id: proposedGamePlayerId }),
+    });
+}
+
+function confirmTeamDecision(gameId, approve) {
+    return apiRequest('/games/team-decision', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'confirm', approve }),
     });
 }
 

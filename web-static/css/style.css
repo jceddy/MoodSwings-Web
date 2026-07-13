@@ -157,7 +157,8 @@ body.game-page {
 
 #hand-list,
 #in-play-list,
-#discard-list {
+#discard-list,
+#teammate-hand-list {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -165,7 +166,8 @@ body.game-page {
 
 #hand-list li,
 #in-play-list li,
-#discard-list li {
+#discard-list li,
+#teammate-hand-list li {
     list-style: none;
 }
 
@@ -353,7 +355,8 @@ dialog#art-preview-dialog {
 }
 
 #choices-panel,
-#pending-decision-panel {
+#pending-decision-panel,
+#team-decision-panel {
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     padding: 1rem;
@@ -375,6 +378,10 @@ dialog#art-preview-dialog {
     box-sizing: border-box;
     padding: 0.4rem;
     margin-top: 0.25rem;
+}
+
+#team-decision-candidates button {
+    margin-right: 0.5rem;
 }
 
 #choices-panel input[type="checkbox"],
