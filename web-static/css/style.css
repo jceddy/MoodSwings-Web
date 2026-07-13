@@ -1,15 +1,71 @@
+/* -- Theming ---------------------------------------------------------
+   Three modes (see "Dark mode" in web-static/README.md): system default
+   (honors prefers-color-scheme, the ":not([data-theme=\"light\"])" guard
+   below), and explicit light/dark overrides via documentElement's
+   data-theme attribute. color-scheme lets the browser's own UI (native
+   form controls, scrollbars, default link colors) follow along without
+   needing to restyle each one by hand. */
+:root {
+    color-scheme: light;
+    --color-bg: #fff;
+    --color-surface: #fff;
+    --color-text: #222;
+    --color-text-secondary: #444;
+    --color-muted: #888;
+    --color-border: #ccc;
+    --color-border-subtle: #eee;
+    --color-error: #b00020;
+    --color-success: #0a7a2e;
+    --color-pending: #7a5b00;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --color-bg: #181818;
+        --color-surface: #242424;
+        --color-text: #e8e8e8;
+        --color-text-secondary: #b8b8b8;
+        --color-muted: #999;
+        --color-border: #444;
+        --color-border-subtle: #333;
+        --color-error: #ff6b6b;
+        --color-success: #4caf7d;
+        --color-pending: #d4a94a;
+    }
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --color-bg: #181818;
+    --color-surface: #242424;
+    --color-text: #e8e8e8;
+    --color-text-secondary: #b8b8b8;
+    --color-muted: #999;
+    --color-border: #444;
+    --color-border-subtle: #333;
+    --color-error: #ff6b6b;
+    --color-success: #4caf7d;
+    --color-pending: #d4a94a;
+}
+
 body {
     font-family: system-ui, sans-serif;
     max-width: 40rem;
     margin: 4rem auto;
     padding: 0 1rem;
-    color: #222;
+    background-color: var(--color-bg);
+    color: var(--color-text);
 }
 
 footer {
     margin-top: 2rem;
     font-size: 0.8rem;
-    color: #888;
+    color: var(--color-muted);
+}
+
+#theme-select-label {
+    margin-left: 1rem;
 }
 
 .field {
@@ -28,11 +84,11 @@ footer {
 }
 
 .error {
-    color: #b00020;
+    color: var(--color-error);
 }
 
 .success {
-    color: #0a7a2e;
+    color: var(--color-success);
 }
 
 dialog#friends-dialog {
@@ -40,7 +96,9 @@ dialog#friends-dialog {
     max-width: 30rem;
     width: 90%;
     padding: 1.5rem;
-    border: 1px solid #ccc;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
 }
 
@@ -59,7 +117,7 @@ dialog#friends-dialog li {
     align-items: center;
     gap: 0.5rem;
     padding: 0.4rem 0;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--color-border-subtle);
 }
 
 dialog#friends-dialog li button {
@@ -84,7 +142,7 @@ body.game-page {
 #lobby-view li,
 #players-list li {
     padding: 0.4rem 0;
-    border-bottom: 1px solid #eee;
+    border-bottom: 1px solid var(--color-border-subtle);
 }
 
 #lobby-view li button {
@@ -131,7 +189,7 @@ body.game-page {
     display: block;
     width: 100%;
     height: auto;
-    border: 1px solid #ccc;
+    border: 1px solid var(--color-border);
     border-radius: 0.4rem;
     transition: transform 0.15s ease;
 }
@@ -193,7 +251,7 @@ body.game-page {
 
 .card-thumb__caption {
     font-size: 0.7rem;
-    color: #444;
+    color: var(--color-text-secondary);
     max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
@@ -214,7 +272,7 @@ body.game-page {
     height: 1.75rem;
     width: auto;
     border-radius: 0.25rem;
-    border: 1px solid #ccc;
+    border: 1px solid var(--color-border);
     vertical-align: middle;
 }
 
@@ -224,7 +282,9 @@ dialog#card-detail-dialog {
     max-width: 30rem;
     width: 90%;
     padding: 1.5rem;
-    border: 1px solid #ccc;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
 }
 
@@ -233,7 +293,9 @@ dialog#art-preview-dialog {
     max-width: 24rem;
     width: 90%;
     padding: 1.5rem;
-    border: 1px solid #ccc;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     text-align: center;
 }
@@ -243,21 +305,21 @@ dialog#art-preview-dialog {
     width: 100%;
     max-width: 20rem;
     margin: 0 auto 1rem;
-    border: 1px solid #ccc;
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
 }
 
 .art-preview-image {
     display: block;
     width: 100%;
-    border: 1px solid #ccc;
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     margin-bottom: 1rem;
 }
 
 #card-detail-suppression {
     font-style: italic;
-    color: #b00020;
+    color: var(--color-error);
 }
 
 #opponent-checkboxes label {
@@ -267,7 +329,7 @@ dialog#art-preview-dialog {
 
 #choices-panel,
 #pending-decision-panel {
-    border: 1px solid #ccc;
+    border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     padding: 1rem;
     margin: 1rem 0;
@@ -297,11 +359,11 @@ dialog#art-preview-dialog {
 
 .choice-field-nested {
     margin-left: 1.5rem;
-    border-left: 2px solid #ccc;
+    border-left: 2px solid var(--color-border);
     padding-left: 0.75rem;
 }
 
 #pending-decision-banner {
     font-weight: bold;
-    color: #7a5b00;
+    color: var(--color-pending);
 }

@@ -188,6 +188,47 @@ function fetchDeployedVersion() {
     });
 })();
 
+// Theme select (System/Light/Dark) in every page's own footer -- see "Dark
+// mode" in web-static/README.md. The actual color switch is CSS-only
+// (custom properties in style.css, gated by a prefers-color-scheme media
+// query plus a documentElement data-theme override); this just keeps the
+// <select> in sync with the stored preference and writes a new one back on
+// change. The very first paint's data-theme is already set by a duplicated
+// inline <script> in each page's own <head> (before this file even loads),
+// so an explicit preference never flashes the wrong theme first -- this
+// IIFE only needs to reflect that same preference in the dropdown's value.
+const THEME_STORAGE_KEY = 'themePreference';
+
+(function initThemeSelect() {
+    const select = document.getElementById('theme-select');
+    if (!select) {
+        return;
+    }
+
+    let stored = 'system';
+    try {
+        stored = localStorage.getItem(THEME_STORAGE_KEY) || 'system';
+    } catch (e) {
+        // localStorage unavailable (e.g. private browsing) -- leave the
+        // dropdown on its default "System" option.
+    }
+    select.value = stored;
+
+    select.addEventListener('change', () => {
+        const preference = select.value;
+        if (preference === 'light' || preference === 'dark') {
+            document.documentElement.dataset.theme = preference;
+        } else {
+            delete document.documentElement.dataset.theme;
+        }
+        try {
+            localStorage.setItem(THEME_STORAGE_KEY, preference);
+        } catch (e) {
+            // ignore -- the selection just won't persist across reloads
+        }
+    });
+})();
+
 // Detects a new deploy landing while a session is already open (e.g. a
 // player leaves the game page open across a deploy) and force-reloads so
 // the page picks up the new JS/CSS/HTML instead of continuing to run
