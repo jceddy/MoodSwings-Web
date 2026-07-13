@@ -12,10 +12,65 @@ Every page has a `<footer>` with a `#app-version` span, populated by a
 self-invoking snippet at the bottom of `js/app.js` (the one script every
 page already loads) that fetches `/VERSION` -- a plain static text file
 deployed alongside `index.html`, not one of the PHP app's own `API_BASE`
-endpoints -- and renders it as e.g. "v0.1.0". Fetched with `cache:
+endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 'no-store'` so a page loaded shortly after a deploy can't keep showing a
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
+
+## Maintenance mode
+
+`apiRequest()` (`js/app.js`) -- the single fetch wrapper every API-calling
+function funnels through -- checks every response for `status: 503` with
+`body.status === 'maintenance'` (see "Maintenance mode" in
+`php-app/README.md`). On a match, it stashes the server's message and the
+current page's path in `sessionStorage` (`maintenanceMessage`/
+`maintenanceReturnTo`), redirects to `/maintenance.html`, and returns a
+Promise that never resolves -- deliberately, so whatever the caller was
+about to do with the response (e.g. `login.js` un-hiding the login form)
+never runs while the page is already mid-navigation away. A module-level
+`redirectingToMaintenance` flag short-circuits any further `apiRequest()`
+calls once that's happened, since `window.location.href` doesn't stop
+script execution synchronously -- without it, an in-flight `setInterval`
+poll (e.g. `game.js`'s board polling) could fire another request and
+re-write `sessionStorage` during the brief window before the browser
+actually navigates.
+
+`maintenance.html` reads the stashed message/return path in `js/maintenance.js`
+(falling back to a hardcoded message and `/` if visited directly, e.g.
+bookmarked), wires a retry button, and polls a raw `fetch('/app/me')`
+(bypassing `apiRequest()`, so the poll itself can't re-trigger the redirect
+logic) every 15 seconds -- once that stops returning `503`, it redirects
+back to the stashed return path automatically. `register.html` makes an
+otherwise-unused `getCurrentUser()` call on load (matching `login.js`/
+`game.js`'s own first action) purely so `apiRequest()` gets a chance to
+catch a maintenance window before the visitor ever submits the form.
+
+### Version watcher
+
+Separately from maintenance mode above (which reacts to a *pending*
+deploy), `startVersionWatcher()` (`js/app.js`) reacts to a deploy that's
+already *landed* while a session was left open -- e.g. a player leaves the
+game page open across a deploy, whose HTML/JS/CSS never re-fetch on their
+own once loaded. `game/index.html`'s top-level IIFE calls it once the
+session is confirmed (right where `#game-main` is un-hidden); `index.html`/
+`register.html` don't, since neither is a page a visitor stays on long
+enough for this to matter, and both redirect away the moment a session
+exists anyway.
+
+It records the deployed `VERSION` at the moment it starts, then re-fetches
+`/VERSION` (via the same `fetchDeployedVersion()` helper the footer
+indicator uses) every 60 seconds; a value that differs from what was
+recorded at start means a new deploy has landed since this page loaded, and
+triggers a plain `window.location.reload()` -- the simplest way to pick up
+new static assets, since a hard reload always re-fetches everything the
+page references rather than trying to hot-swap individual scripts/styles.
+Skips its check (rather than reloading) while `apiRequest()`'s own
+`redirectingToMaintenance` flag is set, since a maintenance redirect is
+already in flight at that point and a second, unrelated reload would just
+race it. No special handling for an in-progress play -- a version bump is
+expected to be infrequent enough, and the check interval coarse enough,
+that this is an acceptable trade-off against the complexity of trying to
+defer the reload until the board is idle.
 
 ## Assets
 
@@ -86,6 +141,9 @@ information the art itself carries.
   `/game/`. Links to `register.html`.
 - `register.html` — Registration form. On success, shows a message to check
   email for the verification link (login is blocked until verified).
+- `maintenance.html` — Shown during a maintenance window (see "Maintenance
+  mode" above); not linked from anywhere, reached only via `apiRequest()`'s
+  redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
   "Friends" button (see below), and the game lobby/board itself:
@@ -181,9 +239,20 @@ information the art itself carries.
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
     Decklists (Duel) deck", which never actually named anything the viewer
     had chosen. Clicking any hand
-    card opens a panel showing its name and rules text plus Play/Cancel, so
-    it doubles as a quick way to inspect a card you don't recognize yet;
-    cards with no ability worth asking about (roughly half the 127-card
+    card opens `#choices-panel` inline, underneath the hand -- a plain
+    block element (not a `<dialog>`/overlay, deliberately: an overlay was
+    tried and reverted, since it made the rest of the board -- in-play
+    moods, discard pile, opponents' state -- harder to reference while
+    still choosing a target) showing an enlarged view of the card's own
+    art in place of a separate name/rules-text heading (its `alt` text
+    carries both, for accessibility) plus whatever choice fields it
+    needs and Play/Cancel. A server-side rejection from actually
+    submitting the play (caught after the panel's own client-side checks
+    below already passed) surfaces inside the panel itself, reusing
+    `#choices-validation`'s existing spot right next to the Play button,
+    rather than the board's own `#board-error` above the hand -- easy to
+    miss while attention is still on the fields just below it. Cards with
+    no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
     card to discard, a mode string, etc.), driven by each card's
@@ -352,7 +421,15 @@ information the art itself carries.
     acting player answers their own "which of my own moods (Instability
     itself included) do I give back" step once that resolves, with no
     frontend changes needed for either card: the response panel already
-    renders any decision, self-targeted or not, the same way. Suspicion, Disillusionment, Avoidance,
+    renders any decision, self-targeted or not, the same way. Pride uses
+    this same self-targeted, immediately-shown pending decision for a
+    different reason again: "more moods than you" can't be compared
+    correctly until Pride itself is in play and counted, so the field's
+    candidate players are computed server-side against the real post-play
+    board and sent down as `candidate_player_ids` — a dropdown field option
+    source `fieldOptions()` handles the same way it already does for
+    Instability's own `candidate_card_ids`, just for players instead of
+    moods. Suspicion, Disillusionment, Avoidance,
     Confusion, and Fury all queue one decision per player (Disillusionment's
     queue starts with the next player in turn order and wraps around to
     the acting player themselves last; Avoidance's, Confusion's, and

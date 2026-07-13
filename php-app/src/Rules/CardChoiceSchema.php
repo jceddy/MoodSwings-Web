@@ -307,9 +307,15 @@ final class CardChoiceSchema
         'recklessness' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => false, 'label' => "An opponent's mood to take (returns to them after scoring if you still hold it)"],
         ],
-        'pride' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Player with more moods in play than you', 'filter' => ['more_moods_than_viewer' => true]],
-        ],
+        // No 'pride' entry here -- unlike every other "choose a player"
+        // field, which player values qualify isn't knowable until Pride
+        // itself is already in play (its own mood counts toward "more
+        // moods than you"), so a static field sourced from the board as it
+        // stands before this play could offer a player who'd only turn out
+        // to be tied. See PrideEffect, which defers this choice to a
+        // pending decision the acting player answers immediately after
+        // Pride has actually entered play, with the qualifying candidates
+        // computed server-side against the real post-play board.
         'corruption' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['cycle', 'double_win'], 'label' => 'Double your next win, or cycle discard-pile cards to the bottom of the deck'],
             ['key' => 'discard_card_ids', 'type' => 'discard_card', 'multi' => true, 'required' => false, 'label' => 'Up to 2 discard-pile cards to cycle (required if mode is cycle)', 'count' => ['max' => 2]],

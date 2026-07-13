@@ -1,4 +1,11 @@
 (function () {
+    // Matches login.js/game.js's own first action on load: the result is
+    // irrelevant here (a 401 is the normal, expected outcome for a
+    // logged-out visitor), this call exists only so apiRequest() gets a
+    // chance to detect and redirect on a pending maintenance window, since
+    // register.html otherwise makes no API call until form submission.
+    getCurrentUser();
+
     const form = document.getElementById('register-form');
     const errorEl = document.getElementById('register-error');
     const successEl = document.getElementById('register-success');

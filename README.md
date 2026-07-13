@@ -37,7 +37,7 @@ the dev environment can never touch production's already-live credentials.
 The three sub-projects deploy together as one site (see "Deployment" below),
 so they share a single product version rather than each having their own —
 tracked in the [`VERSION`](VERSION) file at the repo root, currently
-`0.1.0`. Follows [Semantic Versioning](https://semver.org/)
+`0.2.0`. Follows [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`), interpreted for this project as:
 
 - **MAJOR** — a breaking change to the game/save data model that makes
@@ -59,6 +59,16 @@ belongs to — there's no automated enforcement of when or by how much. The
 frontend fetches `VERSION` directly (a plain static file, deployed
 alongside `index.html`) to render the version indicator described in
 `web-static/README.md`.
+
+**Hard requirement: any change that includes a database migration must also
+bump `VERSION`.** The deployed app compares `VERSION` against a version
+value stored in the database (`schema_version`, see `database/README.md`)
+on every request, and shows a maintenance page on any mismatch — see
+`MaintenanceGate` in `php-app/README.md`. This exists because production
+has no CI access to the database (migrations are applied by hand, see
+"Deployment" below); without it, a deploy that shipped code depending on a
+not-yet-applied migration would run silently against a stale schema instead
+of visibly blocking traffic until the migration catches up.
 
 ## Deployment
 
