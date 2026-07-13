@@ -841,8 +841,11 @@
         inProgressArea.hidden = false;
 
         if (state.game.status === 'completed') {
+            const winnerNames = state.game.winner_usernames && state.game.winner_usernames.length
+                ? state.game.winner_usernames.join(' & ')
+                : 'nobody';
             document.getElementById('board-round-status').textContent =
-                'Game over — ' + (state.game.winner_username || 'nobody') + ' won.';
+                'Game over — ' + winnerNames + ' won.';
         } else {
             document.getElementById('board-round-status').textContent =
                 'Round ' + state.round.round_number +
@@ -1043,10 +1046,19 @@
 
         panel.hidden = false;
 
-        const titlesByDecisionType = {
-            turn_order: "Your team's turn",
-            draw_recipient: "Your team's shared draw",
-        };
+        // Every viewer in the game receives the same team_decision (see
+        // GameService::getState()), including the team that ISN'T making
+        // the decision -- so "your team"/"your teammate" phrasing is only
+        // correct when decision.team_id actually matches the viewer's own
+        // team. can_propose/can_confirm are already false for an outside
+        // viewer, but the wording still needs to branch explicitly so it
+        // doesn't claim a stranger is "your teammate".
+        const viewer = currentState.players.find((p) => p.game_player_id === currentState.you.game_player_id);
+        const isOwnTeam = viewer && viewer.team_id === decision.team_id;
+
+        const titlesByDecisionType = isOwnTeam
+            ? { turn_order: "Your team's turn", draw_recipient: "Your team's shared draw" }
+            : { turn_order: "Opposing team's turn", draw_recipient: "Opposing team's shared draw" };
         document.getElementById('team-decision-title').textContent =
             titlesByDecisionType[decision.decision_type] || 'Team decision';
 
@@ -1084,9 +1096,14 @@
                 ' proposed ' + proposedLabel + ' to ' + actionDescription + '. Do you agree?';
             confirmButton.hidden = false;
             rejectButton.hidden = false;
-        } else {
+        } else if (isOwnTeam) {
             statusEl.textContent = 'Waiting for your teammate to confirm that ' +
                 proposedLabel + ' should ' + actionDescription + '.';
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+        } else {
+            statusEl.textContent = 'Waiting for ' + playerLabelFor(decision.proposer_game_player_id) +
+                "'s team to confirm that " + proposedLabel + ' should ' + actionDescription + '.';
             confirmButton.hidden = true;
             rejectButton.hidden = true;
         }

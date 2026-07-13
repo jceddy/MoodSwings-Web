@@ -1514,6 +1514,29 @@ The player/mood-target cards that exclude a teammate also carry
 never even offers the teammate as a choice, rather than only rejecting it
 server-side once submitted.
 
+**Winner display** -- `getState()`'s `game.winner_usernames` (an array)
+replaces the old single `winner_username`: for a team-format win it holds
+BOTH teammates on the winning team (looked up by `winner_team_id`, not
+just the single representative `winner_game_player_id` that
+`finishTeamScoringAndAdvance()` still stores for FK/internal purposes),
+so the frontend's "Game over" banner credits the whole winning team
+(`teamalice & teambob won`) rather than crediting just whichever teammate
+happened to score higher that round. Non-team games fall back to the
+single winner's username, same as before.
+
+**Team-decision wording for the non-deciding team** -- `getState()`'s
+`team_decision` is the same object for every viewer in the game,
+including the team that ISN'T making the decision (its `can_propose`/
+`can_confirm` are simply both `false` for them). `game.js`'s
+`renderTeamDecision()` used to always say "Your team's turn" and "Waiting
+for your teammate to confirm..." regardless of whether the viewer was
+actually on the deciding team, which read as flatly wrong (and
+confusing) from the other team's side. It now compares `decision.team_id`
+against the viewer's own `team_id` (from `state.players`) and shows
+neutral, correctly-attributed wording ("Opposing team's turn", "Waiting
+for teamdave's team to confirm...") when the viewer isn't a candidate on
+that decision.
+
 ### Game timestamps
 
 `games` tracks four points in a game's life, each set exactly once by a
