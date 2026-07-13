@@ -260,21 +260,62 @@
     // defines) only makes sense FOR a duel -- both enforced server-side by
     // GameService::createGame(), disabled here too so a doomed combination
     // can't even be selected, matching updateOpponentSelectionLimit()'s own
-    // proactive-prevention approach for format-dependent constraints.
-    // Falls back to 'structure' if the now-disallowed option was selected.
+    // proactive-prevention approach for format-dependent constraints. Team
+    // format similarly disables 'power' -- its 15 cards fall short of Open
+    // Team Play's 45-card minimum (see php-app/README.md). Falls back to
+    // 'structure' if the now-disallowed option was selected.
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
-        const isDuel = document.getElementById('new-game-format').value === 'duel';
+        const format = document.getElementById('new-game-format').value;
+        const isDuel = format === 'duel';
+        const isTeam = format === 'team';
         const customOption = deckTypeSelect.querySelector('option[value="custom"]');
         const customDuelOption = deckTypeSelect.querySelector('option[value="custom_duel"]');
+        const powerOption = deckTypeSelect.querySelector('option[value="power"]');
 
         customOption.disabled = isDuel;
         customDuelOption.disabled = !isDuel;
-        if ((isDuel && deckTypeSelect.value === 'custom') || (!isDuel && deckTypeSelect.value === 'custom_duel')) {
+        powerOption.disabled = isTeam;
+        if (
+            (isDuel && deckTypeSelect.value === 'custom')
+            || (!isDuel && deckTypeSelect.value === 'custom_duel')
+            || (isTeam && deckTypeSelect.value === 'power')
+        ) {
             deckTypeSelect.value = 'structure';
         }
 
         updateDeckTypeDescription();
+    }
+
+    // Shows the partner picker only for Open Team Play, populated from
+    // whichever opponents are currently checked -- re-run on every
+    // checkbox change and format change (mirroring
+    // updateOpponentSelectionLimit()'s own re-run triggers), so the
+    // partner list never offers someone who isn't actually one of this
+    // game's 3 opponents. Preserves the previously-selected partner
+    // across a re-population if they're still checked.
+    function updateTeamFields() {
+        const isTeam = document.getElementById('new-game-format').value === 'team';
+        document.getElementById('new-game-team-fields').hidden = !isTeam;
+        if (!isTeam) {
+            return;
+        }
+
+        const partnerSelect = document.getElementById('new-game-partner');
+        const previousValue = partnerSelect.value;
+        partnerSelect.innerHTML = '';
+
+        const checked = Array.from(opponentCheckboxes.querySelectorAll('input:checked'));
+        for (const box of checked) {
+            const option = document.createElement('option');
+            option.value = box.value;
+            option.textContent = box.parentElement.textContent.trim();
+            partnerSelect.appendChild(option);
+        }
+
+        if (checked.some((box) => box.value === previousValue)) {
+            partnerSelect.value = previousValue;
+        }
     }
 
     async function refreshLobby() {
@@ -328,6 +369,7 @@
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
+    document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
 
@@ -401,11 +443,13 @@
             checkbox.type = 'checkbox';
             checkbox.value = friend.friend_id;
             checkbox.addEventListener('change', updateOpponentSelectionLimit);
+            checkbox.addEventListener('change', updateTeamFields);
             label.appendChild(checkbox);
             label.append(' ' + friend.friend_username);
             opponentCheckboxes.appendChild(label);
         }
 
+        updateTeamFields();
         newGameDialog.showModal();
     });
 
@@ -427,10 +471,18 @@
         }
 
         const format = document.getElementById('new-game-format').value;
+
+        if (format === 'team' && opponentUserIds.length !== 3) {
+            newGameError.textContent = 'Open Team Play needs exactly 3 opponents (4 players total).';
+            newGameError.hidden = false;
+            return;
+        }
+
+        const partnerUserId = format === 'team' ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
         const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
-        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText, duelDeckRules);
+        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText, duelDeckRules, partnerUserId);
 
         if (!ok) {
             newGameError.textContent = body.message || 'Could not create the game.';
@@ -724,10 +776,20 @@
                 const deckLabel = state.game.deck_type === 'custom_duel' && state.game.status !== 'waiting'
                     ? ' — deck: ' + (player.custom_deck_name || 'Uploaded Deck')
                     : '';
+                // Open Team Play's own team_id (null in every other format)
+                // -- tags each row with which team it's on, and calls out
+                // the viewer's own teammate specifically since that's the
+                // one other player whose hand they can actually see (see
+                // the teammate-hand section below).
+                const isTeammate = state.you.teammate_game_player_id === player.game_player_id;
+                const teamLabel = player.team_id !== null
+                    ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
+                    : '';
+
                 const infoEl = document.createElement('span');
                 infoEl.textContent = player.username + ' — seat ' + player.seat_order +
                     ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
-                    player.hand_count + ' card(s) in hand' + deckLabel +
+                    player.hand_count + ' card(s) in hand' + deckLabel + teamLabel +
                     (wentFirst ? ' — went first this round' : '') +
                     (isTurn ? ' — on turn' : '');
                 li.appendChild(infoEl);
@@ -756,6 +818,8 @@
                 return li;
             }
         );
+
+        renderTeamScores(state.teams);
 
         if (state.game.status === 'waiting') {
             document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
@@ -876,6 +940,9 @@
             return li;
         });
 
+        renderTeammateHand(state);
+        renderTeamDecision(state.team_decision);
+
         document.getElementById('pass-button').disabled = !canAct;
 
         // round.play_grants describes whoever's turn it currently is, not
@@ -908,6 +975,158 @@
             }
         );
     }
+
+    // Open Team Play's own team totals (null in every other format) --
+    // teams is only populated once the game is in_progress/completed (see
+    // GameService::getState()'s early return for 'waiting'), so the
+    // partner pairing itself is only visible via each player row's own
+    // team_id tag (see the players-list renderer above) until then.
+    function renderTeamScores(teams) {
+        const container = document.getElementById('team-scores');
+        if (!teams) {
+            container.hidden = true;
+            return;
+        }
+
+        container.hidden = false;
+        renderList(document.getElementById('team-scores-list'), { hidden: true }, teams, (team) => {
+            const li = document.createElement('li');
+            const memberNames = team.game_player_ids.map(playerLabelFor).join(' & ');
+            li.textContent = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ') — ' +
+                team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)';
+            return li;
+        });
+    }
+
+    // Open Team Play's "open information" premise -- see
+    // php-app/README.md -- shows the viewer's own teammate's hand
+    // read-only, the same way in-play/discard-pile cards are shown to
+    // everyone: clicking a card opens the ordinary detail view rather than
+    // anything playable, since only the teammate who actually holds a card
+    // can play it.
+    function renderTeammateHand(state) {
+        const section = document.getElementById('teammate-hand-section');
+        const teammateHand = state.you.teammate_hand;
+        if (!teammateHand) {
+            section.hidden = true;
+            return;
+        }
+
+        section.hidden = false;
+        document.getElementById('teammate-hand-title').textContent =
+            playerLabelFor(state.you.teammate_game_player_id) + "'s hand";
+        renderList(document.getElementById('teammate-hand-list'), { hidden: true }, teammateHand, (card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            return li;
+        });
+    }
+
+    // Open Team Play's own turn_order/draw_recipient decisions -- see
+    // "Open Team Play" in php-app/README.md. Either teammate proposes who
+    // should act; the OTHER teammate then approves or rejects before it's
+    // locked in (game_team_decisions' own propose/confirm phases) --
+    // mirrors renderPendingDecision()'s shape but reads state.team_decision
+    // (a top-level field, not round.pending_decision) since this isn't a
+    // card-effect decision and has no played_card_id/afterPlaying() tie-in.
+    function renderTeamDecision(decision) {
+        const panel = document.getElementById('team-decision-panel');
+        const confirmButton = document.getElementById('team-decision-confirm-button');
+        const rejectButton = document.getElementById('team-decision-reject-button');
+
+        if (!decision) {
+            panel.hidden = true;
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+            return;
+        }
+
+        panel.hidden = false;
+
+        const titlesByDecisionType = {
+            turn_order: "Your team's turn",
+            draw_recipient: "Your team's shared draw",
+        };
+        document.getElementById('team-decision-title').textContent =
+            titlesByDecisionType[decision.decision_type] || 'Team decision';
+
+        const actionDescription = decision.decision_type === 'draw_recipient'
+            ? 'draw the shared card'
+            : 'go next';
+        const statusEl = document.getElementById('team-decision-status');
+        const candidatesContainer = document.getElementById('team-decision-candidates');
+        candidatesContainer.innerHTML = '';
+
+        if (decision.phase === 'propose') {
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+
+            if (decision.can_propose) {
+                statusEl.textContent = 'Choose who should ' + actionDescription + ':';
+                decision.candidate_game_player_ids.forEach((gamePlayerId) => {
+                    candidatesContainer.appendChild(actionButton(
+                        playerLabelFor(gamePlayerId),
+                        () => submitTeamProposal(gamePlayerId)
+                    ));
+                });
+            } else {
+                statusEl.textContent = 'Waiting for ' +
+                    decision.candidate_game_player_ids.map(playerLabelFor).join(' or ') +
+                    ' to choose who should ' + actionDescription + '.';
+            }
+            return;
+        }
+
+        // phase === 'confirm'
+        const proposedLabel = playerLabelFor(decision.proposed_game_player_id);
+        if (decision.can_confirm) {
+            statusEl.textContent = playerLabelFor(decision.proposer_game_player_id) +
+                ' proposed ' + proposedLabel + ' to ' + actionDescription + '. Do you agree?';
+            confirmButton.hidden = false;
+            rejectButton.hidden = false;
+        } else {
+            statusEl.textContent = 'Waiting for your teammate to confirm that ' +
+                proposedLabel + ' should ' + actionDescription + '.';
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+        }
+    }
+
+    async function submitTeamProposal(proposedGamePlayerId) {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await proposeTeamDecision(currentGameId, proposedGamePlayerId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit that proposal.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
+    document.getElementById('team-decision-confirm-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmTeamDecision(currentGameId, true);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not confirm that decision.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    });
+
+    document.getElementById('team-decision-reject-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmTeamDecision(currentGameId, false);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not reject that decision.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    });
 
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the

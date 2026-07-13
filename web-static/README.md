@@ -215,8 +215,9 @@ information the art itself carries.
     `completed` ones regardless of recency, so a stalled active game never
     gets buried below a long-finished one; see "Game timestamps" in
     `php-app/README.md`. A "New game" dialog
-    picks 1-3 friends (via `GET /friends`) plus a format, then calls
-    `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
+    picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
+    Duel, or Open Team Play), then calls `POST /games`.
+    `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
     3 normally, but only 1 for Duel, since a duel is exactly 2 players and
     the server rejects anything else (see "Duel: separate per-player
@@ -224,7 +225,16 @@ information the art itself carries.
     `change` as well as the format `<select>`'s: switching to Duel with 2
     friends already checked auto-unchecks the second one and disables the
     rest, and switching back to Traditional re-enables them, so you can't
-    submit a Duel request the server will just reject with a 400. The
+    submit a Duel request the server will just reject with a 400.
+    Selecting Open Team Play reveals `#new-game-team-fields`
+    (`updateTeamFields()`, wired to the same checkbox/format `change`
+    events): a partner `<select>` populated from whichever friends are
+    currently checked, re-populated on every change but keeping the
+    previous selection if that friend is still checked. Submitting
+    requires exactly 3 opponents checked (a client-side check ahead of the
+    server's own 4-players-total rejection) and sends the selected
+    partner as `partner_user_id`. See "Open Team Play" in
+    `php-app/README.md` for the format itself. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), One of Each
     Card, in that order, matching `deck_type`'s own six values -- see
@@ -248,7 +258,11 @@ information the art itself carries.
     games, falling back to Structure if Custom Decklist was already
     selected when the format switches -- and, the other way round,
     disables Custom Decklists (Duel) whenever Duel *isn't* selected, since
-    that option only makes sense for a duel. Selecting Custom Decklists
+    that option only makes sense for a duel. The same function also
+    disables Power whenever Open Team Play is selected -- Power's 15 cards
+    fall short of that format's 45-card minimum (see "Open Team Play" in
+    `php-app/README.md`) -- falling back to Structure if Power was already
+    selected. Selecting Custom Decklists
     (Duel) reveals `#new-game-duel-rules-fields` instead of the decklist
     fields -- no decklist is entered here at all, only the deck-building
     *rules* both players' own decklists (submitted later, see the Board
@@ -295,7 +309,32 @@ information the art itself carries.
     `state.you.game_player_id`, the same `custom_deck_name` field the
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
     Decklists (Duel) deck", which never actually named anything the viewer
-    had chosen. Clicking any hand
+    had chosen.
+
+    For a `team`-format game (see "Open Team Play" in `php-app/README.md`),
+    each Players-list row also gets a "— Team N" tag (from that player's
+    own `team_id`, `null` in every other format) plus "(your teammate)" on
+    the one row that's actually `state.you.teammate_game_player_id`. A
+    `#team-scores` section (`renderTeamScores()`, hidden until
+    `state.teams` is populated -- only once the game has actually started)
+    lists each team's combined score-so-far and round wins. A
+    `#teammate-hand-section` (`renderTeammateHand()`, hidden whenever
+    `state.you.teammate_hand` is `null`) shows your teammate's hand the
+    same read-only way in-play/discard-pile cards are shown to everyone --
+    clicking a card opens the ordinary detail view, never anything
+    playable, since only the teammate actually holding a card can play it.
+    A `#team-decision-panel` (`renderTeamDecision()`, reading
+    `state.team_decision`, `null` unless a `game_team_decisions` row is
+    open) shows either a row of candidate buttons (`can_propose`, calling
+    `proposeTeamDecision()`) or an Approve/Reject pair (`can_confirm`,
+    calling `confirmTeamDecision()`), or, for every OTHER player, a
+    read-only "Waiting for X or Y to choose who should go next/draw the
+    shared card" status line built from the same `decision_type` --
+    everyone sees this panel while a round is frozen on a team decision
+    (mirroring `#pending-decision-panel`'s own always-visible-but-
+    read-only-for-non-targets shape), not just the two candidates.
+
+    Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
     block element (not a `<dialog>`/overlay, deliberately: an overlay was
     tried and reverted, since it made the rest of the board -- in-play

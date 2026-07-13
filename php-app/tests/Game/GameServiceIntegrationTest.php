@@ -42,6 +42,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE game_events');
+        $pdo->exec('TRUNCATE TABLE game_team_decisions');
         $pdo->exec('TRUNCATE TABLE game_pending_decisions');
         $pdo->exec('TRUNCATE TABLE game_pending_decision_batches');
         $pdo->exec('TRUNCATE TABLE game_round_scores');
@@ -4908,5 +4909,390 @@ final class GameServiceIntegrationTest extends TestCase
         } finally {
             $this->pdo->prepare('SELECT RELEASE_LOCK(?)')->execute(["moodswings_game:{$gameId}"]);
         }
+    }
+
+    // -- Open Team Play (format 'team') -----------------------------------
+
+    private function insertTeamGamePlayer(int $gameId, int $userId, int $seatOrder, int $teamId): int
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO game_players (game_id, user_id, seat_order, team_id) VALUES (:game_id, :user_id, :seat_order, :team_id)'
+        );
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $userId, 'seat_order' => $seatOrder, 'team_id' => $teamId]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    private function insertTeamGameRound(int $gameId, int $roundNumber, int $firstGamePlayerId): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
+             VALUES (:game_id, :round_number, :first_player, NULL, 0, 'in_progress')"
+        );
+        $stmt->execute(['game_id' => $gameId, 'round_number' => $roundNumber, 'first_player' => $firstGamePlayerId]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    /** @param int[] $candidateGamePlayerIds */
+    private function insertTeamDecision(int $gameId, int $roundId, int $teamId, string $decisionType, array $candidateGamePlayerIds): int
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO game_team_decisions (game_id, game_round_id, team_id, decision_type, candidate_game_player_ids)
+             VALUES (:game_id, :round_id, :team_id, :decision_type, :candidates)'
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'round_id' => $roundId,
+            'team_id' => $teamId,
+            'decision_type' => $decisionType,
+            'candidates' => json_encode($candidateGamePlayerIds),
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    private function fetchOpenTeamDecision(int $gameId): array|false
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_team_decisions WHERE game_id = :game_id AND resolved_at IS NULL LIMIT 1');
+        $stmt->execute(['game_id' => $gameId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * Team 0 = p1/p2 (seats 0/1), Team 1 = p3/p4 (seats 2/3) -- adjacent
+     * seating per "Open Team Play" in php-app/README.md. Round 1 starts
+     * exactly the way startGame() would leave it: current_turn_game_player_id
+     * NULL, team_turn_1/2 unset, and an already-open turn_order decision
+     * for team 0 (the round's own first_game_player_id, p1, is team 0's
+     * representative). Each player's one hand card is one of the five
+     * vanilla, no-ability, flat-4-value commons (migration 0003's own
+     * catalog comment), so nothing here can trigger a card effect --
+     * keeping the round's score math (team totals, tie-breaks)
+     * unambiguous.
+     *
+     * @return array{gameId:int, roundId:int, p1:int, p2:int, p3:int, p4:int, complacencyId:int, indifferenceId:int, apathyId:int, boredomId:int}
+     */
+    private function buildTeamFixture(): array
+    {
+        $u1 = $this->insertUser('team1p1');
+        $u2 = $this->insertUser('team1p2');
+        $u3 = $this->insertUser('team2p1');
+        $u4 = $this->insertUser('team2p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 0);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 1);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // white, value 4
+        $indifferenceId = $this->insertGameCard($gameId, 44, 'hand', $p2); // blue, value 4
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p3); // black, value 4
+        $boredomId = $this->insertGameCard($gameId, 83, 'hand', $p4); // red, value 4
+        $this->insertGameCard($gameId, 27, 'deck', null, 0);
+        $this->insertGameCard($gameId, 54, 'deck', null, 1);
+
+        $roundId = $this->insertTeamGameRound($gameId, 1, $p1);
+        $this->insertTeamDecision($gameId, $roundId, 0, 'turn_order', [$p1, $p2]);
+
+        return [
+            'gameId' => $gameId,
+            'roundId' => $roundId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+            'complacencyId' => $complacencyId,
+            'indifferenceId' => $indifferenceId,
+            'apathyId' => $apathyId,
+            'boredomId' => $boredomId,
+        ];
+    }
+
+    public function testCreateGameTeamFormatRequiresExactlyFourPlayers(): void
+    {
+        $u1 = $this->insertUser('c1');
+        $u2 = $this->insertUser('c2');
+        $u3 = $this->insertUser('c3');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('exactly 4 players');
+        $this->games->createGame($u1, [$u1, $u2, $u3], 'team', 3, 'structure', null, null, $u2);
+    }
+
+    public function testCreateGameTeamFormatRequiresPartnerUserId(): void
+    {
+        $u1 = $this->insertUser('c1');
+        $u2 = $this->insertUser('c2');
+        $u3 = $this->insertUser('c3');
+        $u4 = $this->insertUser('c4');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('partner');
+        $this->games->createGame($u1, [$u1, $u2, $u3, $u4], 'team', 3, 'structure', null, null, null);
+    }
+
+    public function testCreateGameTeamFormatSeatsPartnersAdjacentAndAssignsTeamIds(): void
+    {
+        $u1 = $this->insertUser('c1');
+        $u2 = $this->insertUser('c2');
+        $u3 = $this->insertUser('c3');
+        $u4 = $this->insertUser('c4');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2, $u3, $u4], 'team', 3, 'structure', null, null, $u3);
+
+        $stmt = $this->pdo->prepare(
+            'SELECT user_id, seat_order, team_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+        $rows = $stmt->fetchAll();
+
+        self::assertSame($u1, (int) $rows[0]['user_id']);
+        self::assertSame(0, (int) $rows[0]['team_id']);
+        // The creator's chosen partner (u3) sits next to them, not
+        // wherever they happened to fall in opponent_user_ids order.
+        self::assertSame($u3, (int) $rows[1]['user_id']);
+        self::assertSame(0, (int) $rows[1]['team_id']);
+        self::assertSame($u2, (int) $rows[2]['user_id']);
+        self::assertSame(1, (int) $rows[2]['team_id']);
+        self::assertSame($u4, (int) $rows[3]['user_id']);
+        self::assertSame(1, (int) $rows[3]['team_id']);
+    }
+
+    public function testCreateGameTeamFormatRejectsPowerDeckType(): void
+    {
+        $u1 = $this->insertUser('c1');
+        $u2 = $this->insertUser('c2');
+        $u3 = $this->insertUser('c3');
+        $u4 = $this->insertUser('c4');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('45-card minimum');
+        $this->games->createGame($u1, [$u1, $u2, $u3, $u4], 'team', 3, 'power', null, null, $u2);
+    }
+
+    /**
+     * End-to-end: both teams' turn_order propose/confirm (including a
+     * rejected proposal being sent back to 'propose'), the two forced
+     * turns, team-aggregated scoring (deliberately a tie, to also cover
+     * the "whichever team played first wins ties" rule), the losing
+     * team's shared-draw propose/confirm, and the next round's own
+     * turn_order decision being opened for the team that just won.
+     */
+    public function testFullTeamRoundCycleWithProposeConfirmTurnOrderAndSharedDraw(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+            'complacencyId' => $complacencyId,
+            'apathyId' => $apathyId,
+        ] = $this->buildTeamFixture();
+
+        $round = $this->fetchRound($gameId);
+        self::assertNull($round['current_turn_game_player_id']);
+
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(0, (int) $decision['team_id']);
+        self::assertSame('turn_order', $decision['decision_type']);
+        self::assertSame('propose', $decision['phase']);
+
+        // p1 proposes themselves; p1 can't also confirm their own proposal.
+        $this->games->proposeTeamDecision($gameId, $p1, $p1);
+        try {
+            $this->games->confirmTeamDecision($gameId, $p1, true);
+            self::fail('Expected a GameStateException for confirming your own proposal');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString("can't also confirm", $e->getMessage());
+        }
+
+        // p2 rejects -- sends it back to 'propose' with no proposal recorded.
+        $this->games->confirmTeamDecision($gameId, $p2, false);
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame('propose', $decision['phase']);
+        self::assertNull($decision['proposer_game_player_id']);
+        self::assertNull($decision['proposed_game_player_id']);
+
+        // p2 proposes p1 goes first this round; p1 confirms.
+        $this->games->proposeTeamDecision($gameId, $p2, $p1);
+        $this->games->confirmTeamDecision($gameId, $p1, true);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['team_turn_1_game_player_id']);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id']);
+
+        // Team 1's own turn_order decision opens immediately (there's no
+        // single player to wait on a play/pass from in between).
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(1, (int) $decision['team_id']);
+        self::assertSame('turn_order', $decision['decision_type']);
+
+        // Turn 1: p1 plays Complacency (value 4). Freezes the round --
+        // team 1's own choice is already pending, not a forced next player.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $round = $this->fetchRound($gameId);
+        self::assertNull($round['current_turn_game_player_id']);
+
+        // Team 1 proposes/confirms p3 for turn 2.
+        $this->games->proposeTeamDecision($gameId, $p3, $p3);
+        $this->games->confirmTeamDecision($gameId, $p4, true);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['team_turn_2_game_player_id']);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id']);
+        self::assertFalse($this->fetchOpenTeamDecision($gameId), 'no decision needed for the two forced remaining turns');
+
+        // Turn 2: p3 plays Apathy (value 4). Turn 3 is forced: team 0's
+        // other member, p2.
+        $this->games->playMood($gameId, $p3, $apathyId, []);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+
+        // Turn 3: p2 passes. Turn 4 is forced: team 1's other member, p4.
+        $this->games->pass($gameId, $p2);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p4, (int) $round['current_turn_game_player_id']);
+
+        // Turn 4: p4 passes -- round scores. Team 0: 4 (p1) + 0 (p2) = 4.
+        // Team 1: 4 (p3) + 0 (p4) = 4 -- a tie, broken by whichever team
+        // played first (team 0, since p1 -- team 0 -- was this round's
+        // first_game_player_id).
+        $result = $this->games->pass($gameId, $p4);
+        self::assertTrue($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        $scoredRound = $this->pdo->prepare('SELECT * FROM game_rounds WHERE id = :id');
+        $scoredRound->execute(['id' => $round['id']]);
+        $scoredRoundRow = $scoredRound->fetch();
+        self::assertSame(0, (int) $scoredRoundRow['winner_team_id']);
+        self::assertSame($p1, (int) $scoredRoundRow['winner_game_player_id']); // p1 scored higher than teammate p2
+
+        // The losing team (team 1) gets a shared draw_recipient decision.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(1, (int) $decision['team_id']);
+        self::assertSame('draw_recipient', $decision['decision_type']);
+
+        $handCountStmt = fn (int $gamePlayerId) => (int) $this->pdo
+            ->query("SELECT COUNT(*) FROM game_cards WHERE owner_game_player_id = {$gamePlayerId} AND zone = 'hand'")
+            ->fetchColumn();
+        self::assertSame(0, $handCountStmt($p3), 'p3 already played their only hand card');
+        self::assertSame(1, $handCountStmt($p4), 'p4 still has their unplayed Boredom');
+
+        // p4 proposes p3 gets the draw; p3 (not the proposer) confirms.
+        $this->games->proposeTeamDecision($gameId, $p4, $p3);
+        $result = $this->games->confirmTeamDecision($gameId, $p3, true);
+        self::assertFalse($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        self::assertSame(1, $handCountStmt($p3), 'p3 received the shared draw');
+        self::assertSame(1, $handCountStmt($p4), 'p4 did not also draw');
+
+        // A fresh round 2 exists, with its own turn_order decision opened
+        // for team 0 -- the team that just won.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertNull($round2['current_turn_game_player_id']);
+        self::assertNull($round2['team_turn_1_game_player_id']);
+
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(0, (int) $decision['team_id']);
+        self::assertSame('turn_order', $decision['decision_type']);
+        self::assertEqualsCanonicalizing([$p1, $p2], array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true)));
+    }
+
+    /**
+     * Regression test: team 2's own turn_order decision opens the moment
+     * team 1's resolves (see applyTurnOrderDecision()'s own docblock), so
+     * team 2 is free to answer it before team 1's chosen player has
+     * actually taken turn 1. Resolving early must NOT hand the turn to
+     * team 2's choice prematurely -- team 1's player still has to actually
+     * play turn 1 first. (This previously clobbered
+     * current_turn_game_player_id to team 2's choice immediately, silently
+     * skipping team 1's own turn 1 entirely.)
+     */
+    public function testTeam2AnsweringTurnOrderEarlyDoesNotSkipTeam1sActualTurn(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+            'complacencyId' => $complacencyId,
+        ] = $this->buildTeamFixture();
+
+        // Team 1 decides p1 goes first.
+        $this->games->proposeTeamDecision($gameId, $p1, $p1);
+        $this->games->confirmTeamDecision($gameId, $p2, true);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['team_turn_1_game_player_id']);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id'], 'p1 must actually get turn 1');
+
+        // Team 2 answers their own turn_order decision right away, before
+        // p1 has played -- this must only record team_turn_2, not touch
+        // whose turn it currently is.
+        $this->games->proposeTeamDecision($gameId, $p3, $p3);
+        $this->games->confirmTeamDecision($gameId, $p4, true);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['team_turn_2_game_player_id']);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id'], "p1's turn must not be clobbered by team 2 deciding early");
+        self::assertFalse($this->fetchOpenTeamDecision($gameId), 'both decisions are already resolved');
+
+        // p1 now actually plays turn 1 -- should go straight to p3 (team
+        // 2's already-known choice) rather than freezing on a decision
+        // that no longer exists to unfreeze it.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id']);
+    }
+
+    public function testGetStateExposesTeamInfoTeammateHandAndTeamDecision(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'indifferenceId' => $indifferenceId,
+        ] = $this->buildTeamFixture();
+
+        $p1UserId = (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$p1}")->fetchColumn();
+        $p3UserId = (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$p3}")->fetchColumn();
+
+        $stateForP1 = $this->games->getState($gameId, $p1UserId);
+
+        foreach ($stateForP1['players'] as $player) {
+            self::assertIsInt($player['team_id']);
+        }
+
+        self::assertCount(2, $stateForP1['teams']);
+        $teamsById = array_column($stateForP1['teams'], null, 'team_id');
+        self::assertEqualsCanonicalizing([$p1, $p2], $teamsById[0]['game_player_ids']);
+
+        self::assertSame($p2, $stateForP1['you']['teammate_game_player_id']);
+        $teammateHandCardIds = array_column($stateForP1['you']['teammate_hand'], 'card_id');
+        self::assertContains($indifferenceId, $teammateHandCardIds);
+
+        // p1 is on the deciding team (team 0) and the decision is still in
+        // 'propose' phase, so p1 can propose.
+        self::assertSame('turn_order', $stateForP1['team_decision']['decision_type']);
+        self::assertTrue($stateForP1['team_decision']['can_propose']);
+        self::assertFalse($stateForP1['team_decision']['can_confirm']);
+
+        // p3 is on the OTHER team -- can see the decision exists, but can't act on it.
+        $stateForP3 = $this->games->getState($gameId, $p3UserId);
+        self::assertFalse($stateForP3['team_decision']['can_propose']);
+        self::assertFalse($stateForP3['team_decision']['can_confirm']);
     }
 }

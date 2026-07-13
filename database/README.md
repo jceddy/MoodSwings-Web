@@ -134,3 +134,15 @@ half-migrated schema.
   been manually applied to yet — see "Adding a new migration" above for the
   convention every future schema-changing migration must follow to keep
   this working.
+- **Open Team Play** (`0022`): adds `winner_team_id` to `games`/
+  `game_rounds`, `team_turn_1_game_player_id`/`team_turn_2_game_player_id`
+  to `game_rounds`, and a new `game_team_decisions` table (a propose/confirm
+  state machine for a team's live "which of us takes this turn" and
+  "which of us gets the shared draw" choices — a card-effect decision has a
+  `played_card_id` to hang off of, these don't, hence a dedicated table
+  rather than reusing `game_pending_decision_batches`). `format = 'team'`
+  and `game_players.team_id` themselves already existed, unused, since
+  `0004` — see "Open Team Play" in `php-app/README.md` for the format
+  itself. Reuses `0011`'s "NULL is distinct in a UNIQUE index" trick
+  (`active_marker`) to guarantee at most one open `game_team_decisions` row
+  per round.
