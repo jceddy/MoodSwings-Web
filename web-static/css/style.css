@@ -219,6 +219,25 @@ body.game-page {
     transform: rotate(270deg);
 }
 
+/* The 90deg (or 270deg, suppressed+value-locked) rotation above turns each
+   portrait card image on its side without changing its own layout box, so
+   the rotated art paints narrower than that box vertically -- badges
+   positioned against the unrotated box would otherwise float above/below
+   the visible art -- and wider than that box horizontally, enough to
+   visually overlap a neighboring card thumb in the same flex-wrap row.
+   Widen a suppressed card's own slot and nudge its badges to compensate. */
+.card-thumb--suppressed {
+    width: calc(5.5rem + 20px);
+}
+
+.card-thumb--suppressed .card-thumb__badge--value {
+    top: calc(0.25rem + 10px);
+}
+
+.card-thumb--suppressed .card-thumb__badge--suppressed {
+    bottom: calc(0.25rem + 10px);
+}
+
 .card-thumb__badge {
     position: absolute;
     font-size: 0.65rem;
