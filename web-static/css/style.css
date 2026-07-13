@@ -233,15 +233,15 @@ body.game-page {
    visually overlap a neighboring card thumb in the same flex-wrap row.
    Widen a suppressed card's own slot and nudge its badges to compensate. */
 .card-thumb--suppressed {
-    width: calc(5.5rem + 20px);
+    width: calc(5.5rem + 30px);
 }
 
 .card-thumb--suppressed .card-thumb__badge--value {
-    top: calc(0.25rem + 10px);
+    top: calc(0.25rem + 20px);
 }
 
 .card-thumb--suppressed .card-thumb__badge--suppressed {
-    bottom: calc(0.25rem + 10px);
+    bottom: calc(0.25rem + 20px);
 }
 
 .card-thumb__badge {
