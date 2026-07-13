@@ -45,6 +45,33 @@ otherwise-unused `getCurrentUser()` call on load (matching `login.js`/
 `game.js`'s own first action) purely so `apiRequest()` gets a chance to
 catch a maintenance window before the visitor ever submits the form.
 
+### Version watcher
+
+Separately from maintenance mode above (which reacts to a *pending*
+deploy), `startVersionWatcher()` (`js/app.js`) reacts to a deploy that's
+already *landed* while a session was left open -- e.g. a player leaves the
+game page open across a deploy, whose HTML/JS/CSS never re-fetch on their
+own once loaded. `game/index.html`'s top-level IIFE calls it once the
+session is confirmed (right where `#game-main` is un-hidden); `index.html`/
+`register.html` don't, since neither is a page a visitor stays on long
+enough for this to matter, and both redirect away the moment a session
+exists anyway.
+
+It records the deployed `VERSION` at the moment it starts, then re-fetches
+`/VERSION` (via the same `fetchDeployedVersion()` helper the footer
+indicator uses) every 60 seconds; a value that differs from what was
+recorded at start means a new deploy has landed since this page loaded, and
+triggers a plain `window.location.reload()` -- the simplest way to pick up
+new static assets, since a hard reload always re-fetches everything the
+page references rather than trying to hot-swap individual scripts/styles.
+Skips its check (rather than reloading) while `apiRequest()`'s own
+`redirectingToMaintenance` flag is set, since a maintenance redirect is
+already in flight at that point and a second, unrelated reload would just
+race it. No special handling for an in-progress play -- a version bump is
+expected to be infrequent enough, and the check interval coarse enough,
+that this is an acceptable trade-off against the complexity of trying to
+defer the reload until the board is idle.
+
 ## Assets
 
 - `img/` -- Game-level art not tied to any specific printed card, e.g.

@@ -7,6 +7,7 @@
 
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
+    startVersionWatcher();
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
