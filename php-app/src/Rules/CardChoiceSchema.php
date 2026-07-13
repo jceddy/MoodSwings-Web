@@ -39,6 +39,14 @@ namespace MoodSwings\Rules;
  *     },                    // mirrors each effect class's own InvalidChoiceException checks exactly --
  *                           // see CardChoiceSchemaTest for the source cross-references. A field with
  *                           // no filter key has no such narrowing (every scope-eligible candidate is legal).
+ *     excludes_teammate?: bool, // player/mood: a static per-effect_key flag (like the rest of this schema,
+ *                           // not computed per-request) marking the handful of cards whose printed text
+ *                           // says "opponent" rather than "another player"/"any player" -- in Open Team
+ *                           // Play, a teammate isn't a legal choice for these even though scope: 'other'
+ *                           // alone wouldn't exclude them (see BoardState::isTeammate() and
+ *                           // php-app/README.md's "Open Team Play" section for exactly which cards this
+ *                           // applies to and which don't). A no-op outside team format: there's no
+ *                           // teammate to exclude, so fieldOptions() narrowing on it never removes anything.
  *     count?: array{        // multi fields only: how many selections are legal
  *         min?: int,             // fewer than this is illegal (unless zero_ok and none are selected)
  *         max?: int,             // more than this is illegal
@@ -126,7 +134,7 @@ final class CardChoiceSchema
         ],
         'guile' => [
             ['key' => 'discard_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 cards to discard (cost to play this card)', 'count' => ['min' => 2, 'max' => 2], 'stage' => 'cost'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to take"],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to take", 'excludes_teammate' => true],
         ],
         'envy' => [
             ['key' => 'discard_mood_id', 'type' => 'mood', 'scope' => 'own', 'required' => true, 'label' => 'Your mood to put into the discard pile (cost to play this card)'],
@@ -186,13 +194,13 @@ final class CardChoiceSchema
         ],
         'regret' => [
             ['key' => 'hand_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => true, 'label' => 'Exactly 2 of your moods to return to hand (cost to play this card)', 'count' => ['min' => 2, 'max' => 2], 'stage' => 'cost'],
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to steal into your hand"],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'other', 'required' => true, 'label' => "An opponent's mood to steal into your hand", 'excludes_teammate' => true],
         ],
         'cruelty' => [
-            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
+            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)', 'filter' => ['min_mood_count' => 2], 'excludes_teammate' => true],
         ],
         'indecisiveness' => [
-            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
+            ['key' => 'opponent_player_ids', 'type' => 'player', 'scope' => 'other', 'multi' => true, 'required' => false, 'label' => 'Opponents to target (each must have 2+ moods)', 'filter' => ['min_mood_count' => 2], 'excludes_teammate' => true],
         ],
         'rejection' => [
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => '2 moods to put into the discard pile (must share a color or value)', 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_color_or_value']],
@@ -238,7 +246,7 @@ final class CardChoiceSchema
         ],
         'cynicism' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard-pile card to give away'],
-            ['key' => 'recipient_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Player to give it to (required if moving a card)'],
+            ['key' => 'recipient_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Player to give it to (required if moving a card)', 'excludes_teammate' => true],
         ],
         'infatuation' => [
             ['key' => 'discard_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => false, 'label' => '2 of your other moods to put into the discard pile'],
@@ -299,7 +307,7 @@ final class CardChoiceSchema
             ['key' => 'recipient_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Player to give it to'],
         ],
         'sneakiness' => [
-            ['key' => 'opponent_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Opponent to swap scores with at scoring time'],
+            ['key' => 'opponent_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Opponent to swap scores with at scoring time', 'excludes_teammate' => true],
         ],
         'awe' => [
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => true, 'label' => 'Player who goes first next round'],
@@ -324,7 +332,7 @@ final class CardChoiceSchema
             ['key' => 'reveal_card_ids', 'type' => 'hand_card', 'multi' => true, 'required' => false, 'label' => 'Hand cards to reveal (redrawn; their colors are banned next round)'],
         ],
         'generosity' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Player to bank an extra play for on their next turn'],
+            ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'other', 'required' => true, 'label' => 'Player to bank an extra play for on their next turn', 'excludes_teammate' => true],
         ],
         'arrogance' => [
             ['key' => 'opponent_player_id', 'type' => 'player', 'scope' => 'other', 'required' => false, 'label' => 'Opponent to target (they choose one of their qualifying moods to give up)'],

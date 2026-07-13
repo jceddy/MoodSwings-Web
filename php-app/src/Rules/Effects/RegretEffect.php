@@ -14,7 +14,10 @@ use MoodSwings\Rules\PlayerChoices;
  * you can't do that, you can't play this card. After playing this mood,
  * put an opponent's mood into your hand." The after-playing effect steals
  * a mood directly into the acting player's own hand, not the target's --
- * see BoardState::moveInPlayToPlayersHand().
+ * see BoardState::moveInPlayToPlayersHand(). You may not choose yourself
+ * (you're not your own opponent), and in Open Team Play you can't return
+ * a teammate's mood to your hand either, for the same reason -- see
+ * BoardState::isTeammate().
  */
 final class RegretEffect extends AbstractMoodEffect
 {
@@ -49,7 +52,8 @@ final class RegretEffect extends AbstractMoodEffect
         if (!$state->isInPlay($targetCardId)) {
             throw new InvalidChoiceException("Card {$targetCardId} is not in play");
         }
-        if ($state->ownerOf($targetCardId) === $playerId) {
+        $targetOwnerId = $state->ownerOf($targetCardId);
+        if ($targetOwnerId === $playerId || $state->isTeammate($playerId, $targetOwnerId)) {
             throw new InvalidChoiceException("Regret can only target an opponent's mood");
         }
 

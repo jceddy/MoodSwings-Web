@@ -17,6 +17,47 @@ endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
 
+## Dark mode
+
+Three modes, chosen via a `<select id="theme-select">` in every page's own
+`<footer>` (`system`/`light`/`dark`, defaulting to `system`): honor the
+OS/browser's `prefers-color-scheme` preference, force light, or force dark
+regardless of what the OS says. Full theming (more than light/dark, a
+"themes" concept) was scoped out of this pass -- see the "Implement dark
+mode and/or themes" issue's own notes -- this only covers the two-mode
+case plus the system default.
+
+The color switch itself is CSS-only, in `css/style.css`: a `:root` block
+defines light-mode custom properties (`--color-bg`, `--color-text`,
+`--color-border`, etc.) that every other rule reads from rather than
+hardcoding colors directly, plus a `color-scheme: light` declaration so
+native form controls/scrollbars/default link colors follow along without
+being restyled by hand. A `prefers-color-scheme: dark` media query
+overrides those properties (and flips `color-scheme` to `dark`) whenever
+the OS prefers dark -- but only when `documentElement` doesn't carry
+`data-theme="light"`, so an explicit "Light" selection can still force
+light mode against a dark OS. A separate `:root[data-theme="dark"]` rule
+applies the same dark overrides unconditionally, forcing dark mode against
+a light OS. This means the "System" default needs no JavaScript to react
+live to an OS-level theme change -- the media query alone re-evaluates
+automatically -- only the two explicit overrides need `data-theme` set at
+all.
+
+Getting that attribute set before first paint (so an explicit preference
+never flashes the wrong theme first) needs to happen before `js/app.js`
+even loads, since that script tag sits at the bottom of `<body>`. Each
+page duplicates a tiny inline `<script>` at the top of its own `<head>`
+that reads `themePreference` from `localStorage` and sets
+`document.documentElement.dataset.theme` synchronously -- inlined and
+repeated per page rather than factored into a shared external file, since
+an external script would itself add back the network-round-trip delay
+this exists to avoid. `js/app.js`'s own `initThemeSelect()` IIFE only
+needs to keep the footer `<select>` in sync with that same stored
+preference and write a new one back to `localStorage` (plus update
+`data-theme` immediately) on `change` -- it doesn't need to set the
+attribute on load, since the inline per-page script already did that job
+by the time this file runs.
+
 ## Maintenance mode
 
 `apiRequest()` (`js/app.js`) -- the single fetch wrapper every API-calling
@@ -174,8 +215,9 @@ information the art itself carries.
     `completed` ones regardless of recency, so a stalled active game never
     gets buried below a long-finished one; see "Game timestamps" in
     `php-app/README.md`. A "New game" dialog
-    picks 1-3 friends (via `GET /friends`) plus a format, then calls
-    `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
+    picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
+    Duel, Open Team Play, or Closed Team Play), then calls `POST /games`.
+    `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
     3 normally, but only 1 for Duel, since a duel is exactly 2 players and
     the server rejects anything else (see "Duel: separate per-player
@@ -183,7 +225,19 @@ information the art itself carries.
     `change` as well as the format `<select>`'s: switching to Duel with 2
     friends already checked auto-unchecks the second one and disables the
     rest, and switching back to Traditional re-enables them, so you can't
-    submit a Duel request the server will just reject with a 400. The
+    submit a Duel request the server will just reject with a 400.
+    Selecting Open Team Play or Closed Team Play reveals
+    `#new-game-team-fields` (`updateTeamFields()`, wired to the same
+    checkbox/format `change` events): a partner `<select>` populated from
+    whichever friends are currently checked, re-populated on every change
+    but keeping the previous selection if that friend is still checked,
+    alongside a description paragraph (`TEAM_FIELDS_DESCRIPTIONS`) that
+    swaps between the two formats' own wording (adjacent seating/open
+    hands vs. across-the-table seating/private hands). Submitting
+    requires exactly 3 opponents checked for either format (a client-side
+    check ahead of the server's own 4-players-total rejection) and sends
+    the selected partner as `partner_user_id`. See "Open Team Play"/
+    "Closed Team Play" in `php-app/README.md` for the formats themselves. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), One of Each
     Card, in that order, matching `deck_type`'s own six values -- see
@@ -207,7 +261,12 @@ information the art itself carries.
     games, falling back to Structure if Custom Decklist was already
     selected when the format switches -- and, the other way round,
     disables Custom Decklists (Duel) whenever Duel *isn't* selected, since
-    that option only makes sense for a duel. Selecting Custom Decklists
+    that option only makes sense for a duel. The same function also
+    disables Power whenever either team format is selected -- Power's 15
+    cards fall short of the 45-card minimum both team formats share (see
+    "Open Team Play"/"Closed Team Play" in
+    `php-app/README.md`) -- falling back to Structure if Power was already
+    selected. Selecting Custom Decklists
     (Duel) reveals `#new-game-duel-rules-fields` instead of the decklist
     fields -- no decklist is entered here at all, only the deck-building
     *rules* both players' own decklists (submitted later, see the Board
@@ -254,7 +313,67 @@ information the art itself carries.
     `state.you.game_player_id`, the same `custom_deck_name` field the
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
     Decklists (Duel) deck", which never actually named anything the viewer
-    had chosen. Clicking any hand
+    had chosen.
+
+    For a `team`/`closed_team`-format game (see "Open Team Play"/"Closed
+    Team Play" in `php-app/README.md`),
+    each Players-list row also gets a "— Team N" tag (from that player's
+    own `team_id`, `null` in every other format) plus "(your teammate)" on
+    the one row that's actually `state.you.teammate_game_player_id` --
+    populated for BOTH team formats, regardless of whether their hand is
+    visible. A
+    `#team-scores` section (`renderTeamScores()`, hidden until
+    `state.teams` is populated -- only once the game has actually started)
+    lists each team's combined score-so-far and round wins. A
+    `#teammate-hand-section` (`renderTeammateHand()`, hidden whenever
+    `state.you.teammate_hand` is `null`) shows your teammate's hand the
+    same read-only way in-play/discard-pile cards are shown to everyone --
+    clicking a card opens the ordinary detail view, never anything
+    playable, since only the teammate actually holding a card can play it.
+    This section simply never renders anything for `closed_team`, since
+    `getState()` never populates `teammate_hand` for that format at all
+    (hands stay private between teammates -- see "Closed Team Play" in
+    `php-app/README.md`). A `#team-decision-panel` (`renderTeamDecision()`, reading
+    `state.team_decision`, `null` unless a `game_team_decisions` row is
+    open) shows either a row of candidate buttons (`can_propose`, calling
+    `proposeTeamDecision()`) or an Approve/Reject pair (`can_confirm`,
+    calling `confirmTeamDecision()`), or, for every OTHER player, a
+    read-only "Waiting for X or Y to choose who should go next/draw the
+    shared card" status line built from the same `decision_type` --
+    everyone sees this panel while a round is frozen on a team decision
+    (mirroring `#pending-decision-panel`'s own always-visible-but-
+    read-only-for-non-targets shape), not just the two candidates. Its
+    title/status wording (`titlesByDecisionType`) branches on whether the
+    viewer's own `team_id` matches the decision's ("Your team's turn" vs.
+    "Opposing team's turn", etc.), since every viewer -- including
+    whichever team ISN'T deciding -- receives the same `team_decision`
+    object.
+
+    A `#initial-card-pass-panel` (`renderInitialCardPass()`, reading
+    `state.initial_card_pass`, `null` for every format except
+    `closed_team`, and `null` there too once every player has submitted)
+    is this format's own pregame step: while the viewer hasn't submitted
+    yet, it shows every hand card as a clickable thumbnail in a horizontal
+    row (reusing `buildCardThumb()`). Selection itself isn't done by
+    clicking the thumbnail directly -- that instead opens the same
+    `#card-detail-dialog` used to inspect in-play/discard-pile/opponent
+    cards elsewhere (`openCardDetail()`), passed an optional third
+    `selection` argument (`{ selected, disabled, onToggle }`) that reveals
+    a `#card-detail-select-button` reading "Select" or "De-select"
+    (disabled once 2 *other* cards are already picked, so an
+    already-selected card can always still be de-selected); clicking it
+    calls `onToggle()` and closes the dialog. The chosen 2 card_ids are
+    tracked purely client-side in a local `Set`, never sent until the
+    submit button is pressed -- the row thumbnail itself still gets the
+    same `.selected` CSS class/border used elsewhere once picked. Calling
+    `submitInitialCardPass()` (`POST /games/initial-pass`) sends the pair;
+    once submitted, the panel shows a read-only "Waiting for X, Y to pass
+    their cards" status instead (built from
+    `state.initial_card_pass.submitted_game_player_ids`, which players
+    have or haven't submitted yet -- never which 2 cards anyone chose).
+    See "Closed Team Play" in `php-app/README.md`.
+
+    Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
     block element (not a `<dialog>`/overlay, deliberately: an overlay was
     tried and reverted, since it made the rest of the board -- in-play

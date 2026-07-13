@@ -100,7 +100,7 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -110,7 +110,38 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             deck_type: deckType,
             decklist_text: decklistText,
             duel_deck_rules: duelDeckRules,
+            // Only meaningful for format 'team'/'closed_team' -- see "Open
+            // Team Play"/"Closed Team Play" in web-static/README.md.
+            partner_user_id: partnerUserId,
         }),
+    });
+}
+
+// Open Team Play's own turn_order/draw_recipient decisions -- see
+// "Open Team Play" in web-static/README.md. Either teammate proposes;
+// the OTHER teammate then confirms (approve) or rejects via the same
+// endpoint, distinguished by `action`.
+function proposeTeamDecision(gameId, proposedGamePlayerId) {
+    return apiRequest('/games/team-decision', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'propose', proposed_game_player_id: proposedGamePlayerId }),
+    });
+}
+
+function confirmTeamDecision(gameId, approve) {
+    return apiRequest('/games/team-decision', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'confirm', approve }),
+    });
+}
+
+// 'closed_team's own pregame mechanic -- see "Closed Team Play" in
+// web-static/README.md: pass exactly 2 hand cards to your teammate,
+// face down, before round 1 can begin.
+function submitInitialCardPass(gameId, cardIds) {
+    return apiRequest('/games/initial-pass', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, card_ids: cardIds }),
     });
 }
 
@@ -185,6 +216,47 @@ function fetchDeployedVersion() {
             el.textContent = 'v' + version;
         }
         // else leave the element empty rather than showing a broken/stale value
+    });
+})();
+
+// Theme select (System/Light/Dark) in every page's own footer -- see "Dark
+// mode" in web-static/README.md. The actual color switch is CSS-only
+// (custom properties in style.css, gated by a prefers-color-scheme media
+// query plus a documentElement data-theme override); this just keeps the
+// <select> in sync with the stored preference and writes a new one back on
+// change. The very first paint's data-theme is already set by a duplicated
+// inline <script> in each page's own <head> (before this file even loads),
+// so an explicit preference never flashes the wrong theme first -- this
+// IIFE only needs to reflect that same preference in the dropdown's value.
+const THEME_STORAGE_KEY = 'themePreference';
+
+(function initThemeSelect() {
+    const select = document.getElementById('theme-select');
+    if (!select) {
+        return;
+    }
+
+    let stored = 'system';
+    try {
+        stored = localStorage.getItem(THEME_STORAGE_KEY) || 'system';
+    } catch (e) {
+        // localStorage unavailable (e.g. private browsing) -- leave the
+        // dropdown on its default "System" option.
+    }
+    select.value = stored;
+
+    select.addEventListener('change', () => {
+        const preference = select.value;
+        if (preference === 'light' || preference === 'dark') {
+            document.documentElement.dataset.theme = preference;
+        } else {
+            delete document.documentElement.dataset.theme;
+        }
+        try {
+            localStorage.setItem(THEME_STORAGE_KEY, preference);
+        } catch (e) {
+            // ignore -- the selection just won't persist across reloads
+        }
     });
 })();
 

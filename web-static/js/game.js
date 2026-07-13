@@ -261,20 +261,70 @@
     // GameService::createGame(), disabled here too so a doomed combination
     // can't even be selected, matching updateOpponentSelectionLimit()'s own
     // proactive-prevention approach for format-dependent constraints.
-    // Falls back to 'structure' if the now-disallowed option was selected.
+    // Either team format similarly disables 'power' -- its 15 cards fall
+    // short of the 45-card minimum both team formats share (see
+    // php-app/README.md). Falls back to 'structure' if the now-disallowed
+    // option was selected.
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
-        const isDuel = document.getElementById('new-game-format').value === 'duel';
+        const format = document.getElementById('new-game-format').value;
+        const isDuel = format === 'duel';
+        const isTeam = format === 'team' || format === 'closed_team';
         const customOption = deckTypeSelect.querySelector('option[value="custom"]');
         const customDuelOption = deckTypeSelect.querySelector('option[value="custom_duel"]');
+        const powerOption = deckTypeSelect.querySelector('option[value="power"]');
 
         customOption.disabled = isDuel;
         customDuelOption.disabled = !isDuel;
-        if ((isDuel && deckTypeSelect.value === 'custom') || (!isDuel && deckTypeSelect.value === 'custom_duel')) {
+        powerOption.disabled = isTeam;
+        if (
+            (isDuel && deckTypeSelect.value === 'custom')
+            || (!isDuel && deckTypeSelect.value === 'custom_duel')
+            || (isTeam && deckTypeSelect.value === 'power')
+        ) {
             deckTypeSelect.value = 'structure';
         }
 
         updateDeckTypeDescription();
+    }
+
+    // Shows the partner picker only for Open Team Play, populated from
+    // whichever opponents are currently checked -- re-run on every
+    // checkbox change and format change (mirroring
+    // updateOpponentSelectionLimit()'s own re-run triggers), so the
+    // partner list never offers someone who isn't actually one of this
+    // game's 3 opponents. Preserves the previously-selected partner
+    // across a re-population if they're still checked.
+    const TEAM_FIELDS_DESCRIPTIONS = {
+        team: "Open Team Play needs exactly 3 opponents (4 players total), seated as two teams of two. Choose which of them is your partner -- you'll sit next to them, see each other's hands, and share a score each round:",
+        closed_team: "Closed Team Play needs exactly 3 opponents (4 players total), seated as two teams of two across the table from each other. Choose which of them is your partner -- your hands stay private from each other, but you'll pass 2 cards to them at the start of the game and share a score each round:",
+    };
+
+    function updateTeamFields() {
+        const format = document.getElementById('new-game-format').value;
+        const isTeamFormat = format === 'team' || format === 'closed_team';
+        document.getElementById('new-game-team-fields').hidden = !isTeamFormat;
+        if (!isTeamFormat) {
+            return;
+        }
+
+        document.getElementById('new-game-team-fields-description').textContent = TEAM_FIELDS_DESCRIPTIONS[format];
+
+        const partnerSelect = document.getElementById('new-game-partner');
+        const previousValue = partnerSelect.value;
+        partnerSelect.innerHTML = '';
+
+        const checked = Array.from(opponentCheckboxes.querySelectorAll('input:checked'));
+        for (const box of checked) {
+            const option = document.createElement('option');
+            option.value = box.value;
+            option.textContent = box.parentElement.textContent.trim();
+            partnerSelect.appendChild(option);
+        }
+
+        if (checked.some((box) => box.value === previousValue)) {
+            partnerSelect.value = previousValue;
+        }
     }
 
     async function refreshLobby() {
@@ -328,6 +378,7 @@
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
+    document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
 
@@ -401,11 +452,13 @@
             checkbox.type = 'checkbox';
             checkbox.value = friend.friend_id;
             checkbox.addEventListener('change', updateOpponentSelectionLimit);
+            checkbox.addEventListener('change', updateTeamFields);
             label.appendChild(checkbox);
             label.append(' ' + friend.friend_username);
             opponentCheckboxes.appendChild(label);
         }
 
+        updateTeamFields();
         newGameDialog.showModal();
     });
 
@@ -427,10 +480,19 @@
         }
 
         const format = document.getElementById('new-game-format').value;
+        const isTeamFormat = format === 'team' || format === 'closed_team';
+
+        if (isTeamFormat && opponentUserIds.length !== 3) {
+            newGameError.textContent = 'Either team format needs exactly 3 opponents (4 players total).';
+            newGameError.hidden = false;
+            return;
+        }
+
+        const partnerUserId = isTeamFormat ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
         const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
-        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText, duelDeckRules);
+        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText, duelDeckRules, partnerUserId);
 
         if (!ok) {
             newGameError.textContent = body.message || 'Could not create the game.';
@@ -538,8 +600,14 @@
 
     // Lets a player double-check a card they don't recognize -- whether
     // it's their own or an opponent's -- without it affecting play, since
-    // in-play/discard-pile cards can't be acted on anyway.
-    function openCardDetail(card, ownerLabel) {
+    // in-play/discard-pile cards can't be acted on anyway. `selection`, when
+    // passed, additionally turns this into the Closed Team Play initial
+    // card-pass's own picker (see renderInitialCardPass()): { selected,
+    // disabled, onToggle } shows a Select/De-select button that calls
+    // onToggle() and closes the dialog -- disabled is computed by the
+    // caller (true once 2 OTHER cards are already selected, so an
+    // already-selected card can still always be de-selected).
+    function openCardDetail(card, ownerLabel, selection) {
         const artEl = document.getElementById('card-detail-art');
         artEl.src = cardArtUrl(card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
@@ -643,6 +711,20 @@
             blissColorEl.hidden = true;
         }
 
+        const selectButton = document.getElementById('card-detail-select-button');
+        if (selection) {
+            selectButton.hidden = false;
+            selectButton.textContent = selection.selected ? 'De-select' : 'Select';
+            selectButton.disabled = selection.disabled;
+            selectButton.onclick = () => {
+                selection.onToggle();
+                cardDetailDialog.close();
+            };
+        } else {
+            selectButton.hidden = true;
+            selectButton.onclick = null;
+        }
+
         cardDetailDialog.showModal();
     }
 
@@ -713,7 +795,7 @@
             (player) => {
                 const li = document.createElement('li');
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
-                const wentFirst = state.round && state.round.first_game_player_id === player.game_player_id;
+                const wentFirst = state.round && state.round.went_first_game_player_id === player.game_player_id;
                 const hasHurtFeelings = state.round && state.round.hurt_feelings_game_player_id === player.game_player_id;
                 // Each custom_duel player has their OWN deck (unlike every
                 // other deck_type, where one label covers the whole game --
@@ -724,10 +806,20 @@
                 const deckLabel = state.game.deck_type === 'custom_duel' && state.game.status !== 'waiting'
                     ? ' — deck: ' + (player.custom_deck_name || 'Uploaded Deck')
                     : '';
+                // Open Team Play's own team_id (null in every other format)
+                // -- tags each row with which team it's on, and calls out
+                // the viewer's own teammate specifically since that's the
+                // one other player whose hand they can actually see (see
+                // the teammate-hand section below).
+                const isTeammate = state.you.teammate_game_player_id === player.game_player_id;
+                const teamLabel = player.team_id !== null
+                    ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
+                    : '';
+
                 const infoEl = document.createElement('span');
                 infoEl.textContent = player.username + ' — seat ' + player.seat_order +
                     ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
-                    player.hand_count + ' card(s) in hand' + deckLabel +
+                    player.hand_count + ' card(s) in hand' + deckLabel + teamLabel +
                     (wentFirst ? ' — went first this round' : '') +
                     (isTurn ? ' — on turn' : '');
                 li.appendChild(infoEl);
@@ -757,6 +849,8 @@
             }
         );
 
+        renderTeamScores(state.teams);
+
         if (state.game.status === 'waiting') {
             document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
             inProgressArea.hidden = true;
@@ -777,8 +871,11 @@
         inProgressArea.hidden = false;
 
         if (state.game.status === 'completed') {
+            const winnerNames = state.game.winner_usernames && state.game.winner_usernames.length
+                ? state.game.winner_usernames.join(' & ')
+                : 'nobody';
             document.getElementById('board-round-status').textContent =
-                'Game over — ' + (state.game.winner_username || 'nobody') + ' won.';
+                'Game over — ' + winnerNames + ' won.';
         } else {
             document.getElementById('board-round-status').textContent =
                 'Round ' + state.round.round_number +
@@ -876,6 +973,10 @@
             return li;
         });
 
+        renderTeammateHand(state);
+        renderTeamDecision(state.team_decision);
+        renderInitialCardPass(state);
+
         document.getElementById('pass-button').disabled = !canAct;
 
         // round.play_grants describes whoever's turn it currently is, not
@@ -908,6 +1009,251 @@
             }
         );
     }
+
+    // Open Team Play's own team totals (null in every other format) --
+    // teams is only populated once the game is in_progress/completed (see
+    // GameService::getState()'s early return for 'waiting'), so the
+    // partner pairing itself is only visible via each player row's own
+    // team_id tag (see the players-list renderer above) until then.
+    function renderTeamScores(teams) {
+        const container = document.getElementById('team-scores');
+        if (!teams) {
+            container.hidden = true;
+            return;
+        }
+
+        container.hidden = false;
+        renderList(document.getElementById('team-scores-list'), { hidden: true }, teams, (team) => {
+            const li = document.createElement('li');
+            const memberNames = team.game_player_ids.map(playerLabelFor).join(' & ');
+            li.textContent = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ') — ' +
+                team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)';
+            return li;
+        });
+    }
+
+    // Open Team Play's "open information" premise -- see
+    // php-app/README.md -- shows the viewer's own teammate's hand
+    // read-only, the same way in-play/discard-pile cards are shown to
+    // everyone: clicking a card opens the ordinary detail view rather than
+    // anything playable, since only the teammate who actually holds a card
+    // can play it.
+    function renderTeammateHand(state) {
+        const section = document.getElementById('teammate-hand-section');
+        const teammateHand = state.you.teammate_hand;
+        if (!teammateHand) {
+            section.hidden = true;
+            return;
+        }
+
+        section.hidden = false;
+        document.getElementById('teammate-hand-title').textContent =
+            playerLabelFor(state.you.teammate_game_player_id) + "'s hand";
+        renderList(document.getElementById('teammate-hand-list'), { hidden: true }, teammateHand, (card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            return li;
+        });
+    }
+
+    // Open Team Play's own turn_order/draw_recipient decisions -- see
+    // "Open Team Play" in php-app/README.md. Either teammate proposes who
+    // should act; the OTHER teammate then approves or rejects before it's
+    // locked in (game_team_decisions' own propose/confirm phases) --
+    // mirrors renderPendingDecision()'s shape but reads state.team_decision
+    // (a top-level field, not round.pending_decision) since this isn't a
+    // card-effect decision and has no played_card_id/afterPlaying() tie-in.
+    function renderTeamDecision(decision) {
+        const panel = document.getElementById('team-decision-panel');
+        const confirmButton = document.getElementById('team-decision-confirm-button');
+        const rejectButton = document.getElementById('team-decision-reject-button');
+
+        if (!decision) {
+            panel.hidden = true;
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+            return;
+        }
+
+        panel.hidden = false;
+
+        // Every viewer in the game receives the same team_decision (see
+        // GameService::getState()), including the team that ISN'T making
+        // the decision -- so "your team"/"your teammate" phrasing is only
+        // correct when decision.team_id actually matches the viewer's own
+        // team. can_propose/can_confirm are already false for an outside
+        // viewer, but the wording still needs to branch explicitly so it
+        // doesn't claim a stranger is "your teammate".
+        const viewer = currentState.players.find((p) => p.game_player_id === currentState.you.game_player_id);
+        const isOwnTeam = viewer && viewer.team_id === decision.team_id;
+
+        const titlesByDecisionType = isOwnTeam
+            ? { turn_order: "Your team's turn", draw_recipient: "Your team's shared draw" }
+            : { turn_order: "Opposing team's turn", draw_recipient: "Opposing team's shared draw" };
+        document.getElementById('team-decision-title').textContent =
+            titlesByDecisionType[decision.decision_type] || 'Team decision';
+
+        const actionDescription = decision.decision_type === 'draw_recipient'
+            ? 'draw the shared card'
+            : 'go next';
+        const statusEl = document.getElementById('team-decision-status');
+        const candidatesContainer = document.getElementById('team-decision-candidates');
+        candidatesContainer.innerHTML = '';
+
+        if (decision.phase === 'propose') {
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+
+            if (decision.can_propose) {
+                statusEl.textContent = 'Choose who should ' + actionDescription + ':';
+                decision.candidate_game_player_ids.forEach((gamePlayerId) => {
+                    candidatesContainer.appendChild(actionButton(
+                        playerLabelFor(gamePlayerId),
+                        () => submitTeamProposal(gamePlayerId)
+                    ));
+                });
+            } else {
+                statusEl.textContent = 'Waiting for ' +
+                    decision.candidate_game_player_ids.map(playerLabelFor).join(' or ') +
+                    ' to choose who should ' + actionDescription + '.';
+            }
+            return;
+        }
+
+        // phase === 'confirm'
+        const proposedLabel = playerLabelFor(decision.proposed_game_player_id);
+        if (decision.can_confirm) {
+            statusEl.textContent = playerLabelFor(decision.proposer_game_player_id) +
+                ' proposed ' + proposedLabel + ' to ' + actionDescription + '. Do you agree?';
+            confirmButton.hidden = false;
+            rejectButton.hidden = false;
+        } else if (isOwnTeam) {
+            statusEl.textContent = 'Waiting for your teammate to confirm that ' +
+                proposedLabel + ' should ' + actionDescription + '.';
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+        } else {
+            statusEl.textContent = 'Waiting for ' + playerLabelFor(decision.proposer_game_player_id) +
+                "'s team to confirm that " + proposedLabel + ' should ' + actionDescription + '.';
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+        }
+    }
+
+    async function submitTeamProposal(proposedGamePlayerId) {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await proposeTeamDecision(currentGameId, proposedGamePlayerId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit that proposal.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
+    document.getElementById('team-decision-confirm-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmTeamDecision(currentGameId, true);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not confirm that decision.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    });
+
+    document.getElementById('team-decision-reject-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmTeamDecision(currentGameId, false);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not reject that decision.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    });
+
+    // 'closed_team's own pregame blind card pass -- see "Closed Team Play"
+    // in php-app/README.md. Tracks which 2 of the viewer's own hand cards
+    // are currently selected (by card_id, the per-game instance id every
+    // other card action already keys off of) purely client-side; nothing
+    // is sent until the submit button is pressed. Re-rendered from scratch
+    // every refreshBoard() poll, same as every other panel here -- the
+    // selection itself is deliberately NOT preserved across a poll (the
+    // panel disappears entirely once submitted, so there's nothing left to
+    // preserve for).
+    let initialCardPassSelection = new Set();
+
+    function renderInitialCardPass(state) {
+        const panel = document.getElementById('initial-card-pass-panel');
+        const pass = state.initial_card_pass;
+        const submitButton = document.getElementById('initial-card-pass-submit-button');
+        const fieldsContainer = document.getElementById('initial-card-pass-fields');
+
+        if (!pass) {
+            panel.hidden = true;
+            submitButton.hidden = true;
+            fieldsContainer.innerHTML = '';
+            return;
+        }
+
+        panel.hidden = false;
+        const statusEl = document.getElementById('initial-card-pass-status');
+
+        if (pass.you_submitted) {
+            const waitingOn = state.players
+                .filter((p) => !pass.submitted_game_player_ids.includes(p.game_player_id))
+                .map((p) => p.username);
+            statusEl.textContent = waitingOn.length
+                ? 'Waiting for ' + waitingOn.join(', ') + ' to pass their cards.'
+                : 'Everyone has passed their cards -- starting the round.';
+            submitButton.hidden = true;
+            fieldsContainer.innerHTML = '';
+            return;
+        }
+
+        statusEl.textContent = "Choose 2 cards from your hand to pass to your teammate, face down -- you won't see what they passed you until you do. Tap a card to view it and select/de-select it.";
+        fieldsContainer.innerHTML = '';
+
+        (state.you.hand || []).forEach((card) => {
+            const selected = initialCardPassSelection.has(card.card_id);
+            const thumb = buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: !selected && initialCardPassSelection.size >= 2,
+                    onToggle: () => {
+                        if (initialCardPassSelection.has(card.card_id)) {
+                            initialCardPassSelection.delete(card.card_id);
+                        } else {
+                            initialCardPassSelection.add(card.card_id);
+                        }
+                        renderInitialCardPass(currentState);
+                    },
+                }),
+            });
+            thumb.classList.toggle('selected', selected);
+            fieldsContainer.appendChild(thumb);
+        });
+
+        submitButton.hidden = false;
+        submitButton.disabled = initialCardPassSelection.size !== 2;
+    }
+
+    document.getElementById('initial-card-pass-submit-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await submitInitialCardPass(currentGameId, Array.from(initialCardPassSelection));
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not pass those cards.';
+            boardError.hidden = false;
+            return;
+        }
+        initialCardPassSelection = new Set();
+        await refreshBoard();
+    });
 
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the
@@ -1153,6 +1499,14 @@
                 }
                 return currentState.players
                     .filter((p) => field.scope !== 'other' || p.game_player_id !== currentState.you.game_player_id)
+                    // excludes_teammate (see CardChoiceSchema.php's own
+                    // docblock): a handful of cards say "opponent," not
+                    // "another player" -- in Open Team Play, your own
+                    // teammate isn't a legal choice for these even though
+                    // scope: 'other' alone wouldn't exclude them. A no-op
+                    // outside team format, since teammate_game_player_id
+                    // is undefined there.
+                    .filter((p) => !field.excludes_teammate || p.game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
             case 'mood':
@@ -1173,6 +1527,11 @@
                         if (field.scope === 'other') return c.owner_game_player_id !== currentState.you.game_player_id;
                         return true;
                     })
+                    // excludes_teammate: see the 'player' case above --
+                    // same handful-of-cards exception, just excluding
+                    // moods the teammate owns instead of the teammate
+                    // themselves.
+                    .filter((c) => !field.excludes_teammate || c.owner_game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) + ' — ' + playerLabelFor(c.owner_game_player_id) }));
             case 'hand_card':

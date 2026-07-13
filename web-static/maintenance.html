@@ -2,6 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+    // Sets the theme before first paint so an explicit light/dark preference
+    // (see "Dark mode" in web-static/README.md) never flashes the wrong
+    // theme first -- inlined and duplicated per-page rather than an external
+    // script, since an external file would itself add a delay this exists to
+    // avoid. The "system" default needs no JS at all: style.css's own
+    // prefers-color-scheme media query handles it.
+    (function () {
+        try {
+            var theme = localStorage.getItem('themePreference');
+            if (theme === 'light' || theme === 'dark') {
+                document.documentElement.dataset.theme = theme;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls back
+            // to the system default.
+        }
+    })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Maintenance - MoodSwings-Web</title>
     <link rel="stylesheet" href="css/style.css">
@@ -12,7 +31,13 @@
         <p id="maintenance-message">MoodSwings is being updated and will be back shortly. Please try again in a few minutes.</p>
         <button id="maintenance-retry-button" type="button">Retry now</button>
     </main>
-    <footer><span id="app-version"></span></footer>
+    <footer><span id="app-version"></span><label id="theme-select-label">Theme
+        <select id="theme-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+        </select>
+    </label></footer>
     <script src="js/app.js"></script>
     <script src="js/maintenance.js"></script>
 </body>

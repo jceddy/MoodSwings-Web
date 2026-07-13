@@ -13,7 +13,9 @@ use MoodSwings\Rules\PlayerChoices;
  * Indecisiveness: "After playing this mood, choose any number of
  * opponents who each have two or more moods. Each chosen player puts a
  * random one of their moods into their hand." Same shape as Cruelty, but
- * returning the mood to its owner's hand instead of discarding it.
+ * returning the mood to its owner's hand instead of discarding it --
+ * including the same teammate exclusion in Open Team Play (see
+ * BoardState::isTeammate()).
  */
 final class IndecisivenessEffect extends AbstractMoodEffect
 {
@@ -24,7 +26,7 @@ final class IndecisivenessEffect extends AbstractMoodEffect
         $chosenPlayers = array_unique($choices->ints('opponent_player_ids'));
 
         foreach ($chosenPlayers as $opponentId) {
-            if ($opponentId === $playerId) {
+            if ($opponentId === $playerId || $state->isTeammate($playerId, $opponentId)) {
                 throw new InvalidChoiceException('Indecisiveness can only target opponents');
             }
             if (count($state->moodsOwnedBy($opponentId)) < self::MINIMUM_MOODS) {

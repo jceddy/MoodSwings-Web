@@ -435,9 +435,11 @@ if ($path === '/games' && $method === 'POST') {
     $deckType = (string) ($body['deck_type'] ?? 'structure');
     $decklistText = isset($body['decklist_text']) ? (string) $body['decklist_text'] : null;
     $duelDeckRules = is_array($body['duel_deck_rules'] ?? null) ? $body['duel_deck_rules'] : null;
+    // Only meaningful for format 'team' -- see createGame()'s own docblock.
+    $partnerUserId = isset($body['partner_user_id']) ? (int) $body['partner_user_id'] : null;
 
     try {
-        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType, $decklistText, $duelDeckRules);
+        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType, $decklistText, $duelDeckRules, $partnerUserId);
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -543,6 +545,42 @@ if ($path === '/games/respond' && $method === 'POST') {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (EffectNotImplementedException $e) {
         respond(500, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/team-decision' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $action = (string) ($body['action'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = match ($action) {
+            'propose' => $games->proposeTeamDecision($gameId, $gamePlayerId, (int) ($body['proposed_game_player_id'] ?? 0)),
+            'confirm' => $games->confirmTeamDecision($gameId, $gamePlayerId, (bool) ($body['approve'] ?? false)),
+            default => throw new GameStateException('action must be "propose" or "confirm"'),
+        };
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/initial-pass' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardIds = array_map(intval(...), (array) ($body['card_ids'] ?? []));
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitInitialCardPass($gameId, $gamePlayerId, $cardIds);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 

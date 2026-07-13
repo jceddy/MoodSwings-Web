@@ -15,7 +15,9 @@ use MoodSwings\Rules\PlayerChoices;
  * via the well-known 'banksExtraPlayForPlayerId' effectState key, which
  * GameService::computeFreshGrants() consults (and clears, since it's a
  * one-shot grant) the next time that specific player's turn starts --
- * however many turns from now that ends up being.
+ * however many turns from now that ends up being. You can't choose a
+ * teammate in Open Team Play, since they aren't an opponent -- see
+ * BoardState::isTeammate().
  */
 final class GenerosityEffect extends AbstractMoodEffect
 {
@@ -25,7 +27,7 @@ final class GenerosityEffect extends AbstractMoodEffect
         if (!in_array($opponentId, $state->playerOrder(), true)) {
             throw new InvalidChoiceException("Player {$opponentId} is not a valid player");
         }
-        if ($opponentId === $playerId) {
+        if ($opponentId === $playerId || $state->isTeammate($playerId, $opponentId)) {
             throw new InvalidChoiceException('Generosity must target an opponent');
         }
 

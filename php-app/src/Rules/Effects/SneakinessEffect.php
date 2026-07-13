@@ -14,7 +14,10 @@ use MoodSwings\Rules\PlayerChoices;
  * after scoring, swap your score with that player before determining who
  * wins the round." Tagged via the well-known 'swapScoreWithPlayerId'
  * effectState key, which GameService::applyScoreSwaps() resolves right
- * after scores are computed and before the winner is determined.
+ * after scores are computed and before the winner is determined. You
+ * may not choose yourself (you're not your own opponent), and in Open
+ * Team Play you can't choose a teammate either -- see
+ * BoardState::isTeammate().
  */
 final class SneakinessEffect extends AbstractMoodEffect
 {
@@ -24,7 +27,7 @@ final class SneakinessEffect extends AbstractMoodEffect
         if (!in_array($opponentId, $state->playerOrder(), true)) {
             throw new InvalidChoiceException("Player {$opponentId} is not a valid player");
         }
-        if ($opponentId === $playerId) {
+        if ($opponentId === $playerId || $state->isTeammate($playerId, $opponentId)) {
             throw new InvalidChoiceException('Sneakiness must target an opponent');
         }
 

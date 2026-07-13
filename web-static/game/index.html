@@ -2,6 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+    // Sets the theme before first paint so an explicit light/dark preference
+    // (see "Dark mode" in web-static/README.md) never flashes the wrong
+    // theme first -- inlined and duplicated per-page rather than an external
+    // script, since an external file would itself add a delay this exists to
+    // avoid. The "system" default needs no JS at all: style.css's own
+    // prefers-color-scheme media query handles it.
+    (function () {
+        try {
+            var theme = localStorage.getItem('themePreference');
+            if (theme === 'light' || theme === 'dark') {
+                document.documentElement.dataset.theme = theme;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls back
+            // to the system default.
+        }
+    })();
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Play - MoodSwings-Web</title>
     <link rel="stylesheet" href="../css/style.css">
@@ -38,6 +57,11 @@
 
             <h3>Players</h3>
             <ul id="players-list"></ul>
+
+            <div id="team-scores" hidden>
+                <h3>Team scores</h3>
+                <ul id="team-scores-list"></ul>
+            </div>
 
             <div id="duel-deck-submission" hidden>
                 <h3>Duel deck-building rules</h3>
@@ -79,6 +103,26 @@
 
                 <h3>Your hand</h3>
                 <ul id="hand-list"></ul>
+
+                <div id="teammate-hand-section" hidden>
+                    <h3 id="teammate-hand-title">Teammate's hand</h3>
+                    <ul id="teammate-hand-list"></ul>
+                </div>
+
+                <div id="team-decision-panel" hidden>
+                    <h4 id="team-decision-title"></h4>
+                    <p id="team-decision-status"></p>
+                    <div id="team-decision-candidates"></div>
+                    <button id="team-decision-confirm-button" type="button" hidden>Approve</button>
+                    <button id="team-decision-reject-button" type="button" hidden>Reject</button>
+                </div>
+
+                <div id="initial-card-pass-panel" hidden>
+                    <h4>Pass 2 cards to your teammate</h4>
+                    <p id="initial-card-pass-status"></p>
+                    <div id="initial-card-pass-fields"></div>
+                    <button id="initial-card-pass-submit-button" type="button" hidden disabled>Pass cards</button>
+                </div>
 
                 <div id="choices-panel" hidden>
                     <img id="choices-card-art" class="card-detail-art">
@@ -123,8 +167,17 @@
                 <select id="new-game-format">
                     <option value="standard">Traditional</option>
                     <option value="duel">Duel</option>
+                    <option value="team">Open Team Play</option>
+                    <option value="closed_team">Closed Team Play</option>
                 </select>
             </label>
+
+            <div id="new-game-team-fields" hidden>
+                <p id="new-game-team-fields-description"></p>
+                <label>Your partner
+                    <select id="new-game-partner"></select>
+                </label>
+            </div>
 
             <label>Deck
                 <select id="new-game-deck-type">
@@ -212,6 +265,7 @@
         <p id="card-detail-affected-by" hidden></p>
         <p id="card-detail-affecting" hidden></p>
         <p id="card-detail-bliss-color" hidden></p>
+        <button id="card-detail-select-button" type="button" hidden>Select</button>
         <button id="card-detail-close-button" type="button">Close</button>
     </dialog>
 
@@ -257,7 +311,13 @@
         <button id="friends-close-button" type="button">Close</button>
     </dialog>
 
-    <footer><span id="app-version"></span></footer>
+    <footer><span id="app-version"></span><label id="theme-select-label">Theme
+        <select id="theme-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+        </select>
+    </label></footer>
     <script src="../js/app.js"></script>
     <script src="../js/game.js"></script>
 </body>
