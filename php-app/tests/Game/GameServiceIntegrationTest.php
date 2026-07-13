@@ -2006,6 +2006,50 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertFalse($faith['is_suppressed']);
     }
 
+    /**
+     * Regression test: BoardState::clearEndOfRoundSuppressions() existed
+     * and was unit-tested (see MoodPlayServiceTest), but nothing in
+     * GameService's actual round-advance paths ever called it -- so
+     * Repentance's (and Scorn's) 'end_of_round' suppression persisted past
+     * the round it was cast in instead of lifting, since suppression state
+     * round-trips through game_cards across a real load()/save() boundary.
+     */
+    public function testRepentanceSuppressionLiftsAfterTheRoundItWasCastInIsScored(): void
+    {
+        $u1 = $this->insertUser('repentanceclear1');
+        $u2 = $this->insertUser('repentanceclear2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $repentanceId = $this->insertGameCard($gameId, 23, 'hand', $p1); // Repentance
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p2); // Courage, value 1
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $repentanceId, ['value' => 1]);
+
+        $inPlayDuringRound1 = $this->games->getState($gameId, $u1)['in_play'];
+        $courageDuringRound1 = self::findByCardId($inPlayDuringRound1, $courageId);
+        self::assertTrue($courageDuringRound1['is_suppressed']);
+        self::assertSame('end_of_round', $courageDuringRound1['suppression_expiry']);
+
+        $this->games->pass($gameId, $p2); // p1 already used their only play -- this ends round 1
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+
+        $inPlayDuringRound2 = $this->games->getState($gameId, $u1)['in_play'];
+        $courageDuringRound2 = self::findByCardId($inPlayDuringRound2, $courageId);
+        self::assertFalse($courageDuringRound2['is_suppressed']);
+        self::assertNull($courageDuringRound2['suppression_expiry']);
+    }
+
     public function testGetStateExposesAffectingAndBoostedByReminderTextForDiceValueAndSuppression(): void
     {
         $u1 = $this->insertUser('affectingsrc1');

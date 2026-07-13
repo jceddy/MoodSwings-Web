@@ -1875,6 +1875,16 @@ final class GameService
 
         $scores = $this->applyScoreSwaps($state, $this->scorer->score($state, $scoringDecisions));
 
+        // Repentance/Scorn's own 'end_of_round' suppression (as opposed to
+        // Faith/Guilt/Meekness/Pacifism/Shame's 'while_source_in_play' kind)
+        // expires at this exact boundary regardless of what's still in
+        // play -- scored above using whatever was suppressed during the
+        // round that just ended, then lifted here so it doesn't carry into
+        // the round about to start. Shared by both the team- and non-team
+        // paths below, since finishTeamScoringAndAdvance() reuses this same
+        // $state.
+        $state->clearEndOfRoundSuppressions();
+
         if (self::isTeamFormat($this->fetchGame($gameId)['format'])) {
             return $this->finishTeamScoringAndAdvance($gameId, $round, $state, $scores);
         }
@@ -2429,6 +2439,13 @@ final class GameService
                 $state->clearEffectState($mood->cardId, 'oneTimeFirstPlayerOverride');
             }
         }
+
+        // This round boundary is skipping scoring, not skipping the round
+        // itself -- Repentance/Scorn's own 'end_of_round' suppression still
+        // needs lifting here exactly like the normal finishScoringAndAdvance()
+        // path does, or it would otherwise carry into the round Awe just
+        // started.
+        $state->clearEndOfRoundSuppressions();
 
         $isTeamFormat = self::isTeamFormat($this->fetchGame($gameId)['format']);
         // Either team format's own turn_order decision still needs
