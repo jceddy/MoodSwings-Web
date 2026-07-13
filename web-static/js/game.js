@@ -260,15 +260,16 @@
     // defines) only makes sense FOR a duel -- both enforced server-side by
     // GameService::createGame(), disabled here too so a doomed combination
     // can't even be selected, matching updateOpponentSelectionLimit()'s own
-    // proactive-prevention approach for format-dependent constraints. Team
-    // format similarly disables 'power' -- its 15 cards fall short of Open
-    // Team Play's 45-card minimum (see php-app/README.md). Falls back to
-    // 'structure' if the now-disallowed option was selected.
+    // proactive-prevention approach for format-dependent constraints.
+    // Either team format similarly disables 'power' -- its 15 cards fall
+    // short of the 45-card minimum both team formats share (see
+    // php-app/README.md). Falls back to 'structure' if the now-disallowed
+    // option was selected.
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
         const format = document.getElementById('new-game-format').value;
         const isDuel = format === 'duel';
-        const isTeam = format === 'team';
+        const isTeam = format === 'team' || format === 'closed_team';
         const customOption = deckTypeSelect.querySelector('option[value="custom"]');
         const customDuelOption = deckTypeSelect.querySelector('option[value="custom_duel"]');
         const powerOption = deckTypeSelect.querySelector('option[value="power"]');
@@ -294,12 +295,20 @@
     // partner list never offers someone who isn't actually one of this
     // game's 3 opponents. Preserves the previously-selected partner
     // across a re-population if they're still checked.
+    const TEAM_FIELDS_DESCRIPTIONS = {
+        team: "Open Team Play needs exactly 3 opponents (4 players total), seated as two teams of two. Choose which of them is your partner -- you'll sit next to them, see each other's hands, and share a score each round:",
+        closed_team: "Closed Team Play needs exactly 3 opponents (4 players total), seated as two teams of two across the table from each other. Choose which of them is your partner -- your hands stay private from each other, but you'll pass 2 cards to them at the start of the game and share a score each round:",
+    };
+
     function updateTeamFields() {
-        const isTeam = document.getElementById('new-game-format').value === 'team';
-        document.getElementById('new-game-team-fields').hidden = !isTeam;
-        if (!isTeam) {
+        const format = document.getElementById('new-game-format').value;
+        const isTeamFormat = format === 'team' || format === 'closed_team';
+        document.getElementById('new-game-team-fields').hidden = !isTeamFormat;
+        if (!isTeamFormat) {
             return;
         }
+
+        document.getElementById('new-game-team-fields-description').textContent = TEAM_FIELDS_DESCRIPTIONS[format];
 
         const partnerSelect = document.getElementById('new-game-partner');
         const previousValue = partnerSelect.value;
@@ -471,14 +480,15 @@
         }
 
         const format = document.getElementById('new-game-format').value;
+        const isTeamFormat = format === 'team' || format === 'closed_team';
 
-        if (format === 'team' && opponentUserIds.length !== 3) {
-            newGameError.textContent = 'Open Team Play needs exactly 3 opponents (4 players total).';
+        if (isTeamFormat && opponentUserIds.length !== 3) {
+            newGameError.textContent = 'Either team format needs exactly 3 opponents (4 players total).';
             newGameError.hidden = false;
             return;
         }
 
-        const partnerUserId = format === 'team' ? Number(document.getElementById('new-game-partner').value) : undefined;
+        const partnerUserId = isTeamFormat ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
         const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
@@ -945,6 +955,7 @@
 
         renderTeammateHand(state);
         renderTeamDecision(state.team_decision);
+        renderInitialCardPass(state);
 
         document.getElementById('pass-button').disabled = !canAct;
 
@@ -1142,6 +1153,80 @@
             boardError.hidden = false;
             return;
         }
+        await refreshBoard();
+    });
+
+    // 'closed_team's own pregame blind card pass -- see "Closed Team Play"
+    // in php-app/README.md. Tracks which 2 of the viewer's own hand cards
+    // are currently selected (by card_id, the per-game instance id every
+    // other card action already keys off of) purely client-side; nothing
+    // is sent until the submit button is pressed. Re-rendered from scratch
+    // every refreshBoard() poll, same as every other panel here -- the
+    // selection itself is deliberately NOT preserved across a poll (the
+    // panel disappears entirely once submitted, so there's nothing left to
+    // preserve for).
+    let initialCardPassSelection = new Set();
+
+    function renderInitialCardPass(state) {
+        const panel = document.getElementById('initial-card-pass-panel');
+        const pass = state.initial_card_pass;
+        const submitButton = document.getElementById('initial-card-pass-submit-button');
+        const fieldsContainer = document.getElementById('initial-card-pass-fields');
+
+        if (!pass) {
+            panel.hidden = true;
+            submitButton.hidden = true;
+            fieldsContainer.innerHTML = '';
+            return;
+        }
+
+        panel.hidden = false;
+        const statusEl = document.getElementById('initial-card-pass-status');
+
+        if (pass.you_submitted) {
+            const waitingOn = state.players
+                .filter((p) => !pass.submitted_game_player_ids.includes(p.game_player_id))
+                .map((p) => p.username);
+            statusEl.textContent = waitingOn.length
+                ? 'Waiting for ' + waitingOn.join(', ') + ' to pass their cards.'
+                : 'Everyone has passed their cards -- starting the round.';
+            submitButton.hidden = true;
+            fieldsContainer.innerHTML = '';
+            return;
+        }
+
+        statusEl.textContent = "Choose 2 cards from your hand to pass to your teammate, face down -- you won't see what they passed you until you do.";
+        fieldsContainer.innerHTML = '';
+
+        (state.you.hand || []).forEach((card) => {
+            const thumb = buildCardThumb(card, {
+                onClick: () => {
+                    if (initialCardPassSelection.has(card.card_id)) {
+                        initialCardPassSelection.delete(card.card_id);
+                    } else if (initialCardPassSelection.size < 2) {
+                        initialCardPassSelection.add(card.card_id);
+                    }
+                    renderInitialCardPass(currentState);
+                },
+            });
+            thumb.classList.toggle('selected', initialCardPassSelection.has(card.card_id));
+            fieldsContainer.appendChild(thumb);
+        });
+
+        submitButton.hidden = false;
+        submitButton.disabled = initialCardPassSelection.size !== 2;
+    }
+
+    document.getElementById('initial-card-pass-submit-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await submitInitialCardPass(currentGameId, Array.from(initialCardPassSelection));
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not pass those cards.';
+            boardError.hidden = false;
+            return;
+        }
+        initialCardPassSelection = new Set();
         await refreshBoard();
     });
 

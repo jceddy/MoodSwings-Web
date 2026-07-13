@@ -117,6 +117,13 @@
                     <button id="team-decision-reject-button" type="button" hidden>Reject</button>
                 </div>
 
+                <div id="initial-card-pass-panel" hidden>
+                    <h4>Pass 2 cards to your teammate</h4>
+                    <p id="initial-card-pass-status"></p>
+                    <div id="initial-card-pass-fields"></div>
+                    <button id="initial-card-pass-submit-button" type="button" hidden disabled>Pass cards</button>
+                </div>
+
                 <div id="choices-panel" hidden>
                     <img id="choices-card-art" class="card-detail-art">
 
@@ -161,11 +168,12 @@
                     <option value="standard">Traditional</option>
                     <option value="duel">Duel</option>
                     <option value="team">Open Team Play</option>
+                    <option value="closed_team">Closed Team Play</option>
                 </select>
             </label>
 
             <div id="new-game-team-fields" hidden>
-                <p>Open Team Play needs exactly 3 opponents (4 players total), seated as two teams of two. Choose which of them is your partner -- you'll sit next to them, see each other's hands, and share a score each round:</p>
+                <p id="new-game-team-fields-description"></p>
                 <label>Your partner
                     <select id="new-game-partner"></select>
                 </label>

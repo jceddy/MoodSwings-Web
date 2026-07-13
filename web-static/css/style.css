@@ -206,6 +206,14 @@ body.game-page {
     opacity: 0.5;
 }
 
+/* Closed Team Play's initial card-pass selection -- see
+   renderInitialCardPass() in web-static/js/game.js -- highlights whichever
+   of the 2 cards the viewer has picked to pass to their teammate. */
+.card-thumb.selected .card-thumb__art {
+    border-color: var(--color-success);
+    border-width: 2px;
+}
+
 .card-thumb.not-playable .card-thumb__art {
     border-style: dashed;
 }

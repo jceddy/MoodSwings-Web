@@ -146,3 +146,16 @@ half-migrated schema.
   itself. Reuses `0011`'s "NULL is distinct in a UNIQUE index" trick
   (`active_marker`) to guarantee at most one open `game_team_decisions` row
   per round.
+- **Closed Team Play** (`0023`): adds `format = 'closed_team'` (partners
+  seated across from each other rather than adjacent, hands stay private,
+  and only one "who leads this round" choice exists per round instead of
+  Open Team Play's two forced turn placements — see "Closed Team Play" in
+  `php-app/README.md`). Reuses `0022`'s `game_team_decisions` table as-is
+  for that one leader choice and the shared-draw choice; needs no
+  equivalent of `team_turn_1/2_game_player_id` since the chosen leader is
+  written straight into `game_rounds.first_game_player_id`. Also adds
+  `game_initial_card_passes`, a new table for this format's own pregame
+  mechanic with no Open Team Play analog: every player blindly passes 2
+  cards to their teammate before round 1 can begin — one row per player
+  per game, inserted the moment they submit (so their choice can never be
+  revised once their teammate's own hand is visible).

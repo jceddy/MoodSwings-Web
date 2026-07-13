@@ -568,4 +568,20 @@ if ($path === '/games/team-decision' && $method === 'POST') {
     }
 }
 
+if ($path === '/games/initial-pass' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardIds = array_map(intval(...), (array) ($body['card_ids'] ?? []));
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitInitialCardPass($gameId, $gamePlayerId, $cardIds);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 respond(404, ['status' => 'error', 'message' => 'Not found']);

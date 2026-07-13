@@ -110,8 +110,8 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             deck_type: deckType,
             decklist_text: decklistText,
             duel_deck_rules: duelDeckRules,
-            // Only meaningful for format 'team' -- see "Open Team Play" in
-            // web-static/README.md.
+            // Only meaningful for format 'team'/'closed_team' -- see "Open
+            // Team Play"/"Closed Team Play" in web-static/README.md.
             partner_user_id: partnerUserId,
         }),
     });
@@ -132,6 +132,16 @@ function confirmTeamDecision(gameId, approve) {
     return apiRequest('/games/team-decision', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, action: 'confirm', approve }),
+    });
+}
+
+// 'closed_team's own pregame mechanic -- see "Closed Team Play" in
+// web-static/README.md: pass exactly 2 hand cards to your teammate,
+// face down, before round 1 can begin.
+function submitInitialCardPass(gameId, cardIds) {
+    return apiRequest('/games/initial-pass', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, card_ids: cardIds }),
     });
 }
 
