@@ -39,10 +39,19 @@ final class BoardStateRepository
         $hasSeparateDecks = $formatStmt->fetchColumn() === 'duel';
 
         $playersStmt = $pdo->prepare(
-            'SELECT id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+            'SELECT id, team_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
         );
         $playersStmt->execute(['game_id' => $gameId]);
-        $playerIds = array_map(intval(...), $playersStmt->fetchAll(PDO::FETCH_COLUMN));
+        $playerRows = $playersStmt->fetchAll();
+        $playerIds = array_map(static fn (array $row) => (int) $row['id'], $playerRows);
+
+        // Only Open Team Play ever sets team_id -- see BoardState::isTeammate().
+        $teamIdByPlayer = [];
+        foreach ($playerRows as $row) {
+            if ($row['team_id'] !== null) {
+                $teamIdByPlayer[(int) $row['id']] = (int) $row['team_id'];
+            }
+        }
 
         $catalog = [];
         foreach ($pdo->query('SELECT * FROM cards') as $row) {
@@ -98,7 +107,7 @@ final class BoardStateRepository
         }
         $deck = $hasSeparateDecks ? $deckByOwnerPosition : ($deckByOwnerPosition[BoardState::SHARED_DECK_KEY] ?? []);
 
-        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor);
+        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer);
 
         foreach ($inPlayRows as $row) {
             $state->restoreMoodInPlay(
@@ -113,7 +122,7 @@ final class BoardStateRepository
         }
 
         $roundStmt = $pdo->prepare(
-            "SELECT current_turn_game_player_id, first_game_player_id, plays_remaining, pending_play_grants, round_number, discarded_this_round FROM game_rounds
+            "SELECT current_turn_game_player_id, first_game_player_id, team_turn_1_game_player_id, plays_remaining, pending_play_grants, round_number, discarded_this_round FROM game_rounds
              WHERE game_id = :game_id AND status = 'in_progress'
              ORDER BY round_number DESC LIMIT 1"
         );
@@ -127,10 +136,24 @@ final class BoardStateRepository
                 ? json_decode((string) $roundRow['pending_play_grants'], true)
                 : array_fill(0, (int) $roundRow['plays_remaining'], null);
 
+            // Chivalry/Triumph care about whoever PERSONALLY took turn 1
+            // this round -- for Open Team Play, that's
+            // team_turn_1_game_player_id (the team's own live choice of
+            // which member goes), NOT first_game_player_id, which for a
+            // team game only identifies a representative member of
+            // whichever TEAM went first (see GameService::startGame()'s
+            // own comment), not necessarily the actual player who did.
+            // first_game_player_id remains what every non-team game (and
+            // a team game's opening round-freeze window, before either
+            // team has decided anything) uses instead.
+            $actualFirstPlayerId = $roundRow['team_turn_1_game_player_id'] !== null
+                ? (int) $roundRow['team_turn_1_game_player_id']
+                : (int) $roundRow['first_game_player_id'];
+
             $state->restoreTurnState(
                 $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null,
                 $playGrants,
-                (int) $roundRow['first_game_player_id'],
+                $actualFirstPlayerId,
                 (int) $roundRow['round_number'],
                 (bool) $roundRow['discarded_this_round'],
             );

@@ -220,6 +220,13 @@ final class BoardState
      *     behavior for any game/test where instance and catalog id
      *     coincide (i.e. everything except a duel with a genuinely
      *     duplicated catalog card).
+     * @param array<int, int> $teamIdByPlayer Open Team Play's own
+     *     game_players.team_id, playerId => team_id -- empty for every
+     *     other format (and every pre-team-format test), in which case
+     *     isTeammate() always returns false, exactly preserving "every
+     *     other player is an opponent" for those. See isTeammate()'s own
+     *     docblock and php-app/README.md's "Open Team Play" section for
+     *     which cards this actually changes.
      */
     public function __construct(
         private readonly array $catalog,
@@ -231,11 +238,35 @@ final class BoardState
         private readonly bool $hasSeparateDecks = false,
         array $discardOwners = [],
         private readonly array $catalogCardIdFor = [],
+        private readonly array $teamIdByPlayer = [],
     ) {
         $this->hands = $hands;
         $this->decks = $hasSeparateDecks ? $deck : [self::SHARED_DECK_KEY => $deck];
         $this->discard = $discard;
         $this->discardOwners = $discardOwners;
+    }
+
+    /**
+     * Whether $a and $b are teammates in Open Team Play -- always false
+     * for every non-team game (empty $teamIdByPlayer) and for a player
+     * compared against themselves, so a bare "!== $ownerId"/"!== $playerId"
+     * self-exclusion check elsewhere can be extended to also exclude a
+     * teammate just by adding "&& !$state->isTeammate(...)" alongside it,
+     * without needing its own format check. See php-app/README.md's "Open
+     * Team Play" section for exactly which cards this changes (a
+     * teammate isn't an "opponent" for cards phrased that way) and which
+     * don't (a card phrased as "another player"/"choose a player" with no
+     * "opponent" wording already included teammates before team format
+     * existed, and still does).
+     */
+    public function isTeammate(int $a, int $b): bool
+    {
+        if ($a === $b) {
+            return false;
+        }
+
+        return isset($this->teamIdByPlayer[$a], $this->teamIdByPlayer[$b])
+            && $this->teamIdByPlayer[$a] === $this->teamIdByPlayer[$b];
     }
 
     /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
