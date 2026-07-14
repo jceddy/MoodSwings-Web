@@ -1,0 +1,11 @@
+-- No schema change here -- this migration exists purely to keep
+-- schema_version in sync with a VERSION bump for a backend bug fix that
+-- didn't touch the schema at all (Hope's -- and Grace's/Stubbornness's --
+-- perpetual extra-play grant only ever looked up the first qualifying
+-- in-play mood each turn, so two independent copies granted just one
+-- extra play instead of two -- see
+-- GameService::effectiveSourceCardIds()). Every schema-changing migration
+-- must bump VERSION and update schema_version as its last statement (see
+-- migration 0021's own docblock and 0024's precedent for a schema-less
+-- bug fix); this keeps that invariant intact the same way.
+UPDATE schema_version SET version = '0.4.2' WHERE id = 1;
