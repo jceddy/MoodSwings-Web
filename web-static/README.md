@@ -492,6 +492,17 @@ too, proportional to the smaller card width.
     from the submitted payload entirely, falling back to the server's old
     "whichever grant comes first" behavior — no special-case JS needed for
     that leave-it-blank path.
+    A `type: 'mood'` field's own options (e.g. Faith's `target_mood_id`)
+    also mark a candidate mood with `card.has_unused_play_grant` (see
+    `php-app/README.md`) with a trailing ` *` right after its name
+    (`cardLabel()`) — most relevant for an in-play Hope/Grace, since a
+    player choosing where to send an effect might otherwise have no reason
+    to check the card detail dialog first. The same asterisk appears
+    everywhere `cardLabel()` builds a dropdown option (the `'mood'`,
+    `'hand_card'`, and `'discard_card'` cases in `fieldOptions()`), though
+    it only ever actually shows for a `'mood'` option in practice — a hand
+    or discard-pile card has no `has_unused_play_grant` field of its own to
+    read.
     This still disambiguates two players' identical printed cards the way
     an inline "— Owner" suffix used to (needed since a `'duel' game's two
     independent decks can put the same printed card in play at once, and
