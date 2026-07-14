@@ -184,6 +184,18 @@ body.game-page {
     display: grid;
     gap: 0.75rem;
     margin: 0.5rem 0;
+    /* Full-bleed: break out of body.game-page's own 60rem max-width/
+       centered margin so the board spans the whole browser window
+       horizontally, regardless of how narrow or wide that cap is. The
+       left/transform pair re-centers on the viewport itself rather than
+       the (now irrelevant) parent, so this works no matter how deeply
+       #in-play-board is nested. */
+    width: 100vw;
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    box-sizing: border-box;
+    padding: 0 1rem;
 }
 
 #in-play-board.in-play-board--2 {
@@ -220,6 +232,17 @@ body.game-page {
     padding: 0.5rem;
     border: 1px dashed var(--color-border-subtle);
     border-radius: 0.5rem;
+}
+
+/* .in-play-zone's own `display: flex` above otherwise beats the browser's
+   default `[hidden] { display: none }` UA-stylesheet rule (an author rule
+   always wins over the UA stylesheet, regardless of selector specificity),
+   so a zone hidden for the current player count (e.g. northwest/northeast
+   in a 2-player game) would otherwise still render as an empty dashed box
+   -- auto-placed by the grid into an extra implicit row/column, showing up
+   as a stray outline below/beside the real zones. */
+.in-play-zone[hidden] {
+    display: none;
 }
 
 .in-play-zone__list {
