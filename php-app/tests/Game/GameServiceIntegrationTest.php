@@ -2729,6 +2729,7 @@ final class GameServiceIntegrationTest extends TestCase
             'p1' => $p1,
             'p2' => $p2,
             'p3' => $p3,
+            'u1' => $u1,
             'apathyId' => $apathyId,
             'boredomId' => $boredomId,
         ] = $this->buildThreePlayerFixture();
@@ -2775,6 +2776,11 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p1, (int) $round2['first_game_player_id']);
         self::assertSame($p3, (int) $round2['hurt_feelings_game_player_id']);
         self::assertSame($p1, (int) $round2['current_turn_game_player_id']);
+
+        // The round_scored event itself calls out who Hurt Feelings went to,
+        // not just the round_2 row -- see GameService::describeRoundScored().
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString('p3 has Hurt Feelings next round', $events[0]['description']);
 
         // p1 plays their remaining card (Boredom, value 4) to win round 2 as well.
         $this->games->playMood($gameId, $p1, $boredomId, []);

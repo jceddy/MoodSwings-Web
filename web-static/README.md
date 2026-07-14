@@ -231,6 +231,12 @@ back, so an unused zone (e.g. northwest/northeast in a 2-player game)
 doesn't render as a stray empty dashed box, auto-placed by the grid into
 an extra implicit row/column past the real zones.
 
+`#in-play-board`'s own grid `gap` is `0` -- the rows/columns of zones sit
+flush against each other, with no visible seam between e.g. the `north`
+row and the `west`/`east` row in a 4-player game. Each zone's own
+`padding` (unaffected by this) still keeps its card thumbnails clear of
+its own dashed border; only the space *between* zones was removed.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
