@@ -217,6 +217,20 @@ exactly as the old flat list did. This is purely a seating-position
 grouping -- Open/Closed Team Play's own team pairing (`team_id`) plays no
 part in it, unlike the players list's own "Team 1"/"Team 2" tags.
 
+`#in-play-board` breaks out of `body.game-page`'s own centered 60rem
+max-width to span the full browser window horizontally -- `width: 100vw`
+plus `left: 50%; transform: translateX(-50%);` re-centers it on the
+viewport itself rather than its (now irrelevant, narrower) parent, the
+standard full-bleed technique for a block nested inside a max-width
+container. Separately, `.in-play-zone`'s own `display: flex` would
+otherwise beat the browser's default `[hidden] { display: none }` rule
+(an author style always wins over the UA stylesheet, regardless of
+selector specificity) for whichever zones aren't used at the current
+player count -- `.in-play-zone[hidden] { display: none; }` overrides that
+back, so an unused zone (e.g. northwest/northeast in a 2-player game)
+doesn't render as a stray empty dashed box, auto-placed by the grid into
+an extra implicit row/column past the real zones.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
