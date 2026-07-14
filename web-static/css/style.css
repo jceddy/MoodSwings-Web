@@ -156,7 +156,6 @@ body.game-page {
 }
 
 #hand-list,
-#in-play-list,
 #discard-list,
 #teammate-hand-list,
 #initial-card-pass-fields {
@@ -166,10 +165,72 @@ body.game-page {
 }
 
 #hand-list li,
-#in-play-list li,
 #discard-list li,
-#teammate-hand-list li {
+#teammate-hand-list li,
+.in-play-zone__list li {
     list-style: none;
+}
+
+/* -- In-play board (issue #124) --------------------------------------
+   Groups in-play moods by seating position relative to the viewer instead
+   of one flat list -- see inPlayZoneAssignments()/renderInPlay() in
+   web-static/js/game.js for how each player's own game_player_id maps to
+   a zone. #in-play-board's own modifier class (in-play-board--2/3/4,
+   matching the game's actual player count) picks which of the 6 zone
+   `<div>`s below actually participate in this game's grid-template-areas
+   -- the rest stay `hidden` (e.g. northwest/northeast never apply to a
+   2-player game, north/west/east never apply to a 3-player game). */
+#in-play-board {
+    display: grid;
+    gap: 0.75rem;
+    margin: 0.5rem 0;
+}
+
+#in-play-board.in-play-board--2 {
+    grid-template-areas:
+        "north north"
+        "south south";
+}
+
+#in-play-board.in-play-board--3 {
+    grid-template-areas:
+        "northwest northeast"
+        "south     south";
+}
+
+#in-play-board.in-play-board--4 {
+    grid-template-areas:
+        "north north"
+        "west  east"
+        "south south";
+}
+
+#in-play-zone-north { grid-area: north; }
+#in-play-zone-northwest { grid-area: northwest; }
+#in-play-zone-northeast { grid-area: northeast; }
+#in-play-zone-west { grid-area: west; }
+#in-play-zone-east { grid-area: east; }
+#in-play-zone-south { grid-area: south; }
+
+.in-play-zone {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 3rem;
+    padding: 0.5rem;
+    border: 1px dashed var(--color-border-subtle);
+    border-radius: 0.5rem;
+}
+
+.in-play-zone__list {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0;
+    width: 100%;
 }
 
 /* -- Card art thumbnails (hand/in-play/discard) --------------------- */

@@ -732,6 +732,81 @@
         cardDetailDialog.close();
     });
 
+    // In-play board (issue #124): groups in-play moods by seating position
+    // relative to the viewer instead of one flat list, matching how the
+    // moods would actually sit around a physical table. Index 0 is always
+    // the viewer's own zone ("south"); index 1 is the player whose turn
+    // comes right after the viewer's own -- GameService::rotate() already
+    // treats ascending seat_order as "clockwise" (see its own docblock),
+    // and clockwise turn order seats that next player at the viewer's own
+    // left -- so index 1 is "west"/"northwest" (left), the last index is
+    // "east"/"northeast" (right), and (for 3-4 players) whichever index
+    // sits directly across is "north".
+    const IN_PLAY_ZONE_ORDER_BY_PLAYER_COUNT = {
+        2: ['south', 'north'],
+        3: ['south', 'northwest', 'northeast'],
+        4: ['south', 'west', 'north', 'east'],
+    };
+    const IN_PLAY_ZONE_NAMES = ['north', 'northwest', 'northeast', 'west', 'east', 'south'];
+
+    function inPlayZoneAssignments(state) {
+        const players = state.players;
+        const zoneOrder = IN_PLAY_ZONE_ORDER_BY_PLAYER_COUNT[players.length];
+        const viewer = players.find((p) => p.game_player_id === state.you.game_player_id);
+
+        const zoneByGamePlayerId = {};
+        for (const player of players) {
+            const offset = (player.seat_order - viewer.seat_order + players.length) % players.length;
+            zoneByGamePlayerId[player.game_player_id] = zoneOrder[offset];
+        }
+        return zoneByGamePlayerId;
+    }
+
+    function renderInPlay(state) {
+        const board = document.getElementById('in-play-board');
+        const emptyEl = document.getElementById('in-play-empty');
+
+        if (state.in_play.length === 0) {
+            board.hidden = true;
+            emptyEl.hidden = false;
+            return;
+        }
+        board.hidden = false;
+        emptyEl.hidden = true;
+
+        board.classList.remove('in-play-board--2', 'in-play-board--3', 'in-play-board--4');
+        board.classList.add('in-play-board--' + state.players.length);
+
+        const zoneByGamePlayerId = inPlayZoneAssignments(state);
+        const activeZones = new Set(Object.values(zoneByGamePlayerId));
+
+        const cardsByZone = {};
+        for (const zone of IN_PLAY_ZONE_NAMES) {
+            cardsByZone[zone] = [];
+        }
+        for (const card of state.in_play) {
+            cardsByZone[zoneByGamePlayerId[card.owner_game_player_id]].push(card);
+        }
+
+        for (const zone of IN_PLAY_ZONE_NAMES) {
+            const zoneEl = document.getElementById('in-play-zone-' + zone);
+            zoneEl.hidden = !activeZones.has(zone);
+
+            const listEl = zoneEl.querySelector('.in-play-zone__list');
+            listEl.innerHTML = '';
+            for (const card of cardsByZone[zone]) {
+                const owner = state.players.find((p) => p.game_player_id === card.owner_game_player_id);
+                const ownerLabel = owner ? owner.username : '?';
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, {
+                    caption: ownerLabel,
+                    onClick: () => openCardDetail(card, ownerLabel),
+                }));
+                listEl.appendChild(li);
+            }
+        }
+    }
+
     // Generic enlarged-art viewer for game-level art not tied to a specific
     // printed card (e.g. Hurt Feelings) -- see "Assets" in
     // web-static/README.md for why that art doesn't live under
@@ -888,21 +963,7 @@
         renderScoringEffects(state.round && state.round.scoring_effects);
         renderBoardEffects(state.round && state.round.board_effects);
 
-        renderList(
-            document.getElementById('in-play-list'),
-            document.getElementById('in-play-empty'),
-            state.in_play,
-            (card) => {
-                const owner = state.players.find((p) => p.game_player_id === card.owner_game_player_id);
-                const ownerLabel = owner ? owner.username : '?';
-                const li = document.createElement('li');
-                li.appendChild(buildCardThumb(card, {
-                    caption: ownerLabel,
-                    onClick: () => openCardDetail(card, ownerLabel),
-                }));
-                return li;
-            }
-        );
+        renderInPlay(state);
 
         // A pending decision freezes the whole round -- nobody, including
         // the player whose turn it nominally is, can play or pass until
