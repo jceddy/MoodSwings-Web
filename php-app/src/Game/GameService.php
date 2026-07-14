@@ -3517,7 +3517,7 @@ final class GameService
                         'key' => 'grant_source_card_id',
                         'type' => 'grant_choice',
                         'required' => false,
-                        'label' => 'Which extra play to use for this card',
+                        'label' => 'Which play to use for this card',
                         'options' => $grantOptions,
                     ],
                     ...$choiceFields,
