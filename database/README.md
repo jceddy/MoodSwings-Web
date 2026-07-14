@@ -168,3 +168,9 @@ half-migrated schema.
   migration; this is the first one that doesn't, since `MaintenanceGate`
   would otherwise show maintenance mode after deploy purely from the
   version mismatch, with no real pending migration to explain it.
+- **Hope perpetual-grant fix** (`0025`): another schema-less
+  `UPDATE schema_version`, same rationale as `0024` — Hope's (and Grace's/
+  Stubbornness's) perpetual extra-play grant only ever looked up the
+  first qualifying in-play mood each turn, so two independent copies
+  granted just one extra play instead of two (see
+  `GameService::effectiveSourceCardIds()`).
