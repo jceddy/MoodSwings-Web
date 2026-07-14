@@ -1936,6 +1936,7 @@ final class GameService
         $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
             'scores' => $scores,
             'winner_game_player_id' => $winnerId,
+            'hurt_feelings_game_player_id' => $hurtFeelingsHolder,
         ], $state);
 
         if ($gameCompleting) {
@@ -2340,13 +2341,19 @@ final class GameService
      * since it isn't tied to a turn boundary at all.
      *
      * Every one of these four carries 'sourceCardId' (via
-     * effectiveSourceCardId(), which follows a Creativity copy back to
+     * effectiveSourceCardIds(), which follows a Creativity copy back to
      * whatever it's actually copying -- e.g. a Creativity currently
      * copying Hope resolves to Hope's own instance id here, the same way
      * serializeCard() already shows that Creativity as "Hope" everywhere
      * else) so describePlayGrant() can name the actual source instead of
      * folding it into the base allowance's own "Your normal turn" -- a
      * bare null grant is reserved *only* for $baseCount's own entries.
+     * Hope/Grace/Stubbornness each contribute one grant *per* qualifying
+     * mood, not just one overall -- two independent Hopes (a duplicate
+     * printed card across two decks in a duel game, or an intentionally
+     * duplicate-including custom deck) each carry their own extra play,
+     * exactly like two separately-played Hopes already do via
+     * MoodPlayService's own same-turn grant.
      *
      * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
      */
@@ -2354,19 +2361,18 @@ final class GameService
     {
         $grants = array_fill(0, $baseCount, null);
 
-        $hopeSourceCardId = $this->effectiveSourceCardId($state, $playerId, 'hope');
-        if ($hopeSourceCardId !== null) {
+        foreach ($this->effectiveSourceCardIds($state, $playerId, 'hope') as $hopeSourceCardId) {
             $grants[] = ['sourceCardId' => $hopeSourceCardId];
         }
 
-        $graceSourceCardId = $this->effectiveSourceCardId($state, $playerId, 'grace');
-        if ($graceSourceCardId !== null) {
+        foreach ($this->effectiveSourceCardIds($state, $playerId, 'grace') as $graceSourceCardId) {
             $grants[] = ['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'sourceCardId' => $graceSourceCardId];
         }
 
-        $stubbornnessSourceCardId = $this->effectiveSourceCardId($state, $playerId, 'stubbornness');
-        if ($stubbornnessSourceCardId !== null && $this->anotherPlayerHasMoreMoods($state, $playerId)) {
-            $grants[] = ['sourceCardId' => $stubbornnessSourceCardId];
+        if ($this->anotherPlayerHasMoreMoods($state, $playerId)) {
+            foreach ($this->effectiveSourceCardIds($state, $playerId, 'stubbornness') as $stubbornnessSourceCardId) {
+                $grants[] = ['sourceCardId' => $stubbornnessSourceCardId];
+            }
         }
 
         foreach ($state->moodsInPlay() as $mood) {
@@ -2380,25 +2386,30 @@ final class GameService
     }
 
     /**
-     * The instance id of $playerId's own in-play mood whose EFFECTIVE
-     * (copy-aware) effect key is $effectKey, or null if they have none --
-     * the same effectiveCardId()-per-mood scan
+     * The instance id of every one of $playerId's own in-play moods whose
+     * EFFECTIVE (copy-aware) effect key is $effectKey -- the same
+     * effectiveCardId()-per-mood scan
      * BoardState::countMoodsInPlayWithEffectiveKey() does, except this
-     * returns the resolved id itself (for a play grant's own
-     * 'sourceCardId') rather than just a count. Effect keys this is
-     * called with (hope/grace/stubbornness) are all singleton in
-     * practice, so "first match" is never actually ambiguous.
+     * returns the resolved ids themselves (for a play grant's own
+     * 'sourceCardId') rather than just a count. Two Creativities both
+     * copying the same real Hope resolve to that Hope's own instance id
+     * twice here (not deduplicated) -- correct, since each Creativity is
+     * its own physical card in play and so grants its own bonus play, the
+     * same as two independent real Hopes would.
+     *
+     * @return int[]
      */
-    private function effectiveSourceCardId(BoardState $state, int $playerId, string $effectKey): ?int
+    private function effectiveSourceCardIds(BoardState $state, int $playerId, string $effectKey): array
     {
+        $ids = [];
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
             $effectiveCardId = $state->effectiveCardId($mood->cardId);
             if ($state->catalogRow($effectiveCardId)['effectKey'] === $effectKey) {
-                return $effectiveCardId;
+                $ids[] = $effectiveCardId;
             }
         }
 
-        return null;
+        return $ids;
     }
 
     private function anotherPlayerHasMoreMoods(BoardState $state, int $playerId): bool
@@ -3186,6 +3197,18 @@ final class GameService
         $winnerId = $details['winner_game_player_id'] ?? null;
         if ($winnerId !== null) {
             $description .= ' -- ' . ($playerNames[(int) $winnerId] ?? 'a player') . ' won';
+        }
+
+        // Only present in games of 3+ players (see the 'hurt_feelings_
+        // game_player_id' key's own producer in scoreRoundAndAdvance()) --
+        // the resulting player's Hurt Feelings status only actually takes
+        // effect next round, but it's decided here, at this round's
+        // scoring, so this is the one place worth announcing who it went
+        // to rather than leaving it to only be inferable from the
+        // players-list indicator once the next round starts.
+        $hurtFeelingsId = $details['hurt_feelings_game_player_id'] ?? null;
+        if ($hurtFeelingsId !== null) {
+            $description .= '; ' . ($playerNames[(int) $hurtFeelingsId] ?? 'a player') . ' has Hurt Feelings next round';
         }
 
         return $description;

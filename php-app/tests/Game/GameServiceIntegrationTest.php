@@ -2729,6 +2729,7 @@ final class GameServiceIntegrationTest extends TestCase
             'p1' => $p1,
             'p2' => $p2,
             'p3' => $p3,
+            'u1' => $u1,
             'apathyId' => $apathyId,
             'boredomId' => $boredomId,
         ] = $this->buildThreePlayerFixture();
@@ -2775,6 +2776,11 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p1, (int) $round2['first_game_player_id']);
         self::assertSame($p3, (int) $round2['hurt_feelings_game_player_id']);
         self::assertSame($p1, (int) $round2['current_turn_game_player_id']);
+
+        // The round_scored event itself calls out who Hurt Feelings went to,
+        // not just the round_2 row -- see GameService::describeRoundScored().
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString('p3 has Hurt Feelings next round', $events[0]['description']);
 
         // p1 plays their remaining card (Boredom, value 4) to win round 2 as well.
         $this->games->playMood($gameId, $p1, $boredomId, []);
@@ -3331,6 +3337,51 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('An extra play from Hope', $playGrants[1]['description']);
         self::assertSame($p1, $this->games->gamePlayerIdFor($gameId, $u1)); // sanity: p1 is who the grant belongs to
         self::assertSame('Hope', $playGrants[1]['source_card_name']);
+    }
+
+    /**
+     * Regression test: computeFreshGrants() used to look up only the
+     * *first* in-play mood matching a given perpetual-grant effect key
+     * (effectiveSourceCardId(), singular) -- so two independent real Hopes
+     * (e.g. a duplicate printed card across a duel game's two separate
+     * decks, or an intentionally duplicate-including custom deck) only
+     * ever granted one extra play at the start of a future turn instead
+     * of two, even though each Hope is its own physical card and
+     * MoodPlayService's own same-turn bonus already correctly grants one
+     * per Hope actually played. effectiveSourceCardIds() (plural) fixes
+     * this by returning every qualifying mood, not just the first.
+     */
+    public function testTwoIndependentHopesEachGrantTheirOwnPerpetualExtraPlay(): void
+    {
+        $u1 = $this->insertUser('doublehope1');
+        $u2 = $this->insertUser('doublehope2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $hope1Id = $this->insertGameCard($gameId, 124, 'in_play', $p1); // Hope #1
+        $hope2Id = $this->insertGameCard($gameId, 124, 'in_play', $p1); // Hope #2, independent physical card
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        // p2 passes -- the turn advances to p1, whose fresh grants should
+        // now include BOTH Hopes' perpetual bonuses.
+        $this->games->pass($gameId, $p2);
+
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+        self::assertCount(3, $playGrants); // base allowance + 2 independent Hope bonuses
+        self::assertSame('Your normal turn', $playGrants[0]['description']);
+        self::assertSame('An extra play from Hope', $playGrants[1]['description']);
+        self::assertSame('An extra play from Hope', $playGrants[2]['description']);
+        self::assertSame(
+            [$hope1Id, $hope2Id],
+            [$playGrants[1]['source_card_id'], $playGrants[2]['source_card_id']],
+        );
     }
 
     /**

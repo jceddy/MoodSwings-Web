@@ -231,6 +231,25 @@ back, so an unused zone (e.g. northwest/northeast in a 2-player game)
 doesn't render as a stray empty dashed box, auto-placed by the grid into
 an extra implicit row/column past the real zones.
 
+`#in-play-board`'s own grid `gap` is `0` -- the rows/columns of zones sit
+flush against each other, with no visible seam between e.g. the `north`
+row and the `west`/`east` row in a 4-player game. Each zone's own
+`padding` (unaffected by this) still keeps its card thumbnails clear of
+its own dashed border; only the space *between* zones was removed.
+
+At phone widths (`@media (max-width: 600px)`), a 4-player game's
+`west`/`east` zones are only about a quarter of the viewport each (one of
+two grid columns, itself already a fraction of `#in-play-board`'s
+full-bleed width) -- too narrow for even two of `.card-thumb`'s normal
+5.5rem-wide cards side by side, so a second card in either zone wrapped
+onto its own row instead of sitting next to the first. This media query
+shrinks `.card-thumb`/`.card-thumb__art` to `4rem` and tightens
+`.in-play-zone`'s padding and `.in-play-zone__list`'s gap, scoped to cards
+inside `.in-play-zone` only (hand/discard cards keep their normal size
+everywhere) -- enough for two cards to fit per row again. The suppressed-card
+width/badge-offset overrides (see above) get scaled-down counterparts here
+too, proportional to the smaller card width.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
@@ -441,15 +460,25 @@ an extra implicit row/column past the real zones.
     two chosen moods must share a color or value, Courage's must belong to
     different players, Anger's combined value can't exceed 5) — Play stays
     disabled with an inline message until the selection is actually legal,
-    without a round trip to find out. Every option naming an in-play mood
-    or a discard-pile card appends its owner (`cardLabel(card) + ' — ' +
-    playerLabelFor(...)`, or the discard pile's own last-known
-    `last_owner_name`) — needed since a `'duel' game's two independent
-    decks can put the same printed card in play (or the discard pile)
-    twice at once, and a bare name alone can't tell two "Discipline" options
-    apart in, say, Pacifism's own "one per player" target list. This
-    matches how the in-play list itself already labels every card with its
-    owner regardless of any choice field being open. If a filled-in choice is still
+    without a round trip to find out. A `type: 'mood'` field's `<select>`
+    (Faith's `target_mood_id`, Malice's multi-select cascade, etc.) groups
+    its options into one `<optgroup>` per owner (`buildFieldWidget()`'s
+    `appendGroupedMoodOptions()`, driven by an `ownerLabel` on each option
+    from `fieldOptions()`) rather than one flat list — with 3+ players in
+    a game, picking a specific player's mood out of a single long list got
+    tedious, and grouping by owner mirrors how the in-play board itself is
+    already organized by seating position. Groups appear in the order
+    each owner's first candidate is encountered, not resorted by seat.
+    This still disambiguates two players' identical printed cards the way
+    an inline "— Owner" suffix used to (needed since a `'duel' game's two
+    independent decks can put the same printed card in play at once, and
+    a bare name alone can't tell two "Discipline" options apart in, say,
+    Pacifism's own "one per player" target list) — just via the group
+    label instead of repeating it on every option. A discard-pile field
+    (e.g. Corruption's `discard_card_ids`) isn't grouped this way and
+    keeps the older inline suffix instead (`cardLabel(card) + ' — ' +
+    last_owner_name`), since the shared discard pile has no current
+    per-player grouping the way in-play moods do. If a filled-in choice is still
     rejected regardless, the rules engine's own human-readable message
     explains what's missing. If you have Scorn and/or Validation in play,
     every other hand card's panel also gets that reaction's field (Scorn's

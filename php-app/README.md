@@ -1084,7 +1084,14 @@ unlabeled read as the same familiar hand-to-discard action instead.
 `describeEvent()`'s `round_scored` case is `describeRoundScored()`, not
 just a static string -- every player's own final score (`$details['scores']`,
 already logged, just previously unused for display) plus who won, e.g.
-"Round scored (Alice: 12, Bob: 8) -- Alice won".
+"Round scored (Alice: 12, Bob: 8) -- Alice won". In a 3+ player game, this
+also calls out who Hurt Feelings goes to next round: `scoreRoundAndAdvance()`
+folds its already-computed `$hurtFeelingsHolder` into this same event's
+`details` as `hurt_feelings_game_player_id`, and `describeRoundScored()`
+appends "; Charlie has Hurt Feelings next round" when it's non-null --
+otherwise the only way to learn who holds it was the players-list
+indicator (see "Hurt Feelings" above), which only ever shows the *current*
+round's holder, never who just received it.
 
 `round.play_grants` is a similar reminder-text pass over
 `BoardState::pendingPlayGrants()` (already persisted as
@@ -1102,12 +1109,18 @@ play) but never read by `grantAllows()` itself, purely a UI concern.
 perpetual grants and any banked Generosity/Joy grant fresh at the start of
 every turn, bypassing `grantExtraPlay()` entirely since there's no one-time
 card play to attribute the bonus to -- attaches the same `sourceCardId` to
-each of those via a small `effectiveSourceCardId()` helper, so they name
+each of those via a small `effectiveSourceCardIds()` helper, so they name
 their source exactly like any other grant instead of collapsing into "Your
 normal turn". That helper resolves through `BoardState::effectiveCardId()`,
 so a Creativity currently copying Hope attributes its bonus play to the
 copied Hope's own instance id, matching how `serializeCard()` already shows
-that same Creativity as "Hope" everywhere else. The one grant this never
+that same Creativity as "Hope" everywhere else. It returns *every*
+qualifying mood a player owns, not just the first -- two independent real
+Hopes (a duplicate printed card across a duel game's two separate decks,
+or an intentionally duplicate-including custom deck) each contribute their
+own perpetual grant every turn, the same way `MoodPlayService` already
+grants one same-turn bonus per Hope actually played regardless of how many
+copies get played in a single turn. The one grant this never
 applies to is `startTurn()`'s own base allowance (1, or 2 with Hurt
 Feelings) -- it's stored as a bare `null`, which `describePlayGrant()`
 reads as "Your normal turn" rather than a granted extra play from any
