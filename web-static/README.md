@@ -191,6 +191,46 @@ value, suppression, ownership, "affecting"/"affected by", Bliss's discard
 color) stays plain text exactly as before, since none of that is
 information the art itself carries.
 
+### In-play board layout
+
+The "In play" area (issue #124) groups moods by seating position relative
+to the viewer instead of one flat list -- `#in-play-board` is a CSS grid
+with 6 zone `<div>`s (`#in-play-zone-north`/`-northwest`/`-northeast`/
+`-west`/`-east`/`-south`, each a flex container that centers its cards both
+ways), and one of three modifier classes (`in-play-board--2/3/4`, matching
+`state.players.length`) picks which `grid-template-areas` -- and so which
+of those 6 zones actually participate -- apply for this game: `north`/
+`south` for a 2-player game (opponent above, you below), `northwest`/
+`northeast`/`south` for 3 players, or `north`/`west`/`east`/`south` for 4.
+Zones not used for the current player count stay `hidden`. `game.js`'s
+`inPlayZoneAssignments(state)` computes each player's own zone from their
+`seat_order` relative to the viewer's: index 0 (the viewer) is always
+`south`; index 1 -- the player whose turn comes right after the viewer's
+own, since `GameService::rotate()` already treats ascending `seat_order` as
+"clockwise" (see its own docblock) -- sits at the
+viewer's own left (`west`/`northwest`); the remaining index(es) fill
+`north` (directly across, 4 players only) and `east`/`northeast` (the
+viewer's right) in that same clockwise order. `renderInPlay()` then buckets
+`state.in_play` by each card's `owner_game_player_id` into its assigned
+zone's own `<ul class="in-play-zone__list">`, reusing `buildCardThumb()`
+exactly as the old flat list did. This is purely a seating-position
+grouping -- Open/Closed Team Play's own team pairing (`team_id`) plays no
+part in it, unlike the players list's own "Team 1"/"Team 2" tags.
+
+`#in-play-board` breaks out of `body.game-page`'s own centered 60rem
+max-width to span the full browser window horizontally -- `width: 100vw`
+plus `left: 50%; transform: translateX(-50%);` re-centers it on the
+viewport itself rather than its (now irrelevant, narrower) parent, the
+standard full-bleed technique for a block nested inside a max-width
+container. Separately, `.in-play-zone`'s own `display: flex` would
+otherwise beat the browser's default `[hidden] { display: none }` rule
+(an author style always wins over the UA stylesheet, regardless of
+selector specificity) for whichever zones aren't used at the current
+player count -- `.in-play-zone[hidden] { display: none; }` overrides that
+back, so an unused zone (e.g. northwest/northeast in a 2-player game)
+doesn't render as a stray empty dashed box, auto-placed by the grid into
+an extra implicit row/column past the real zones.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

@@ -3409,6 +3409,16 @@ final class GameService
                 ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue),
             ];
         }
+        // Still in hand (not yet played): a value/parity-filtered 'mood'
+        // field (Courage, Anxiety, Spite, Shock, Worry, Hostility) needs
+        // its candidate list computed as if $cardId were already in play --
+        // see BoardState::valueOfAsIfAlsoInPlay()'s own docblock for why.
+        if (!$inPlay && $reactingViewerId !== null) {
+            $choiceFields = array_map(
+                fn (array $field) => $this->withSimulatedMoodCandidates($state, $field, $cardId, $reactingViewerId),
+                $choiceFields
+            );
+        }
 
         return [
             'card_id' => $cardId,
@@ -3440,6 +3450,70 @@ final class GameService
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
         ];
+    }
+
+    /**
+     * Adds a server-computed candidate_card_ids to a 'mood'-type choice
+     * field whose filter depends on value/parity (min_value, max_value, or
+     * parity -- not colors/has_dice_value, which don't change based on
+     * $cardId entering play) -- a no-op for every other field. game.js's
+     * own fieldOptions() already treats candidate_card_ids as authoritative
+     * and skips applying field.filter itself once it's present (the same
+     * mechanism Pride's/Fury's/Instability's own pending-decision
+     * candidate_card_ids already rely on), so this is what actually fixes
+     * the target from looking ineligible: it filters using
+     * BoardState::valueOfAsIfAlsoInPlay() instead of each candidate's
+     * current (pre-play) 'value', matching every other constraint the
+     * field's own scope/filter would otherwise apply (self-exclusion,
+     * own/other scope, a 'colors' filter if present) so the result is a
+     * fully correct replacement, not just a value re-check.
+     */
+    private function withSimulatedMoodCandidates(BoardState $state, array $field, int $cardId, int $ownerId): array
+    {
+        $filter = $field['filter'] ?? null;
+        if ($field['type'] !== 'mood'
+            || isset($field['candidate_card_ids'])
+            || $filter === null
+            || (!isset($filter['min_value']) && !isset($filter['max_value']) && !isset($filter['parity']))
+        ) {
+            return $field;
+        }
+
+        $candidates = [];
+        foreach ($state->moodsInPlay() as $inPlayCardId => $mood) {
+            if ($inPlayCardId === $cardId) {
+                continue;
+            }
+            if ($field['scope'] === 'own' && $mood->ownerId !== $ownerId) {
+                continue;
+            }
+            if ($field['scope'] === 'other' && $mood->ownerId === $ownerId) {
+                continue;
+            }
+            if (isset($filter['colors']) && !in_array($state->colorOf($inPlayCardId), $filter['colors'], true)) {
+                continue;
+            }
+
+            $value = $state->valueOfAsIfAlsoInPlay($inPlayCardId, $cardId, $ownerId);
+            if (isset($filter['values']) && !in_array($value, $filter['values'], true)) {
+                continue;
+            }
+            if (isset($filter['min_value']) && $value < $filter['min_value']) {
+                continue;
+            }
+            if (isset($filter['max_value']) && $value > $filter['max_value']) {
+                continue;
+            }
+            if (isset($filter['parity']) && ($value % 2 === 0) !== ($filter['parity'] === 'even')) {
+                continue;
+            }
+
+            $candidates[] = $inPlayCardId;
+        }
+
+        $field['candidate_card_ids'] = $candidates;
+
+        return $field;
     }
 
     /**

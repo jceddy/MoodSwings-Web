@@ -2050,6 +2050,56 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($courageDuringRound2['suppression_expiry']);
     }
 
+    /**
+     * Regression test: with a green Joy already in play and an opponent's
+     * Ambivalence (blue, base 6 / alt 3 once 2+ red/green moods are in
+     * play) also in play, playing a red Shock should be able to target
+     * that Ambivalence -- Shock's own color is what tips the red/green
+     * count to 2, but only once Shock is actually in play, which happens
+     * moments before its own "value of 3 or less" targeting resolves (see
+     * BoardState::valueOfAsIfAlsoInPlay()). Before the fix, Ambivalence
+     * never appeared in the served candidate_card_ids at all, since it was
+     * computed from Ambivalence's stale pre-play value (6, ineligible).
+     */
+    public function testShockCanTargetAnAmbivalenceThatOnlyQualifiesOnceShockItselfIsInPlay(): void
+    {
+        $u1 = $this->insertUser('shockambiv1');
+        $u2 = $this->insertUser('shockambiv2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $joyId = $this->insertGameCard($gameId, 125, 'in_play', $p1); // Joy, green
+        $ambivalenceId = $this->insertGameCard($gameId, 27, 'in_play', $p2); // Ambivalence, blue, base 6 / alt 3
+        $shockId = $this->insertGameCard($gameId, 101, 'hand', $p1); // Shock, red
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $stateBeforePlaying = $this->games->getState($gameId, $u1);
+        self::assertSame(6, self::findByCardId($stateBeforePlaying['in_play'], $ambivalenceId)['value']);
+
+        $shockCard = self::findByCardId($stateBeforePlaying['you']['hand'], $shockId);
+        $targetField = self::findFieldByKey($shockCard['choice_fields'], 'target_mood_ids');
+        self::assertContains($ambivalenceId, $targetField['candidate_card_ids']);
+
+        $this->games->playMood($gameId, $p1, $shockId, ['target_mood_ids' => [$ambivalenceId]]);
+
+        $stateAfterPlaying = $this->games->getState($gameId, $u1);
+        self::assertNotContains(
+            $ambivalenceId,
+            array_column($stateAfterPlaying['in_play'], 'card_id'),
+        );
+        self::assertContains(
+            $ambivalenceId,
+            array_column($stateAfterPlaying['discard_pile'], 'card_id'),
+        );
+    }
+
     public function testGetStateExposesAffectingAndBoostedByReminderTextForDiceValueAndSuppression(): void
     {
         $u1 = $this->insertUser('affectingsrc1');

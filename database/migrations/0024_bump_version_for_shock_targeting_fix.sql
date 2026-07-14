@@ -1,0 +1,14 @@
+-- No schema change here -- this migration exists purely to keep
+-- schema_version in sync with a VERSION bump for a backend bug fix that
+-- didn't touch the schema at all (Shock/Courage/Anxiety/Spite/Worry/
+-- Hostility's own choice_fields could never actually offer a target whose
+-- value only qualifies once the played card itself is counted -- see
+-- GameService::withSimulatedMoodCandidates()/BoardState::
+-- valueOfAsIfAlsoInPlay()). MaintenanceGate compares the deployed VERSION
+-- file against this table on every request (see migration 0021's own
+-- docblock), so a VERSION bump with no corresponding schema_version update
+-- would show maintenance mode after deploy even though nothing about the
+-- schema actually changed -- this keeps that invariant intact the same way
+-- every other VERSION bump so far has, without needing an unrelated DDL
+-- change to hang it on.
+UPDATE schema_version SET version = '0.4.1' WHERE id = 1;

@@ -920,6 +920,49 @@ final class BoardState
     }
 
     /**
+     * What $targetCardId's value would be if $hypotheticalCardId (still in
+     * hand/discard, about to be played by $hypotheticalOwnerId) were
+     * already in play alongside everything actually in play right now.
+     *
+     * Needed because a still-in-hand card's own choice_fields (see
+     * GameService::serializeCard()) sometimes filter targets by value --
+     * e.g. Shock's "value of 3 or less" -- and a target's dynamic value
+     * (Ambivalence's "3 if there are two or more red and/or green moods,"
+     * or any other PairedColorThresholdEffect/computeValue() that scans
+     * moodsInPlay()) can depend on the very card being played: playing a
+     * red Shock alongside an already-in-play green Joy tips Ambivalence's
+     * own red-or-green count from 1 to 2, dropping its value to 3 -- but
+     * only once Shock is *actually* in play, which MoodPlayService only
+     * does moments before calling ShockEffect::afterPlaying() (by which
+     * point $this correctly reflects it -- see moveHandToInPlay()'s own
+     * call site). Without this, a target that only qualifies once the
+     * played card counts would look ineligible right up until the instant
+     * it's actually played, blocking the choice_fields UI from ever
+     * offering it even though the server would accept it.
+     *
+     * Never mutates $this beyond the scope of this one call: adds a
+     * throwaway MoodInPlay for $hypotheticalCardId, computes, then removes
+     * it again (a try/finally, so an exception mid-computation can't leave
+     * the phantom entry behind).
+     */
+    public function valueOfAsIfAlsoInPlay(int $targetCardId, int $hypotheticalCardId, int $hypotheticalOwnerId): int
+    {
+        if (isset($this->moodsInPlay[$hypotheticalCardId])) {
+            // Already actually in play (e.g. Creativity copying a card
+            // that's also the one being evaluated) -- valueOf() already
+            // reflects it, no phantom needed.
+            return $this->valueOf($targetCardId);
+        }
+
+        $this->moodsInPlay[$hypotheticalCardId] = new MoodInPlay($hypotheticalCardId, $hypotheticalOwnerId);
+        try {
+            return $this->valueOf($targetCardId);
+        } finally {
+            unset($this->moodsInPlay[$hypotheticalCardId]);
+        }
+    }
+
+    /**
      * The card id of the Encouragement or Idealism currently applying
      * $cardId's dice value, or null if neither currently does. Encouragement
      * tags one specific chosen mood (its 'boostedMoodId' effectState key);
