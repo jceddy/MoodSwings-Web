@@ -474,6 +474,208 @@ final class BoardStateTest extends TestCase
         self::assertNull($state->consumeGrantUsed());
     }
 
+    /**
+     * Hope's (and Grace's) own grant -- unlike an ordinary one -- is lost
+     * outright if the specific Hope that created it leaves play before a
+     * player gets around to using it, not merely left un-attributed to a
+     * name. See BoardState::grantIsActive()'s own docblock for why
+     * Stubbornness's grant is deliberately exempt from this (see the
+     * companion test below).
+     */
+    public function testHopeSourcedGrantIsLostIfHopeLeavesPlayBeforeItsUsed(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]); // Hope, a plain hand card
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124); // Hope enters play
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124); // Hope's own same-turn bonus
+
+        self::assertSame(2, $state->playsRemaining()); // base turn + Hope's bonus
+
+        $state->moveInPlayToDiscard(124); // some effect removes Hope from play before the bonus is used
+
+        self::assertSame(1, $state->playsRemaining()); // Hope's own grant is gone, not merely un-attributed
+        self::assertNull($state->useGrantFor(3, 1)); // only the base allowance (null restriction) is left to consume
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    /**
+     * Contrast with the test above: a grant with no 'requiresSourceInPlay'
+     * tag (e.g. Stubbornness's own perpetual grant -- see
+     * GameService::computeFreshGrants()) persists for the rest of the turn
+     * even after whatever card granted it leaves play, since nothing ties
+     * its survival to that card's continued presence the way Hope's/
+     * Grace's "while in play" phrasing does.
+     */
+    public function testGrantWithoutRequiresSourceInPlayPersistsAfterItsSourceLeavesPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [102, 3]]); // Stubbornness, a plain hand card
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 102); // Stubbornness enters play
+        $state->grantExtraPlay(1, null, sourceCardId: 102); // Stubbornness's own perpetual grant, no requiresSourceInPlay
+
+        self::assertSame(2, $state->playsRemaining());
+
+        $state->moveInPlayToDiscard(102); // Stubbornness itself later leaves play
+
+        self::assertSame(2, $state->playsRemaining()); // the grant it already created is unaffected
+    }
+
+    /**
+     * The event-log counterpart to testHopeSourcedGrantIsLostIfHopeLeavesPlayBeforeItsUsed()
+     * above: cascadeMoodLeavingPlay() must record the orphaned grant so
+     * GameService can announce the loss, not just silently drop
+     * playsRemaining() by one.
+     */
+    public function testConsumeGrantsLostRecordsAnOrphanedHopeGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        self::assertSame([], $state->consumeGrantsLost()); // nothing lost yet
+
+        $state->moveInPlayToDiscard(124);
+
+        self::assertSame(
+            [['requiresSourceInPlay' => true, 'sourceCardId' => 124]],
+            $state->consumeGrantsLost(),
+        );
+        self::assertSame([], $state->consumeGrantsLost()); // cleared after reading
+    }
+
+    /**
+     * A grant that's already been spent (useGrantFor() removed it from
+     * $playGrants) is no longer sitting there to find when its source
+     * later leaves play -- consumeGrantsLost() must stay empty, since
+     * nothing was actually lost.
+     */
+    public function testConsumeGrantsLostStaysEmptyForAnAlreadyUsedGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        $state->useGrantFor(3, 1); // consumes the base allowance first
+        $state->useGrantFor(3, 1); // consumes Hope's own grant
+
+        $state->moveInPlayToDiscard(124);
+
+        self::assertSame([], $state->consumeGrantsLost());
+    }
+
+    /**
+     * Contrast with testConsumeGrantsLostRecordsAnOrphanedHopeGrant() above:
+     * Stubbornness's own perpetual grant is never tagged
+     * 'requiresSourceInPlay' (see GameService::computeFreshGrants()), so
+     * losing Stubbornness itself must never be recorded as a lost grant --
+     * nothing about that grant was ever tied to Stubbornness staying in
+     * play.
+     */
+    public function testConsumeGrantsLostStaysEmptyForAGrantWithoutRequiresSourceInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [102, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 102);
+        $state->grantExtraPlay(1, null, sourceCardId: 102);
+
+        $state->moveInPlayToDiscard(102);
+
+        self::assertSame([], $state->consumeGrantsLost());
+    }
+
+    /**
+     * With a plain base allowance plus one Hope-sourced grant both able to
+     * cover the same play, usableGrants() must surface both as distinct
+     * choices -- this is the data GameService::grantChoiceOptions() offers
+     * a player as "which extra play do you want to use for this card".
+     */
+    public function testUsableGrantsReturnsEachDistinctSourceSeparately(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]); // Hope, a plain hand card
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124); // Hope enters play
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124); // Hope's own bonus
+
+        $grants = $state->usableGrants(3, 1);
+
+        self::assertCount(2, $grants);
+        self::assertNull($grants[0]); // the base allowance
+        self::assertSame(['requiresSourceInPlay' => true, 'sourceCardId' => 124], $grants[1]);
+    }
+
+    /**
+     * Hurt Feelings grants a second, entirely unrestricted base-style play
+     * (see startTurn()'s hasHurtFeelings param) -- two bare-null entries in
+     * $playGrants that are indistinguishable to a player choosing between
+     * them, so usableGrants() must collapse them into a single entry
+     * rather than offering a nonsensical "which null do you want" choice.
+     */
+    public function testUsableGrantsCollapsesMultipleBaseAllowances(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(1, hasHurtFeelings: true);
+
+        self::assertSame(2, $state->playsRemaining());
+        self::assertCount(1, $state->usableGrants(3, 1));
+    }
+
+    /**
+     * The player-facing counterpart to usableGrants(): given a preference
+     * (here, Hope's own card id), useGrantFor() must consume that specific
+     * grant even though the base allowance would have matched first.
+     */
+    public function testUseGrantForWithPreferredSourceCardIdConsumesThatSpecificGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        $consumed = $state->useGrantFor(3, 1, preferredSourceCardId: 124);
+
+        self::assertSame(['requiresSourceInPlay' => true, 'sourceCardId' => 124], $consumed);
+        self::assertSame(1, $state->playsRemaining()); // only the base allowance is left
+    }
+
+    /**
+     * 0 is the sentinel usableGrants()/grantChoiceOptions() use for "the
+     * base allowance" (it has no 'sourceCardId' of its own) -- confirms
+     * useGrantFor() honors that same sentinel rather than treating a
+     * preference of 0 as "no preference".
+     */
+    public function testUseGrantForWithPreferredSourceCardIdZeroConsumesBaseAllowance(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        $consumed = $state->useGrantFor(3, 1, preferredSourceCardId: 0);
+
+        self::assertNull($consumed); // the base allowance's own restriction is bare null
+        self::assertSame(1, $state->playsRemaining()); // Hope's grant is still outstanding
+    }
+
+    /**
+     * A stale or fabricated preference naming a grant that isn't actually
+     * usable right now must not fall back to silently consuming some
+     * *other* grant -- see MoodPlayService::playMood()'s own validation,
+     * which relies on this to reject such a preference outright instead of
+     * ever reaching useGrantFor() with it.
+     */
+    public function testUseGrantForWithNonMatchingPreferredSourceCardIdConsumesNothing(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(1);
+
+        $consumed = $state->useGrantFor(3, 1, preferredSourceCardId: 999);
+
+        self::assertNull($consumed);
+        self::assertSame(1, $state->playsRemaining()); // the base allowance is untouched
+    }
+
     public function testDeckWithNoPlayerIdReturnsTheSharedDeckWhenDecksAreNotSeparate(): void
     {
         $state = $this->boardState(deck: [10, 20, 30]);

@@ -711,6 +711,20 @@
             blissColorEl.hidden = true;
         }
 
+        // has_unused_play_grant only exists (and is only ever true) on an
+        // in-play card whose own effect (Hope, Grace, ...) granted an extra
+        // play that hasn't been spent yet -- see GameService::getState()'s
+        // in_play mapping. Only ever true during that card's own owner's
+        // turn (the grant doesn't exist as an object at all outside of it),
+        // so this stays hidden the rest of the time same as the others.
+        const unusedGrantEl = document.getElementById('card-detail-unused-grant');
+        if (card.has_unused_play_grant) {
+            unusedGrantEl.textContent = 'This card has an unused extra play grant available.';
+            unusedGrantEl.hidden = false;
+        } else {
+            unusedGrantEl.hidden = true;
+        }
+
         const selectButton = document.getElementById('card-detail-select-button');
         if (selection) {
             selectButton.hidden = false;
@@ -1621,6 +1635,15 @@
                         value: c.card_id,
                         label: cardLabel(c) + (c.last_owner_name ? ' — ' + c.last_owner_name : ''),
                     }));
+            case 'grant_choice':
+                // Unlike every other case here, the options themselves are
+                // already fully server-computed (GameService::
+                // grantChoiceOptions(), reusing describePlayGrant()'s own
+                // description text) -- this field only ever appears when
+                // there are 2+ usable grants to choose between in the
+                // first place, so there's nothing left to derive
+                // client-side.
+                return field.options;
             default:
                 return [];
         }

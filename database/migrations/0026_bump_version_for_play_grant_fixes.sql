@@ -1,0 +1,14 @@
+-- No schema change here -- this migration exists purely to keep
+-- schema_version in sync with a VERSION bump for a batch of backend bug
+-- fixes/additions around extra play grants that didn't touch the schema
+-- at all: letting a player choose which outstanding grant to spend when
+-- 2+ would cover the same play (BoardState::usableGrants()), surfacing
+-- whether an in-play Hope/Grace still has an unused grant
+-- (has_unused_play_grant), and logging it to the game's event log when a
+-- Hope's/Grace's own grant is lost unused because its source card left
+-- play before it was spent (BoardState::consumeGrantsLost()). Every
+-- schema-changing migration must bump VERSION and update schema_version
+-- as its last statement (see migration 0021's own docblock and 0024's/
+-- 0025's precedent for a schema-less bug fix); this keeps that invariant
+-- intact the same way.
+UPDATE schema_version SET version = '0.4.3' WHERE id = 1;

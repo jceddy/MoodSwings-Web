@@ -1131,6 +1131,103 @@ entirely unless it's actually the viewer's turn (see `web-static/README.md`),
 rather than showing another player's own outstanding plays as if they were
 the viewer's.
 
+Hope's and Grace's own grants -- both the same-turn one
+(`MoodPlayService`, the moment either card enters play) and every future
+turn's perpetual one (`computeFreshGrants()`) -- also carry
+`'requiresSourceInPlay' => true` alongside their `sourceCardId`. Unlike an
+ordinary grant, one tagged this way is lost outright, not merely
+un-attributed, if that specific Hope or Grace leaves play (discarded,
+returned to hand, etc.) before a player gets around to actually using the
+play it granted -- `BoardState::grantIsActive()` is consulted by
+`playsRemaining()`, `pendingPlayGrants()`, `hasUsablePlayGrant()`, and
+`useGrantFor()` alike, so a dead grant disappears from the "Plays left"
+count and can never be the one consumed to play a card, without needing
+to actively prune `$playGrants` the instant the source leaves play (its
+entry just sits inert from then on). Stubbornness's own perpetual grant
+is deliberately exempt -- its text grants a play "at the start of your
+turn" outright, with nothing tying the grant's survival to Stubbornness's
+own continued presence the way Hope's/Grace's "while in play" phrasing
+does, so once granted, it persists for that turn even if Stubbornness
+itself is later discarded. Neither the base allowance nor a banked
+Generosity/Joy grant carry this tag either, both unaffected by the
+distinction.
+
+Losing a grant this way is silent from `playsRemaining()`'s own
+perspective -- it just reads one lower, with nothing to say why -- so
+`BoardState::cascadeMoodLeavingPlay()` (already the one place every
+move-out-of-play method funnels through) additionally records it via
+`$pendingGrantsLost`/`consumeGrantsLost()`, the same consume-before-
+logging convention `$pendingGrantsCreated`/`$pendingGrantUsed` already use.
+`GameService::withCardHistory()` folds whatever it returns into the
+current event's `details['grants_lost']`, and `describeEvent()` appends
+"{player} lost an extra play from Hope -- its source left play before it
+was used" to that event's description (reusing `describeGrantDetails()`,
+the same wording a newly created or just-used grant already gets),
+attributed to `$actor` for the same reason `grants_created` already is:
+`$playGrants` only ever holds whoever's turn is currently active, so
+whoever's move triggered the card leaving play is always the same player
+the lost grant belonged to. This surfaces in the game's event log (`GET
+/games/state`'s `recent_events`) on whatever play or response actually
+moved the source card out of play -- e.g. Bravado discarding a player's own
+Hope as its own cost logs both "was granted an extra play from Bravado"
+and "lost an extra play from Hope" on that same `mood_played` event -- so a
+player never has to reverse-engineer a suddenly-missing extra play from
+`plays_remaining` alone. Never populated for an ordinary grant (Stubbornness's,
+a banked Generosity/Joy grant, or the base allowance), since none of those
+are tied to their source card's continued presence in the first place --
+see `grantIsActive()` above.
+
+Every `sourceCardId` above is always a per-game *instance* id
+(`game_cards.id`, same as `MoodInPlay::$cardId` -- see its own docblock),
+never a catalog id -- two independent real Hopes each carry their own
+distinct `sourceCardId`, exactly like `testTwoIndependentHopesEachGrantTheirOwnPerpetualExtraPlay()`
+already exercises. This is what makes it meaningful to let a player choose
+*which* grant to spend when more than one would cover the same play (see
+`usableGrants()`/`grant_source_card_id` below) -- the choice is always
+between specific physical cards, never ambiguous "some Hope or other"
+options.
+
+When 2+ outstanding grants would each independently permit playing a given
+card -- most commonly two Hopes/Graces both still armed, or one plus the
+base allowance -- `BoardState::useGrantFor()` used to just consume
+whichever came first in `$playGrants`' own order, giving the player no say
+over which one got spent even though it matters (a Hope-sourced grant is
+lost outright if that Hope later leaves play before its bonus is used --
+see above -- so spending the more fragile grant first can matter).
+`BoardState::usableGrants(int $cardId, int $playerId)` returns every
+currently-usable grant for that card, deduplicated by `sourceCardId` (`??
+'base'`, since the base allowance's own bare `null`s -- there can be 2 with
+Hurt Feelings -- are indistinguishable to a player choosing between them
+and so collapse into a single entry). `GameService::serializeCard()`
+prepends a `grant_source_card_id` choice field (`type: 'grant_choice'`,
+`required: false`) whenever this returns 2+ entries, one option per grant,
+reusing `describePlayGrant()`'s own description text verbatim as each
+option's label and its `source_card_id` (`0` standing in for the base
+allowance, which has none of its own) as the option's value -- so "An
+extra play from Hope" never needs to be written twice. Submitting
+`grant_source_card_id` is optional even when the field is offered (left
+absent, `MoodPlayService::playMood()` falls back to the old "whichever
+comes first" behavior via `useGrantFor()`'s new optional
+`$preferredSourceCardId` parameter) but, if given, is validated against
+`usableGrants()` before being honored -- a stale or fabricated preference
+(naming a grant that's since been consumed or lost) throws
+`InvalidChoiceException` rather than silently falling through to spend
+some *other* grant the player never chose, which would otherwise corrupt
+`playsRemaining()` in a way that's hard to notice after the fact.
+
+Each in-play mood's own serialization also carries `has_unused_play_grant`
+-- whether that specific card currently has an active, not-yet-consumed
+play grant it's responsible for (cross-referenced against
+`BoardState::pendingPlayGrants()`'s own `sourceCardId`s). Most useful for
+an in-play Hope/Grace, since losing track of whether its own bonus is
+still available actually matters (see `grantIsActive()` above) -- the
+frontend surfaces this in the card detail dialog (see
+`web-static/README.md`). It's only ever `true` during that mood's own
+owner's turn: a future turn's perpetual Hope/Grace bonus doesn't exist as a
+grant at all until `computeFreshGrants()` creates it fresh when that turn
+starts, so this reads `false` the rest of the time, not as a limitation but
+because there's genuinely nothing outstanding to flag yet.
+
 Each in-play mood's serialization also carries `base_color` alongside its
 current `color` -- the printed color, ignoring Imagination's "while in
 play, all moods are the chosen color" blanket override (or, for a
