@@ -159,3 +159,12 @@ half-migrated schema.
   cards to their teammate before round 1 can begin — one row per player
   per game, inserted the moment they submit (so their choice can never be
   revised once their teammate's own hand is visible).
+- **Shock targeting fix** (`0024`): no schema change — a pure
+  `UPDATE schema_version` to keep it in sync with a `VERSION` bump for a
+  backend bug fix (Shock and 5 other cards' `choice_fields` could never
+  offer a target whose value only qualifies once the played card itself
+  is counted — see `GameService::withSimulatedMoodCandidates()`). Every
+  prior `VERSION` bump so far rode along with an actual schema-changing
+  migration; this is the first one that doesn't, since `MaintenanceGate`
+  would otherwise show maintenance mode after deploy purely from the
+  version mismatch, with no real pending migration to explain it.
