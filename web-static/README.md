@@ -488,10 +488,15 @@ too, proportional to the smaller card width.
     Hope") — there's nothing left to derive client-side, so the case just
     returns `field.options` as-is. It's optional even when offered: like
     every other non-multi field, `buildFieldWidget()` auto-prepends a blank
-    `(none)` option, and leaving it selected omits `grant_source_card_id`
+    default option, and leaving it selected omits `grant_source_card_id`
     from the submitted payload entirely, falling back to the server's old
     "whichever grant comes first" behavior — no special-case JS needed for
-    that leave-it-blank path.
+    that leave-it-blank path. That default option reads "(any)" rather than
+    every other field's "(none)", the one place `buildFieldWidget()`
+    special-cases the label by `field.type` — leaving this blank doesn't
+    mean "use no grant" (a play always uses one), just "no preference which
+    outstanding one," so "(none)" would misleadingly suggest declining a
+    grant entirely.
     A `type: 'mood'` field's own options (e.g. Faith's `target_mood_id`)
     also mark a candidate mood with `card.has_unused_play_grant` (see
     `php-app/README.md`) with a trailing ` *` right after its name
