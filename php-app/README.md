@@ -1109,12 +1109,18 @@ play) but never read by `grantAllows()` itself, purely a UI concern.
 perpetual grants and any banked Generosity/Joy grant fresh at the start of
 every turn, bypassing `grantExtraPlay()` entirely since there's no one-time
 card play to attribute the bonus to -- attaches the same `sourceCardId` to
-each of those via a small `effectiveSourceCardId()` helper, so they name
+each of those via a small `effectiveSourceCardIds()` helper, so they name
 their source exactly like any other grant instead of collapsing into "Your
 normal turn". That helper resolves through `BoardState::effectiveCardId()`,
 so a Creativity currently copying Hope attributes its bonus play to the
 copied Hope's own instance id, matching how `serializeCard()` already shows
-that same Creativity as "Hope" everywhere else. The one grant this never
+that same Creativity as "Hope" everywhere else. It returns *every*
+qualifying mood a player owns, not just the first -- two independent real
+Hopes (a duplicate printed card across a duel game's two separate decks,
+or an intentionally duplicate-including custom deck) each contribute their
+own perpetual grant every turn, the same way `MoodPlayService` already
+grants one same-turn bonus per Hope actually played regardless of how many
+copies get played in a single turn. The one grant this never
 applies to is `startTurn()`'s own base allowance (1, or 2 with Hurt
 Feelings) -- it's stored as a bare `null`, which `describePlayGrant()`
 reads as "Your normal turn" rather than a granted extra play from any
