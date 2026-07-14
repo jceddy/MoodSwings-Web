@@ -523,9 +523,37 @@ validate a selection before ever submitting it. `GameService::serializeCard()`
 attaches each card's `choice_fields` (plus `has_dice_value`, needed for
 Encouragement's filter) to the JSON returned by `GET /games/state`.
 
-A `type: 'mood'` field's candidates are always drawn from `state.in_play`
-directly (never separately embedded in the field itself, except
-Instability's precomputed `candidate_card_ids`), which is what makes a
+A `type: 'mood'` field's candidates are usually drawn from `state.in_play`
+directly and filtered client-side by `field.filter`, rather than embedded
+in the field itself — except Instability's/Fury's/Pride's own precomputed
+`candidate_card_ids` (pending-decision fields, see above) and, for the
+same reason, every still-in-hand card's own `min_value`/`max_value`/
+`parity`-filtered field (Courage, Anxiety, Spite, Shock, Worry, Hostility):
+`GameService::withSimulatedMoodCandidates()` attaches a server-computed
+`candidate_card_ids` to these too, which `game.js`'s `fieldOptions()`
+already treats as authoritative and skips its own `field.filter` check for
+(the same mechanism the pending-decision fields rely on). This exists
+because a candidate's *own* value can depend on the very card about to be
+played: Ambivalence (and the nine other `PairedColorThresholdEffect`
+cards) reads "3 if there are two or more red and/or green moods" off
+whatever's *currently* in play, but playing a red Shock alongside an
+already-in-play green mood only tips that count to 2 once Shock is
+actually in play — which `MoodPlayService::playMood()` does moments
+before calling `ShockEffect::afterPlaying()`, so the rules engine already
+gets it right by the time it matters. Filtering client-side by each
+candidate's *pre-play* `state.in_play[].value` doesn't: a target that only
+qualifies once the played card counts would look permanently ineligible.
+`BoardState::valueOfAsIfAlsoInPlay()` is what actually recomputes this
+correctly — it inserts a throwaway `MoodInPlay` for the card about to be
+played, calls the ordinary `valueOf()`, and removes it again (a
+`try`/`finally`, so a mid-computation exception can't leave it behind) —
+`withSimulatedMoodCandidates()` uses it in place of each candidate's own
+`value` when checking `filter`, replicating every other constraint the
+field would otherwise apply (self-exclusion, `own`/`other` scope, a
+`colors` filter if present) so the result is a drop-in, fully correct
+replacement, not just a value re-check.
+
+This candidate-embedding is also what makes a
 `'duel' game's two identical catalog cards (see "Card identity" above) a
 real UI problem for `distinct_owners` fields specifically: Pacifism's own
 "one per chosen player" constraint is impossible to satisfy correctly if a
