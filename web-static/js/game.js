@@ -507,7 +507,18 @@
     // -- Board ---------------------------------------------------------
 
     function cardLabel(card) {
-        return card.name + ' (' + card.color + ', ' + card.value + ')' +
+        // has_unused_play_grant only ever exists (and is only ever true) on
+        // an in-play card -- see GameService::getState()'s in_play mapping
+        // -- so this stays silent for a hand/discard-pile card the same way
+        // is_creativity_copy already does below. Most relevant for Hope/
+        // Grace, whose own grant is lost outright if this specific card
+        // leaves play before it's spent (see BoardState::grantIsActive()'s
+        // own docblock) -- called out here too since a 'mood' choice field
+        // (e.g. Faith's target_mood_id) is exactly the kind of place a
+        // player might not otherwise think to check the card detail dialog
+        // before picking a target.
+        return card.name + (card.has_unused_play_grant ? ' *' : '') +
+            ' (' + card.color + ', ' + card.value + ')' +
             (card.is_creativity_copy ? ' [Creativity copy]' : '');
     }
 
