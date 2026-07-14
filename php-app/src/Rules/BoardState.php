@@ -680,7 +680,7 @@ final class BoardState
         );
     }
 
-    /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> $playGrants */
+    /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int, requiresSourceInPlay?: bool}> $playGrants */
     public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId, ?int $currentRoundNumber = null, bool $discardedThisRound = false): void
     {
         $this->currentPlayerId = $currentPlayerId;
@@ -1094,9 +1094,12 @@ final class BoardState
      * this specific outstanding play (see describePlayGrant()) -- the one
      * caller that doesn't pass it is BoardStateTest's own generic
      * "does a grant exist at all" test, and startTurn()'s own base
-     * allowance is never granted through this method at all.
+     * allowance is never granted through this method at all. A
+     * restriction may also carry 'requiresSourceInPlay' => true (Hope's
+     * and Grace's own same-turn bonus) -- see grantIsActive()'s own
+     * docblock for what that does.
      *
-     * @param ?array{type?: string, values?: int[], source?: string} $restriction
+     * @param ?array{type?: string, values?: int[], source?: string, requiresSourceInPlay?: bool} $restriction
      */
     public function grantExtraPlay(int $count = 1, ?array $restriction = null, ?int $sourceCardId = null): void
     {
@@ -1132,20 +1135,20 @@ final class BoardState
 
     public function playsRemaining(): int
     {
-        return count($this->playGrants);
+        return count(array_filter($this->playGrants, fn (?array $g) => $this->grantIsActive($g)));
     }
 
     /** @return array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> */
     public function pendingPlayGrants(): array
     {
-        return $this->playGrants;
+        return array_values(array_filter($this->playGrants, fn (?array $g) => $this->grantIsActive($g)));
     }
 
     /** Whether any outstanding grant this turn -- restricted or not -- would allow playing $cardId. */
     public function hasUsablePlayGrant(int $cardId, int $playerId): bool
     {
         foreach ($this->playGrants as $restriction) {
-            if ($this->grantAllows($restriction, $cardId, $playerId)) {
+            if ($this->grantIsActive($restriction) && $this->grantAllows($restriction, $cardId, $playerId)) {
                 return true;
             }
         }
@@ -1165,6 +1168,9 @@ final class BoardState
     public function useGrantFor(int $cardId, int $playerId): ?array
     {
         foreach ($this->playGrants as $index => $restriction) {
+            if (!$this->grantIsActive($restriction)) {
+                continue;
+            }
             if ($this->grantAllows($restriction, $cardId, $playerId)) {
                 unset($this->playGrants[$index]);
                 $this->playGrants = array_values($this->playGrants);
@@ -1178,6 +1184,32 @@ final class BoardState
         }
 
         return null;
+    }
+
+    /**
+     * Whether $restriction (an entry in $playGrants) still actually
+     * counts. True for every ordinary grant, but a grant tagged
+     * 'requiresSourceInPlay' -- Hope's and Grace's own bonus, both the
+     * same-turn one (grantExtraPlay(), the moment either card is played)
+     * and every future turn's perpetual one
+     * (GameService::computeFreshGrants()) -- only counts while its own
+     * 'sourceCardId' is still actually in play. If that specific Hope or
+     * Grace is discarded, returned to hand, or otherwise leaves play
+     * before the player gets around to using the play it granted, the
+     * grant is lost, not merely un-attributed. Stubbornness's own
+     * perpetual grant is deliberately never tagged this way -- once
+     * computeFreshGrants() grants it at the start of a turn, it persists
+     * for that turn even if Stubbornness itself later leaves play, unlike
+     * Hope/Grace. Neither is the base allowance (always null) or a banked
+     * Generosity/Joy grant, both unaffected by this distinction.
+     */
+    private function grantIsActive(?array $restriction): bool
+    {
+        if ($restriction === null || !($restriction['requiresSourceInPlay'] ?? false)) {
+            return true;
+        }
+
+        return $this->isInPlay($restriction['sourceCardId']);
     }
 
     /**

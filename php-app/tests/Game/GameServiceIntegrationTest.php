@@ -3385,6 +3385,99 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Hope's own perpetual grant is lost outright -- not merely kept but
+     * un-attributed -- if that specific Hope leaves play before the player
+     * gets around to using the play it granted. Bravado's own effect
+     * ("you may put one of your other moods into the discard pile; if you
+     * do, you may play an additional mood this turn") is the simplest real
+     * card that discards a player's own in-play mood as part of playing a
+     * different card, making it a convenient way to remove Hope from play
+     * mid-turn without needing a dedicated opponent-decision or scoring
+     * flow just to set this scenario up.
+     */
+    public function testHopesPerpetualGrantIsLostIfHopeIsDiscardedBeforeItsUsed(): void
+    {
+        $u1 = $this->insertUser('hopelost1');
+        $u2 = $this->insertUser('hopelost2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $hopeId = $this->insertGameCard($gameId, 124, 'in_play', $p1); // Hope, already in play
+        $bravadoId = $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado, in p1's hand
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        // p2 passes -- the turn advances to p1, whose fresh grants now
+        // include Hope's perpetual bonus (base allowance + Hope = 2).
+        $this->games->pass($gameId, $p2);
+        self::assertSame(2, (int) $this->fetchRound($gameId)['plays_remaining']);
+
+        // p1 plays Bravado, discarding their own Hope as its cost -- this
+        // consumes the base allowance to play Bravado itself, discards
+        // Hope (destroying its now-stale grant), then grants Bravado's own
+        // unconditional bonus. Net: 2 -> 1, not 2 -> 2 -- Hope's own grant
+        // doesn't survive its own removal from play.
+        $this->games->playMood($gameId, $p1, $bravadoId, ['discard_mood_id' => $hopeId]);
+
+        $stateAfter = $this->games->getState($gameId, $u1);
+        self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining']);
+        $playGrants = $stateAfter['round']['play_grants'];
+        self::assertCount(1, $playGrants);
+        self::assertSame('An extra play from Bravado', $playGrants[0]['description']);
+    }
+
+    /**
+     * Contrast with the test above: Stubbornness's own perpetual grant is
+     * deliberately NOT tagged 'requiresSourceInPlay' (see
+     * GameService::computeFreshGrants()'s own docblock), so it persists
+     * for the rest of the turn even if Stubbornness itself is discarded
+     * before the player uses the play it granted -- unlike Hope/Grace.
+     */
+    public function testStubbornnessPerpetualGrantSurvivesStubbornnessBeingDiscarded(): void
+    {
+        $u1 = $this->insertUser('stubborngrant1');
+        $u2 = $this->insertUser('stubborngrant2');
+        $u3 = $this->insertUser('stubborngrant3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $stubbornnessId = $this->insertGameCard($gameId, 102, 'in_play', $p1); // Stubbornness, already in play
+        $bravadoId = $this->insertGameCard($gameId, 84, 'hand', $p1); // Bravado, in p1's hand
+        // p2 has more moods in play than p1 -- Stubbornness's own condition.
+        $this->insertGameCard($gameId, 5, 'in_play', $p2);
+        $this->insertGameCard($gameId, 27, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p3, $p3, 1);
+
+        // p3 passes to p1's turn (skipping p2 would be wrong seat order --
+        // seat order is p1=0, p2=1, p3=2, so first_player p3 rotates to p1
+        // next). p1's fresh grants now include Stubbornness's bonus.
+        $this->games->pass($gameId, $p3);
+        self::assertSame(2, (int) $this->fetchRound($gameId)['plays_remaining']);
+
+        // p1 plays Bravado, discarding their own Stubbornness as its cost.
+        $this->games->playMood($gameId, $p1, $bravadoId, ['discard_mood_id' => $stubbornnessId]);
+
+        // Net: 2 -> 2 (Bravado's own new grant replaces the one consumed
+        // to play it), NOT 2 -> 1 -- Stubbornness's own grant survives its
+        // own discard, unlike Hope's/Grace's in the test above.
+        self::assertSame(2, (int) $this->fetchRound($gameId)['plays_remaining']);
+    }
+
+    /**
      * The exact bug report this fix addresses: a Creativity copying Hope
      * grants the extra play (already correctly, via
      * BoardState::countMoodsInPlayWithEffectiveKey()'s copy-aware

@@ -474,6 +474,52 @@ final class BoardStateTest extends TestCase
         self::assertNull($state->consumeGrantUsed());
     }
 
+    /**
+     * Hope's (and Grace's) own grant -- unlike an ordinary one -- is lost
+     * outright if the specific Hope that created it leaves play before a
+     * player gets around to using it, not merely left un-attributed to a
+     * name. See BoardState::grantIsActive()'s own docblock for why
+     * Stubbornness's grant is deliberately exempt from this (see the
+     * companion test below).
+     */
+    public function testHopeSourcedGrantIsLostIfHopeLeavesPlayBeforeItsUsed(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]); // Hope, a plain hand card
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124); // Hope enters play
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124); // Hope's own same-turn bonus
+
+        self::assertSame(2, $state->playsRemaining()); // base turn + Hope's bonus
+
+        $state->moveInPlayToDiscard(124); // some effect removes Hope from play before the bonus is used
+
+        self::assertSame(1, $state->playsRemaining()); // Hope's own grant is gone, not merely un-attributed
+        self::assertNull($state->useGrantFor(3, 1)); // only the base allowance (null restriction) is left to consume
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    /**
+     * Contrast with the test above: a grant with no 'requiresSourceInPlay'
+     * tag (e.g. Stubbornness's own perpetual grant -- see
+     * GameService::computeFreshGrants()) persists for the rest of the turn
+     * even after whatever card granted it leaves play, since nothing ties
+     * its survival to that card's continued presence the way Hope's/
+     * Grace's "while in play" phrasing does.
+     */
+    public function testGrantWithoutRequiresSourceInPlayPersistsAfterItsSourceLeavesPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [102, 3]]); // Stubbornness, a plain hand card
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 102); // Stubbornness enters play
+        $state->grantExtraPlay(1, null, sourceCardId: 102); // Stubbornness's own perpetual grant, no requiresSourceInPlay
+
+        self::assertSame(2, $state->playsRemaining());
+
+        $state->moveInPlayToDiscard(102); // Stubbornness itself later leaves play
+
+        self::assertSame(2, $state->playsRemaining()); // the grant it already created is unaffected
+    }
+
     public function testDeckWithNoPlayerIdReturnsTheSharedDeckWhenDecksAreNotSeparate(): void
     {
         $state = $this->boardState(deck: [10, 20, 30]);

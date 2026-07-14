@@ -1131,6 +1131,27 @@ entirely unless it's actually the viewer's turn (see `web-static/README.md`),
 rather than showing another player's own outstanding plays as if they were
 the viewer's.
 
+Hope's and Grace's own grants -- both the same-turn one
+(`MoodPlayService`, the moment either card enters play) and every future
+turn's perpetual one (`computeFreshGrants()`) -- also carry
+`'requiresSourceInPlay' => true` alongside their `sourceCardId`. Unlike an
+ordinary grant, one tagged this way is lost outright, not merely
+un-attributed, if that specific Hope or Grace leaves play (discarded,
+returned to hand, etc.) before a player gets around to actually using the
+play it granted -- `BoardState::grantIsActive()` is consulted by
+`playsRemaining()`, `pendingPlayGrants()`, `hasUsablePlayGrant()`, and
+`useGrantFor()` alike, so a dead grant disappears from the "Plays left"
+count and can never be the one consumed to play a card, without needing
+to actively prune `$playGrants` the instant the source leaves play (its
+entry just sits inert from then on). Stubbornness's own perpetual grant
+is deliberately exempt -- its text grants a play "at the start of your
+turn" outright, with nothing tying the grant's survival to Stubbornness's
+own continued presence the way Hope's/Grace's "while in play" phrasing
+does, so once granted, it persists for that turn even if Stubbornness
+itself is later discarded. Neither the base allowance nor a banked
+Generosity/Joy grant carry this tag either, both unaffected by the
+distinction.
+
 Each in-play mood's serialization also carries `base_color` alongside its
 current `color` -- the printed color, ignoring Imagination's "while in
 play, all moods are the chosen color" blanket override (or, for a

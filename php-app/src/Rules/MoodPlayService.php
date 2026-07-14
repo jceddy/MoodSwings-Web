@@ -116,9 +116,9 @@ final class MoodPlayService
         // computeFreshGrants() covers every turn after this one, for as
         // long as the card stays in play.
         if ($effectiveEffectKey === 'hope') {
-            $state->grantExtraPlay(1);
+            $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], $cardId);
         } elseif ($effectiveEffectKey === 'grace') {
-            $state->grantExtraPlay(1, ['type' => 'shares_color_with_your_moods', 'source' => 'discard']);
+            $state->grantExtraPlay(1, ['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'requiresSourceInPlay' => true], $cardId);
         }
 
         return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $choices, $choices, 0);

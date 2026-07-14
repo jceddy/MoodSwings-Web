@@ -2355,18 +2355,34 @@ final class GameService
      * exactly like two separately-played Hopes already do via
      * MoodPlayService's own same-turn grant.
      *
-     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     * Hope's and Grace's own grants (but not Stubbornness's) also carry
+     * 'requiresSourceInPlay' => true -- if that specific Hope/Grace is
+     * removed from play later in the turn it's granted for, before the
+     * player actually uses the play it granted, the grant is lost, not
+     * merely un-attributed (see BoardState::grantIsActive()). Stubbornness
+     * grants a play "at the start of your turn" outright, with nothing in
+     * its own text tying the grant's survival to its own continued
+     * presence the way Hope's/Grace's "while in play" phrasing does, so
+     * once granted, it persists for that turn regardless of what happens
+     * to Stubbornness afterward.
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, requiresSourceInPlay?: bool}>
      */
     private function computeFreshGrants(BoardState $state, int $playerId, int $baseCount): array
     {
         $grants = array_fill(0, $baseCount, null);
 
         foreach ($this->effectiveSourceCardIds($state, $playerId, 'hope') as $hopeSourceCardId) {
-            $grants[] = ['sourceCardId' => $hopeSourceCardId];
+            $grants[] = ['sourceCardId' => $hopeSourceCardId, 'requiresSourceInPlay' => true];
         }
 
         foreach ($this->effectiveSourceCardIds($state, $playerId, 'grace') as $graceSourceCardId) {
-            $grants[] = ['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'sourceCardId' => $graceSourceCardId];
+            $grants[] = [
+                'type' => 'shares_color_with_your_moods',
+                'source' => 'discard',
+                'sourceCardId' => $graceSourceCardId,
+                'requiresSourceInPlay' => true,
+            ];
         }
 
         if ($this->anotherPlayerHasMoreMoods($state, $playerId)) {
