@@ -520,6 +520,97 @@ final class BoardStateTest extends TestCase
         self::assertSame(2, $state->playsRemaining()); // the grant it already created is unaffected
     }
 
+    /**
+     * With a plain base allowance plus one Hope-sourced grant both able to
+     * cover the same play, usableGrants() must surface both as distinct
+     * choices -- this is the data GameService::grantChoiceOptions() offers
+     * a player as "which extra play do you want to use for this card".
+     */
+    public function testUsableGrantsReturnsEachDistinctSourceSeparately(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]); // Hope, a plain hand card
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124); // Hope enters play
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124); // Hope's own bonus
+
+        $grants = $state->usableGrants(3, 1);
+
+        self::assertCount(2, $grants);
+        self::assertNull($grants[0]); // the base allowance
+        self::assertSame(['requiresSourceInPlay' => true, 'sourceCardId' => 124], $grants[1]);
+    }
+
+    /**
+     * Hurt Feelings grants a second, entirely unrestricted base-style play
+     * (see startTurn()'s hasHurtFeelings param) -- two bare-null entries in
+     * $playGrants that are indistinguishable to a player choosing between
+     * them, so usableGrants() must collapse them into a single entry
+     * rather than offering a nonsensical "which null do you want" choice.
+     */
+    public function testUsableGrantsCollapsesMultipleBaseAllowances(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(1, hasHurtFeelings: true);
+
+        self::assertSame(2, $state->playsRemaining());
+        self::assertCount(1, $state->usableGrants(3, 1));
+    }
+
+    /**
+     * The player-facing counterpart to usableGrants(): given a preference
+     * (here, Hope's own card id), useGrantFor() must consume that specific
+     * grant even though the base allowance would have matched first.
+     */
+    public function testUseGrantForWithPreferredSourceCardIdConsumesThatSpecificGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        $consumed = $state->useGrantFor(3, 1, preferredSourceCardId: 124);
+
+        self::assertSame(['requiresSourceInPlay' => true, 'sourceCardId' => 124], $consumed);
+        self::assertSame(1, $state->playsRemaining()); // only the base allowance is left
+    }
+
+    /**
+     * 0 is the sentinel usableGrants()/grantChoiceOptions() use for "the
+     * base allowance" (it has no 'sourceCardId' of its own) -- confirms
+     * useGrantFor() honors that same sentinel rather than treating a
+     * preference of 0 as "no preference".
+     */
+    public function testUseGrantForWithPreferredSourceCardIdZeroConsumesBaseAllowance(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        $consumed = $state->useGrantFor(3, 1, preferredSourceCardId: 0);
+
+        self::assertNull($consumed); // the base allowance's own restriction is bare null
+        self::assertSame(1, $state->playsRemaining()); // Hope's grant is still outstanding
+    }
+
+    /**
+     * A stale or fabricated preference naming a grant that isn't actually
+     * usable right now must not fall back to silently consuming some
+     * *other* grant -- see MoodPlayService::playMood()'s own validation,
+     * which relies on this to reject such a preference outright instead of
+     * ever reaching useGrantFor() with it.
+     */
+    public function testUseGrantForWithNonMatchingPreferredSourceCardIdConsumesNothing(): void
+    {
+        $state = $this->boardState(hands: [1 => [3]]);
+        $state->startTurn(1);
+
+        $consumed = $state->useGrantFor(3, 1, preferredSourceCardId: 999);
+
+        self::assertNull($consumed);
+        self::assertSame(1, $state->playsRemaining()); // the base allowance is untouched
+    }
+
     public function testDeckWithNoPlayerIdReturnsTheSharedDeckWhenDecksAreNotSeparate(): void
     {
         $state = $this->boardState(deck: [10, 20, 30]);

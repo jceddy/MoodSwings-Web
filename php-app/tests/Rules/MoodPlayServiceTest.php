@@ -3353,6 +3353,44 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
+    /**
+     * With Hope already in play from a previous turn (its own perpetual
+     * grant already active, same as computeFreshGrants() would set up --
+     * simulated directly here rather than through a real previous turn) and
+     * this turn's own base allowance both still outstanding, a player can
+     * explicitly choose to spend Hope's grant via 'grant_source_card_id'
+     * rather than always silently consuming whichever comes first.
+     */
+    public function testPlayMoodWithGrantSourceCardIdConsumesThatSpecificGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [5, 124]]); // Complacency (no abilities), Hope
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124); // Hope, already in play from a previous turn
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124); // Hope's own perpetual grant
+
+        self::assertSame(2, $state->playsRemaining()); // base allowance + Hope's grant
+
+        $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 124]));
+
+        self::assertTrue($state->isInPlay(5));
+        self::assertSame(1, $state->playsRemaining()); // only the base allowance is left; Hope's own grant was spent
+    }
+
+    /**
+     * A stale/fabricated 'grant_source_card_id' (naming a grant that isn't
+     * actually usable for this play) must be rejected outright, not
+     * silently fall back to consuming whichever grant happens to come
+     * first -- see MoodPlayService::playMood()'s own validation.
+     */
+    public function testPlayMoodRejectsAnInvalidGrantSourceCardId(): void
+    {
+        $state = $this->boardState(hands: [1 => [5]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 999]));
+    }
+
     public function testGraceGrantsADiscardSourcedColorMatchingPlayTheTurnItsPlayed(): void
     {
         $state = $this->boardState(hands: [1 => [121]], discard: [110]); // Grace (green), Cheer (green) in discard

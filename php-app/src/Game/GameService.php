@@ -2889,6 +2889,20 @@ final class GameService
             }
         }
 
+        // Every distinct in-play card id currently backing an active,
+        // not-yet-consumed play grant (BoardState::pendingPlayGrants()
+        // already only returns the active ones -- see grantIsActive()) --
+        // computed once here rather than per-card, since it's the same
+        // set for every mood checked below. Most relevant to Hope/Grace
+        // (see 'has_unused_play_grant' below), but works the same for any
+        // other card's own outstanding grant that hasn't been spent yet.
+        $activeGrantSourceCardIds = [];
+        foreach ($state->pendingPlayGrants() as $grant) {
+            if ($grant !== null && isset($grant['sourceCardId'])) {
+                $activeGrantSourceCardIds[] = $grant['sourceCardId'];
+            }
+        }
+
         foreach ($state->moodsInPlay() as $cardId => $mood) {
             $serialized = $this->serializeCard($state, $cardId, $names);
             $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
@@ -2896,6 +2910,16 @@ final class GameService
                 ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
+                // Whether this specific card currently has an unused play
+                // grant it's responsible for -- most useful for Hope/Grace,
+                // whose own grant (see BoardState::grantIsActive()) is lost
+                // outright if this card leaves play before it's spent, so
+                // knowing it's still "armed" actually means something.
+                // Only ever true during this card's own owner's turn --
+                // Hope's/Grace's perpetual bonus for a future turn doesn't
+                // exist as a grant at all until computeFreshGrants() creates
+                // it fresh when that turn actually starts.
+                'has_unused_play_grant' => in_array($cardId, $activeGrantSourceCardIds, true),
                 // A permanent one-time "after playing this mood, ... this
                 // mood's value becomes N" trigger (Dignity, Delight, ...)
                 // has locked its value in via BoardState::setValueOverride()
@@ -3457,6 +3481,28 @@ final class GameService
                 fn (array $field) => $this->withSimulatedMoodCandidates($state, $field, $cardId, $reactingViewerId),
                 $choiceFields
             );
+
+            // 'grant_source_card_id' -- present only when 2+ distinct
+            // outstanding grants would each independently allow playing
+            // this card (BoardState::usableGrants()), letting the player
+            // pick which one to spend instead of always silently
+            // consuming whichever happens to come first. Prepended, not
+            // appended -- like Guile's/Regret's own mandatory discard
+            // cost, this is resolved before the card's own after-playing
+            // choices, not after them.
+            $grantOptions = $this->grantChoiceOptions($state, $cardId, $reactingViewerId, $names);
+            if ($grantOptions !== []) {
+                $choiceFields = [
+                    [
+                        'key' => 'grant_source_card_id',
+                        'type' => 'grant_choice',
+                        'required' => false,
+                        'label' => 'Which extra play to use for this card',
+                        'options' => $grantOptions,
+                    ],
+                    ...$choiceFields,
+                ];
+            }
         }
 
         return [
@@ -3553,6 +3599,35 @@ final class GameService
         $field['candidate_card_ids'] = $candidates;
 
         return $field;
+    }
+
+    /**
+     * The 'grant_source_card_id' field's own options: one per currently
+     * usable, distinguishable grant for playing $cardId
+     * (BoardState::usableGrants()), reusing describePlayGrant()'s own
+     * description text verbatim (so "An extra play from Hope (must share
+     * a color with one of your moods)"-style detail isn't duplicated
+     * here) and its 'source_card_id' (0 standing in for the base
+     * allowance, which has none of its own -- see usableGrants()'s own
+     * docblock) as each option's value. Empty whenever there's at most
+     * one usable grant, since there's nothing to actually choose between
+     * -- the caller skips adding the field entirely in that case.
+     *
+     * @param array<int, string> $cardNames
+     * @return array<int, array{value: int, label: string}>
+     */
+    private function grantChoiceOptions(BoardState $state, int $cardId, int $viewerId, array $cardNames): array
+    {
+        $grants = $state->usableGrants($cardId, $viewerId);
+        if (count($grants) < 2) {
+            return [];
+        }
+
+        return array_map(function (?array $restriction) use ($cardNames) {
+            $described = $this->describePlayGrant($restriction, $cardNames);
+
+            return ['value' => $described['source_card_id'] ?? 0, 'label' => $described['description']];
+        }, $grants);
     }
 
     /**

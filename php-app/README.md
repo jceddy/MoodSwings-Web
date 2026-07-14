@@ -1152,6 +1152,57 @@ itself is later discarded. Neither the base allowance nor a banked
 Generosity/Joy grant carry this tag either, both unaffected by the
 distinction.
 
+Every `sourceCardId` above is always a per-game *instance* id
+(`game_cards.id`, same as `MoodInPlay::$cardId` -- see its own docblock),
+never a catalog id -- two independent real Hopes each carry their own
+distinct `sourceCardId`, exactly like `testTwoIndependentHopesEachGrantTheirOwnPerpetualExtraPlay()`
+already exercises. This is what makes it meaningful to let a player choose
+*which* grant to spend when more than one would cover the same play (see
+`usableGrants()`/`grant_source_card_id` below) -- the choice is always
+between specific physical cards, never ambiguous "some Hope or other"
+options.
+
+When 2+ outstanding grants would each independently permit playing a given
+card -- most commonly two Hopes/Graces both still armed, or one plus the
+base allowance -- `BoardState::useGrantFor()` used to just consume
+whichever came first in `$playGrants`' own order, giving the player no say
+over which one got spent even though it matters (a Hope-sourced grant is
+lost outright if that Hope later leaves play before its bonus is used --
+see above -- so spending the more fragile grant first can matter).
+`BoardState::usableGrants(int $cardId, int $playerId)` returns every
+currently-usable grant for that card, deduplicated by `sourceCardId` (`??
+'base'`, since the base allowance's own bare `null`s -- there can be 2 with
+Hurt Feelings -- are indistinguishable to a player choosing between them
+and so collapse into a single entry). `GameService::serializeCard()`
+prepends a `grant_source_card_id` choice field (`type: 'grant_choice'`,
+`required: false`) whenever this returns 2+ entries, one option per grant,
+reusing `describePlayGrant()`'s own description text verbatim as each
+option's label and its `source_card_id` (`0` standing in for the base
+allowance, which has none of its own) as the option's value -- so "An
+extra play from Hope" never needs to be written twice. Submitting
+`grant_source_card_id` is optional even when the field is offered (left
+absent, `MoodPlayService::playMood()` falls back to the old "whichever
+comes first" behavior via `useGrantFor()`'s new optional
+`$preferredSourceCardId` parameter) but, if given, is validated against
+`usableGrants()` before being honored -- a stale or fabricated preference
+(naming a grant that's since been consumed or lost) throws
+`InvalidChoiceException` rather than silently falling through to spend
+some *other* grant the player never chose, which would otherwise corrupt
+`playsRemaining()` in a way that's hard to notice after the fact.
+
+Each in-play mood's own serialization also carries `has_unused_play_grant`
+-- whether that specific card currently has an active, not-yet-consumed
+play grant it's responsible for (cross-referenced against
+`BoardState::pendingPlayGrants()`'s own `sourceCardId`s). Most useful for
+an in-play Hope/Grace, since losing track of whether its own bonus is
+still available actually matters (see `grantIsActive()` above) -- the
+frontend surfaces this in the card detail dialog (see
+`web-static/README.md`). It's only ever `true` during that mood's own
+owner's turn: a future turn's perpetual Hope/Grace bonus doesn't exist as a
+grant at all until `computeFreshGrants()` creates it fresh when that turn
+starts, so this reads `false` the rest of the time, not as a limitation but
+because there's genuinely nothing outstanding to flag yet.
+
 Each in-play mood's serialization also carries `base_color` alongside its
 current `color` -- the printed color, ignoring Imagination's "while in
 play, all moods are the chosen color" blanket override (or, for a

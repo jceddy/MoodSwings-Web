@@ -188,8 +188,14 @@ each other. The card-detail dialog's enlarged
 a `<p>` rules-text paragraph -- both now conveyed only via that image's
 `alt` text -- while every other line in the dialog (color, value, alt
 value, suppression, ownership, "affecting"/"affected by", Bliss's discard
-color) stays plain text exactly as before, since none of that is
-information the art itself carries.
+color, an unused play grant) stays plain text exactly as before, since none
+of that is information the art itself carries. The last of those,
+`#card-detail-unused-grant`, mirrors `card.has_unused_play_grant` (see
+`php-app/README.md`) -- most relevant to an in-play Hope/Grace, since it's
+the only visible way to tell whether that specific card's own bonus play
+is still outstanding or has already been spent (losing track of that
+matters more for Hope/Grace than an ordinary grant -- see
+`BoardState::grantIsActive()`'s own docblock).
 
 ### In-play board layout
 
@@ -469,6 +475,23 @@ too, proportional to the smaller card width.
     tedious, and grouping by owner mirrors how the in-play board itself is
     already organized by seating position. Groups appear in the order
     each owner's first candidate is encountered, not resorted by seat.
+    A `type: 'grant_choice'` field (`grant_source_card_id`, prepended ahead
+    of the card's own fields) appears only when 2+ outstanding play grants
+    would each independently cover the card being played — most commonly
+    two Hopes/Graces both still armed, or one plus your ordinary turn —
+    letting you pick which specific one gets spent instead of the rules
+    engine always silently consuming whichever happens to come first (see
+    `usableGrants()`/`grant_source_card_id` in `php-app/README.md`).
+    Unlike every other field case in `fieldOptions()`, its options arrive
+    fully server-computed (`GameService::grantChoiceOptions()`, reusing
+    `describePlayGrant()`'s own description text, e.g. "An extra play from
+    Hope") — there's nothing left to derive client-side, so the case just
+    returns `field.options` as-is. It's optional even when offered: like
+    every other non-multi field, `buildFieldWidget()` auto-prepends a blank
+    `(none)` option, and leaving it selected omits `grant_source_card_id`
+    from the submitted payload entirely, falling back to the server's old
+    "whichever grant comes first" behavior — no special-case JS needed for
+    that leave-it-blank path.
     This still disambiguates two players' identical printed cards the way
     an inline "— Owner" suffix used to (needed since a `'duel' game's two
     independent decks can put the same printed card in play at once, and

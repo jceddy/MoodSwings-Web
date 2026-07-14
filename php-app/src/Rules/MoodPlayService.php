@@ -92,7 +92,28 @@ final class MoodPlayService
             $effect->payToPlayCost($state, $cardId, $playerId, $choices);
         }
 
-        $consumedGrant = $state->useGrantFor($cardId, $playerId);
+        // 'grant_source_card_id' (see GameService::grantChoiceOptions()) is
+        // only ever offered/submitted when 2+ distinct grants would
+        // actually work for this play, and is optional even then -- left
+        // unset, useGrantFor() falls back to its old "whichever comes
+        // first" behavior. Validated explicitly against usableGrants()
+        // (not just handed straight to useGrantFor()) so a stale or
+        // fabricated preference (the one grant it names having since been
+        // consumed or lost -- see BoardState::grantIsActive()) is rejected
+        // outright rather than silently falling through to consuming some
+        // *other* grant the player never chose.
+        $preferredGrantSourceCardId = $choices->int('grant_source_card_id');
+        if ($preferredGrantSourceCardId !== null) {
+            $usableSourceCardIds = array_map(
+                static fn (?array $g) => $g['sourceCardId'] ?? 0,
+                $state->usableGrants($cardId, $playerId),
+            );
+            if (!in_array($preferredGrantSourceCardId, $usableSourceCardIds, true)) {
+                throw new InvalidChoiceException("Grant sourced from card {$preferredGrantSourceCardId} is not currently usable for playing card {$cardId}");
+            }
+        }
+
+        $consumedGrant = $state->useGrantFor($cardId, $playerId, $preferredGrantSourceCardId);
         if ($fromDiscard) {
             $state->moveDiscardToInPlay($playerId, $cardId, $copiedCardId);
         } else {

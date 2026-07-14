@@ -1163,12 +1163,23 @@ final class BoardState
      * callers can react to a grant-specific tag -- see the
      * 'onUseEffectState' key.
      *
+     * $preferredSourceCardId, when given, restricts the search to the one
+     * grant sourced from that specific card (0 standing in for the base
+     * allowance, which has no 'sourceCardId' of its own -- see
+     * usableGrants()) -- how a player picks which of 2+ usable grants to
+     * spend when GameService's own 'grant_source_card_id' choice field
+     * offered one. Left null (the default), this behaves exactly as
+     * before: whichever usable grant happens to come first.
+     *
      * @return ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}
      */
-    public function useGrantFor(int $cardId, int $playerId): ?array
+    public function useGrantFor(int $cardId, int $playerId, ?int $preferredSourceCardId = null): ?array
     {
         foreach ($this->playGrants as $index => $restriction) {
             if (!$this->grantIsActive($restriction)) {
+                continue;
+            }
+            if ($preferredSourceCardId !== null && ($restriction['sourceCardId'] ?? 0) !== $preferredSourceCardId) {
                 continue;
             }
             if ($this->grantAllows($restriction, $cardId, $playerId)) {
@@ -1184,6 +1195,38 @@ final class BoardState
         }
 
         return null;
+    }
+
+    /**
+     * Every currently-usable grant for playing $cardId (grantIsActive()
+     * and grantAllows() both satisfied), deduplicated by 'sourceCardId' --
+     * the base allowance's own bare nulls (there can be more than one at
+     * once, with Hurt Feelings) collapse into a single entry, since
+     * they're indistinguishable to a player choosing between them. Order
+     * follows $playGrants' own order. Exposed so GameService can offer an
+     * explicit "which grant do you want to use" choice whenever 2+ come
+     * back -- see 'grant_source_card_id' in php-app/README.md -- instead
+     * of always silently consuming whichever happens to come first.
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     */
+    public function usableGrants(int $cardId, int $playerId): array
+    {
+        $grants = [];
+        $seenKeys = [];
+        foreach ($this->playGrants as $restriction) {
+            if (!$this->grantIsActive($restriction) || !$this->grantAllows($restriction, $cardId, $playerId)) {
+                continue;
+            }
+            $key = $restriction['sourceCardId'] ?? 'base';
+            if (isset($seenKeys[$key])) {
+                continue;
+            }
+            $seenKeys[$key] = true;
+            $grants[] = $restriction;
+        }
+
+        return $grants;
     }
 
     /**

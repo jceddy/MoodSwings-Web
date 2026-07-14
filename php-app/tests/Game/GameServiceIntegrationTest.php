@@ -3433,6 +3433,117 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Two independent real Hopes (see testTwoIndependentHopesEachGrantTheirOwnPerpetualExtraPlay
+     * above) each grant their own perpetual bonus, on top of the base
+     * allowance -- 3 distinct usable grants for any ordinary hand card, so
+     * GameService::serializeCard() should offer an explicit
+     * 'grant_source_card_id' choice field naming all 3, tagged 0/hope1Id/
+     * hope2Id per BoardState::usableGrants()'s own sentinel convention.
+     */
+    public function testGrantSourceCardIdChoiceFieldOffersEachDistinctUsableGrant(): void
+    {
+        $u1 = $this->insertUser('grantchoice1');
+        $u2 = $this->insertUser('grantchoice2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $hope1Id = $this->insertGameCard($gameId, 124, 'in_play', $p1); // Hope #1
+        $hope2Id = $this->insertGameCard($gameId, 124, 'in_play', $p1); // Hope #2, independent physical card
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency, no abilities of its own
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        // p2 passes -- the turn advances to p1, whose fresh grants now
+        // include the base allowance plus BOTH Hopes' perpetual bonuses.
+        $this->games->pass($gameId, $p2);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $complacency = null;
+        foreach ($hand as $card) {
+            if ($card['card_id'] === $complacencyId) {
+                $complacency = $card;
+            }
+        }
+        self::assertNotNull($complacency);
+
+        $grantField = null;
+        foreach ($complacency['choice_fields'] as $field) {
+            if ($field['key'] === 'grant_source_card_id') {
+                $grantField = $field;
+            }
+        }
+        self::assertNotNull($grantField);
+        self::assertSame('grant_choice', $grantField['type']);
+        self::assertFalse($grantField['required']);
+        self::assertSame(
+            ['value' => 0, 'label' => 'Your normal turn'],
+            $grantField['options'][0],
+        );
+        self::assertSame(
+            ['value' => $hope1Id, 'label' => 'An extra play from Hope'],
+            $grantField['options'][1],
+        );
+        self::assertSame(
+            ['value' => $hope2Id, 'label' => 'An extra play from Hope'],
+            $grantField['options'][2],
+        );
+    }
+
+    /**
+     * The card-detail-dialog indicator's own backing data: each Hope
+     * remains "armed" (has_unused_play_grant true) until the specific play
+     * it granted is actually spent -- choosing one via grant_source_card_id
+     * clears only that one Hope's flag, leaving the other (and the base
+     * allowance, which has no card of its own to flag) untouched.
+     */
+    public function testHasUnusedPlayGrantClearsOnlyForTheHopeWhoseGrantWasSpent(): void
+    {
+        $u1 = $this->insertUser('unusedgrant1');
+        $u2 = $this->insertUser('unusedgrant2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $hope1Id = $this->insertGameCard($gameId, 124, 'in_play', $p1);
+        $hope2Id = $this->insertGameCard($gameId, 124, 'in_play', $p1);
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->games->pass($gameId, $p2);
+
+        $unusedGrantFlagFor = function (array $state, int $cardId): bool {
+            foreach ($state['in_play'] as $card) {
+                if ($card['card_id'] === $cardId) {
+                    return $card['has_unused_play_grant'];
+                }
+            }
+            throw new \RuntimeException("card {$cardId} not found in in_play");
+        };
+
+        $before = $this->games->getState($gameId, $u1);
+        self::assertTrue($unusedGrantFlagFor($before, $hope1Id));
+        self::assertTrue($unusedGrantFlagFor($before, $hope2Id));
+
+        $this->games->playMood($gameId, $p1, $complacencyId, ['grant_source_card_id' => $hope1Id]);
+
+        $after = $this->games->getState($gameId, $u1);
+        self::assertFalse($unusedGrantFlagFor($after, $hope1Id)); // spent
+        self::assertTrue($unusedGrantFlagFor($after, $hope2Id)); // still outstanding
+    }
+
+    /**
      * Contrast with the test above: Stubbornness's own perpetual grant is
      * deliberately NOT tagged 'requiresSourceInPlay' (see
      * GameService::computeFreshGrants()'s own docblock), so it persists
