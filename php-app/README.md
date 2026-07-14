@@ -1084,7 +1084,14 @@ unlabeled read as the same familiar hand-to-discard action instead.
 `describeEvent()`'s `round_scored` case is `describeRoundScored()`, not
 just a static string -- every player's own final score (`$details['scores']`,
 already logged, just previously unused for display) plus who won, e.g.
-"Round scored (Alice: 12, Bob: 8) -- Alice won".
+"Round scored (Alice: 12, Bob: 8) -- Alice won". In a 3+ player game, this
+also calls out who Hurt Feelings goes to next round: `scoreRoundAndAdvance()`
+folds its already-computed `$hurtFeelingsHolder` into this same event's
+`details` as `hurt_feelings_game_player_id`, and `describeRoundScored()`
+appends "; Charlie has Hurt Feelings next round" when it's non-null --
+otherwise the only way to learn who holds it was the players-list
+indicator (see "Hurt Feelings" above), which only ever shows the *current*
+round's holder, never who just received it.
 
 `round.play_grants` is a similar reminder-text pass over
 `BoardState::pendingPlayGrants()` (already persisted as

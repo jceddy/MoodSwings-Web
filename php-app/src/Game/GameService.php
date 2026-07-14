@@ -1936,6 +1936,7 @@ final class GameService
         $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
             'scores' => $scores,
             'winner_game_player_id' => $winnerId,
+            'hurt_feelings_game_player_id' => $hurtFeelingsHolder,
         ], $state);
 
         if ($gameCompleting) {
@@ -3186,6 +3187,18 @@ final class GameService
         $winnerId = $details['winner_game_player_id'] ?? null;
         if ($winnerId !== null) {
             $description .= ' -- ' . ($playerNames[(int) $winnerId] ?? 'a player') . ' won';
+        }
+
+        // Only present in games of 3+ players (see the 'hurt_feelings_
+        // game_player_id' key's own producer in scoreRoundAndAdvance()) --
+        // the resulting player's Hurt Feelings status only actually takes
+        // effect next round, but it's decided here, at this round's
+        // scoring, so this is the one place worth announcing who it went
+        // to rather than leaving it to only be inferable from the
+        // players-list indicator once the next round starts.
+        $hurtFeelingsId = $details['hurt_feelings_game_player_id'] ?? null;
+        if ($hurtFeelingsId !== null) {
+            $description .= '; ' . ($playerNames[(int) $hurtFeelingsId] ?? 'a player') . ' has Hurt Feelings next round';
         }
 
         return $description;
