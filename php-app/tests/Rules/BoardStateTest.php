@@ -288,6 +288,30 @@ final class BoardStateTest extends TestCase
         self::assertSame(6, $state->valueOf(56));
     }
 
+    /**
+     * Regression test: Shock's own "value of 3 or less" choice_fields
+     * candidate list used to look stale for a target like Ambivalence
+     * whose paired-color-threshold value only drops once the played card
+     * (Shock itself, red) tips the count -- see
+     * BoardState::valueOfAsIfAlsoInPlay()'s own docblock.
+     */
+    public function testValueOfAsIfAlsoInPlayReflectsThePairedColorThresholdTheHypotheticalCardWouldTip(): void
+    {
+        $state = $this->boardState(hands: [1 => [101], 2 => [27, 125]]); // Shock (red), Ambivalence (blue), Joy (green)
+        $state->moveHandToInPlay(2, 125); // Joy in play -- 1 red/green mood so far
+        $state->moveHandToInPlay(2, 27); // Ambivalence in play -- threshold not met yet
+
+        self::assertSame(6, $state->valueOf(27)); // base value, only 1 red/green mood (Joy) in play
+
+        // As if Shock (still in hand, red) were also in play: 2 red/green moods now -- threshold met.
+        self::assertSame(3, $state->valueOfAsIfAlsoInPlay(27, 101, 1));
+
+        // No lasting side effects: the real board is untouched.
+        self::assertSame(6, $state->valueOf(27));
+        self::assertFalse($state->isInPlay(101));
+        self::assertTrue($state->isInHand(1, 101));
+    }
+
     public function testClearSuppressionsFromSource(): void
     {
         $state = $this->boardState(hands: [1 => [56]]);
