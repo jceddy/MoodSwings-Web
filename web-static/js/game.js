@@ -1689,7 +1689,14 @@
         if (field.multi) {
             select.multiple = true;
         } else {
-            select.appendChild(new Option('(none)', ''));
+            // 'grant_choice' (grant_source_card_id) reads differently from
+            // every other optional field here: leaving it blank doesn't
+            // mean "use no grant" (a play always uses one), just "no
+            // preference which outstanding one" -- see MoodPlayService::
+            // playMood()'s own fallback to "whichever comes first" -- so
+            // "(any)" says what actually happens, where "(none)" would
+            // misleadingly suggest declining to use a grant at all.
+            select.appendChild(new Option(field.type === 'grant_choice' ? '(any)' : '(none)', ''));
         }
 
         const options = field.type === 'mode'
