@@ -1152,6 +1152,31 @@ itself is later discarded. Neither the base allowance nor a banked
 Generosity/Joy grant carry this tag either, both unaffected by the
 distinction.
 
+Losing a grant this way is silent from `playsRemaining()`'s own
+perspective -- it just reads one lower, with nothing to say why -- so
+`BoardState::cascadeMoodLeavingPlay()` (already the one place every
+move-out-of-play method funnels through) additionally records it via
+`$pendingGrantsLost`/`consumeGrantsLost()`, the same consume-before-
+logging convention `$pendingGrantsCreated`/`$pendingGrantUsed` already use.
+`GameService::withCardHistory()` folds whatever it returns into the
+current event's `details['grants_lost']`, and `describeEvent()` appends
+"{player} lost an extra play from Hope -- its source left play before it
+was used" to that event's description (reusing `describeGrantDetails()`,
+the same wording a newly created or just-used grant already gets),
+attributed to `$actor` for the same reason `grants_created` already is:
+`$playGrants` only ever holds whoever's turn is currently active, so
+whoever's move triggered the card leaving play is always the same player
+the lost grant belonged to. This surfaces in the game's event log (`GET
+/games/state`'s `recent_events`) on whatever play or response actually
+moved the source card out of play -- e.g. Bravado discarding a player's own
+Hope as its own cost logs both "was granted an extra play from Bravado"
+and "lost an extra play from Hope" on that same `mood_played` event -- so a
+player never has to reverse-engineer a suddenly-missing extra play from
+`plays_remaining` alone. Never populated for an ordinary grant (Stubbornness's,
+a banked Generosity/Joy grant, or the base allowance), since none of those
+are tied to their source card's continued presence in the first place --
+see `grantIsActive()` above.
+
 Every `sourceCardId` above is always a per-game *instance* id
 (`game_cards.id`, same as `MoodInPlay::$cardId` -- see its own docblock),
 never a catalog id -- two independent real Hopes each carry their own

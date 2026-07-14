@@ -3430,6 +3430,15 @@ final class GameServiceIntegrationTest extends TestCase
         $playGrants = $stateAfter['round']['play_grants'];
         self::assertCount(1, $playGrants);
         self::assertSame('An extra play from Bravado', $playGrants[0]['description']);
+
+        // The event log must say what happened to Hope's own bonus play
+        // instead of just letting plays_remaining quietly drop by one --
+        // otherwise a player who expected 2 plays this turn has no way to
+        // tell whether that's a bug or working as intended.
+        self::assertStringContainsString(
+            "lost an extra play from Hope -- its source left play before it was used",
+            $stateAfter['recent_events'][0]['description'],
+        );
     }
 
     /**

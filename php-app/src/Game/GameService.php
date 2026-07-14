@@ -3176,6 +3176,26 @@ final class GameService
             $description .= '; ' . implode('; ', $grantParts);
         }
 
+        // Every 'requiresSourceInPlay' grant BoardState::consumeGrantsLost()
+        // recorded as orphaned by this event -- Hope's/Grace's own bonus,
+        // never used, because the specific card that created it just left
+        // play (see grantIsActive()'s own docblock). Attributed to $actor
+        // for the same reason $grantsCreated above is: $playGrants only
+        // ever holds whoever's turn is currently active, so the player
+        // whose own move triggered the card leaving play is always the
+        // same one the lost grant belonged to. Surfaced explicitly here
+        // (rather than leaving players to infer it from plays_remaining
+        // quietly dropping by one) so there's no confusion later about
+        // where an expected extra play went.
+        $grantsLost = $details['grants_lost'] ?? [];
+        if ($grantsLost !== []) {
+            $lostParts = array_map(
+                fn (array $restriction) => "{$actor} lost " . $this->describeGrantDetails($restriction, $cardNames) . ' -- its source left play before it was used',
+                $grantsLost,
+            );
+            $description .= '; ' . implode('; ', $lostParts);
+        }
+
         return $description;
     }
 
@@ -3275,7 +3295,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'scoring_trigger'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 
@@ -4280,8 +4300,8 @@ final class GameService
     /**
      * Folds whatever BoardState::consumeRevealedCardIds()/consumeCardMoves()/
      * consumeOwnershipChanges()/consumeDraws()/consumeGrantsCreated()/
-     * consumeGrantUsed() have collected since the last event was logged
-     * into $details before it's persisted -- see those methods' own
+     * consumeGrantUsed()/consumeGrantsLost() have collected since the last
+     * event was logged into $details before it's persisted -- see those methods' own
      * docblocks for why this can't just be read back out of $details like
      * everything else in it. A no-op for a play that revealed, moved, or
      * reassigned nothing, drew no cards, and granted/used no extra play.
@@ -4332,6 +4352,11 @@ final class GameService
         $grantUsed = $state->consumeGrantUsed();
         if ($grantUsed !== null) {
             $details['grant_used'] = $grantUsed;
+        }
+
+        $grantsLost = $state->consumeGrantsLost();
+        if ($grantsLost !== []) {
+            $details['grants_lost'] = $grantsLost;
         }
 
         return $details;

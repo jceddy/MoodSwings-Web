@@ -521,6 +521,71 @@ final class BoardStateTest extends TestCase
     }
 
     /**
+     * The event-log counterpart to testHopeSourcedGrantIsLostIfHopeLeavesPlayBeforeItsUsed()
+     * above: cascadeMoodLeavingPlay() must record the orphaned grant so
+     * GameService can announce the loss, not just silently drop
+     * playsRemaining() by one.
+     */
+    public function testConsumeGrantsLostRecordsAnOrphanedHopeGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        self::assertSame([], $state->consumeGrantsLost()); // nothing lost yet
+
+        $state->moveInPlayToDiscard(124);
+
+        self::assertSame(
+            [['requiresSourceInPlay' => true, 'sourceCardId' => 124]],
+            $state->consumeGrantsLost(),
+        );
+        self::assertSame([], $state->consumeGrantsLost()); // cleared after reading
+    }
+
+    /**
+     * A grant that's already been spent (useGrantFor() removed it from
+     * $playGrants) is no longer sitting there to find when its source
+     * later leaves play -- consumeGrantsLost() must stay empty, since
+     * nothing was actually lost.
+     */
+    public function testConsumeGrantsLostStaysEmptyForAnAlreadyUsedGrant(): void
+    {
+        $state = $this->boardState(hands: [1 => [124, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124);
+
+        $state->useGrantFor(3, 1); // consumes the base allowance first
+        $state->useGrantFor(3, 1); // consumes Hope's own grant
+
+        $state->moveInPlayToDiscard(124);
+
+        self::assertSame([], $state->consumeGrantsLost());
+    }
+
+    /**
+     * Contrast with testConsumeGrantsLostRecordsAnOrphanedHopeGrant() above:
+     * Stubbornness's own perpetual grant is never tagged
+     * 'requiresSourceInPlay' (see GameService::computeFreshGrants()), so
+     * losing Stubbornness itself must never be recorded as a lost grant --
+     * nothing about that grant was ever tied to Stubbornness staying in
+     * play.
+     */
+    public function testConsumeGrantsLostStaysEmptyForAGrantWithoutRequiresSourceInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [102, 3]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 102);
+        $state->grantExtraPlay(1, null, sourceCardId: 102);
+
+        $state->moveInPlayToDiscard(102);
+
+        self::assertSame([], $state->consumeGrantsLost());
+    }
+
+    /**
      * With a plain base allowance plus one Hope-sourced grant both able to
      * cover the same play, usableGrants() must surface both as distinct
      * choices -- this is the data GameService::grantChoiceOptions() offers

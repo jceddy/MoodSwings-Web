@@ -175,6 +175,23 @@ final class BoardState
     private array $pendingGrantsCreated = [];
 
     /**
+     * @var array<int, array{requiresSourceInPlay: true, sourceCardId: int}>
+     * One entry per still-outstanding 'requiresSourceInPlay' grant (Hope's
+     * or Grace's own -- see grantIsActive()'s own docblock) orphaned by
+     * cascadeMoodLeavingPlay() because the specific card that created it
+     * just left play before anyone got around to using it -- lets
+     * GameService announce the loss in the game's event log instead of the
+     * grant just silently going stale (playsRemaining() dropping by one
+     * with no explanation), which otherwise reads as a bug report waiting
+     * to happen. Never populated for an ordinary grant (Stubbornness's, a
+     * banked Generosity/Joy grant, or the base allowance), since none of
+     * those are tied to their source card's continued presence in the
+     * first place. Same consume-before-logging convention as
+     * $pendingGrantsCreated/$pendingGrantUsed above.
+     */
+    private array $pendingGrantsLost = [];
+
+    /**
      * The restriction descriptor useGrantFor() most recently consumed, if
      * it was an actual granted extra play (not the ordinary null-
      * restriction base allowance every turn already starts with) -- lets
@@ -525,11 +542,23 @@ final class BoardState
      * (see clearSuppressionsFrom()) and returns any mood tagged as "give
      * this back if you still have it when I leave play" (Arrogance) to its
      * original owner, provided the Arrogance player still actually holds
-     * it -- see ArrogranceEffect.
+     * it -- see ArrogranceEffect. Also records (see $pendingGrantsLost) any
+     * still-outstanding 'requiresSourceInPlay' grant $cardId was
+     * responsible for -- grantIsActive() would silently start reading it
+     * as inactive the instant $cardId is gone from $moodsInPlay (already
+     * true by the time every caller gets here), so this is the one place
+     * that can still tell "used" apart from "just went stale" while it
+     * still matters.
      */
     private function cascadeMoodLeavingPlay(int $cardId): void
     {
         $this->clearSuppressionsFrom($cardId);
+
+        foreach ($this->playGrants as $restriction) {
+            if (($restriction['requiresSourceInPlay'] ?? false) && $restriction['sourceCardId'] === $cardId) {
+                $this->pendingGrantsLost[] = $restriction;
+            }
+        }
 
         foreach ($this->moodsInPlay as $mood) {
             $stolen = $mood->effectState['returnsToOwnerIfCardLeavesPlay'] ?? null;
@@ -1129,6 +1158,22 @@ final class BoardState
     {
         $grants = $this->pendingGrantsCreated;
         $this->pendingGrantsCreated = [];
+
+        return $grants;
+    }
+
+    /**
+     * Returns and clears every restriction descriptor cascadeMoodLeavingPlay()
+     * recorded as lost since the last call -- see $pendingGrantsLost' own
+     * docblock. Same consume-before-logging convention as
+     * consumeGrantsCreated()/consumeGrantUsed().
+     *
+     * @return array<int, array{requiresSourceInPlay: true, sourceCardId: int}>
+     */
+    public function consumeGrantsLost(): array
+    {
+        $grants = $this->pendingGrantsLost;
+        $this->pendingGrantsLost = [];
 
         return $grants;
     }
