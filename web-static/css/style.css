@@ -256,6 +256,48 @@ body.game-page {
     width: 100%;
 }
 
+/* At phone widths, a 4-player game's west/east quadrants are only about a
+   quarter of the viewport each (two grid columns, further split from
+   #in-play-board's own full-bleed width) -- too narrow for even two of
+   .card-thumb's normal 5.5rem-wide cards side by side, so every card in
+   those zones stacked into its own single-card row instead of wrapping.
+   Shrinking the card size and tightening the padding/gaps around it here
+   (in-play zones only -- hand/discard cards elsewhere keep their normal
+   size) is enough for two to fit per row again. */
+@media (max-width: 600px) {
+    #in-play-board {
+        padding: 0 0.5rem;
+    }
+
+    .in-play-zone {
+        padding: 0.25rem;
+    }
+
+    .in-play-zone__list {
+        gap: 0.25rem;
+    }
+
+    .in-play-zone .card-thumb,
+    .in-play-zone .card-thumb__art {
+        width: 4rem;
+    }
+
+    /* Scaled-down counterparts of the same-named rules under
+       .card-thumb--suppressed above, proportional to the smaller card
+       width here (4/5.5 of the original 30px/20px). */
+    .in-play-zone .card-thumb--suppressed {
+        width: calc(4rem + 22px);
+    }
+
+    .in-play-zone .card-thumb--suppressed .card-thumb__badge--value {
+        top: calc(0.25rem + 15px);
+    }
+
+    .in-play-zone .card-thumb--suppressed .card-thumb__badge--suppressed {
+        bottom: calc(0.25rem + 15px);
+    }
+}
+
 /* -- Card art thumbnails (hand/in-play/discard) --------------------- */
 
 .card-thumb {

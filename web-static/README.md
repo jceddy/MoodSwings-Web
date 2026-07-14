@@ -237,6 +237,19 @@ row and the `west`/`east` row in a 4-player game. Each zone's own
 `padding` (unaffected by this) still keeps its card thumbnails clear of
 its own dashed border; only the space *between* zones was removed.
 
+At phone widths (`@media (max-width: 600px)`), a 4-player game's
+`west`/`east` zones are only about a quarter of the viewport each (one of
+two grid columns, itself already a fraction of `#in-play-board`'s
+full-bleed width) -- too narrow for even two of `.card-thumb`'s normal
+5.5rem-wide cards side by side, so a second card in either zone wrapped
+onto its own row instead of sitting next to the first. This media query
+shrinks `.card-thumb`/`.card-thumb__art` to `4rem` and tightens
+`.in-play-zone`'s padding and `.in-play-zone__list`'s gap, scoped to cards
+inside `.in-play-zone` only (hand/discard cards keep their normal size
+everywhere) -- enough for two cards to fit per row again. The suppressed-card
+width/badge-offset overrides (see above) get scaled-down counterparts here
+too, proportional to the smaller card width.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
