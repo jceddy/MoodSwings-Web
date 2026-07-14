@@ -1571,15 +1571,18 @@
                     .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
             case 'mood':
-                // Two players' identical catalog cards can both be in play
-                // at once (a 'duel' game gives each player their own deck),
-                // so the bare card name alone can't tell two options apart
-                // -- appending the owner disambiguates them the same way
-                // the in-play list itself already does.
+                // ownerLabel drives buildFieldWidget()'s own <optgroup>
+                // grouping below -- with 3+ players in play, a flat list
+                // made it tedious to find a specific player's moods. It
+                // also still disambiguates two players' identical catalog
+                // cards (a 'duel' game gives each player their own deck) the
+                // same way the old inline "— Owner" suffix used to, just
+                // via the group label instead of repeating it on every
+                // option.
                 if (field.candidate_card_ids) {
                     return currentState.in_play
                         .filter((c) => field.candidate_card_ids.includes(c.card_id))
-                        .map((c) => ({ value: c.card_id, label: cardLabel(c) + ' — ' + playerLabelFor(c.owner_game_player_id) }));
+                        .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) }));
                 }
                 return currentState.in_play
                     .filter((c) => c.card_id !== card.card_id)
@@ -1594,7 +1597,7 @@
                     // themselves.
                     .filter((c) => !field.excludes_teammate || c.owner_game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
-                    .map((c) => ({ value: c.card_id, label: cardLabel(c) + ' — ' + playerLabelFor(c.owner_game_player_id) }));
+                    .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) }));
             case 'hand_card':
                 // No owner suffix needed here -- every option is already
                 // the viewer's own hand, and two identical physical copies
@@ -1658,10 +1661,36 @@
         const options = field.type === 'mode'
             ? field.options.map((value) => ({ value, label: capitalize(value).replace(/_/g, ' ') }))
             : fieldOptions(field, card);
-        for (const option of options) {
-            select.appendChild(new Option(option.label, option.value));
+        if (field.type === 'mood') {
+            appendGroupedMoodOptions(select, options);
+        } else {
+            for (const option of options) {
+                select.appendChild(new Option(option.label, option.value));
+            }
         }
         return select;
+    }
+
+    // Groups a 'mood' field's <option>s into one <optgroup> per owner
+    // (fieldOptions()'s 'mood' case stamps an ownerLabel onto each option
+    // for exactly this) instead of one flat list -- with 3+ players in
+    // play, picking a specific player's mood out of a single long list got
+    // tedious. Groups appear in the order each owner's first option is
+    // encountered (itself currentState.in_play's own order), not re-sorted
+    // by seat, consistent with every other consumer of currentState.in_play
+    // in this file.
+    function appendGroupedMoodOptions(select, options) {
+        const groupsByOwner = new Map();
+        for (const option of options) {
+            let group = groupsByOwner.get(option.ownerLabel);
+            if (!group) {
+                group = document.createElement('optgroup');
+                group.label = option.ownerLabel;
+                groupsByOwner.set(option.ownerLabel, group);
+                select.appendChild(group);
+            }
+            group.appendChild(new Option(option.label, option.value));
+        }
     }
 
     // Builds one <label> per field for the choices panel and the
