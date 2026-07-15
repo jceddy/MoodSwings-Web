@@ -571,7 +571,18 @@ too, proportional to the smaller card width.
     below already passed) surfaces inside the panel itself, reusing
     `#choices-validation`'s existing spot right next to the Play button,
     rather than the board's own `#board-error` above the hand -- easy to
-    miss while attention is still on the fields just below it. Cards with
+    miss while attention is still on the fields just below it. The Play
+    button itself disables and relabels to "Playing..." the instant it's
+    clicked, before the request even resolves, so a slow response can't
+    read as a missed click and prompt a second, duplicate submission; on a
+    server-side rejection it re-labels back to "Play card" and re-enables
+    (a plain `disabled = false`, not a recomputed
+    `updatePlayButtonEnabled()` call, which would otherwise overwrite
+    `#choices-validation` with its own client-side-only verdict and
+    clobber the server's actual rejection message that was just shown
+    there) so the player can adjust their choice and try again; on success
+    the whole panel closes anyway, so there's nothing left to re-enable.
+    Cards with
     no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
