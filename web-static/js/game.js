@@ -1073,7 +1073,7 @@
     // (redundant, aria-hidden) SVG and badge separately.
     function buildPlayerStat(kind, value, label) {
         const wrapper = document.createElement('span');
-        wrapper.className = 'player-stat';
+        wrapper.className = 'player-stat player-stat--' + kind;
         wrapper.title = label;
         wrapper.setAttribute('role', 'img');
         wrapper.setAttribute('aria-label', label);
@@ -1089,7 +1089,7 @@
     // badge (went-first, on-turn).
     function buildPlayerFlag(kind, label, extraClass) {
         const wrapper = document.createElement('span');
-        wrapper.className = 'player-flag' + (extraClass ? ' ' + extraClass : '');
+        wrapper.className = 'player-flag player-flag--' + kind + (extraClass ? ' ' + extraClass : '');
         wrapper.title = label;
         wrapper.setAttribute('role', 'img');
         wrapper.setAttribute('aria-label', label);
@@ -1164,11 +1164,21 @@
                     ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
                     : '';
 
-                const youLabel = state.you.game_player_id === player.game_player_id ? ' (you)' : '';
+                const isYou = state.you.game_player_id === player.game_player_id;
 
                 const nameEl = document.createElement('span');
                 nameEl.className = 'player-name';
-                nameEl.textContent = player.username + youLabel + deckLabel + teamLabel;
+                nameEl.appendChild(document.createTextNode(player.username));
+                if (isYou) {
+                    // Its own span/color rather than folded into the plain
+                    // username text, so it reads as a tag rather than
+                    // looking like part of the username itself.
+                    const youTag = document.createElement('span');
+                    youTag.className = 'player-you-tag';
+                    youTag.textContent = ' (you)';
+                    nameEl.appendChild(youTag);
+                }
+                nameEl.appendChild(document.createTextNode(deckLabel + teamLabel));
                 li.appendChild(nameEl);
 
                 // All the icons/flags/thumbnail below share one wrapper (its
