@@ -344,21 +344,35 @@
             const infoEl = document.createElement('div');
             infoEl.className = 'lobby-info';
 
-            const opponents = game.players.map((p) => p.username).join(', ');
+            // Matches renderBoard()'s own deckDescription logic one level up
+            // (board title), except there's no per-viewer custom_deck_name
+            // available for 'custom_duel' at this list level -- each
+            // player's own submitted deck name only comes back from
+            // getState(), not listGamesForUser() -- so that case falls back
+            // to deckTypeLabel()'s generic label like every other deck_type.
+            const deckDescription = game.deck_type === 'custom'
+                ? (game.custom_deck_name || 'Uploaded Deck')
+                : deckTypeLabel(game.deck_type) + ' deck';
+            const formatEl = document.createElement('div');
+            formatEl.className = 'lobby-format';
+            formatEl.append(formatLabel(game.format) + ', ' + deckDescription + ' — ');
 
             const statusEl = document.createElement('span');
             statusEl.className = 'lobby-status lobby-status--' + game.status;
             statusEl.textContent = humanizeStatus(game.status);
-
-            infoEl.append(opponents + ' — ');
-            infoEl.appendChild(statusEl);
+            formatEl.appendChild(statusEl);
 
             if (game.is_your_turn) {
                 const yourTurnEl = document.createElement('span');
                 yourTurnEl.className = 'lobby-your-turn';
                 yourTurnEl.textContent = ' (your turn)';
-                infoEl.appendChild(yourTurnEl);
+                formatEl.appendChild(yourTurnEl);
             }
+
+            infoEl.appendChild(formatEl);
+
+            const opponents = game.players.map((p) => p.username).join(', ');
+            infoEl.append(opponents);
 
             // winner_usernames is only ever non-empty once the game is
             // actually 'completed' (see GameService::listGamesForUser()) --
