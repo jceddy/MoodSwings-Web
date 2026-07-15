@@ -71,6 +71,15 @@ footer {
     margin-left: 1rem;
 }
 
+/* #friends-button/#logout-button sit directly above whichever of
+   #lobby-view/#board-view is currently visible -- without this they'd
+   touch it with no gap, most noticeably #board-view's own
+   #back-to-lobby-button immediately below. */
+#friends-button,
+#logout-button {
+    margin-bottom: 0.5rem;
+}
+
 .field {
     margin-bottom: 1rem;
 }
@@ -553,6 +562,11 @@ dialog#art-preview-dialog {
 
 .lobby-info {
     min-width: 0;
+}
+
+.lobby-format {
+    font-size: 0.85rem;
+    color: var(--color-muted);
 }
 
 .lobby-status {

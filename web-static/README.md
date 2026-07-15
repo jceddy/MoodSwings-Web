@@ -268,9 +268,20 @@ too, proportional to the smaller card width.
   redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
-  "Friends" button (see below), and the game lobby/board itself:
-  - **Lobby**: your games (via `GET /games`), each showing opponents,
-    status, and whether it's your turn — status reads as e.g. "In
+  "Friends" button (see below), and the game lobby/board itself. The
+  "Friends"/"Log out" buttons carry their own `margin-bottom` so they don't
+  touch whichever of the lobby or board view is showing directly beneath
+  them (most noticeably the board view's own "Back to your games" button).
+  - **Lobby**: your games (via `GET /games`), each showing a format/deck
+    line (`.lobby-format`, muted/smaller text) above the opponents --
+    e.g. "Traditional, Structure deck" or "Duel, Power deck" -- built from
+    the same `format`/`deck_type` labels (`formatLabel()`/`deckTypeLabel()`)
+    the board's own title uses, substituting the game's `custom_deck_name`
+    for a `custom` deck_type just like the board title does. `custom_duel`
+    falls back to `deckTypeLabel()`'s generic label here since each
+    player's own submitted deck name (unlike `custom`'s single game-wide
+    name) only comes back from `GET /games/:id`, not the lobby list. Then
+    opponents, status, and whether it's your turn — status reads as e.g. "In
     Progress" rather than the raw `in_progress` the API returns
     (`humanizeStatus()`, a generic snake_case-to-Title-Case transform, not
     a fixed per-status lookup table, so any future status value still

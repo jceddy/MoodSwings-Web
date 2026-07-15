@@ -344,6 +344,20 @@
             const infoEl = document.createElement('div');
             infoEl.className = 'lobby-info';
 
+            // Matches renderBoard()'s own deckDescription logic one level up
+            // (board title), except there's no per-viewer custom_deck_name
+            // available for 'custom_duel' at this list level -- each
+            // player's own submitted deck name only comes back from
+            // getState(), not listGamesForUser() -- so that case falls back
+            // to deckTypeLabel()'s generic label like every other deck_type.
+            const deckDescription = game.deck_type === 'custom'
+                ? (game.custom_deck_name || 'Uploaded Deck')
+                : deckTypeLabel(game.deck_type) + ' deck';
+            const formatEl = document.createElement('div');
+            formatEl.className = 'lobby-format';
+            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
+            infoEl.appendChild(formatEl);
+
             const opponents = game.players.map((p) => p.username).join(', ');
 
             const statusEl = document.createElement('span');
