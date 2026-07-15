@@ -223,6 +223,18 @@ body.game-page {
     padding: 0 1rem;
 }
 
+/* #in-play-board's own `display: grid` above otherwise beats the
+   browser's default `[hidden] { display: none }` UA-stylesheet rule (an
+   author style always wins over the UA stylesheet, regardless of
+   selector specificity) -- without this, renderInPlay()'s own
+   `board.hidden = true` early return (whenever the newly-loaded game's
+   own in_play is empty) left whichever game's board rendered last still
+   fully visible underneath, cards and all, since setting the `hidden`
+   attribute alone did nothing to actually hide it. */
+#in-play-board[hidden] {
+    display: none;
+}
+
 #in-play-board.in-play-board--2 {
     grid-template-areas:
         "north north"
