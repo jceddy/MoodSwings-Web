@@ -912,7 +912,13 @@ too, proportional to the smaller card width.
     star (points), a trophy (wins), and two overlapping cards (hand size)
     — each with a numeric badge overlaid on its lower-right corner
     (`.player-stat__badge`, the same overlay convention `.card-thumb__badge`
-    already uses for a card's own current value). `player.total_score` is
+    already uses for a card's own current value). The badge's background is
+    a 40%-opacity mix of the theme's surface color
+    (`color-mix(in srgb, var(--color-surface) 40%, transparent)`) rather
+    than solid, so the icon underneath is still partly visible through it
+    instead of being almost entirely hidden behind an opaque plate — the
+    number is the point of the badge, not full coverage of the icon it
+    sits on. `player.total_score` is
     a live sum of what's actually on the board right now, i.e. what each
     player would score if the round ended this instant, not anything
     accumulated from earlier rounds; distinct from `total_wins`, which only

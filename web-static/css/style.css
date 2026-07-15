@@ -565,7 +565,10 @@ body.game-page {
     min-width: 1rem;
     padding: 0 0.2rem;
     border-radius: 999px;
-    background: var(--color-surface);
+    /* Translucent rather than solid so the icon underneath is still
+       visible through the badge instead of being mostly hidden behind
+       it -- the number is the important part, not an opaque plate. */
+    background: color-mix(in srgb, var(--color-surface) 40%, transparent);
     border: 1px solid var(--color-border);
     color: var(--color-text);
     font-size: 0.65rem;
