@@ -142,7 +142,7 @@ final class GameService
     private const SCORING_DECISION_TYPES = [self::ENTHUSIASM_DECISION_TYPE, self::PASSION_DECISION_TYPE];
 
     /**
-     * Quick Draft (issue #88, format 'duel' only): a shared pool of up to
+     * Quick Draft (issue #88, format 'draft' only): a shared pool of up to
      * this many cards, drafted over QUICK_DRAFT_ROUNDS rounds -- each round
      * both players draw QUICK_DRAFT_DRAW_PER_ROUND cards, keep
      * QUICK_DRAFT_KEEP_PER_STAGE from their own draw and pass the rest to
@@ -209,8 +209,8 @@ final class GameService
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
-        if ($format === 'duel' && count($userIds) !== 2) {
-            throw new GameStateException('A duel game must have exactly 2 players');
+        if (self::isDuelShapedFormat($format) && count($userIds) !== 2) {
+            throw new GameStateException("A {$format} game must have exactly 2 players");
         }
         if (self::isTeamFormat($format)) {
             if (count($userIds) !== self::TEAM_PLAYER_COUNT) {
@@ -232,6 +232,13 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
+        if ($format === 'draft' && $deckType !== 'quick_draft') {
+            throw new GameStateException('The "draft" format only supports the "quick_draft" deck type');
+        }
+        if ($deckType === 'quick_draft' && $format !== 'draft') {
+            throw new GameStateException('The "quick_draft" deck type is only supported for the "draft" format');
+        }
+
         if ($deckType === 'custom') {
             if ($format === 'duel') {
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
@@ -249,10 +256,6 @@ final class GameService
             $duelRarityLimits = $rules->rarityLimits;
             $duelDuplicateLimits = $rules->duplicateLimits;
             $duelEvenColorDistributionRarities = $rules->evenColorDistributionRarities;
-        } elseif ($deckType === 'quick_draft') {
-            if ($format !== 'duel') {
-                throw new GameStateException('The "quick_draft" deck type is only supported for duel games');
-            }
         }
 
         // Built (and, for a 'custom' pool, fully validated) before the
@@ -408,6 +411,19 @@ final class GameService
     private static function isTeamFormat(string $format): bool
     {
         return $format === 'team' || $format === 'closed_team';
+    }
+
+    /**
+     * 'draft' (issue #88's Quick Draft and any future live-drafting deck
+     * types -- see the "Quick Draft" docblock above and
+     * database/migrations/0028_add_draft_format.sql) reuses 'duel''s rules
+     * engine completely unchanged -- same 2-player, separate-per-player-deck
+     * shape (see BoardStateRepository::load()'s own $hasSeparateDecks
+     * check) -- it only differs in which deck_type values it allows.
+     */
+    private static function isDuelShapedFormat(string $format): bool
+    {
+        return $format === 'duel' || $format === 'draft';
     }
 
     /**
@@ -683,17 +699,17 @@ final class GameService
                  VALUES (:game_id, :card_id, :zone, :owner, :deck_position)'
             );
 
-            // 'duel' gives each player their OWN complete deck -- built,
-            // and shuffled, independently per player by the exact same
-            // rules a normal single-player deck uses -- rather than
+            // 'duel'/'draft' each give the player their OWN complete deck --
+            // built, and shuffled, independently per player by the exact
+            // same rules a normal single-player deck uses -- rather than
             // splitting one shared pool (createGame() already rejected any
-            // 'duel' game without exactly 2 players; see
+            // duel-shaped game without exactly 2 players; see
             // BoardState::$hasSeparateDecks). The same catalog card can
             // therefore legitimately end up in both players' pools at
             // once; a card's identity within the game is its own
             // game_cards.id, not its catalog card_id -- see
             // BoardState::$catalogCardIdFor.
-            if ($game['format'] === 'duel') {
+            if (self::isDuelShapedFormat($game['format'])) {
                 foreach ($playerIds as $playerId) {
                     $playerCardIds = match ($game['deck_type']) {
                         'custom_duel' => $customDuelDeckCardIds[$playerId],
@@ -2682,9 +2698,10 @@ final class GameService
 
         $insertGame = $pdo->prepare(
             "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed)
-             VALUES ('duel', 'quick_draft', :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed)"
+             VALUES (:format, 'quick_draft', :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed)"
         );
         $insertGame->execute([
+            'format' => $game['format'],
             'draft_match_id' => $draftMatchId,
             'match_game_number' => (int) $game['match_game_number'] + 1,
             'created_by' => (int) $game['created_by_user_id'],

@@ -56,7 +56,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`one_of_each`, see below). `decklist_text` is required when `deck_type` is `custom` (see "Custom decklists" below) and ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`one_of_each`/`custom`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise. `400` if that's more than 4 players or an opponent id doesn't exist, a `duel`/`quick_draft` game doesn't seat *exactly* 2 players total, a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel`/`quick_draft` with any `format` other than `'duel'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`one_of_each`, see below). `decklist_text` is required when `deck_type` is `custom` (see "Custom decklists" below) and ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`one_of_each`/`custom`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise. `400` if that's more than 4 players or an opponent id doesn't exist, a `duel`/`draft` game doesn't seat *exactly* 2 players total, a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`, `deck_type` is `quick_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"}`                                  | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded). Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | POST   | `/games/draft/pick` | `{"game_id", "round", "stage", "card_ids": [int, int]}`      | Requires auth; `403` if you're not seated in that game. A `quick_draft` match's own per-round blind pick -- `stage` is `draw` (keep 2 of your own just-dealt 6) or `received` (keep 2 of the 4 you received from your opponent, only submittable once both players have submitted `draw`). `409` if the game isn't `quick_draft`, the match isn't currently drafting, `round` isn't the match's current round, `card_ids` isn't exactly 2 cards you're actually eligible to keep for that stage, or you've already submitted that stage. See "Quick Draft" below. Returns `{"stage_completed", "round_advanced", "draft_completed"}`. |
 | POST   | `/games/draft/deck` | `{"game_id", "card_ids": [int]}`                             | Requires auth; `403` if you're not seated in that game. A `quick_draft` match's own deck trim/sideboard -- used both for the initial 16-to-14/15/16 trim and every later sideboard between the match's games. `409` if the game isn't `quick_draft`, the match isn't currently `deck_building`, `card_ids` isn't 14-16 cards all drawn from your own `drafted_card_ids`. See "Quick Draft" below. |
@@ -1334,9 +1334,10 @@ one of six builders:
   programmer error, not a user-facing one), since there's no single "the"
   deck for a `custom_duel` game the way there is for every other type;
   `startGame()` reads each player's own submitted deck directly instead.
-- `quick_draft` -- for `duel` games only: both players draft their own
-  16-card pool live from a shared card pool, then play a best-of-three
-  match built from it (see "Quick Draft" below) -- like `custom_duel`,
+- `quick_draft` -- for `format: 'draft'` games only (see "Draft format"
+  below): both players draft their own 16-card pool live from a shared
+  card pool, then play a best-of-three match built from it (see "Quick
+  Draft" below) -- like `custom_duel`,
   `deckCardIdsFor()` explicitly refuses to build this one (a
   `\LogicException`), since each player's own deck lives on
   `draft_match_players.deck_card_ids`, not anywhere this method's `$game`
@@ -1517,17 +1518,34 @@ the decklist's own card ids or raw text, so a `custom_duel` game's waiting
 room can show "Alice submitted, waiting on Bob" without leaking either
 player's decklist contents to their opponent before the game starts.
 
+### Draft format
+
+`format: 'draft'` (migration `0028`) is "duel-shaped" (see "Duel: separate
+per-player decks" above) but scoped to a different set of deck_type
+values -- ones that build a player's deck through some kind of live
+drafting process rather than an already-built pool/decklist, as opposed to
+`format: 'duel'`'s algorithmically-assembled/self-submitted ones.
+`quick_draft` (below) is the first such deck_type and, for now, the only
+one `'draft'` supports -- `createGame()` rejects a `'draft'` game with any
+other deck_type, and rejects `deck_type: 'quick_draft'` under any format
+other than `'draft'`. It started out as a `duel` deck_type during issue
+#88's own development, then was split into its own format once a second
+draft-style deck type was planned -- none of which are expected to ever
+make sense under `'duel'` itself, whose own deck_type roster
+(`structure`/`power`/`jceddys_75`/`custom_duel`/`one_of_each`) is expected
+to stay exactly what it is.
+
 ### Quick Draft
 
-`deck_type: 'quick_draft'` (issue #88) is Duel's own draft format: instead
-of picking a pre-built pool or submitting an already-built decklist, both
-players draft their decks live from a shared card pool, then play a
-best-of-three match with sideboarding between games. This is the largest
-deviation from every other deck_type's shape -- it's the only one where
-deck-acquisition data has to survive across up to 3 separate `games` rows
-(one per game of the match) rather than living entirely within one, so it
-gets its own match-level tables (migration `0027`) instead of columns on
-`games`/`game_players`.
+`deck_type: 'quick_draft'` (issue #88) is the first `format: 'draft'` deck
+type: instead of picking a pre-built pool or submitting an already-built
+decklist, both players draft their decks live from a shared card pool,
+then play a best-of-three match with sideboarding between games. This is
+the largest deviation from every other deck_type's shape -- it's the only
+one where deck-acquisition data has to survive across up to 3 separate
+`games` rows (one per game of the match) rather than living entirely
+within one, so it gets its own match-level tables (migration `0027`)
+instead of columns on `games`/`game_players`.
 
 **Data model** -- `draft_matches` (one row per match: `pool_source`,
 `pool_card_ids` -- the shared up-to-48-card pool, `status`
@@ -1916,14 +1934,18 @@ above.
 
 ### Duel: separate per-player decks
 
-`format: 'duel'` is the one physical rules difference `format` actually
-makes (every other format value is cosmetic, just echoed back and
-displayed as a label). In a duel, each of the game's exactly-2 players
-draws from -- and bottoms cards onto -- their *own* deck rather than a
-single shared one; `createGame()` rejects any `duel` game that doesn't
-seat exactly 2 total players (`GameStateException`, "A duel game must have
-exactly 2 players") since the split-deck model below only makes sense for
-two.
+`format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the
+only physical rules difference `format` actually makes (every other format
+value is cosmetic, just echoed back and displayed as a label) -- both are
+"duel-shaped": each of the game's exactly-2 players draws from -- and
+bottoms cards onto -- their *own* deck rather than a single shared one.
+`GameService::isDuelShapedFormat(string $format): bool` (`$format === 'duel'
+|| $format === 'draft'`) is the single helper both `createGame()` (the
+exactly-2-players check, `GameStateException` "A {format} game must have
+exactly 2 players") and `startGame()` (the per-player-deck-dealing branch)
+consult, so the two formats can never drift out of sync with each other.
+`BoardStateRepository::load()`'s own `$hasSeparateDecks` check is the same
+condition again, one level down, for exactly the same reason.
 
 - `BoardState` generalizes its single flat deck into `array<int, int[]>
   $decks` keyed by a "deck key": either `BoardState::SHARED_DECK_KEY` (the

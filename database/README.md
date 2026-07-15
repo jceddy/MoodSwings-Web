@@ -197,3 +197,10 @@ half-migrated schema.
   sub-steps — passed/received/discarded cards are derived from these at
   read time, never stored separately). See "Quick Draft" in
   `php-app/README.md`.
+- **Draft format** (`0028`): adds `format = 'draft'` — functionally
+  identical to `'duel'` (same 2-player, separate-per-player-deck rules
+  engine), but scoped to deck_type values that build a deck through some
+  kind of live drafting process. `quick_draft` (`0027`, previously gated
+  on `format = 'duel'`) is the first such deck_type and, for now, the only
+  one `'draft'` supports; more are expected to join it later. See "Quick
+  Draft" in `php-app/README.md`.

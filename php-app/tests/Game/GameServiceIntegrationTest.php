@@ -6194,7 +6194,7 @@ final class GameServiceIntegrationTest extends TestCase
         $gameId = $this->games->createGame(
             $u1,
             [$u1, $u2],
-            format: 'duel',
+            format: 'draft',
             winsNeeded: $winsNeeded,
             deckType: 'quick_draft',
             quickDraftPoolSource: $poolSource,
@@ -6297,15 +6297,70 @@ final class GameServiceIntegrationTest extends TestCase
         return (int) $userIdStmt->fetchColumn();
     }
 
-    public function testCreateGameRejectsQuickDraftForNonDuelFormat(): void
+    public function testCreateGameRejectsQuickDraftForNonDraftFormat(): void
     {
-        $creator = $this->insertUser('quickdraft-nonduel-alice');
-        $bob = $this->insertUser('quickdraft-nonduel-bob');
+        $creator = $this->insertUser('quickdraft-nondraft-alice');
+        $bob = $this->insertUser('quickdraft-nondraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supported for duel games');
+        $this->expectExceptionMessage('only supported for the "draft" format');
 
         $this->games->createGame($creator, [$creator, $bob], deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameRejectsDraftFormatForNonQuickDraftDeckType(): void
+    {
+        $creator = $this->insertUser('draft-nonquickdraft-alice');
+        $bob = $this->insertUser('draft-nonquickdraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supports the "quick_draft" deck type');
+
+        $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
+    }
+
+    public function testCreateGameRejectsADraftGameWithMoreThanTwoPlayers(): void
+    {
+        $u1 = $this->insertUser('drafttoomany1');
+        $u2 = $this->insertUser('drafttoomany2');
+        $u3 = $this->insertUser('drafttoomany3');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameRejectsADraftGameWithFewerThanTwoPlayers(): void
+    {
+        $u1 = $this->insertUser('drafttoofew1');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($u1, [$u1], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+    }
+
+    public function testStartGameGivesEachDraftPlayerTheirOwnIndependentDeck(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('random_48');
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $u2);
+
+        $nullOwnerStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'deck' AND owner_game_player_id IS NULL"
+        );
+        $nullOwnerStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $nullOwnerStmt->fetchColumn(), 'a draft-format game must not deal into a shared, ownerless pool');
+
+        foreach ([$p1, $p2] as $playerId) {
+            $deckCountStmt = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'deck' AND owner_game_player_id = :owner"
+            );
+            $deckCountStmt->execute(['game_id' => $gameId, 'owner' => $playerId]);
+            self::assertGreaterThan(0, (int) $deckCountStmt->fetchColumn(), "player {$playerId} must have their own separate deck");
+        }
     }
 
     public function testCreateGameQuickDraftRandom48PoolHasFortyEightDistinctCards(): void
@@ -6353,7 +6408,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->createGame(
             $u1,
             [$u1, $u2],
-            format: 'duel',
+            format: 'draft',
             deckType: 'quick_draft',
             quickDraftPoolSource: 'custom',
             quickDraftCustomPoolText: "1 Charity\n1 Chivalry",

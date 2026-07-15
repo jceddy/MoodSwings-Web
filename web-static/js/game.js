@@ -205,7 +205,7 @@
         jceddys_75: 'jceddy\'s 75 Card',
         custom: 'Custom Decklist',
         custom_duel: 'Custom Decklists (Duel)',
-        quick_draft: 'Quick Draft (Duel)',
+        quick_draft: 'Quick Draft',
         one_of_each: 'One of Each Card',
     };
 
@@ -288,36 +288,55 @@
         document.getElementById('new-game-duel-rules-user-defined').hidden = preset !== 'user_defined';
     }
 
-    // 'custom' decklists aren't supported for duel games, and 'custom_duel'
-    // (each player supplying their own decklist against rules the creator
-    // defines) only makes sense FOR a duel -- both enforced server-side by
-    // GameService::createGame(), disabled here too so a doomed combination
-    // can't even be selected, matching updateOpponentSelectionLimit()'s own
-    // proactive-prevention approach for format-dependent constraints.
-    // Either team format similarly disables 'power' -- its 15 cards fall
+    // The 'draft' format only supports the 'quick_draft' deck type (see
+    // GameService::createGame()'s own format<->deck_type validation, and
+    // database/migrations/0028_add_draft_format.sql for why 'draft' is a
+    // separate format rather than a duel deck_type) -- checked first since
+    // it overrides every other rule below. Otherwise: 'custom' decklists
+    // aren't supported for duel games, 'custom_duel' (each player supplying
+    // their own decklist against rules the creator defines) only makes
+    // sense FOR a duel, and 'quick_draft' only makes sense for 'draft'.
+    // Either team format similarly rules out 'power' -- its 15 cards fall
     // short of the 45-card minimum both team formats share (see
-    // php-app/README.md). Falls back to 'structure' if the now-disallowed
-    // option was selected.
+    // php-app/README.md).
+    function isDeckTypeAvailableForFormat(deckType, format) {
+        if (format === 'draft') {
+            return deckType === 'quick_draft';
+        }
+        switch (deckType) {
+            case 'custom': return format !== 'duel';
+            case 'custom_duel': return format === 'duel';
+            case 'quick_draft': return false;
+            case 'power': return format !== 'team' && format !== 'closed_team';
+            default: return true;
+        }
+    }
+
+    // Unavailable deck types are hidden (not merely disabled) so the
+    // dropdown only ever lists options that actually make sense for the
+    // currently-selected format. If the previously-selected option becomes
+    // unavailable, falls back to the first option that IS available for
+    // the new format (in <option> document order) -- e.g. 'structure' for
+    // most formats, but 'quick_draft' for 'draft', since it's the only
+    // option 'draft' allows.
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
         const format = document.getElementById('new-game-format').value;
-        const isDuel = format === 'duel';
-        const isTeam = format === 'team' || format === 'closed_team';
-        const customOption = deckTypeSelect.querySelector('option[value="custom"]');
-        const customDuelOption = deckTypeSelect.querySelector('option[value="custom_duel"]');
-        const quickDraftOption = deckTypeSelect.querySelector('option[value="quick_draft"]');
-        const powerOption = deckTypeSelect.querySelector('option[value="power"]');
 
-        customOption.disabled = isDuel;
-        customDuelOption.disabled = !isDuel;
-        quickDraftOption.disabled = !isDuel;
-        powerOption.disabled = isTeam;
-        if (
-            (isDuel && deckTypeSelect.value === 'custom')
-            || (!isDuel && (deckTypeSelect.value === 'custom_duel' || deckTypeSelect.value === 'quick_draft'))
-            || (isTeam && deckTypeSelect.value === 'power')
-        ) {
-            deckTypeSelect.value = 'structure';
+        let fallbackValue = null;
+        let selectedStillAvailable = false;
+        for (const option of deckTypeSelect.options) {
+            const available = isDeckTypeAvailableForFormat(option.value, format);
+            option.hidden = !available;
+            if (available && fallbackValue === null) {
+                fallbackValue = option.value;
+            }
+            if (available && option.value === deckTypeSelect.value) {
+                selectedStillAvailable = true;
+            }
+        }
+        if (!selectedStillAvailable) {
+            deckTypeSelect.value = fallbackValue;
         }
 
         updateDeckTypeDescription();
@@ -457,15 +476,17 @@
     const newGameError = document.getElementById('new-game-error');
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
-    // A 'duel' game requires exactly 2 players total (enforced server-side
-    // by GameService::createGame()), so at most 1 opponent may be chosen
-    // for it -- every other format allows up to 3. Re-run on every
+    // 'duel' and 'draft' games each require exactly 2 players total
+    // (enforced server-side by GameService::isDuelShapedFormat()'s own
+    // check in createGame()), so at most 1 opponent may be chosen for
+    // either -- every other format allows up to 3. Re-run on every
     // checkbox change and every format-dropdown change, so switching to
-    // 'duel' with 2+ opponents already checked un-checks the extras
-    // (keeping the first one) rather than leaving a selection the server
-    // would just reject.
+    // 'duel'/'draft' with 2+ opponents already checked un-checks the
+    // extras (keeping the first one) rather than leaving a selection the
+    // server would just reject.
     function updateOpponentSelectionLimit() {
-        const maxOpponents = document.getElementById('new-game-format').value === 'duel' ? 1 : 3;
+        const format = document.getElementById('new-game-format').value;
+        const maxOpponents = format === 'duel' || format === 'draft' ? 1 : 3;
         const boxes = opponentCheckboxes.querySelectorAll('input');
 
         let checkedCount = 0;
