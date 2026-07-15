@@ -355,24 +355,24 @@
                 : deckTypeLabel(game.deck_type) + ' deck';
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
-            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
-            infoEl.appendChild(formatEl);
-
-            const opponents = game.players.map((p) => p.username).join(', ');
+            formatEl.append(formatLabel(game.format) + ', ' + deckDescription + ' — ');
 
             const statusEl = document.createElement('span');
             statusEl.className = 'lobby-status lobby-status--' + game.status;
             statusEl.textContent = humanizeStatus(game.status);
-
-            infoEl.append(opponents + ' — ');
-            infoEl.appendChild(statusEl);
+            formatEl.appendChild(statusEl);
 
             if (game.is_your_turn) {
                 const yourTurnEl = document.createElement('span');
                 yourTurnEl.className = 'lobby-your-turn';
                 yourTurnEl.textContent = ' (your turn)';
-                infoEl.appendChild(yourTurnEl);
+                formatEl.appendChild(yourTurnEl);
             }
+
+            infoEl.appendChild(formatEl);
+
+            const opponents = game.players.map((p) => p.username).join(', ');
+            infoEl.append(opponents);
 
             // winner_usernames is only ever non-empty once the game is
             // actually 'completed' (see GameService::listGamesForUser()) --

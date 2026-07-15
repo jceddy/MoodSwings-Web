@@ -564,6 +564,14 @@ dialog#art-preview-dialog {
     min-width: 0;
 }
 
+/* Fixed width (rather than shrinking to fit "Play" vs the wider "View")
+   so every row's button lines up in a column regardless of which label
+   its own game's status picked. */
+.lobby-row button {
+    width: 4rem;
+    flex-shrink: 0;
+}
+
 .lobby-format {
     font-size: 0.85rem;
     color: var(--color-muted);

@@ -272,20 +272,21 @@ too, proportional to the smaller card width.
   "Friends"/"Log out" buttons carry their own `margin-bottom` so they don't
   touch whichever of the lobby or board view is showing directly beneath
   them (most noticeably the board view's own "Back to your games" button).
-  - **Lobby**: your games (via `GET /games`), each showing a format/deck
-    line (`.lobby-format`, muted/smaller text) above the opponents --
-    e.g. "Traditional, Structure deck" or "Duel, Power deck" -- built from
-    the same `format`/`deck_type` labels (`formatLabel()`/`deckTypeLabel()`)
-    the board's own title uses, substituting the game's `custom_deck_name`
-    for a `custom` deck_type just like the board title does. `custom_duel`
-    falls back to `deckTypeLabel()`'s generic label here since each
-    player's own submitted deck name (unlike `custom`'s single game-wide
-    name) only comes back from `GET /games/:id`, not the lobby list. Then
-    opponents, status, and whether it's your turn — status reads as e.g. "In
-    Progress" rather than the raw `in_progress` the API returns
+  - **Lobby**: your games (via `GET /games`), each showing a format/deck/
+    status line (`.lobby-format`, muted/smaller text) above the opponents
+    -- e.g. "Traditional, Structure deck — In Progress (your turn)" --
+    built from the same `format`/`deck_type` labels
+    (`formatLabel()`/`deckTypeLabel()`) the board's own title uses,
+    substituting the game's `custom_deck_name` for a `custom` deck_type
+    just like the board title does. `custom_duel` falls back to
+    `deckTypeLabel()`'s generic label here since each player's own
+    submitted deck name (unlike `custom`'s single game-wide name) only
+    comes back from `GET /games/:id`, not the lobby list. Status reads as
+    e.g. "In Progress" rather than the raw `in_progress` the API returns
     (`humanizeStatus()`, a generic snake_case-to-Title-Case transform, not
     a fixed per-status lookup table, so any future status value still
-    reads reasonably without needing an update here). The list itself is
+    reads reasonably without needing an update here). The opponents
+    themselves get their own line below. The list itself is
     rendered in whatever order the API returns (no client-side re-sort) --
     `GET /games` always puts `waiting`/`in_progress` games above
     `completed` ones regardless of recency, so a stalled active game never
@@ -310,7 +311,10 @@ too, proportional to the smaller card width.
     the right of and vertically centered against however many lines the
     text itself wraps to on a narrow (phone-width) viewport, instead of
     always trailing on its own line below a wrapped winner line/status.
-    Each row's own button reads "Play" for
+    The button itself has a fixed width (`.lobby-row button`) so every
+    row's button lines up in a column regardless of whether that row's own
+    label is the shorter "Play" or the wider "View". Each row's own button
+    reads "Play" for
     a `waiting`/`in_progress` game (something there's still an actual turn
     to take) and "View" otherwise (`showBoard()` itself renders read-only
     once a game isn't `in_progress` regardless of the button's own label,
