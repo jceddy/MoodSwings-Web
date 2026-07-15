@@ -175,6 +175,23 @@ final class BoardState
     private array $pendingGrantsCreated = [];
 
     /**
+     * @var array<int, array{requiresSourceInPlay: true, sourceCardId: int}>
+     * One entry per still-outstanding 'requiresSourceInPlay' grant (Hope's
+     * or Grace's own -- see grantIsActive()'s own docblock) orphaned by
+     * cascadeMoodLeavingPlay() because the specific card that created it
+     * just left play before anyone got around to using it -- lets
+     * GameService announce the loss in the game's event log instead of the
+     * grant just silently going stale (playsRemaining() dropping by one
+     * with no explanation), which otherwise reads as a bug report waiting
+     * to happen. Never populated for an ordinary grant (Stubbornness's, a
+     * banked Generosity/Joy grant, or the base allowance), since none of
+     * those are tied to their source card's continued presence in the
+     * first place. Same consume-before-logging convention as
+     * $pendingGrantsCreated/$pendingGrantUsed above.
+     */
+    private array $pendingGrantsLost = [];
+
+    /**
      * The restriction descriptor useGrantFor() most recently consumed, if
      * it was an actual granted extra play (not the ordinary null-
      * restriction base allowance every turn already starts with) -- lets
@@ -525,11 +542,23 @@ final class BoardState
      * (see clearSuppressionsFrom()) and returns any mood tagged as "give
      * this back if you still have it when I leave play" (Arrogance) to its
      * original owner, provided the Arrogance player still actually holds
-     * it -- see ArrogranceEffect.
+     * it -- see ArrogranceEffect. Also records (see $pendingGrantsLost) any
+     * still-outstanding 'requiresSourceInPlay' grant $cardId was
+     * responsible for -- grantIsActive() would silently start reading it
+     * as inactive the instant $cardId is gone from $moodsInPlay (already
+     * true by the time every caller gets here), so this is the one place
+     * that can still tell "used" apart from "just went stale" while it
+     * still matters.
      */
     private function cascadeMoodLeavingPlay(int $cardId): void
     {
         $this->clearSuppressionsFrom($cardId);
+
+        foreach ($this->playGrants as $restriction) {
+            if (($restriction['requiresSourceInPlay'] ?? false) && $restriction['sourceCardId'] === $cardId) {
+                $this->pendingGrantsLost[] = $restriction;
+            }
+        }
 
         foreach ($this->moodsInPlay as $mood) {
             $stolen = $mood->effectState['returnsToOwnerIfCardLeavesPlay'] ?? null;
@@ -680,7 +709,7 @@ final class BoardState
         );
     }
 
-    /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> $playGrants */
+    /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int, requiresSourceInPlay?: bool}> $playGrants */
     public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId, ?int $currentRoundNumber = null, bool $discardedThisRound = false): void
     {
         $this->currentPlayerId = $currentPlayerId;
@@ -1094,9 +1123,12 @@ final class BoardState
      * this specific outstanding play (see describePlayGrant()) -- the one
      * caller that doesn't pass it is BoardStateTest's own generic
      * "does a grant exist at all" test, and startTurn()'s own base
-     * allowance is never granted through this method at all.
+     * allowance is never granted through this method at all. A
+     * restriction may also carry 'requiresSourceInPlay' => true (Hope's
+     * and Grace's own same-turn bonus) -- see grantIsActive()'s own
+     * docblock for what that does.
      *
-     * @param ?array{type?: string, values?: int[], source?: string} $restriction
+     * @param ?array{type?: string, values?: int[], source?: string, requiresSourceInPlay?: bool} $restriction
      */
     public function grantExtraPlay(int $count = 1, ?array $restriction = null, ?int $sourceCardId = null): void
     {
@@ -1130,22 +1162,38 @@ final class BoardState
         return $grants;
     }
 
+    /**
+     * Returns and clears every restriction descriptor cascadeMoodLeavingPlay()
+     * recorded as lost since the last call -- see $pendingGrantsLost' own
+     * docblock. Same consume-before-logging convention as
+     * consumeGrantsCreated()/consumeGrantUsed().
+     *
+     * @return array<int, array{requiresSourceInPlay: true, sourceCardId: int}>
+     */
+    public function consumeGrantsLost(): array
+    {
+        $grants = $this->pendingGrantsLost;
+        $this->pendingGrantsLost = [];
+
+        return $grants;
+    }
+
     public function playsRemaining(): int
     {
-        return count($this->playGrants);
+        return count(array_filter($this->playGrants, fn (?array $g) => $this->grantIsActive($g)));
     }
 
     /** @return array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}> */
     public function pendingPlayGrants(): array
     {
-        return $this->playGrants;
+        return array_values(array_filter($this->playGrants, fn (?array $g) => $this->grantIsActive($g)));
     }
 
     /** Whether any outstanding grant this turn -- restricted or not -- would allow playing $cardId. */
     public function hasUsablePlayGrant(int $cardId, int $playerId): bool
     {
         foreach ($this->playGrants as $restriction) {
-            if ($this->grantAllows($restriction, $cardId, $playerId)) {
+            if ($this->grantIsActive($restriction) && $this->grantAllows($restriction, $cardId, $playerId)) {
                 return true;
             }
         }
@@ -1160,11 +1208,25 @@ final class BoardState
      * callers can react to a grant-specific tag -- see the
      * 'onUseEffectState' key.
      *
+     * $preferredSourceCardId, when given, restricts the search to the one
+     * grant sourced from that specific card (0 standing in for the base
+     * allowance, which has no 'sourceCardId' of its own -- see
+     * usableGrants()) -- how a player picks which of 2+ usable grants to
+     * spend when GameService's own 'grant_source_card_id' choice field
+     * offered one. Left null (the default), this behaves exactly as
+     * before: whichever usable grant happens to come first.
+     *
      * @return ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>}
      */
-    public function useGrantFor(int $cardId, int $playerId): ?array
+    public function useGrantFor(int $cardId, int $playerId, ?int $preferredSourceCardId = null): ?array
     {
         foreach ($this->playGrants as $index => $restriction) {
+            if (!$this->grantIsActive($restriction)) {
+                continue;
+            }
+            if ($preferredSourceCardId !== null && ($restriction['sourceCardId'] ?? 0) !== $preferredSourceCardId) {
+                continue;
+            }
             if ($this->grantAllows($restriction, $cardId, $playerId)) {
                 unset($this->playGrants[$index]);
                 $this->playGrants = array_values($this->playGrants);
@@ -1178,6 +1240,64 @@ final class BoardState
         }
 
         return null;
+    }
+
+    /**
+     * Every currently-usable grant for playing $cardId (grantIsActive()
+     * and grantAllows() both satisfied), deduplicated by 'sourceCardId' --
+     * the base allowance's own bare nulls (there can be more than one at
+     * once, with Hurt Feelings) collapse into a single entry, since
+     * they're indistinguishable to a player choosing between them. Order
+     * follows $playGrants' own order. Exposed so GameService can offer an
+     * explicit "which grant do you want to use" choice whenever 2+ come
+     * back -- see 'grant_source_card_id' in php-app/README.md -- instead
+     * of always silently consuming whichever happens to come first.
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     */
+    public function usableGrants(int $cardId, int $playerId): array
+    {
+        $grants = [];
+        $seenKeys = [];
+        foreach ($this->playGrants as $restriction) {
+            if (!$this->grantIsActive($restriction) || !$this->grantAllows($restriction, $cardId, $playerId)) {
+                continue;
+            }
+            $key = $restriction['sourceCardId'] ?? 'base';
+            if (isset($seenKeys[$key])) {
+                continue;
+            }
+            $seenKeys[$key] = true;
+            $grants[] = $restriction;
+        }
+
+        return $grants;
+    }
+
+    /**
+     * Whether $restriction (an entry in $playGrants) still actually
+     * counts. True for every ordinary grant, but a grant tagged
+     * 'requiresSourceInPlay' -- Hope's and Grace's own bonus, both the
+     * same-turn one (grantExtraPlay(), the moment either card is played)
+     * and every future turn's perpetual one
+     * (GameService::computeFreshGrants()) -- only counts while its own
+     * 'sourceCardId' is still actually in play. If that specific Hope or
+     * Grace is discarded, returned to hand, or otherwise leaves play
+     * before the player gets around to using the play it granted, the
+     * grant is lost, not merely un-attributed. Stubbornness's own
+     * perpetual grant is deliberately never tagged this way -- once
+     * computeFreshGrants() grants it at the start of a turn, it persists
+     * for that turn even if Stubbornness itself later leaves play, unlike
+     * Hope/Grace. Neither is the base allowance (always null) or a banked
+     * Generosity/Joy grant, both unaffected by this distinction.
+     */
+    private function grantIsActive(?array $restriction): bool
+    {
+        if ($restriction === null || !($restriction['requiresSourceInPlay'] ?? false)) {
+            return true;
+        }
+
+        return $this->isInPlay($restriction['sourceCardId']);
     }
 
     /**

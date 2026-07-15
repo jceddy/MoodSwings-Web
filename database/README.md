@@ -174,3 +174,13 @@ half-migrated schema.
   first qualifying in-play mood each turn, so two independent copies
   granted just one extra play instead of two (see
   `GameService::effectiveSourceCardIds()`).
+- **Play grant choice/visibility/loss-logging** (`0026`): another
+  schema-less `UPDATE schema_version`, same rationale as `0024`/`0025` — a
+  batch of extra-play-grant work: letting a player choose which
+  outstanding grant to spend when 2+ would cover the same play
+  (`BoardState::usableGrants()`/`grant_source_card_id`), surfacing whether
+  an in-play Hope/Grace still has an unused grant
+  (`has_unused_play_grant`), and logging it to the game's event log when a
+  Hope's/Grace's own grant is lost unused because its source card left
+  play before it was spent (`BoardState::consumeGrantsLost()`) — see
+  `php-app/README.md`.

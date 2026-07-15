@@ -507,7 +507,18 @@
     // -- Board ---------------------------------------------------------
 
     function cardLabel(card) {
-        return card.name + ' (' + card.color + ', ' + card.value + ')' +
+        // has_unused_play_grant only ever exists (and is only ever true) on
+        // an in-play card -- see GameService::getState()'s in_play mapping
+        // -- so this stays silent for a hand/discard-pile card the same way
+        // is_creativity_copy already does below. Most relevant for Hope/
+        // Grace, whose own grant is lost outright if this specific card
+        // leaves play before it's spent (see BoardState::grantIsActive()'s
+        // own docblock) -- called out here too since a 'mood' choice field
+        // (e.g. Faith's target_mood_id) is exactly the kind of place a
+        // player might not otherwise think to check the card detail dialog
+        // before picking a target.
+        return card.name + (card.has_unused_play_grant ? ' *' : '') +
+            ' (' + card.color + ', ' + card.value + ')' +
             (card.is_creativity_copy ? ' [Creativity copy]' : '');
     }
 
@@ -709,6 +720,20 @@
             blissColorEl.hidden = false;
         } else {
             blissColorEl.hidden = true;
+        }
+
+        // has_unused_play_grant only exists (and is only ever true) on an
+        // in-play card whose own effect (Hope, Grace, ...) granted an extra
+        // play that hasn't been spent yet -- see GameService::getState()'s
+        // in_play mapping. Only ever true during that card's own owner's
+        // turn (the grant doesn't exist as an object at all outside of it),
+        // so this stays hidden the rest of the time same as the others.
+        const unusedGrantEl = document.getElementById('card-detail-unused-grant');
+        if (card.has_unused_play_grant) {
+            unusedGrantEl.textContent = 'This card has an unused extra play grant available.';
+            unusedGrantEl.hidden = false;
+        } else {
+            unusedGrantEl.hidden = true;
         }
 
         const selectButton = document.getElementById('card-detail-select-button');
@@ -1621,6 +1646,15 @@
                         value: c.card_id,
                         label: cardLabel(c) + (c.last_owner_name ? ' — ' + c.last_owner_name : ''),
                     }));
+            case 'grant_choice':
+                // Unlike every other case here, the options themselves are
+                // already fully server-computed (GameService::
+                // grantChoiceOptions(), reusing describePlayGrant()'s own
+                // description text) -- this field only ever appears when
+                // there are 2+ usable grants to choose between in the
+                // first place, so there's nothing left to derive
+                // client-side.
+                return field.options;
             default:
                 return [];
         }
@@ -1655,7 +1689,14 @@
         if (field.multi) {
             select.multiple = true;
         } else {
-            select.appendChild(new Option('(none)', ''));
+            // 'grant_choice' (grant_source_card_id) reads differently from
+            // every other optional field here: leaving it blank doesn't
+            // mean "use no grant" (a play always uses one), just "no
+            // preference which outstanding one" -- see MoodPlayService::
+            // playMood()'s own fallback to "whichever comes first" -- so
+            // "(any)" says what actually happens, where "(none)" would
+            // misleadingly suggest declining to use a grant at all.
+            select.appendChild(new Option(field.type === 'grant_choice' ? '(any)' : '(none)', ''));
         }
 
         const options = field.type === 'mode'

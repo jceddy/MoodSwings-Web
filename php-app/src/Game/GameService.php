@@ -2355,18 +2355,34 @@ final class GameService
      * exactly like two separately-played Hopes already do via
      * MoodPlayService's own same-turn grant.
      *
-     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     * Hope's and Grace's own grants (but not Stubbornness's) also carry
+     * 'requiresSourceInPlay' => true -- if that specific Hope/Grace is
+     * removed from play later in the turn it's granted for, before the
+     * player actually uses the play it granted, the grant is lost, not
+     * merely un-attributed (see BoardState::grantIsActive()). Stubbornness
+     * grants a play "at the start of your turn" outright, with nothing in
+     * its own text tying the grant's survival to its own continued
+     * presence the way Hope's/Grace's "while in play" phrasing does, so
+     * once granted, it persists for that turn regardless of what happens
+     * to Stubbornness afterward.
+     *
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, requiresSourceInPlay?: bool}>
      */
     private function computeFreshGrants(BoardState $state, int $playerId, int $baseCount): array
     {
         $grants = array_fill(0, $baseCount, null);
 
         foreach ($this->effectiveSourceCardIds($state, $playerId, 'hope') as $hopeSourceCardId) {
-            $grants[] = ['sourceCardId' => $hopeSourceCardId];
+            $grants[] = ['sourceCardId' => $hopeSourceCardId, 'requiresSourceInPlay' => true];
         }
 
         foreach ($this->effectiveSourceCardIds($state, $playerId, 'grace') as $graceSourceCardId) {
-            $grants[] = ['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'sourceCardId' => $graceSourceCardId];
+            $grants[] = [
+                'type' => 'shares_color_with_your_moods',
+                'source' => 'discard',
+                'sourceCardId' => $graceSourceCardId,
+                'requiresSourceInPlay' => true,
+            ];
         }
 
         if ($this->anotherPlayerHasMoreMoods($state, $playerId)) {
@@ -2873,6 +2889,20 @@ final class GameService
             }
         }
 
+        // Every distinct in-play card id currently backing an active,
+        // not-yet-consumed play grant (BoardState::pendingPlayGrants()
+        // already only returns the active ones -- see grantIsActive()) --
+        // computed once here rather than per-card, since it's the same
+        // set for every mood checked below. Most relevant to Hope/Grace
+        // (see 'has_unused_play_grant' below), but works the same for any
+        // other card's own outstanding grant that hasn't been spent yet.
+        $activeGrantSourceCardIds = [];
+        foreach ($state->pendingPlayGrants() as $grant) {
+            if ($grant !== null && isset($grant['sourceCardId'])) {
+                $activeGrantSourceCardIds[] = $grant['sourceCardId'];
+            }
+        }
+
         foreach ($state->moodsInPlay() as $cardId => $mood) {
             $serialized = $this->serializeCard($state, $cardId, $names);
             $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
@@ -2880,6 +2910,16 @@ final class GameService
                 ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
                 'is_suppressed' => $mood->isSuppressed,
+                // Whether this specific card currently has an unused play
+                // grant it's responsible for -- most useful for Hope/Grace,
+                // whose own grant (see BoardState::grantIsActive()) is lost
+                // outright if this card leaves play before it's spent, so
+                // knowing it's still "armed" actually means something.
+                // Only ever true during this card's own owner's turn --
+                // Hope's/Grace's perpetual bonus for a future turn doesn't
+                // exist as a grant at all until computeFreshGrants() creates
+                // it fresh when that turn actually starts.
+                'has_unused_play_grant' => in_array($cardId, $activeGrantSourceCardIds, true),
                 // A permanent one-time "after playing this mood, ... this
                 // mood's value becomes N" trigger (Dignity, Delight, ...)
                 // has locked its value in via BoardState::setValueOverride()
@@ -3136,6 +3176,26 @@ final class GameService
             $description .= '; ' . implode('; ', $grantParts);
         }
 
+        // Every 'requiresSourceInPlay' grant BoardState::consumeGrantsLost()
+        // recorded as orphaned by this event -- Hope's/Grace's own bonus,
+        // never used, because the specific card that created it just left
+        // play (see grantIsActive()'s own docblock). Attributed to $actor
+        // for the same reason $grantsCreated above is: $playGrants only
+        // ever holds whoever's turn is currently active, so the player
+        // whose own move triggered the card leaving play is always the
+        // same one the lost grant belonged to. Surfaced explicitly here
+        // (rather than leaving players to infer it from plays_remaining
+        // quietly dropping by one) so there's no confusion later about
+        // where an expected extra play went.
+        $grantsLost = $details['grants_lost'] ?? [];
+        if ($grantsLost !== []) {
+            $lostParts = array_map(
+                fn (array $restriction) => "{$actor} lost " . $this->describeGrantDetails($restriction, $cardNames) . ' -- its source left play before it was used',
+                $grantsLost,
+            );
+            $description .= '; ' . implode('; ', $lostParts);
+        }
+
         return $description;
     }
 
@@ -3235,7 +3295,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'scoring_trigger'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 
@@ -3441,6 +3501,28 @@ final class GameService
                 fn (array $field) => $this->withSimulatedMoodCandidates($state, $field, $cardId, $reactingViewerId),
                 $choiceFields
             );
+
+            // 'grant_source_card_id' -- present only when 2+ distinct
+            // outstanding grants would each independently allow playing
+            // this card (BoardState::usableGrants()), letting the player
+            // pick which one to spend instead of always silently
+            // consuming whichever happens to come first. Prepended, not
+            // appended -- like Guile's/Regret's own mandatory discard
+            // cost, this is resolved before the card's own after-playing
+            // choices, not after them.
+            $grantOptions = $this->grantChoiceOptions($state, $cardId, $reactingViewerId, $names);
+            if ($grantOptions !== []) {
+                $choiceFields = [
+                    [
+                        'key' => 'grant_source_card_id',
+                        'type' => 'grant_choice',
+                        'required' => false,
+                        'label' => 'Which play to use for this card',
+                        'options' => $grantOptions,
+                    ],
+                    ...$choiceFields,
+                ];
+            }
         }
 
         return [
@@ -3537,6 +3619,35 @@ final class GameService
         $field['candidate_card_ids'] = $candidates;
 
         return $field;
+    }
+
+    /**
+     * The 'grant_source_card_id' field's own options: one per currently
+     * usable, distinguishable grant for playing $cardId
+     * (BoardState::usableGrants()), reusing describePlayGrant()'s own
+     * description text verbatim (so "An extra play from Hope (must share
+     * a color with one of your moods)"-style detail isn't duplicated
+     * here) and its 'source_card_id' (0 standing in for the base
+     * allowance, which has none of its own -- see usableGrants()'s own
+     * docblock) as each option's value. Empty whenever there's at most
+     * one usable grant, since there's nothing to actually choose between
+     * -- the caller skips adding the field entirely in that case.
+     *
+     * @param array<int, string> $cardNames
+     * @return array<int, array{value: int, label: string}>
+     */
+    private function grantChoiceOptions(BoardState $state, int $cardId, int $viewerId, array $cardNames): array
+    {
+        $grants = $state->usableGrants($cardId, $viewerId);
+        if (count($grants) < 2) {
+            return [];
+        }
+
+        return array_map(function (?array $restriction) use ($cardNames) {
+            $described = $this->describePlayGrant($restriction, $cardNames);
+
+            return ['value' => $described['source_card_id'] ?? 0, 'label' => $described['description']];
+        }, $grants);
     }
 
     /**
@@ -4189,8 +4300,8 @@ final class GameService
     /**
      * Folds whatever BoardState::consumeRevealedCardIds()/consumeCardMoves()/
      * consumeOwnershipChanges()/consumeDraws()/consumeGrantsCreated()/
-     * consumeGrantUsed() have collected since the last event was logged
-     * into $details before it's persisted -- see those methods' own
+     * consumeGrantUsed()/consumeGrantsLost() have collected since the last
+     * event was logged into $details before it's persisted -- see those methods' own
      * docblocks for why this can't just be read back out of $details like
      * everything else in it. A no-op for a play that revealed, moved, or
      * reassigned nothing, drew no cards, and granted/used no extra play.
@@ -4241,6 +4352,11 @@ final class GameService
         $grantUsed = $state->consumeGrantUsed();
         if ($grantUsed !== null) {
             $details['grant_used'] = $grantUsed;
+        }
+
+        $grantsLost = $state->consumeGrantsLost();
+        if ($grantsLost !== []) {
+            $details['grants_lost'] = $grantsLost;
         }
 
         return $details;
