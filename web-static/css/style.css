@@ -181,6 +181,15 @@ body.game-page {
     gap: 0.5rem;
 }
 
+/* min-width is set inline per render (see the players-list renderList call
+   in game.js) to the widest username in this game, so every row's icons
+   start at the same x regardless of how long that row's own username is;
+   flex-shrink: 0 keeps a shorter name from being squeezed back down to its
+   own natural width when the row wraps. */
+.player-name {
+    flex-shrink: 0;
+}
+
 #hand-list,
 #discard-list,
 #teammate-hand-list,

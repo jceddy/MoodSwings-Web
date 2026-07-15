@@ -1167,6 +1167,7 @@
                 const youLabel = state.you.game_player_id === player.game_player_id ? ' (you)' : '';
 
                 const nameEl = document.createElement('span');
+                nameEl.className = 'player-name';
                 nameEl.textContent = player.username + youLabel + deckLabel + teamLabel;
                 li.appendChild(nameEl);
 
@@ -1213,6 +1214,18 @@
                 return li;
             }
         );
+
+        // Line up every row's icons at the same horizontal position
+        // regardless of username length -- easier to scan than icons
+        // staggered at whatever x each row's own username happened to end
+        // at. Measured after the fact (rather than fixed in CSS) since the
+        // right width depends on this game's actual usernames/labels, not
+        // any single value that would either clip a long one or leave a
+        // short one with a lot of wasted gap.
+        const playerNameEls = document.querySelectorAll('#players-list .player-name');
+        playerNameEls.forEach((el) => { el.style.minWidth = ''; });
+        const maxNameWidth = Math.max(0, ...Array.from(playerNameEls, (el) => el.offsetWidth));
+        playerNameEls.forEach((el) => { el.style.minWidth = maxNameWidth + 'px'; });
 
         renderTeamScores(state.teams);
 

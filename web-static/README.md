@@ -930,7 +930,12 @@ too, proportional to the smaller card width.
     player from) whoever the current-turn marker — a play/active triangle,
     rendered in `--color-success` via `.player-flag--turn` to match this
     app's existing "your turn" bold/success-color convention — currently
-    marks. In games of 3+ players, whoever holds Hurt Feelings
+    marks. Every row's icons line up at the same horizontal position
+    regardless of how long that row's own username is: `renderBoard()`
+    measures the widest `.player-name` span in the just-rendered list and
+    applies that as a shared `min-width` to all of them, rather than
+    hardcoding one width that would either clip a long username or leave a
+    short one with an oddly large gap before its icons start. In games of 3+ players, whoever holds Hurt Feelings
     (`state.round.hurt_feelings_game_player_id`,
     already tracked server-side to grant that player 2 plays instead of 1
     this round, but previously never surfaced to the client either) gets a
