@@ -437,9 +437,23 @@ if ($path === '/games' && $method === 'POST') {
     $duelDeckRules = is_array($body['duel_deck_rules'] ?? null) ? $body['duel_deck_rules'] : null;
     // Only meaningful for format 'team' -- see createGame()'s own docblock.
     $partnerUserId = isset($body['partner_user_id']) ? (int) $body['partner_user_id'] : null;
+    // Only meaningful for deck_type 'quick_draft' -- see createGame()'s own docblock.
+    $quickDraftPoolSource = isset($body['quick_draft_pool_source']) ? (string) $body['quick_draft_pool_source'] : null;
+    $quickDraftCustomPoolText = isset($body['quick_draft_custom_pool_text']) ? (string) $body['quick_draft_custom_pool_text'] : null;
 
     try {
-        $gameId = $games->createGame($currentUserId, $userIds, $format, $winsNeeded, $deckType, $decklistText, $duelDeckRules, $partnerUserId);
+        $gameId = $games->createGame(
+            $currentUserId,
+            $userIds,
+            $format,
+            $winsNeeded,
+            $deckType,
+            $decklistText,
+            $duelDeckRules,
+            $partnerUserId,
+            $quickDraftPoolSource,
+            $quickDraftCustomPoolText,
+        );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -579,6 +593,44 @@ if ($path === '/games/initial-pass' && $method === 'POST') {
     try {
         $result = $games->submitInitialCardPass($gameId, $gamePlayerId, $cardIds);
         respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $round = (int) ($body['round'] ?? 0);
+    $stage = (string) ($body['stage'] ?? '');
+    $cardIds = array_map(intval(...), (array) ($body['card_ids'] ?? []));
+
+    // Quick Draft's own picks are keyed by user_id, not game_player_id
+    // (see migration 0027's docblock -- this data spans up to 3 separate
+    // games rows) -- requireGamePlayer() here is purely the seated-in-this-game
+    // auth check every other route already uses.
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitQuickDraftPick($gameId, (int) $currentUser['id'], $round, $stage, $cardIds);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/deck' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardIds = array_map(intval(...), (array) ($body['card_ids'] ?? []));
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->submitQuickDraftDeck($gameId, (int) $currentUser['id'], $cardIds);
+        respond(200, ['status' => 'ok']);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }

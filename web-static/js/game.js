@@ -157,6 +157,13 @@
         // doesn't need the same treatment -- refreshBoard() itself
         // already clears it on every successful load.
         boardMessage.hidden = true;
+        // Quick Draft's own picker state is scoped to whichever game/match
+        // was previously open -- reset here (rather than only when a
+        // selection is actually submitted) so switching games never
+        // carries over a stale selection into a different match's picker.
+        quickDraftPickSelection = new Set();
+        quickDraftPickSelectionKey = null;
+        quickDraftDeckSelectionInitialized = false;
         refreshBoard();
         if (pollTimer) {
             clearInterval(pollTimer);
@@ -198,6 +205,7 @@
         jceddys_75: 'jceddy\'s 75 Card',
         custom: 'Custom Decklist',
         custom_duel: 'Custom Decklists (Duel)',
+        quick_draft: 'Quick Draft (Duel)',
         one_of_each: 'One of Each Card',
     };
 
@@ -216,7 +224,18 @@
         jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
+        quick_draft: 'Both players draft their own 16-card deck live from a shared card pool, trim it to 14-16 cards, then play a best-of-three match -- sideboarding freely between games.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
+    };
+
+    // Plain-language explanation shown under Quick Draft's own Pool
+    // dropdown -- kept in sync with GameService::buildQuickDraftPool()'s
+    // actual behavior for each pool_source.
+    const QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
+        random_48: '48 random cards, no duplicates.',
+        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- short of the 48 cards a full draft needs, so round 4 tops back up from already-discarded cards, same as a physical 45-card box.',
+        one_of_each: 'The full 133-card pool, randomly narrowed down to 48 before the draft begins.',
+        custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 48 if you provide more.',
     };
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
@@ -237,9 +256,23 @@
         document.getElementById('new-game-deck-type-description').textContent = DECK_TYPE_DESCRIPTIONS[deckType] || '';
         document.getElementById('new-game-decklist-fields').hidden = deckType !== 'custom';
         document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
+        document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
+        if (deckType === 'quick_draft') {
+            updateQuickDraftPoolSourceVisibility();
+        }
+    }
+
+    // Shows the custom-pool file/textarea fields only for the 'custom'
+    // pool source -- mirrors updateDeckTypeDescription()'s own
+    // description-plus-conditional-fields pattern one level up.
+    function updateQuickDraftPoolSourceVisibility() {
+        const poolSource = document.getElementById('new-game-quick-draft-pool-source').value;
+        document.getElementById('new-game-quick-draft-pool-source-description').textContent =
+            QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
+        document.getElementById('new-game-quick-draft-custom-pool-fields').hidden = poolSource !== 'custom';
     }
 
     // Shows the locked-in summary for a built-in preset, or the editable
@@ -272,14 +305,16 @@
         const isTeam = format === 'team' || format === 'closed_team';
         const customOption = deckTypeSelect.querySelector('option[value="custom"]');
         const customDuelOption = deckTypeSelect.querySelector('option[value="custom_duel"]');
+        const quickDraftOption = deckTypeSelect.querySelector('option[value="quick_draft"]');
         const powerOption = deckTypeSelect.querySelector('option[value="power"]');
 
         customOption.disabled = isDuel;
         customDuelOption.disabled = !isDuel;
+        quickDraftOption.disabled = !isDuel;
         powerOption.disabled = isTeam;
         if (
             (isDuel && deckTypeSelect.value === 'custom')
-            || (!isDuel && deckTypeSelect.value === 'custom_duel')
+            || (!isDuel && (deckTypeSelect.value === 'custom_duel' || deckTypeSelect.value === 'quick_draft'))
             || (isTeam && deckTypeSelect.value === 'power')
         ) {
             deckTypeSelect.value = 'structure';
@@ -454,6 +489,16 @@
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
+    document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
+
+    document.getElementById('new-game-quick-draft-custom-pool-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-game-quick-draft-custom-pool-text').value = await file.text();
+    });
 
     // Reading an uploaded decklist file into the textarea lets both input
     // methods (file upload or pasted text) share the same submit-time
@@ -565,7 +610,21 @@
         const deckType = document.getElementById('new-game-deck-type').value;
         const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
-        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText, duelDeckRules, partnerUserId);
+        const quickDraftPoolSource = deckType === 'quick_draft' ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
+        const quickDraftCustomPoolText = deckType === 'quick_draft' && quickDraftPoolSource === 'custom'
+            ? document.getElementById('new-game-quick-draft-custom-pool-text').value
+            : undefined;
+        const { ok, body } = await createGame(
+            opponentUserIds,
+            format,
+            undefined,
+            deckType,
+            decklistText,
+            duelDeckRules,
+            partnerUserId,
+            quickDraftPoolSource,
+            quickDraftCustomPoolText,
+        );
 
         if (!ok) {
             newGameError.textContent = body.message || 'Could not create the game.';
@@ -1133,6 +1192,8 @@
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
 
+        renderQuickDraftScoreline(state);
+
         const inProgressArea = document.getElementById('in-progress-area');
         const startButton = document.getElementById('start-game-button');
 
@@ -1251,14 +1312,27 @@
         renderTeamScores(state.teams);
 
         if (state.game.status === 'waiting') {
-            document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
             inProgressArea.hidden = true;
 
             if (state.game.deck_type === 'custom_duel') {
+                document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                document.getElementById('quick-draft-panel').hidden = true;
                 renderDuelDeckSubmission(state);
                 startButton.hidden = !state.players.every((p) => p.deck_submitted);
-            } else {
+            } else if (state.game.deck_type === 'quick_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
+                document.getElementById('board-round-status').textContent =
+                    state.quick_draft.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
+                renderQuickDraftPanel(state);
+                startButton.hidden = !(
+                    state.quick_draft.status === 'deck_building'
+                    && state.quick_draft.deck_building.you_submitted
+                    && state.quick_draft.deck_building.opponent_submitted
+                );
+            } else {
+                document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                document.getElementById('duel-deck-submission').hidden = true;
+                document.getElementById('quick-draft-panel').hidden = true;
                 startButton.hidden = false;
             }
 
@@ -1267,6 +1341,7 @@
 
         startButton.hidden = true;
         document.getElementById('duel-deck-submission').hidden = true;
+        document.getElementById('quick-draft-panel').hidden = true;
         inProgressArea.hidden = false;
 
         if (state.game.status === 'completed') {
@@ -1618,6 +1693,193 @@
         initialCardPassSelection = new Set();
         await refreshBoard();
     });
+
+    // -- Quick Draft (issue #88) -------------------------------------------
+    //
+    // A Quick Draft match's own drafting/deck_building phases both happen
+    // while games.status is still 'waiting' (see GameService::getState()'s
+    // 'quick_draft' field) -- shown in the same waiting-room area
+    // renderDuelDeckSubmission() occupies for custom_duel, mutually
+    // exclusive with it. quickDraftPickSelection/quickDraftDeckSelection
+    // are plain client-side Sets, the same "nothing is sent until submit"
+    // pattern initialCardPassSelection already uses -- re-rendered from
+    // scratch every refreshBoard() poll, but not reset on every render
+    // (only when the underlying round/stage or game actually changes --
+    // see showBoard()'s own reset and the two selection-key checks below),
+    // so an in-progress selection survives an ordinary poll uneventfully.
+
+    function renderQuickDraftScoreline(state) {
+        const el = document.getElementById('quick-draft-scoreline');
+        const qd = state.quick_draft;
+        if (!qd) {
+            el.hidden = true;
+            return;
+        }
+
+        el.hidden = false;
+        el.textContent = 'Quick Draft match — game ' + (state.game.match_game_number || 1) + ' of up to 3 — ' +
+            'you ' + qd.your_wins + ', opponent ' + qd.opponent_wins +
+            ' (first to ' + qd.games_to_win + ' wins the match)';
+    }
+
+    let quickDraftPickSelection = new Set();
+    let quickDraftPickSelectionKey = null;
+
+    const QUICK_DRAFT_STAGE_STATUS = {
+        draw: 'Choose 2 cards to keep from your 6 just-dealt cards -- the other 4 will be passed to your opponent. Tap a card to view it and select/de-select it.',
+        awaiting_opponent_draw: "You've kept your 2 -- your received cards aren't determined until your opponent also makes their own pick.",
+        received: 'Choose 2 cards to keep from the 4 cards you received from your opponent -- the other 2 are discarded. Tap a card to view it and select/de-select it.',
+        awaiting_opponent_received: "You've made both picks this round -- waiting for your opponent to finish theirs.",
+    };
+
+    function renderQuickDraftDrafting(drafting) {
+        document.getElementById('quick-draft-drafting-title').textContent =
+            'Draft round ' + drafting.round + ' of ' + drafting.total_rounds;
+        document.getElementById('quick-draft-drafting-status').textContent = QUICK_DRAFT_STAGE_STATUS[drafting.stage] || '';
+
+        const selectionKey = drafting.round + ':' + drafting.stage;
+        if (quickDraftPickSelectionKey !== selectionKey) {
+            quickDraftPickSelection = new Set();
+            quickDraftPickSelectionKey = selectionKey;
+        }
+
+        const packContainer = document.getElementById('quick-draft-pack');
+        packContainer.innerHTML = '';
+        const submitButton = document.getElementById('quick-draft-pick-submit-button');
+        const pickable = drafting.stage === 'draw' || drafting.stage === 'received';
+
+        drafting.pack.forEach((card) => {
+            const selected = quickDraftPickSelection.has(card.card_id);
+            const thumb = buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: !selected && quickDraftPickSelection.size >= 2,
+                    onToggle: () => {
+                        if (quickDraftPickSelection.has(card.card_id)) {
+                            quickDraftPickSelection.delete(card.card_id);
+                        } else {
+                            quickDraftPickSelection.add(card.card_id);
+                        }
+                        renderQuickDraftDrafting(drafting);
+                    },
+                }),
+            });
+            thumb.classList.toggle('selected', selected);
+            packContainer.appendChild(thumb);
+        });
+
+        submitButton.hidden = !pickable;
+        submitButton.disabled = quickDraftPickSelection.size !== 2;
+
+        renderList(document.getElementById('quick-draft-kept-so-far'), { hidden: true }, drafting.kept_so_far, (card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            return li;
+        });
+    }
+
+    document.getElementById('quick-draft-pick-submit-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const drafting = currentState.quick_draft.drafting;
+        const { ok, body } = await submitQuickDraftPick(currentGameId, drafting.round, drafting.stage, Array.from(quickDraftPickSelection));
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit that pick.';
+            boardError.hidden = false;
+            return;
+        }
+        quickDraftPickSelection = new Set();
+        quickDraftPickSelectionKey = null;
+        await refreshBoard();
+    });
+
+    // Used for both the initial 16-to-14/15/16 trim and every later
+    // sideboard between the match's up-to-3 games -- same picker, same
+    // endpoint (submitQuickDraftDeck()). Seeded once from the player's
+    // current deck_card_ids (or, before their first-ever submission, all
+    // 16 drafted cards) -- quickDraftDeckSelectionInitialized is reset by
+    // showBoard() so switching games/sideboarding for a new game always
+    // re-seeds rather than carrying over a stale selection.
+    let quickDraftDeckSelection = new Set();
+    let quickDraftDeckSelectionInitialized = false;
+
+    function renderQuickDraftDeckBuilding(deckBuilding) {
+        document.getElementById('quick-draft-deck-building-title').textContent = 'Build your deck (14-16 cards)';
+        const picker = document.getElementById('quick-draft-deck-picker');
+        const submitButton = document.getElementById('quick-draft-deck-submit-button');
+        const statusEl = document.getElementById('quick-draft-deck-building-status');
+
+        if (deckBuilding.you_submitted) {
+            statusEl.textContent = deckBuilding.opponent_submitted
+                ? 'Both decks are in -- start the game when ready.'
+                : "Your deck is submitted -- waiting for your opponent's deck.";
+            picker.innerHTML = '';
+            submitButton.hidden = true;
+            return;
+        }
+
+        if (!quickDraftDeckSelectionInitialized) {
+            quickDraftDeckSelection = new Set(deckBuilding.deck_card_ids || deckBuilding.drafted_cards.map((card) => card.card_id));
+            quickDraftDeckSelectionInitialized = true;
+        }
+
+        statusEl.textContent = 'Choose 14-16 of your 16 drafted cards for your deck. Tap a card to select/de-select it.';
+        picker.innerHTML = '';
+
+        deckBuilding.drafted_cards.forEach((card) => {
+            const selected = quickDraftDeckSelection.has(card.card_id);
+            const thumb = buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: false,
+                    onToggle: () => {
+                        if (quickDraftDeckSelection.has(card.card_id)) {
+                            quickDraftDeckSelection.delete(card.card_id);
+                        } else {
+                            quickDraftDeckSelection.add(card.card_id);
+                        }
+                        renderQuickDraftDeckBuilding(deckBuilding);
+                    },
+                }),
+            });
+            thumb.classList.toggle('selected', selected);
+            picker.appendChild(thumb);
+        });
+
+        submitButton.hidden = false;
+        submitButton.disabled = quickDraftDeckSelection.size < 14 || quickDraftDeckSelection.size > 16;
+    }
+
+    document.getElementById('quick-draft-deck-submit-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const errorEl = document.getElementById('quick-draft-deck-error');
+        errorEl.hidden = true;
+
+        const { ok, body } = await submitQuickDraftDeck(currentGameId, Array.from(quickDraftDeckSelection));
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not submit that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+        quickDraftDeckSelectionInitialized = false;
+        await refreshBoard();
+    });
+
+    function renderQuickDraftPanel(state) {
+        const panel = document.getElementById('quick-draft-panel');
+        const qd = state.quick_draft;
+        panel.hidden = false;
+
+        document.getElementById('quick-draft-drafting').hidden = qd.status !== 'drafting';
+        document.getElementById('quick-draft-deck-building').hidden = qd.status !== 'deck_building';
+
+        if (qd.status === 'drafting') {
+            renderQuickDraftDrafting(qd.drafting);
+        } else if (qd.status === 'deck_building') {
+            renderQuickDraftDeckBuilding(qd.deck_building);
+        }
+    }
 
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the
