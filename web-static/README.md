@@ -400,6 +400,14 @@ too, proportional to the smaller card width.
     once a game isn't `in_progress` regardless of the button's own label,
     so this is purely about setting the right expectation before
     clicking, not a new access restriction). A "New game" dialog
+    (`.new-game-field` puts the Format and Deck `<label>`s each on their
+    own line -- plain inline `<label>` elements otherwise sit side by side
+    until their own `<select>` runs out of room, rather than breaking
+    predictably between fields; `#new-game-close-button`'s small
+    margin-top keeps it from touching the submit button directly above
+    it, which are two separate block boxes -- the button's inside
+    `<form>`, Close is a sibling after it -- that would otherwise stack
+    flush against each other)
     picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
     Duel, Open Team Play, or Closed Team Play), then calls `POST /games`.
     `updateOpponentSelectionLimit()` caps how many friends
