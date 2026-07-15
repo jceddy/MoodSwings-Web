@@ -446,14 +446,16 @@ body.game-page {
 }
 
 /* -- Discard pile stacking (issue #142) ------------------------------
-   Cards fan into columns capped at DISCARD_STACK_COLUMN_SIZE (see
-   renderDiscardPile() in web-static/js/game.js), each one pulled up to
-   overlap all but a sliver of the card before it -- see
-   .discard-stack__column .card-thumb below. Columns themselves lay out
-   left to right via #discard-list's existing flex-wrap; flex-start keeps
-   a shorter final column (fewer than a full DISCARD_STACK_COLUMN_SIZE
-   cards) pinned to the top rather than centered/stretched against a
-   taller neighboring column. */
+   Cards fan into however many columns discardStackColumnCount() (see
+   web-static/js/game.js) works out fit #discard-list's own current width,
+   each one pulled up to overlap all but a sliver of the card before it --
+   see .discard-stack__column .card-thumb below. Columns themselves lay
+   out left to right via flex-wrap -- normally exactly filling one row
+   since the column count is computed to fit, though it's kept as a
+   defensive fallback in case that math is ever off by one; flex-start
+   keeps a shorter final column (whenever the pile's own card count isn't
+   an exact multiple of the column count) pinned to the top rather than
+   centered/stretched against a taller neighboring column. */
 #discard-list {
     align-items: flex-start;
 }

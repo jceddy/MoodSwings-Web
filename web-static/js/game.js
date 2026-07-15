@@ -911,32 +911,65 @@
 
     // A discard pile only ever grows over a game, so a flat wrapping list
     // of full-size thumbnails (issue #142) eventually dwarfs the rest of
-    // the board. Instead, cards are grouped into columns of up to
-    // DISCARD_STACK_COLUMN_SIZE, each stacked with just enough overlap
-    // (see .discard-stack__column's own negative margin-bottom in
-    // style.css) to leave a sliver of every covered card visible -- its
-    // name and, when present, its current-value badge in the upper-right
-    // corner -- while the last (most recently discarded, assuming append
-    // order -- see BoardState's own $discard docblock) card in each column
-    // renders in full, painted on top of the one before it by DOM order.
-    // A column caps at DISCARD_STACK_COLUMN_SIZE cards so its own height
-    // stays bounded rather than growing indefinitely; #discard-list's
-    // existing flex-wrap lays additional columns out beside it, wrapping
-    // to a new row once the viewport runs out of width. Kept deliberately
-    // small (rather than large enough to always need just 1-2 columns) so
-    // a modest pile still spreads across every column a given viewport can
-    // actually fit side by side, instead of stacking needlessly deep in
-    // just one or two while unused width goes to waste next to them.
-    const DISCARD_STACK_COLUMN_SIZE = 4;
+    // the board. Cards instead stack into columns, each pulled up to
+    // overlap all but a sliver of the card before it (see
+    // .discard-stack__column's own negative margin-bottom in style.css) --
+    // that sliver still shows a covered card's own name and, when present,
+    // its current-value badge's upper-right corner, while the last
+    // (most recently discarded, assuming append order -- see BoardState's
+    // own $discard docblock) card in each column renders in full, painted
+    // on top of the one before it by DOM order.
+    //
+    // How many columns exist is recomputed from #discard-list's own actual
+    // width every render (issue #142 follow-up) rather than a fixed
+    // cards-per-column cap, and cards are dealt round-robin across however
+    // many columns that is -- card 0 into column 0, card 1 into column 1,
+    // ..., wrapping back to column 0 once every column has one -- so the
+    // pile fills available width before it stacks any column deeper than
+    // one card, instead of filling column 0 completely before starting
+    // column 1. Combined with the resize listener below, this keeps the
+    // pile's own vertical footprint as small as the current viewport
+    // allows at all times, including e.g. a phone rotating from portrait
+    // to landscape mid-game.
+    const DISCARD_STACK_CARD_WIDTH_PX = 5.5 * 16; // .card-thumb's own fixed 5.5rem width
+    const DISCARD_STACK_GAP_PX = 0.5 * 16; // #discard-list's own flex gap
+
+    // Both pixel constants above assume the default 16px root font-size
+    // the rest of this file's own rem/px math already assumes (no page
+    // here overrides it) -- clientWidth itself is only ever available in
+    // pixels, so there's no way to ask for "how many 5.5rem slots fit"
+    // directly.
+    function discardStackColumnCount() {
+        const availableWidth = document.getElementById('discard-list').clientWidth;
+        const columns = Math.floor(
+            (availableWidth + DISCARD_STACK_GAP_PX) / (DISCARD_STACK_CARD_WIDTH_PX + DISCARD_STACK_GAP_PX)
+        );
+        return Math.max(1, columns);
+    }
+
+    // Remembered so the resize listener below can re-run the same layout
+    // from scratch -- renderBoard() itself only re-runs on the next 4s
+    // poll (see startPolling()) or an explicit action, neither of which
+    // fires just because the viewport changed shape.
+    let lastDiscardPile = [];
+    let lastDiscardCanAct = false;
 
     function renderDiscardPile(discardPile, canAct) {
+        lastDiscardPile = discardPile;
+        lastDiscardCanAct = canAct;
+
         const listEl = document.getElementById('discard-list');
         listEl.innerHTML = '';
+        if (discardPile.length === 0) {
+            return;
+        }
 
-        for (let i = 0; i < discardPile.length; i += DISCARD_STACK_COLUMN_SIZE) {
+        const columnCount = Math.min(discardStackColumnCount(), discardPile.length);
+        for (let col = 0; col < columnCount; col++) {
             const column = document.createElement('li');
             column.className = 'discard-stack__column';
-            for (const card of discardPile.slice(i, i + DISCARD_STACK_COLUMN_SIZE)) {
+            for (let i = col; i < discardPile.length; i += columnCount) {
+                const card = discardPile[i];
                 // Almost always just informational (a discard-pile card
                 // can't normally be played), but Angst/Harmony/Grief's
                 // discard-sourced extra play, or Melancholy's "play from
@@ -958,6 +991,20 @@
             listEl.appendChild(column);
         }
     }
+
+    // Debounced so a drag-resize (or a slow orientation-change animation)
+    // doesn't re-layout the pile dozens of times a second -- only once the
+    // size has actually settled. Harmless to fire while the board itself
+    // isn't visible (e.g. still on the lobby view): lastDiscardPile is
+    // still whatever the last-rendered board's own pile was, and the next
+    // real refreshBoard() poll overwrites it regardless.
+    let discardStackResizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(discardStackResizeTimer);
+        discardStackResizeTimer = setTimeout(() => {
+            renderDiscardPile(lastDiscardPile, lastDiscardCanAct);
+        }, 150);
+    });
 
     // Generic enlarged-art viewer for game-level art not tied to a specific
     // printed card (e.g. Hurt Feelings) -- see "Assets" in
