@@ -1132,6 +1132,55 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    /**
+     * The lobby's own "who won" line (issue #136) depends on
+     * winner_usernames staying empty until there's actually a winner to
+     * name -- neither a still-waiting nor an in-progress game has one yet.
+     */
+    public function testListGamesForUserWinnerUsernamesEmptyUntilCompleted(): void
+    {
+        $creator = $this->insertUser('winnames-alice');
+        $bob = $this->insertUser('winnames-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        self::assertSame([], $this->games->listGamesForUser($creator)[0]['winner_usernames']);
+
+        $this->games->startGame($gameId);
+        self::assertSame([], $this->games->listGamesForUser($creator)[0]['winner_usernames']);
+
+        $winnerId = $this->games->gamePlayerIdFor($gameId, $creator);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $winnerId, 'id' => $gameId]);
+
+        self::assertSame(['winnames-alice'], $this->games->listGamesForUser($creator)[0]['winner_usernames']);
+    }
+
+    /**
+     * Mirrors getState()'s own "credit the whole winning team" logic (see
+     * "Open Team Play" in php-app/README.md) -- a team-format win's
+     * winner_usernames must name both teammates, not just the
+     * representative winner_game_player_id the games row itself stores.
+     */
+    public function testListGamesForUserWinnerUsernamesIncludesBothTeammatesForATeamWin(): void
+    {
+        $u1 = $this->insertUser('winteam-alice');
+        $u2 = $this->insertUser('winteam-bob');
+        $u3 = $this->insertUser('winteam-carol');
+        $u4 = $this->insertUser('winteam-dave');
+
+        // u1 (creator) + u2 (chosen partner) become team 0; u3/u4 are team 1.
+        $gameId = $this->games->createGame($u1, [$u1, $u2, $u3, $u4], 'team', 3, 'structure', null, null, $u2);
+
+        $winnerRepresentative = $this->games->gamePlayerIdFor($gameId, $u1);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner, winner_team_id = 0 WHERE id = :id"
+        )->execute(['winner' => $winnerRepresentative, 'id' => $gameId]);
+
+        $summary = $this->games->listGamesForUser($u1)[0];
+        self::assertEqualsCanonicalizing(['winteam-alice', 'winteam-bob'], $summary['winner_usernames']);
+    }
+
     public function testPassStampsLastMoveAtButAnIllegalPassDoesNot(): void
     {
         $creator = $this->insertUser('lastmove-alice');
