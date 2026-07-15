@@ -902,7 +902,11 @@ too, proportional to the smaller card width.
     *other* game's board opened, including a freshly created one that had
     never even started yet.
 
-    The "Players" list near the top of the board shows each player's seat,
+    The "Players" list near the top of the board tags the viewer's own row
+    with a plain "(you)" suffix right after their username
+    (`state.you.game_player_id === player.game_player_id`), so it's
+    unambiguous at a glance which row is theirs even in a 4-player game with
+    similar-looking usernames. It also shows each player's seat,
     current point total, win count, and hand size as small inline SVG
     icons (issue #143) rather than spelled-out text — a bench (seat), a
     star (points), a trophy (wins), and two overlapping cards (hand size)

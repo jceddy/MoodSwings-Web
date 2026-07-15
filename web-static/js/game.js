@@ -1164,8 +1164,10 @@
                     ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
                     : '';
 
+                const youLabel = state.you.game_player_id === player.game_player_id ? ' (you)' : '';
+
                 const nameEl = document.createElement('span');
-                nameEl.textContent = player.username + deckLabel + teamLabel;
+                nameEl.textContent = player.username + youLabel + deckLabel + teamLabel;
                 li.appendChild(nameEl);
 
                 // Issue #143: seat/points/wins/hand-count each become an
