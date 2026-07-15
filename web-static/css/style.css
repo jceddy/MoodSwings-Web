@@ -19,6 +19,8 @@
     --color-pending: #7a5b00;
     --color-info: #0b5db3;
     --color-your-turn-bg: #e8f7ec;
+    --color-brown: #8b5a2b;
+    --color-gold: #b8860b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -36,6 +38,8 @@
         --color-pending: #d4a94a;
         --color-info: #6ab0f3;
         --color-your-turn-bg: #1f3d2a;
+        --color-brown: #c58b52;
+        --color-gold: #e0b93a;
     }
 }
 
@@ -53,6 +57,8 @@
     --color-pending: #d4a94a;
     --color-info: #6ab0f3;
     --color-your-turn-bg: #1f3d2a;
+    --color-brown: #c58b52;
+    --color-gold: #e0b93a;
 }
 
 body {
@@ -586,10 +592,30 @@ body.game-page {
 
 /* Matches the board round status's/lobby's own "your turn" convention
    (bold, --color-success) elsewhere on this page -- the one flag most
-   worth standing out from the rest at a glance. wentFirst's own flag
-   stays the default muted color; it's informational, not actionable. */
+   worth standing out from the rest at a glance. */
 .player-flag--turn {
     color: var(--color-success);
+}
+
+/* A little color per stat/flag kind, echoing what each icon actually
+   depicts, rather than every one defaulting to the same muted gray --
+   seat/hand icons in brown (bench, cards), points/wins in gold (star,
+   trophy), and the went-first pennant in red. The badge overlaid on each
+   .player-stat icon keeps its own neutral --color-text/--color-surface
+   styling regardless (see .player-stat__badge above) so the number stays
+   legible no matter what color its icon is. */
+.player-stat--seat,
+.player-stat--hand {
+    color: var(--color-brown);
+}
+
+.player-stat--points,
+.player-stat--wins {
+    color: var(--color-gold);
+}
+
+.player-flag--wentFirst {
+    color: var(--color-error);
 }
 
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */

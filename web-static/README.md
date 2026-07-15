@@ -913,7 +913,13 @@ too, proportional to the smaller card width.
     current point total, win count, and hand size as small inline SVG
     icons (issue #143) rather than spelled-out text — a bench (seat), a
     star (points), a trophy (wins), and two overlapping cards (hand size)
-    — each with a numeric badge overlaid on its lower-right corner
+    — each colored to match what it depicts rather than every one
+    defaulting to the same muted gray: seat/hand-count in brown
+    (`--color-brown`, a bench and a hand of cards), points/wins in gold
+    (`--color-gold`, a star and a trophy), and the went-first pennant in
+    red (reusing `--color-error`, already theme-tuned for both light and
+    dark). The on-turn triangle keeps its own existing green
+    (`--color-success` via `.player-flag--turn`) — each with a numeric badge overlaid on its lower-right corner
     (`.player-stat__badge`, the same overlay convention `.card-thumb__badge`
     already uses for a card's own current value). The badge's background is
     a 40%-opacity mix of the theme's surface color
