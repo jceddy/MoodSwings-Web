@@ -2551,7 +2551,7 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,winner_usernames:array<int,string>}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
@@ -2579,7 +2579,7 @@ final class GameService
             $game = $this->fetchGame($gameId);
 
             $playersStmt = $pdo->prepare(
-                'SELECT gp.id, gp.user_id, gp.seat_order, u.username FROM game_players gp
+                'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username FROM game_players gp
                  JOIN users u ON u.id = gp.user_id
                  WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
             );
@@ -2597,6 +2597,26 @@ final class GameService
                     'username' => $row['username'],
                     'seat_order' => (int) $row['seat_order'],
                 ];
+            }
+
+            // Same "credit the whole winning team" logic as getState()'s own
+            // 'winner_usernames' -- both teammates' usernames for a
+            // team-format win, just the one player's otherwise. Empty until
+            // the game actually completes (winner_team_id/winner_game_player_id
+            // are both still null).
+            $winnerUsernames = [];
+            if ($game['winner_team_id'] !== null) {
+                foreach ($playerRows as $row) {
+                    if ($row['team_id'] !== null && (int) $row['team_id'] === (int) $game['winner_team_id']) {
+                        $winnerUsernames[] = $row['username'];
+                    }
+                }
+            } elseif ($game['winner_game_player_id'] !== null) {
+                foreach ($playerRows as $row) {
+                    if ((int) $row['id'] === (int) $game['winner_game_player_id']) {
+                        $winnerUsernames[] = $row['username'];
+                    }
+                }
             }
 
             $currentTurnGamePlayerId = null;
@@ -2624,6 +2644,7 @@ final class GameService
                 'completed_at' => $game['completed_at'],
                 'players' => $players,
                 'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
+                'winner_usernames' => $winnerUsernames,
             ];
         }
 

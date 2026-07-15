@@ -17,6 +17,7 @@
     --color-error: #b00020;
     --color-success: #0a7a2e;
     --color-pending: #7a5b00;
+    --color-info: #0b5db3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +33,7 @@
         --color-error: #ff6b6b;
         --color-success: #4caf7d;
         --color-pending: #d4a94a;
+        --color-info: #6ab0f3;
     }
 }
 
@@ -47,6 +49,7 @@
     --color-error: #ff6b6b;
     --color-success: #4caf7d;
     --color-pending: #d4a94a;
+    --color-info: #6ab0f3;
 }
 
 body {
@@ -533,4 +536,35 @@ dialog#art-preview-dialog {
 #pending-decision-banner {
     font-weight: bold;
     color: var(--color-pending);
+}
+
+/* -- Lobby (issue #136) ---------------------------------------------- */
+
+.lobby-status {
+    font-weight: bold;
+}
+
+.lobby-status--waiting {
+    color: var(--color-pending);
+}
+
+.lobby-status--in_progress {
+    color: var(--color-info);
+}
+
+.lobby-status--completed {
+    color: var(--color-muted);
+}
+
+.lobby-status--abandoned {
+    color: var(--color-error);
+}
+
+.lobby-your-turn {
+    font-weight: bold;
+    color: var(--color-success);
+}
+
+.lobby-winner {
+    color: var(--color-success);
 }

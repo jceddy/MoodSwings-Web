@@ -279,7 +279,25 @@ too, proportional to the smaller card width.
     `GET /games` always puts `waiting`/`in_progress` games above
     `completed` ones regardless of recency, so a stalled active game never
     gets buried below a long-finished one; see "Game timestamps" in
-    `php-app/README.md`. A "New game" dialog
+    `php-app/README.md`. Status is also color-coded (issue #136) via a
+    `.lobby-status--<status>` class per row -- `waiting` reads in
+    `--color-pending`, `in_progress` in a new `--color-info` (blue, added
+    alongside the existing error/success/pending theme variables --
+    see "Dark mode" below), `completed` in `--color-muted`, and the rarer
+    `abandoned` in `--color-error` -- distinguishing what needs attention
+    at a glance rather than requiring every row's text to be read in full.
+    `is_your_turn` gets its own bold `--color-success` "(your turn)" tag
+    for the same reason. Once a game is `completed`,
+    `winner_usernames` (both teammates' for a team-format win, just the
+    one player's otherwise -- see `php-app/README.md`) renders as an extra
+    line below the players, e.g. "alice won" or "alice & bob won" --
+    absent (and the line omitted entirely) for every other status, since
+    there's no winner yet to name. Each row's own button reads "Play" for
+    a `waiting`/`in_progress` game (something there's still an actual turn
+    to take) and "View" otherwise (`showBoard()` itself renders read-only
+    once a game isn't `in_progress` regardless of the button's own label,
+    so this is purely about setting the right expectation before
+    clicking, not a new access restriction). A "New game" dialog
     picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
     Duel, Open Team Play, or Closed Team Play), then calls `POST /games`.
     `updateOpponentSelectionLimit()` caps how many friends

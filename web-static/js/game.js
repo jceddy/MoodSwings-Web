@@ -334,8 +334,41 @@
         renderList(gamesList, document.getElementById('games-empty'), ok ? body.games : [], (game) => {
             const li = document.createElement('li');
             const opponents = game.players.map((p) => p.username).join(', ');
-            li.append(opponents + ' — ' + humanizeStatus(game.status) + (game.is_your_turn ? ' (your turn)' : ''));
-            li.appendChild(actionButton('Open', () => showBoard(game.id)));
+
+            const statusEl = document.createElement('span');
+            statusEl.className = 'lobby-status lobby-status--' + game.status;
+            statusEl.textContent = humanizeStatus(game.status);
+
+            li.append(opponents + ' — ');
+            li.appendChild(statusEl);
+
+            if (game.is_your_turn) {
+                const yourTurnEl = document.createElement('span');
+                yourTurnEl.className = 'lobby-your-turn';
+                yourTurnEl.textContent = ' (your turn)';
+                li.appendChild(yourTurnEl);
+            }
+
+            // winner_usernames is only ever non-empty once the game is
+            // actually 'completed' (see GameService::listGamesForUser()) --
+            // both teammates' names for a team-format win, just the one
+            // player's otherwise, matching how the board's own end-of-game
+            // display already credits a team win.
+            if (game.winner_usernames.length > 0) {
+                const winnerEl = document.createElement('div');
+                winnerEl.className = 'lobby-winner';
+                winnerEl.textContent = game.winner_usernames.join(' & ') + ' won';
+                li.appendChild(winnerEl);
+            }
+
+            // A 'waiting'/'in_progress' game is still something to actually
+            // play; anything else (completed, or the rarer abandoned) is
+            // read-only from here on, so the button reads "View" instead --
+            // matches what actually happens when it's clicked (showBoard()
+            // renders a read-only board once the game itself isn't
+            // in_progress, see GameService::getState()'s own round: null).
+            const canPlay = game.status === 'waiting' || game.status === 'in_progress';
+            li.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
             return li;
         });
     }
