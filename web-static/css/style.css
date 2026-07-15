@@ -231,7 +231,8 @@ body.game-page {
 #teammate-hand-list,
 #initial-card-pass-fields,
 #quick-draft-pack,
-#quick-draft-kept-so-far {
+#quick-draft-kept-so-far,
+#quick-draft-deck-picker {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -245,11 +246,12 @@ body.game-page {
     list-style: none;
 }
 
-/* A pixel or two of breathing room between the pack above and the submit
-   button below it -- without this the button sits flush against the
-   bottom edge of the card thumbnails, which reads as a layout mistake
-   rather than intentional spacing. */
-#quick-draft-pick-submit-button {
+/* A pixel or two of breathing room between a card pack/picker above and
+   the submit button below it -- without this the button sits flush
+   against the bottom edge of the card thumbnails, which reads as a
+   layout mistake rather than intentional spacing. */
+#quick-draft-pick-submit-button,
+#quick-draft-deck-submit-button {
     margin-top: 0.5rem;
 }
 
