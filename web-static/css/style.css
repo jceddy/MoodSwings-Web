@@ -648,6 +648,23 @@ dialog#card-detail-dialog {
     border-radius: 0.5rem;
 }
 
+/* Format/Deck are plain inline <label> elements by default, so with
+   nothing else forcing a break between them they'd sit on the same line
+   as each other -- only their own <select> wraps once it runs out of
+   room. Block display puts each on its own line regardless of width. */
+.new-game-field {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+/* The submit button (inside <form>) and the Close button (a sibling
+   after </form>) sit in different block boxes, so they stack instead of
+   flowing side by side -- margin-top gives them a little breathing room
+   instead of touching. */
+#new-game-close-button {
+    margin-top: 0.5rem;
+}
+
 dialog#art-preview-dialog {
     box-sizing: border-box;
     max-width: 24rem;
