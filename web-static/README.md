@@ -272,7 +272,10 @@ too, proportional to the smaller card width.
   "Friends"/"Log out" buttons carry their own `margin-bottom` so they don't
   touch whichever of the lobby or board view is showing directly beneath
   them (most noticeably the board view's own "Back to your games" button).
-  - **Lobby**: your games (via `GET /games`), each rendered as three
+  - **Lobby**: a "New game" button (`#new-game-button`, also with its own
+    `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
+    opens the New game dialog described below. Your games (via
+    `GET /games`), each rendered as three
     stacked lines above the row's own action button. First, a format/deck
     line (`.lobby-format`, muted/smaller text) -- e.g. "Traditional,
     Structure deck" -- built from the same `format`/`deck_type` labels
