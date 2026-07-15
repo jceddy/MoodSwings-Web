@@ -184,3 +184,23 @@ half-migrated schema.
   Hope's/Grace's own grant is lost unused because its source card left
   play before it was spent (`BoardState::consumeGrantsLost()`) — see
   `php-app/README.md`.
+- **Quick Draft** (`0027`): adds `deck_type = 'quick_draft'` plus
+  `draft_match_id`/`match_game_number` on `games`, and three new tables —
+  `draft_matches` (one row per best-of-three match: pool config, drafting/
+  deck_building/completed status, current round, winner), `draft_match_players`
+  (per `(draft_match_id, user_id)`: the fixed 16-card `drafted_card_ids`
+  result of the draft, the player's current 14-16 card `deck_card_ids`, and
+  this match's own win counter — keyed by `user_id` rather than
+  `game_player_id` since this data spans up to 3 separate `games` rows, one
+  per game of the match), and `draft_round_picks` (one row per player per
+  draft round: cards drawn and kept at each of the round's two blind
+  sub-steps — passed/received/discarded cards are derived from these at
+  read time, never stored separately). See "Quick Draft" in
+  `php-app/README.md`.
+- **Draft format** (`0028`): adds `format = 'draft'` — functionally
+  identical to `'duel'` (same 2-player, separate-per-player-deck rules
+  engine), but scoped to deck_type values that build a deck through some
+  kind of live drafting process. `quick_draft` (`0027`, previously gated
+  on `format = 'duel'`) is the first such deck_type and, for now, the only
+  one `'draft'` supports; more are expected to join it later. See "Quick
+  Draft" in `php-app/README.md`.

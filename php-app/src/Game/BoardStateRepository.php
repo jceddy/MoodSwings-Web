@@ -36,7 +36,11 @@ final class BoardStateRepository
 
         $formatStmt = $pdo->prepare('SELECT format FROM games WHERE id = :game_id');
         $formatStmt->execute(['game_id' => $gameId]);
-        $hasSeparateDecks = $formatStmt->fetchColumn() === 'duel';
+        // 'draft' (Quick Draft and future draft-style deck types, see
+        // GameService's own "Quick Draft" docblock) reuses the Duel
+        // engine's rules completely unchanged -- each player has their own
+        // separate deck, exactly like 'duel' itself.
+        $hasSeparateDecks = in_array($formatStmt->fetchColumn(), ['duel', 'draft'], true);
 
         $playersStmt = $pdo->prepare(
             'SELECT id, team_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'

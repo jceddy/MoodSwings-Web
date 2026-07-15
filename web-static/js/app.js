@@ -100,7 +100,7 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -113,6 +113,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // Only meaningful for format 'team'/'closed_team' -- see "Open
             // Team Play"/"Closed Team Play" in web-static/README.md.
             partner_user_id: partnerUserId,
+            // Only meaningful for deck_type 'quick_draft' -- see "Quick
+            // Draft" in web-static/README.md.
+            quick_draft_pool_source: quickDraftPoolSource,
+            quick_draft_custom_pool_text: quickDraftCustomPoolText,
         }),
     });
 }
@@ -149,6 +153,25 @@ function submitCustomDuelDeck(gameId, decklistText) {
     return apiRequest('/games/decklist', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, decklist_text: decklistText }),
+    });
+}
+
+// Quick Draft (issue #88) -- see "Quick Draft" in web-static/README.md.
+// stage is 'draw' (keep 2 of your own just-dealt 6) or 'received' (keep 2
+// of the 4 cards you received from your opponent).
+function submitQuickDraftPick(gameId, round, stage, cardIds) {
+    return apiRequest('/games/draft/pick', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, round, stage, card_ids: cardIds }),
+    });
+}
+
+// Used both for the initial 16-to-14/15/16 trim and every later sideboard
+// between the match's up-to-3 games -- same endpoint, same shape.
+function submitQuickDraftDeck(gameId, cardIds) {
+    return apiRequest('/games/draft/deck', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, card_ids: cardIds }),
     });
 }
 

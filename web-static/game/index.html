@@ -43,6 +43,7 @@
             <button id="back-to-lobby-button" type="button">&larr; Back to your games</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
+            <p id="quick-draft-scoreline" hidden></p>
             <p id="board-message" class="success" hidden></p>
             <p id="board-error" class="error" hidden></p>
             <p id="pending-decision-banner" hidden></p>
@@ -81,6 +82,25 @@
                     <p id="duel-deck-submit-error" class="error" hidden></p>
                 </div>
                 <p id="duel-deck-submitted-message" hidden></p>
+            </div>
+
+            <div id="quick-draft-panel" hidden>
+                <div id="quick-draft-drafting" hidden>
+                    <h3 id="quick-draft-drafting-title"></h3>
+                    <p id="quick-draft-drafting-status"></p>
+                    <div id="quick-draft-pack"></div>
+                    <button id="quick-draft-pick-submit-button" type="button" hidden disabled>Keep selected cards</button>
+                    <h4>Kept so far</h4>
+                    <ul id="quick-draft-kept-so-far"></ul>
+                </div>
+
+                <div id="quick-draft-deck-building" hidden>
+                    <h3 id="quick-draft-deck-building-title"></h3>
+                    <p id="quick-draft-deck-building-status"></p>
+                    <div id="quick-draft-deck-picker"></div>
+                    <p id="quick-draft-deck-error" class="error" hidden></p>
+                    <button id="quick-draft-deck-submit-button" type="button">Submit deck</button>
+                </div>
             </div>
 
             <div id="in-progress-area" hidden>
@@ -192,6 +212,7 @@
                 <select id="new-game-format">
                     <option value="standard">Traditional</option>
                     <option value="duel">Duel</option>
+                    <option value="draft">Draft</option>
                     <option value="team">Open Team Play</option>
                     <option value="closed_team">Closed Team Play</option>
                 </select>
@@ -211,6 +232,7 @@
                     <option value="jceddys_75">jceddy's 75 Card</option>
                     <option value="custom">Custom Decklist</option>
                     <option value="custom_duel">Custom Decklists (Duel)</option>
+                    <option value="quick_draft">Quick Draft</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -272,6 +294,28 @@
                             </tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <div id="new-game-quick-draft-fields" hidden>
+                <p>Both players will draft their decks live from a shared card pool, then play a best-of-three match with sideboarding between games. Choose the shared pool to draft from:</p>
+                <label>Pool
+                    <select id="new-game-quick-draft-pool-source">
+                        <option value="random_48">48 random cards</option>
+                        <option value="structure">Structure deck (45 cards)</option>
+                        <option value="one_of_each">One of Each Card (133 cards)</option>
+                        <option value="custom">Custom pool</option>
+                    </select>
+                </label>
+                <p id="new-game-quick-draft-pool-source-description"></p>
+
+                <div id="new-game-quick-draft-custom-pool-fields" hidden>
+                    <label>Upload a pool file
+                        <input type="file" id="new-game-quick-draft-custom-pool-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards)
+                        <textarea id="new-game-quick-draft-custom-pool-text" rows="10"></textarea>
+                    </label>
                 </div>
             </div>
 

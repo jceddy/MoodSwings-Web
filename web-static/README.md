@@ -409,16 +409,16 @@ too, proportional to the smaller card width.
     `<form>`, Close is a sibling after it -- that would otherwise stack
     flush against each other)
     picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
-    Duel, Open Team Play, or Closed Team Play), then calls `POST /games`.
-    `updateOpponentSelectionLimit()` caps how many friends
+    Duel, Draft, Open Team Play, or Closed Team Play), then calls
+    `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
-    3 normally, but only 1 for Duel, since a duel is exactly 2 players and
-    the server rejects anything else (see "Duel: separate per-player
-    decks" in `php-app/README.md`). It runs on every checkbox's own
-    `change` as well as the format `<select>`'s: switching to Duel with 2
-    friends already checked auto-unchecks the second one and disables the
-    rest, and switching back to Traditional re-enables them, so you can't
-    submit a Duel request the server will just reject with a 400.
+    3 normally, but only 1 for Duel or Draft, since both are exactly 2
+    players and the server rejects anything else (see "Duel: separate
+    per-player decks" in `php-app/README.md`). It runs on every checkbox's
+    own `change` as well as the format `<select>`'s: switching to Duel or
+    Draft with 2 friends already checked auto-unchecks the second one and
+    disables the rest, and switching back to Traditional re-enables them,
+    so you can't submit a request the server will just reject with a 400.
     Selecting Open Team Play or Closed Team Play reveals
     `#new-game-team-fields` (`updateTeamFields()`, wired to the same
     checkbox/format `change` events): a partner `<select>` populated from
@@ -432,9 +432,9 @@ too, proportional to the smaller card width.
     the selected partner as `partner_user_id`. See "Open Team Play"/
     "Closed Team Play" in `php-app/README.md` for the formats themselves. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
-    jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), One of Each
-    Card, in that order, matching `deck_type`'s own six values -- see
-    "Deck types" in
+    jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
+    Draft, One of Each Card, in that order, matching `deck_type`'s
+    own seven values -- see "Deck types" in
     `php-app/README.md`) has a plain-language
     description shown right below it (`#new-game-deck-type-description`,
     `updateDeckTypeDescription()`) that updates live as the selection
@@ -448,23 +448,29 @@ too, proportional to the smaller card width.
     reads its text into the textarea via `FileReader`, so the server only
     ever sees one input shape regardless of which the player used) -- see
     "Custom decklists" in `php-app/README.md` for the format itself.
-    `updateDeckTypeAvailability()` disables that option (mirroring
-    `updateOpponentSelectionLimit()`'s own proactive approach) whenever
-    Duel is selected, since custom decklists aren't supported for duel
-    games, falling back to Structure if Custom Decklist was already
-    selected when the format switches -- and, the other way round,
-    disables Custom Decklists (Duel) whenever Duel *isn't* selected, since
-    that option only makes sense for a duel. The same function also
-    disables Power whenever either team format is selected -- Power's 15
-    cards fall short of the 45-card minimum both team formats share (see
-    "Open Team Play"/"Closed Team Play" in
-    `php-app/README.md`) -- falling back to Structure if Power was already
-    selected. Selecting Custom Decklists
-    (Duel) reveals `#new-game-duel-rules-fields` instead of the decklist
-    fields -- no decklist is entered here at all, only the deck-building
-    *rules* both players' own decklists (submitted later, see the Board
-    bullet below) will have to satisfy. A `#new-game-duel-rules-preset`
-    dropdown (Structure/Power/jceddy's 75 Card/User-Defined) either shows a
+    `updateDeckTypeAvailability()` **hides** (`option.hidden`, not merely
+    `option.disabled`) whichever deck-type options don't make sense for
+    the currently-selected format -- so the dropdown only ever *lists*
+    options that are actually legal, rather than showing a doomed one
+    grayed out -- via a small `isDeckTypeAvailableForFormat(deckType,
+    format)` allow-list function: Custom Decklist whenever Duel is
+    selected (custom decklists aren't supported for duel games), Custom
+    Decklists (Duel) whenever Duel *isn't* selected (that option only
+    makes sense for a duel), Power whenever either team format is
+    selected (Power's 15 cards fall short of the 45-card minimum both team
+    formats share -- see "Open Team Play"/"Closed Team Play" in
+    `php-app/README.md`), and -- since the Draft format supports nothing
+    but Quick Draft -- every option *except* Quick Draft whenever Draft is
+    selected, and Quick Draft itself whenever Draft *isn't* selected. If
+    the previously-selected option becomes unavailable, the dropdown falls
+    back to the first option that's still available in document order --
+    Structure for most formats, but Quick Draft for Draft, since it's the
+    only option Draft allows. Selecting Custom Decklists (Duel) reveals
+    `#new-game-duel-rules-fields` instead of the decklist fields -- no
+    decklist is entered here at all, only the deck-building *rules* both
+    players' own decklists (submitted later, see the Board bullet below)
+    will have to satisfy. A `#new-game-duel-rules-preset` dropdown
+    (Structure/Power/jceddy's 75 Card/User-Defined) either shows a
     read-only summary of that preset's locked-in values
     (`DUEL_RULES_PRESET_SUMMARIES`, a client-side mirror of
     `DuelDeckRules::forPreset()` purely for display -- the actual values
@@ -477,7 +483,22 @@ too, proportional to the smaller card width.
     plain list of checked rarity names rather than a `{rarity: value}`
     map, since it's a flag rather than a count) -- see "Custom decklists
     for Duel games" in `php-app/README.md` for what these rules actually
-    mean. Polls `GET /games` every 4 seconds while the lobby is
+    mean. Selecting Quick Draft reveals `#new-game-quick-draft-fields`
+    instead -- a Pool dropdown (`#new-game-quick-draft-pool-source`: 48
+    random cards, Structure deck, One of Each Card, or Custom pool) with
+    its own plain-language description below it
+    (`QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS`, `updateQuickDraftPoolSourceVisibility()`),
+    and, only for Custom pool, the same file-upload/paste pair the
+    Traditional `custom` deck_type and the `custom_duel` waiting room both
+    already use, feeding `quick_draft_custom_pool_text` instead of
+    `decklist_text`/`custom_duel`'s own decklist field. Quick Draft is only
+    ever offered under the Draft format (`#new-game-format` has its own
+    Draft option, functionally identical to Duel -- same 2-player,
+    separate-per-player-deck engine, `updateOpponentSelectionLimit()` caps
+    it at 1 opponent the same way Duel is -- but restricted to deck types
+    that build a deck through some kind of live drafting process; Quick
+    Draft is the first, and so far only, one -- see "Draft format" in
+    `php-app/README.md`). Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just
@@ -565,6 +586,64 @@ too, proportional to the smaller card width.
     `state.initial_card_pass.submitted_game_player_ids`, which players
     have or haven't submitted yet -- never which 2 cards anyone chose).
     See "Closed Team Play" in `php-app/README.md`.
+
+    A `#quick-draft-scoreline` line (`renderQuickDraftScoreline()`, reading
+    `state.quick_draft`, hidden for every other deck_type) sits just below
+    the round-status line and is always shown once a `quick_draft` game
+    exists, regardless of whether the game itself is `waiting`/
+    `in_progress`/`completed` -- "Quick Draft match — game N of up to 3 —
+    you X, opponent Y (first to 2 wins the match)". A `#quick-draft-panel`
+    (mutually exclusive with `#duel-deck-submission`, occupying the same
+    waiting-room slot while `state.game.status` is `'waiting'`) covers this
+    format's own two pregame phases, both read from `state.quick_draft`:
+    - **Drafting** (`#quick-draft-drafting`, `renderQuickDraftDrafting()`,
+      shown while `state.quick_draft.status` is `'drafting'`) -- shows the
+      current round number and one of four stage messages
+      (`QUICK_DRAFT_STAGE_STATUS`) depending on `state.quick_draft.drafting.stage`:
+      `'draw'` (your own 6 just-dealt cards, keep 2), `'received'` (the 4
+      cards you actually received from your opponent, keep 2 — only
+      determined once both players have submitted `'draw'`), or one of the
+      two `awaiting_opponent_*` stages (an empty pack, a "waiting on your
+      opponent" message — transient, since the round/stage advances
+      automatically the moment they finish too). The pack itself
+      (`#quick-draft-pack`) reuses the exact same click-thumbnail-to-open-
+      `#card-detail-dialog`-with-a-`selection`-object picker pattern
+      `renderInitialCardPass()` already established (a plain client-side
+      `Set`, capped at 2, never sent until `#quick-draft-pick-submit-button`
+      is pressed, which calls `submitQuickDraftPick()` — `POST
+      /games/draft/pick`). That selection Set is keyed to the current
+      `round:stage` pair (reset the moment either changes) rather than
+      reset on every render, so it survives an ordinary 4-second poll
+      mid-pick the same way `renderInitialCardPass()`'s own selection does.
+      A `#quick-draft-kept-so-far` list shows every card you've kept in the
+      draft so far (across all rounds, including whatever's already
+      resolved this one), read-only.
+    - **Deck building** (`#quick-draft-deck-building`,
+      `renderQuickDraftDeckBuilding()`, shown while `state.quick_draft.status`
+      is `'deck_building'`) -- the exact same picker/endpoint
+      (`submitQuickDraftDeck()`, `POST /games/draft/deck`) serves both the
+      very first 16-to-14/15/16 trim and every later sideboard between the
+      match's games; there's no "first trim" vs. "sideboard" distinction in
+      the UI either. All 16 of your own drafted cards
+      (`state.quick_draft.deck_building.drafted_cards`) show as toggleable
+      thumbnails (same picker pattern again, no 2-card cap this time — any
+      count from 14 to 16 is valid), pre-seeded from your current
+      `deck_card_ids` (or, before your very first submission, all 16) —
+      that seeding only happens once per game (`quickDraftDeckSelectionInitialized`,
+      reset by `showBoard()` whenever you switch games/sideboard into a new
+      one) so an in-progress selection isn't silently overwritten by an
+      ordinary poll. Once you've submitted, the picker itself hides in
+      favor of a status line ("waiting for your opponent's deck" or "both
+      decks are in"). "Start game" itself stays hidden until
+      `state.quick_draft.deck_building.you_submitted` AND
+      `.opponent_submitted` are both true. Pool/pack/drafted cards are all
+      served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
+      rather than the usual in-play `serializeCard()` result, but with the
+      exact same field names `buildCardThumb()`/`openCardDetail()` already
+      read (`card_id`, `name`, `color`, `value`, `rules_text`, etc.), so
+      neither function needed any change to render a card that hasn't been
+      dealt into a game yet. See "Quick Draft" in `php-app/README.md` for
+      the format itself.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
