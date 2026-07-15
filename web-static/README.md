@@ -272,21 +272,22 @@ too, proportional to the smaller card width.
   "Friends"/"Log out" buttons carry their own `margin-bottom` so they don't
   touch whichever of the lobby or board view is showing directly beneath
   them (most noticeably the board view's own "Back to your games" button).
-  - **Lobby**: your games (via `GET /games`), each showing a format/deck/
-    status line (`.lobby-format`, muted/smaller text) above the opponents
-    -- e.g. "Traditional, Structure deck — In Progress (your turn)" --
-    built from the same `format`/`deck_type` labels
+  - **Lobby**: your games (via `GET /games`), each rendered as three
+    stacked lines above the row's own action button. First, a format/deck
+    line (`.lobby-format`, muted/smaller text) -- e.g. "Traditional,
+    Structure deck" -- built from the same `format`/`deck_type` labels
     (`formatLabel()`/`deckTypeLabel()`) the board's own title uses,
     substituting the game's `custom_deck_name` for a `custom` deck_type
     just like the board title does. `custom_duel` falls back to
     `deckTypeLabel()`'s generic label here since each player's own
     submitted deck name (unlike `custom`'s single game-wide name) only
-    comes back from `GET /games/:id`, not the lobby list. Status reads as
-    e.g. "In Progress" rather than the raw `in_progress` the API returns
+    comes back from `GET /games/:id`, not the lobby list. Second, its own
+    status line (`.lobby-status-line`) -- status reads as e.g.
+    "In Progress" rather than the raw `in_progress` the API returns
     (`humanizeStatus()`, a generic snake_case-to-Title-Case transform, not
     a fixed per-status lookup table, so any future status value still
-    reads reasonably without needing an update here). The opponents
-    themselves get their own line below. The list itself is
+    reads reasonably without needing an update here). Third, the
+    opponents themselves. The list itself is
     rendered in whatever order the API returns (no client-side re-sort) --
     `GET /games` always puts `waiting`/`in_progress` games above
     `completed` ones regardless of recency, so a stalled active game never
@@ -299,7 +300,12 @@ too, proportional to the smaller card width.
     `abandoned` in `--color-error` -- distinguishing what needs attention
     at a glance rather than requiring every row's text to be read in full.
     `is_your_turn` gets its own bold `--color-success` "(your turn)" tag
-    for the same reason. Once a game is `completed`,
+    on that same status line, plus a whole-row background
+    (`.lobby-row--your-turn`, a new `--color-your-turn-bg` theme variable)
+    so an actionable game stands out even before any of the row's text is
+    read; `#lobby-view li`'s own horizontal padding (rather than 0) is what
+    keeps that background from touching the row's edges. Once a game is
+    `completed`,
     `winner_usernames` (both teammates' for a team-format win, just the
     one player's otherwise -- see `php-app/README.md`) renders as an extra
     line below the players, e.g. "alice won" or "alice & bob won" --
