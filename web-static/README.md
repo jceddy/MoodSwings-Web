@@ -903,10 +903,13 @@ too, proportional to the smaller card width.
     never even started yet.
 
     The "Players" list near the top of the board tags the viewer's own row
-    with a plain "(you)" suffix right after their username
+    with a "(you)" suffix right after their username
     (`state.you.game_player_id === player.game_player_id`), so it's
     unambiguous at a glance which row is theirs even in a 4-player game with
-    similar-looking usernames. It also shows each player's seat,
+    similar-looking usernames. The suffix has its own `.player-you-tag`
+    color (`--color-info`, bold) rather than being plain text, so it reads
+    as a tag next to the name instead of looking like part of the username
+    itself. It also shows each player's seat,
     current point total, win count, and hand size as small inline SVG
     icons (issue #143) rather than spelled-out text — a bench (seat), a
     star (points), a trophy (wins), and two overlapping cards (hand size)

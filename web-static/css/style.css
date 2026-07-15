@@ -196,6 +196,13 @@ body.game-page {
     flex-shrink: 0;
 }
 
+/* Its own color rather than plain text, so "(you)" reads as a tag next to
+   the username instead of looking like part of the username itself. */
+.player-you-tag {
+    color: var(--color-info);
+    font-weight: bold;
+}
+
 /* Takes whatever width is left after the name (flex: 1 1 auto, with
    min-width: 0 overriding a flex item's default auto min-width so it's
    actually allowed to shrink below its content's natural size) and wraps
