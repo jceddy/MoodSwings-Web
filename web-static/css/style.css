@@ -540,6 +540,21 @@ dialog#art-preview-dialog {
 
 /* -- Lobby (issue #136) ---------------------------------------------- */
 
+/* Keeps the Play/View button beside the row's text as a flex sibling,
+   vertically centered against however many lines that text itself wraps
+   to on a narrow (phone-width) viewport, rather than the button always
+   trailing on its own line below a wrapped winner line/status. */
+.lobby-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.lobby-info {
+    min-width: 0;
+}
+
 .lobby-status {
     font-weight: bold;
 }

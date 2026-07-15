@@ -333,20 +333,31 @@
 
         renderList(gamesList, document.getElementById('games-empty'), ok ? body.games : [], (game) => {
             const li = document.createElement('li');
+            li.className = 'lobby-row';
+
+            // Wrapped in its own container (rather than appended straight
+            // to the li) so the action button below can sit beside the
+            // text as a flex sibling -- see the ".lobby-row"/".lobby-info"
+            // rules in style.css -- instead of always trailing after
+            // however many lines the text itself wraps to on a narrow
+            // (phone-width) viewport.
+            const infoEl = document.createElement('div');
+            infoEl.className = 'lobby-info';
+
             const opponents = game.players.map((p) => p.username).join(', ');
 
             const statusEl = document.createElement('span');
             statusEl.className = 'lobby-status lobby-status--' + game.status;
             statusEl.textContent = humanizeStatus(game.status);
 
-            li.append(opponents + ' — ');
-            li.appendChild(statusEl);
+            infoEl.append(opponents + ' — ');
+            infoEl.appendChild(statusEl);
 
             if (game.is_your_turn) {
                 const yourTurnEl = document.createElement('span');
                 yourTurnEl.className = 'lobby-your-turn';
                 yourTurnEl.textContent = ' (your turn)';
-                li.appendChild(yourTurnEl);
+                infoEl.appendChild(yourTurnEl);
             }
 
             // winner_usernames is only ever non-empty once the game is
@@ -358,8 +369,10 @@
                 const winnerEl = document.createElement('div');
                 winnerEl.className = 'lobby-winner';
                 winnerEl.textContent = game.winner_usernames.join(' & ') + ' won';
-                li.appendChild(winnerEl);
+                infoEl.appendChild(winnerEl);
             }
+
+            li.appendChild(infoEl);
 
             // A 'waiting'/'in_progress' game is still something to actually
             // play; anything else (completed, or the rarer abandoned) is
