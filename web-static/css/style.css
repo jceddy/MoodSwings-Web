@@ -465,15 +465,16 @@ body.game-page {
 
 /* .card-thumb__art is a fixed 5.5rem wide with height: auto, so every
    card renders at the same height: 5.5rem times the printed card art's
-   own (fixed, MSW-set-wide) 744:1039 intrinsic aspect ratio, ~7.68rem. A
-   negative margin-bottom of -6.3rem pulls the next card in the column up
-   to cover all but the top ~1.375rem (22px) of this one -- comfortably
-   inside the 20-25px issue #142 asked for -- leaving its name and, if
-   present, its value badge's upper-right corner still visible. Not
-   applied to a column's own last card, so it alone renders in full,
-   uncovered by anything after it. */
+   own (fixed, MSW-set-wide) 744:1039 intrinsic aspect ratio, ~7.68rem,
+   plus its own 1px top/bottom border. A negative margin-bottom of
+   -6.6rem pulls the next card in the column up to cover all but a ~19px
+   sliver of this one (~5px tighter than the original -6.3rem, per
+   follow-up feedback on issue #142) -- still enough to keep its name and,
+   if present, its value badge's upper-right corner visible. Not applied
+   to a column's own last card, so it alone renders in full, uncovered by
+   anything after it. */
 .discard-stack__column .card-thumb:not(:last-child) {
-    margin-bottom: -6.3rem;
+    margin-bottom: -6.6rem;
 }
 
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */

@@ -914,18 +914,20 @@
     // the board. Instead, cards are grouped into columns of up to
     // DISCARD_STACK_COLUMN_SIZE, each stacked with just enough overlap
     // (see .discard-stack__column's own negative margin-bottom in
-    // style.css) to leave a ~22px sliver of every covered card visible --
-    // its name and, when present, its current-value badge in the
-    // upper-right corner -- while the last
-    // (most recently discarded, assuming append order -- see BoardState's
-    // own $discard docblock) card in each column renders in full, painted
-    // on top of the one before it by DOM order. A column caps at
-    // DISCARD_STACK_COLUMN_SIZE cards so its own height stays bounded --
-    // roughly one card's height plus 7 more slivers, well short of two
-    // full-size cards -- rather than growing indefinitely; #discard-list's
+    // style.css) to leave a sliver of every covered card visible -- its
+    // name and, when present, its current-value badge in the upper-right
+    // corner -- while the last (most recently discarded, assuming append
+    // order -- see BoardState's own $discard docblock) card in each column
+    // renders in full, painted on top of the one before it by DOM order.
+    // A column caps at DISCARD_STACK_COLUMN_SIZE cards so its own height
+    // stays bounded rather than growing indefinitely; #discard-list's
     // existing flex-wrap lays additional columns out beside it, wrapping
-    // to a new row once the viewport runs out of width.
-    const DISCARD_STACK_COLUMN_SIZE = 8;
+    // to a new row once the viewport runs out of width. Kept deliberately
+    // small (rather than large enough to always need just 1-2 columns) so
+    // a modest pile still spreads across every column a given viewport can
+    // actually fit side by side, instead of stacking needlessly deep in
+    // just one or two while unused width goes to waste next to them.
+    const DISCARD_STACK_COLUMN_SIZE = 4;
 
     function renderDiscardPile(discardPile, canAct) {
         const listEl = document.getElementById('discard-list');
