@@ -162,18 +162,21 @@ is the shared element builder every card zone (hand, in-play, discard pile)
 uses in place of the old text-only buttons: a `<button class="card-thumb">`
 containing the art `<img>` (its `alt` text is `name + '. ' + rules_text`,
 covering what the printed art itself can't convey to a screen reader) plus
-whatever ISN'T part of the static art overlaid as small badges/captions on
-top of it -- a current value badge (only shown when `card.value` differs
-from `card.base_value`, since the printed value is already baked into the
-art otherwise), a "Copy" badge for an in-play Creativity copy, a
-"Suppressed" ribbon, and an owner/last-owner caption below the thumbnail
-for in-play and discard-pile cards. An unplayable hand card keeps the same
-dashed, lower-opacity `.not-playable` treatment the old text button had,
-just applied to the thumbnail instead. Two tabletop conventions are
-conveyed by rotating the art itself (badges/captions are siblings of the
-`<img>`, not children of it, so they always stay upright and legible --
-the rotation is a visual reinforcement of the badge, never a replacement
-for it): a suppressed in-play mood's `.card-thumb--suppressed` class
+whatever ISN'T part of the static art overlaid as small badges on top of
+it -- a current value badge (only shown when `card.value` differs from
+`card.base_value`, since the printed value is already baked into the art
+otherwise), a "Copy" badge for an in-play Creativity copy, and a
+"Suppressed" ribbon. Ownership (issue #142) is no longer a per-thumb
+caption -- it's redundant once every zone already identifies whose cards
+are in it (see "Discard pile stacking" and "In-play board layout" below),
+and it cost each card its own line of vertical space repeated across the
+whole board. An unplayable hand card keeps the same dashed,
+lower-opacity `.not-playable` treatment the old text button had, just
+applied to the thumbnail instead. Two tabletop conventions are conveyed by
+rotating the art itself (badges are siblings of the `<img>`, not children
+of it, so they always stay upright and legible -- the rotation is a
+visual reinforcement of the badge, never a replacement for it): a
+suppressed in-play mood's `.card-thumb--suppressed` class
 rotates it 90 degrees, and a mood whose `value_locked` flag is true --
 a permanent "after playing this mood" trigger (Dignity, Delight, ...)
 has locked in its alt value, as opposed to a continuously-recomputed
@@ -197,13 +200,47 @@ is still outstanding or has already been spent (losing track of that
 matters more for Hope/Grace than an ordinary grant -- see
 `BoardState::grantIsActive()`'s own docblock).
 
+### Discard pile stacking
+
+A discard pile only ever grows over a game -- unlike hand/in-play, which
+stay bounded by a player's own card count -- so a flat wrapping list of
+full-size thumbnails (the old layout) eventually dwarfs the rest of the
+board. `renderDiscardPile()` in `game.js` instead groups `state.discard_pile`
+into columns of up to `DISCARD_STACK_COLUMN_SIZE` (8) cards each, rendered
+as `<li class="discard-stack__column">` elements holding `buildCardThumb()`
+buttons directly (no per-card `<li>` needed, unlike hand/in-play).
+`.discard-stack__column .card-thumb:not(:last-child) { margin-bottom:
+-6.3rem; }` pulls each card up to overlap all but a ~22px sliver of the one
+before it -- `.card-thumb__art` is a fixed 5.5rem wide with `height: auto`,
+so every card renders at the same height (5.5rem times the printed card
+art's own fixed 744:1039 intrinsic ratio, ~7.68rem); leaving a 22px sliver
+means overlapping the rest, i.e. `-(7.68rem - 1.375rem)`. That sliver still
+shows the covered card's own name and, if present, its value badge's
+upper-right corner, since both live in that card's own top strip and the
+next card (painted on top by DOM/paint order, not applied any negative
+margin since it's the last child) only starts further down. A column's
+own last card -- the most recently discarded, assuming the array's actual
+append-only order, though `BoardState`'s own docblock doesn't treat that
+as a hard contract -- therefore always renders in full. Capping columns at
+8 cards keeps any one column's own height bounded (one card plus 7 slivers,
+well under two full-size cards) rather than growing indefinitely; multiple
+columns lay out side by side via `#discard-list`'s existing `flex-wrap`,
+wrapping to a new row once the viewport runs out of width, with
+`align-items: flex-start` keeping a shorter trailing column pinned to the
+top rather than centered/stretched against a taller neighbor. Clicking any
+card in the stack (even a mostly-covered one, via its visible sliver)
+opens the same read-only detail dialog as before, now passing
+`last_owner_name` explicitly as that dialog's own ownerLabel argument
+(previously conveyed by the per-thumb caption removed above).
+
 ### In-play board layout
 
 The "In play" area (issue #124) groups moods by seating position relative
 to the viewer instead of one flat list -- `#in-play-board` is a CSS grid
 with 6 zone `<div>`s (`#in-play-zone-north`/`-northwest`/`-northeast`/
-`-west`/`-east`/`-south`, each a flex container that centers its cards both
-ways), and one of three modifier classes (`in-play-board--2/3/4`, matching
+`-west`/`-east`/`-south`, each a flex container -- `flex-direction: column`
+-- that centers its own `.in-play-zone__label` above its cards both ways),
+and one of three modifier classes (`in-play-board--2/3/4`, matching
 `state.players.length`) picks which `grid-template-areas` -- and so which
 of those 6 zones actually participate -- apply for this game: `north`/
 `south` for a 2-player game (opponent above, you below), `northwest`/
@@ -219,7 +256,10 @@ viewer's own left (`west`/`northwest`); the remaining index(es) fill
 viewer's right) in that same clockwise order. `renderInPlay()` then buckets
 `state.in_play` by each card's `owner_game_player_id` into its assigned
 zone's own `<ul class="in-play-zone__list">`, reusing `buildCardThumb()`
-exactly as the old flat list did. This is purely a seating-position
+exactly as the old flat list did -- except each card's own owner caption
+(issue #142) is gone; the zone's own `.in-play-zone__label` (inverted from
+the same `zoneByGamePlayerId` map, one lookup per zone rather than one per
+card) names its player once instead. This is purely a seating-position
 grouping -- Open/Closed Team Play's own team pairing (`team_id`) plays no
 part in it, unlike the players list's own "Team 1"/"Team 2" tags.
 

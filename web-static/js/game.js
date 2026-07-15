@@ -612,9 +612,10 @@
     // the printed art already conveys name/color/base value/rules text (all
     // included as alt text for accessibility), so only whatever ISN'T part
     // of the static art -- a value currently different from what's printed,
-    // suppression, an owner caption, or a disabled state -- needs to be
-    // overlaid on top of it.
-    function buildCardThumb(card, { caption, onClick, notPlayable = false } = {}) {
+    // suppression, or a disabled state -- needs to be overlaid on top of it.
+    // Owner information (issue #142) instead lives in the in-play zone's own
+    // label and the card-detail dialog's meta line, not a per-thumb caption.
+    function buildCardThumb(card, { onClick, notPlayable = false } = {}) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'card-thumb';
@@ -665,13 +666,6 @@
         if (notPlayable) {
             button.classList.add('not-playable');
             button.title = "This card can't be played right now";
-        }
-
-        if (caption) {
-            const captionEl = document.createElement('span');
-            captionEl.className = 'card-thumb__caption';
-            captionEl.textContent = caption;
-            button.appendChild(captionEl);
         }
 
         return button;
@@ -878,6 +872,15 @@
         const zoneByGamePlayerId = inPlayZoneAssignments(state);
         const activeZones = new Set(Object.values(zoneByGamePlayerId));
 
+        // A zone's own label (issue #142) replaces the identical owner
+        // caption every card in it used to carry individually -- one name
+        // per zone instead of one per card frees up the vertical space
+        // that repetition cost.
+        const playerByZone = {};
+        for (const player of state.players) {
+            playerByZone[zoneByGamePlayerId[player.game_player_id]] = player;
+        }
+
         const cardsByZone = {};
         for (const zone of IN_PLAY_ZONE_NAMES) {
             cardsByZone[zone] = [];
@@ -889,6 +892,8 @@
         for (const zone of IN_PLAY_ZONE_NAMES) {
             const zoneEl = document.getElementById('in-play-zone-' + zone);
             zoneEl.hidden = !activeZones.has(zone);
+            zoneEl.querySelector('.in-play-zone__label').textContent =
+                playerByZone[zone] ? playerByZone[zone].username : '';
 
             const listEl = zoneEl.querySelector('.in-play-zone__list');
             listEl.innerHTML = '';
@@ -897,11 +902,58 @@
                 const ownerLabel = owner ? owner.username : '?';
                 const li = document.createElement('li');
                 li.appendChild(buildCardThumb(card, {
-                    caption: ownerLabel,
                     onClick: () => openCardDetail(card, ownerLabel),
                 }));
                 listEl.appendChild(li);
             }
+        }
+    }
+
+    // A discard pile only ever grows over a game, so a flat wrapping list
+    // of full-size thumbnails (issue #142) eventually dwarfs the rest of
+    // the board. Instead, cards are grouped into columns of up to
+    // DISCARD_STACK_COLUMN_SIZE, each stacked with just enough overlap
+    // (see .discard-stack__column's own negative margin-bottom in
+    // style.css) to leave a ~22px sliver of every covered card visible --
+    // its name and, when present, its current-value badge in the
+    // upper-right corner -- while the last
+    // (most recently discarded, assuming append order -- see BoardState's
+    // own $discard docblock) card in each column renders in full, painted
+    // on top of the one before it by DOM order. A column caps at
+    // DISCARD_STACK_COLUMN_SIZE cards so its own height stays bounded --
+    // roughly one card's height plus 7 more slivers, well short of two
+    // full-size cards -- rather than growing indefinitely; #discard-list's
+    // existing flex-wrap lays additional columns out beside it, wrapping
+    // to a new row once the viewport runs out of width.
+    const DISCARD_STACK_COLUMN_SIZE = 8;
+
+    function renderDiscardPile(discardPile, canAct) {
+        const listEl = document.getElementById('discard-list');
+        listEl.innerHTML = '';
+
+        for (let i = 0; i < discardPile.length; i += DISCARD_STACK_COLUMN_SIZE) {
+            const column = document.createElement('li');
+            column.className = 'discard-stack__column';
+            for (const card of discardPile.slice(i, i + DISCARD_STACK_COLUMN_SIZE)) {
+                // Almost always just informational (a discard-pile card
+                // can't normally be played), but Angst/Harmony/Grief's
+                // discard-sourced extra play, or Melancholy's "play from
+                // the discard pile as though it were your hand," can make
+                // a specific one playable for the rest of this turn --
+                // is_playable already reflects that (see GameService::
+                // getState()'s discard_pile mapping), so route straight to
+                // the same Play/Cancel panel a hand card uses instead of
+                // the read-only detail view in that case. last_owner_name
+                // disambiguates two players' identical catalog cards both
+                // sitting in the shared discard pile at once (see the
+                // 'discard_card' case in fieldOptions() below) -- shown in
+                // the detail dialog now that the per-thumb caption is gone.
+                const onClick = (canAct && card.is_playable)
+                    ? () => handleHandCardClick(card)
+                    : () => openCardDetail(card, card.last_owner_name);
+                column.appendChild(buildCardThumb(card, { onClick }));
+            }
+            listEl.appendChild(column);
         }
     }
 
@@ -1070,28 +1122,7 @@
 
         document.getElementById('discard-count').textContent = state.discard_pile.length;
         document.getElementById('deck-count').textContent = state.deck_count;
-        renderList(document.getElementById('discard-list'), { hidden: true }, state.discard_pile, (card) => {
-            const li = document.createElement('li');
-            // last_owner_name disambiguates two players' identical catalog
-            // cards both sitting in the shared discard pile at once (see
-            // the 'discard_card' case in fieldOptions() below) -- shown
-            // here too so the thumbnail itself isn't ambiguous either.
-            const caption = card.last_owner_name || null;
-            // Almost always just informational (a discard-pile card can't
-            // normally be played), but Angst/Harmony/Grief's discard-sourced
-            // extra play, or Melancholy's "play from the discard pile as
-            // though it were your hand," can make a specific one playable
-            // for the rest of this turn -- is_playable already reflects
-            // that (see GameService::getState()'s discard_pile mapping), so
-            // route straight to the same Play/Cancel panel a hand card
-            // uses instead of the read-only detail view in that case.
-            if (canAct && card.is_playable) {
-                li.appendChild(buildCardThumb(card, { caption, onClick: () => handleHandCardClick(card) }));
-            } else {
-                li.appendChild(buildCardThumb(card, { caption, onClick: () => openCardDetail(card) }));
-            }
-            return li;
-        });
+        renderDiscardPile(state.discard_pile, canAct);
 
         // While the viewer is the one being asked to answer a pending
         // decision (e.g. Confusion's "choose a hand card to give away"),
