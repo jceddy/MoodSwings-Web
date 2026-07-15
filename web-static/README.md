@@ -206,32 +206,36 @@ A discard pile only ever grows over a game -- unlike hand/in-play, which
 stay bounded by a player's own card count -- so a flat wrapping list of
 full-size thumbnails (the old layout) eventually dwarfs the rest of the
 board. `renderDiscardPile()` in `game.js` instead groups `state.discard_pile`
-into columns of up to `DISCARD_STACK_COLUMN_SIZE` (8) cards each, rendered
+into columns of up to `DISCARD_STACK_COLUMN_SIZE` (4) cards each, rendered
 as `<li class="discard-stack__column">` elements holding `buildCardThumb()`
-buttons directly (no per-card `<li>` needed, unlike hand/in-play).
-`.discard-stack__column .card-thumb:not(:last-child) { margin-bottom:
--6.3rem; }` pulls each card up to overlap all but a ~22px sliver of the one
-before it -- `.card-thumb__art` is a fixed 5.5rem wide with `height: auto`,
-so every card renders at the same height (5.5rem times the printed card
-art's own fixed 744:1039 intrinsic ratio, ~7.68rem); leaving a 22px sliver
-means overlapping the rest, i.e. `-(7.68rem - 1.375rem)`. That sliver still
-shows the covered card's own name and, if present, its value badge's
-upper-right corner, since both live in that card's own top strip and the
-next card (painted on top by DOM/paint order, not applied any negative
-margin since it's the last child) only starts further down. A column's
-own last card -- the most recently discarded, assuming the array's actual
-append-only order, though `BoardState`'s own docblock doesn't treat that
-as a hard contract -- therefore always renders in full. Capping columns at
-8 cards keeps any one column's own height bounded (one card plus 7 slivers,
-well under two full-size cards) rather than growing indefinitely; multiple
-columns lay out side by side via `#discard-list`'s existing `flex-wrap`,
-wrapping to a new row once the viewport runs out of width, with
-`align-items: flex-start` keeping a shorter trailing column pinned to the
-top rather than centered/stretched against a taller neighbor. Clicking any
-card in the stack (even a mostly-covered one, via its visible sliver)
-opens the same read-only detail dialog as before, now passing
-`last_owner_name` explicitly as that dialog's own ownerLabel argument
-(previously conveyed by the per-thumb caption removed above).
+buttons directly (no per-card `<li>` needed, unlike hand/in-play). Kept
+deliberately small -- rather than large enough that most piles need only
+one or two columns -- so a modest pile still spreads across every column
+a given viewport can actually fit side by side instead of stacking
+needlessly deep in just one or two while unused width goes to waste next
+to them (a real mobile-viewport complaint the column size was tuned down
+to fix). `.discard-stack__column .card-thumb:not(:last-child) {
+margin-bottom: -6.6rem; }` pulls each card up to overlap all but a ~19px
+sliver of the one before it -- `.card-thumb__art` is a fixed 5.5rem wide
+with `height: auto`, so every card renders at the same height (5.5rem
+times the printed card art's own fixed 744:1039 intrinsic ratio, ~7.68rem,
+plus its own 1px top/bottom border); leaving a ~19px sliver means
+overlapping the rest, i.e. roughly `-(7.68rem + border - 1.19rem)`. That
+sliver still shows the covered card's own name and, if present, its value
+badge's upper-right corner, since both live in that card's own top strip
+and the next card (painted on top by DOM/paint order, not applied any
+negative margin since it's the last child) only starts further down. A
+column's own last card -- the most recently discarded, assuming the
+array's actual append-only order, though `BoardState`'s own docblock
+doesn't treat that as a hard contract -- therefore always renders in full.
+Multiple columns lay out side by side via `#discard-list`'s existing
+`flex-wrap`, wrapping to a new row once the viewport runs out of width,
+with `align-items: flex-start` keeping a shorter trailing column pinned to
+the top rather than centered/stretched against a taller neighbor.
+Clicking any card in the stack (even a mostly-covered one, via its
+visible sliver) opens the same read-only detail dialog as before, now
+passing `last_owner_name` explicitly as that dialog's own ownerLabel
+argument (previously conveyed by the per-thumb caption removed above).
 
 ### In-play board layout
 
