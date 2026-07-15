@@ -230,7 +230,8 @@ body.game-page {
 #discard-list,
 #teammate-hand-list,
 #initial-card-pass-fields,
-#quick-draft-pack {
+#quick-draft-pack,
+#quick-draft-kept-so-far {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -239,8 +240,17 @@ body.game-page {
 #hand-list li,
 #discard-list li,
 #teammate-hand-list li,
+#quick-draft-kept-so-far li,
 .in-play-zone__list li {
     list-style: none;
+}
+
+/* A pixel or two of breathing room between the pack above and the submit
+   button below it -- without this the button sits flush against the
+   bottom edge of the card thumbnails, which reads as a layout mistake
+   rather than intentional spacing. */
+#quick-draft-pick-submit-button {
+    margin-top: 0.5rem;
 }
 
 /* -- In-play board (issue #124) --------------------------------------
