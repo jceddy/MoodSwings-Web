@@ -83,6 +83,12 @@ footer {
     margin-bottom: 0.5rem;
 }
 
+/* #new-game-button otherwise touches #games-list directly beneath it
+   with no gap. */
+#new-game-button {
+    margin-bottom: 0.5rem;
+}
+
 .field {
     margin-bottom: 1rem;
 }
