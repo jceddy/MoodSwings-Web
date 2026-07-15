@@ -295,7 +295,18 @@ selector specificity) for whichever zones aren't used at the current
 player count -- `.in-play-zone[hidden] { display: none; }` overrides that
 back, so an unused zone (e.g. northwest/northeast in a 2-player game)
 doesn't render as a stray empty dashed box, auto-placed by the grid into
-an extra implicit row/column past the real zones.
+an extra implicit row/column past the real zones. `#in-play-board`
+itself needs the identical `#in-play-board[hidden] { display: none; }`
+override for the same reason, one level up: `renderInPlay()` sets
+`board.hidden = true` and returns early whenever the just-loaded game's
+own `state.in_play` is empty, without touching that game's own zone
+`hidden`/list contents at all (there's nothing to bucket) -- without the
+CSS override, that early return did nothing visible, and whichever other
+game's board had rendered last stayed fully on screen underneath, cards
+and all, until a game whose own `in_play` wasn't empty happened to load
+next. Concretely: viewing a finished game with moods still in play, going
+back to the lobby, then opening a different, fresh in-progress game
+before its first play left that first game's own in-play area showing.
 
 `#in-play-board`'s own grid `gap` is `0` -- the rows/columns of zones sit
 flush against each other, with no visible seam between e.g. the `north`
