@@ -935,7 +935,16 @@ too, proportional to the smaller card width.
     measures the widest `.player-name` span in the just-rendered list and
     applies that as a shared `min-width` to all of them, rather than
     hardcoding one width that would either clip a long username or leave a
-    short one with an oddly large gap before its icons start. In games of 3+ players, whoever holds Hurt Feelings
+    short one with an oddly large gap before its icons start. All the
+    icons/flags/thumbnail for a row share one `.player-icons` wrapper (its
+    own flex-wrap container) rather than wrapping directly as children of
+    the row itself, and the row is `flex-wrap: nowrap` so the name and this
+    wrapper always stay on the same line — the wrapper just shrinks (see
+    its `flex: 1 1 auto; min-width: 0`) and wraps its own children within
+    whatever width is left. On a narrow viewport this means an overflowing
+    icon continues on a second line starting right under the first icon
+    (this wrapper's own left edge), not back at the row's far-left edge
+    underneath the username. In games of 3+ players, whoever holds Hurt Feelings
     (`state.round.hurt_feelings_game_player_id`,
     already tracked server-side to grant that player 2 plays instead of 1
     this round, but previously never surfaced to the client either) gets a

@@ -174,10 +174,16 @@ body.game-page {
     margin-left: 1rem;
 }
 
+/* nowrap keeps .player-name and .player-icons on the same conceptual row no
+   matter how little room is left -- if they were allowed to wrap against
+   each other, the icons block would jump as a whole unit to a fresh line
+   starting back at the row's left edge the moment it didn't fit next to
+   the name, rather than wrapping internally at the icon column's own x
+   (see .player-icons below, which is where the actual wrapping happens). */
 #players-list li {
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 0.5rem;
 }
 
@@ -188,6 +194,23 @@ body.game-page {
    own natural width when the row wraps. */
 .player-name {
     flex-shrink: 0;
+}
+
+/* Takes whatever width is left after the name (flex: 1 1 auto, with
+   min-width: 0 overriding a flex item's default auto min-width so it's
+   actually allowed to shrink below its content's natural size) and wraps
+   its own children -- the icons -- within that width via its own
+   flex-wrap. Because this box always starts right after the name (its
+   parent li never wraps against it -- see above), an overflowing icon
+   wraps to a second line starting at this box's own left edge, i.e. right
+   under the first icon, rather than back at the row's far-left edge. */
+.player-icons {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 0.5rem;
 }
 
 #hand-list,

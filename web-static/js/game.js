@@ -1171,6 +1171,17 @@
                 nameEl.textContent = player.username + youLabel + deckLabel + teamLabel;
                 li.appendChild(nameEl);
 
+                // All the icons/flags/thumbnail below share one wrapper (its
+                // own flex-wrap container) rather than wrapping directly as
+                // children of `li` -- that way, if a row runs out of width,
+                // the overflow wraps to a second line starting right under
+                // the first icon (this wrapper's own left edge, just after
+                // the name column) instead of back at the far-left edge of
+                // the whole row underneath the username.
+                const iconsEl = document.createElement('span');
+                iconsEl.className = 'player-icons';
+                li.appendChild(iconsEl);
+
                 // Issue #143: seat/points/wins/hand-count each become an
                 // icon with a numeric badge overlay instead of a plain
                 // "N thing(s)" clause; went-first/on-turn become an
@@ -1179,15 +1190,15 @@
                 // keeps its original full text as a tooltip/aria-label
                 // (see buildPlayerStat()/buildPlayerFlag()) so none of that
                 // information is lost, just no longer spelled out inline.
-                li.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
-                li.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
-                li.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
-                li.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
+                iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
+                iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
+                iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
+                iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
                 if (wentFirst) {
-                    li.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
+                    iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
                 }
                 if (isTurn) {
-                    li.appendChild(buildPlayerFlag('onTurn', 'On turn', 'player-flag--turn'));
+                    iconsEl.appendChild(buildPlayerFlag('onTurn', 'On turn', 'player-flag--turn'));
                 }
 
                 // A small Hurt Feelings art thumbnail replaces the old plain
@@ -1208,7 +1219,7 @@
                     img.src = '../img/hurt-feelings.webp';
                     img.alt = 'Hurt Feelings';
                     thumb.appendChild(img);
-                    li.appendChild(thumb);
+                    iconsEl.appendChild(thumb);
                 }
 
                 return li;
