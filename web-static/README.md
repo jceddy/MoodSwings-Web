@@ -902,20 +902,32 @@ too, proportional to the smaller card width.
     *other* game's board opened, including a freshly created one that had
     never even started yet.
 
-    The "Players" list near the top of the board shows each player's
-    current point total alongside their win count and hand size
-    (`player.total_score` — a live sum of what's actually on the board
-    right now, i.e. what each player would score if the round ended this
-    instant, not anything accumulated from earlier rounds; distinct from
-    `total_wins`, which only counts outright round victories) — "Alice —
-    seat 0, 12 point(s), 2 win(s), 5 card(s) in hand" — so nobody has to
-    manually add up the values on their own moods. It also marks whoever
-    went first this round (`state.round.first_game_player_id`, already
-    tracked server-side for Chivalry/Honor/Triumph-style effects but
-    previously never surfaced to the client) with its own "— went first
-    this round" tag, independent of (and possibly a different player
-    from) whoever the "— on turn" tag currently marks. In games of 3+
-    players, whoever holds Hurt Feelings (`state.round.hurt_feelings_game_player_id`,
+    The "Players" list near the top of the board shows each player's seat,
+    current point total, win count, and hand size as small inline SVG
+    icons (issue #143) rather than spelled-out text — a bench (seat), a
+    star (points), a trophy (wins), and two overlapping cards (hand size)
+    — each with a numeric badge overlaid on its lower-right corner
+    (`.player-stat__badge`, the same overlay convention `.card-thumb__badge`
+    already uses for a card's own current value). `player.total_score` is
+    a live sum of what's actually on the board right now, i.e. what each
+    player would score if the round ended this instant, not anything
+    accumulated from earlier rounds; distinct from `total_wins`, which only
+    counts outright round victories. Every icon keeps its full original
+    text (e.g. "12 point(s)", "Seat 0") as both a `title` tooltip and an
+    `aria-label` on its wrapping `<span role="img">`, so a screen reader or
+    a sighted user hovering for a reminder still gets the exact same
+    information the old plain-text clauses gave (see `buildPlayerStat()`/
+    `buildStatIcon()`/`PLAYER_STAT_ICON_PATHS` in `game.js`, and the
+    `.player-stat`/`.player-flag` rules in `style.css`). It also marks
+    whoever went first this round (`state.round.first_game_player_id`,
+    already tracked server-side for Chivalry/Honor/Triumph-style effects
+    but previously never surfaced to the client) with its own small flag
+    icon (`buildPlayerFlag()`), independent of (and possibly a different
+    player from) whoever the current-turn marker — a play/active triangle,
+    rendered in `--color-success` via `.player-flag--turn` to match this
+    app's existing "your turn" bold/success-color convention — currently
+    marks. In games of 3+ players, whoever holds Hurt Feelings
+    (`state.round.hurt_feelings_game_player_id`,
     already tracked server-side to grant that player 2 plays instead of 1
     this round, but previously never surfaced to the client either) gets a
     small `img/hurt-feelings.webp` thumbnail next to their row instead of a

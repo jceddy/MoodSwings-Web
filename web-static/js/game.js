@@ -1023,6 +1023,80 @@
         artPreviewDialog.close();
     });
 
+    // Small inline pictograms (issue #143) replacing the players list's own
+    // plain-text stat clauses ("4 point(s)", "went first this round", ...)
+    // -- self-contained straight-line shapes rather than curves, so each is
+    // easy to eyeball for correctness by hand without a design tool, and
+    // `fill="currentColor"` lets every one inherit (and be recolored via)
+    // its own wrapping element's CSS `color`, same as any text glyph would.
+    // Not an exhaustive icon set -- just what this one list currently
+    // needs -- so a future stat would add its own entry here rather than
+    // this doubling as a general-purpose icon library.
+    const PLAYER_STAT_ICON_PATHS = {
+        // A seat at the table: a backed bench on two legs.
+        seat: '<rect x="6" y="4" width="12" height="9" rx="1"/>'
+            + '<rect x="7" y="13" width="2" height="6"/><rect x="15" y="13" width="2" height="6"/>',
+        // Score: a plain 5-point star.
+        points: '<polygon points="12,2 14.4,8.8 21.5,8.9 15.8,13.2 17.9,20.1 '
+            + '12,16 6.1,20.1 8.2,13.2 2.5,8.9 9.6,8.8"/>',
+        // Round wins: a trophy cup on a stem and base.
+        wins: '<polygon points="6,4 18,4 15,13 9,13"/>'
+            + '<rect x="11" y="13" width="2" height="4"/><rect x="8" y="18" width="8" height="2"/>',
+        // Hand size: two overlapping cards, echoing the printed cards'
+        // own portrait shape elsewhere on this page.
+        hand: '<rect x="4" y="7" width="10" height="14" rx="1.5" transform="rotate(-8 9 14)"/>'
+            + '<rect x="7" y="5" width="10" height="14" rx="1.5"/>',
+        // Went first this round: a small flag on a pole.
+        wentFirst: '<rect x="5" y="3" width="2" height="18"/><polygon points="7,4 19,7 7,10"/>',
+        // Whose turn it currently is: a play/active triangle.
+        onTurn: '<polygon points="7,4 20,12 7,20"/>',
+    };
+
+    // <template> parses its own innerHTML through the HTML parser's SVG
+    // foreign-content handling, unlike setting .innerHTML directly on an
+    // element created via createElementNS -- which isn't reliably
+    // supported -- so this is the simplest robust way to build an inline
+    // icon from a plain markup string.
+    function buildStatIcon(kind) {
+        const template = document.createElement('template');
+        template.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + PLAYER_STAT_ICON_PATHS[kind] + '</svg>';
+        return template.content.firstChild;
+    }
+
+    // Icon + numeric badge overlay replacing a plain "N thing(s)" text
+    // clause. `label` (the full original text, e.g. "4 point(s)") becomes
+    // both a `title` tooltip for a mouse and an `aria-label` for a screen
+    // reader -- a `title` alone is only ever exposed on hover/focus, never
+    // announced outright, so accessibility needs the explicit label too;
+    // `role="img"` tells assistive tech to treat the whole span as a single
+    // image-with-text-alternative rather than trying to read its
+    // (redundant, aria-hidden) SVG and badge separately.
+    function buildPlayerStat(kind, value, label) {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'player-stat';
+        wrapper.title = label;
+        wrapper.setAttribute('role', 'img');
+        wrapper.setAttribute('aria-label', label);
+        wrapper.appendChild(buildStatIcon(kind));
+        const badge = document.createElement('span');
+        badge.className = 'player-stat__badge';
+        badge.textContent = String(value);
+        wrapper.appendChild(badge);
+        return wrapper;
+    }
+
+    // Same icon/tooltip/label treatment for a binary flag with no count to
+    // badge (went-first, on-turn).
+    function buildPlayerFlag(kind, label, extraClass) {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'player-flag' + (extraClass ? ' ' + extraClass : '');
+        wrapper.title = label;
+        wrapper.setAttribute('role', 'img');
+        wrapper.setAttribute('aria-label', label);
+        wrapper.appendChild(buildStatIcon(kind));
+        return wrapper;
+    }
+
     async function refreshBoard() {
         const seq = ++boardRequestSeq;
         const { ok, body } = await getGameState(currentGameId);
@@ -1090,13 +1164,28 @@
                     ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
                     : '';
 
-                const infoEl = document.createElement('span');
-                infoEl.textContent = player.username + ' — seat ' + player.seat_order +
-                    ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
-                    player.hand_count + ' card(s) in hand' + deckLabel + teamLabel +
-                    (wentFirst ? ' — went first this round' : '') +
-                    (isTurn ? ' — on turn' : '');
-                li.appendChild(infoEl);
+                const nameEl = document.createElement('span');
+                nameEl.textContent = player.username + deckLabel + teamLabel;
+                li.appendChild(nameEl);
+
+                // Issue #143: seat/points/wins/hand-count each become an
+                // icon with a numeric badge overlay instead of a plain
+                // "N thing(s)" clause; went-first/on-turn become an
+                // icon-only flag (nothing to count) instead of an appended
+                // "— went first this round"/"— on turn" clause. Every one
+                // keeps its original full text as a tooltip/aria-label
+                // (see buildPlayerStat()/buildPlayerFlag()) so none of that
+                // information is lost, just no longer spelled out inline.
+                li.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
+                li.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
+                li.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
+                li.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
+                if (wentFirst) {
+                    li.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
+                }
+                if (isTurn) {
+                    li.appendChild(buildPlayerFlag('onTurn', 'On turn', 'player-flag--turn'));
+                }
 
                 // A small Hurt Feelings art thumbnail replaces the old plain
                 // text tag -- Hurt Feelings is a round-level marker/token,
