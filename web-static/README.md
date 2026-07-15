@@ -566,7 +566,9 @@ too, proportional to the smaller card width.
     still choosing a target) showing an enlarged view of the card's own
     art in place of a separate name/rules-text heading (its `alt` text
     carries both, for accessibility) plus whatever choice fields it
-    needs and Play/Cancel. A server-side rejection from actually
+    needs and Play/"Close" (labeled "Close" rather than "Cancel" --
+    once a play is actually submitted, closing the panel can't retract
+    it, and "Cancel" reads as if it might). A server-side rejection from actually
     submitting the play (caught after the panel's own client-side checks
     below already passed) surfaces inside the panel itself, reusing
     `#choices-validation`'s existing spot right next to the Play button,
@@ -751,8 +753,8 @@ too, proportional to the smaller card width.
     (Angst/Harmony/Grief) or by Melancholy's "play from the discard pile as
     though it were your hand" — the same `is_playable` flag that already
     filters a hand card routes a click on one of those straight to the
-    ordinary Play/Cancel choices panel instead. The viewer's own hand cards
-    make this same read-only-vs-Play/Cancel split whenever it isn't their
+    ordinary Play/Close choices panel instead. The viewer's own hand cards
+    make this same read-only-vs-Play/Close split whenever it isn't their
     turn to act at all (not their turn, or a pending decision elsewhere is
     freezing the round) — a card sitting in your own hand is never hidden
     *from you*, only playing it is turn-gated, so the button stays clickable
