@@ -292,7 +292,14 @@ too, proportional to the smaller card width.
     one player's otherwise -- see `php-app/README.md`) renders as an extra
     line below the players, e.g. "alice won" or "alice & bob won" --
     absent (and the line omitted entirely) for every other status, since
-    there's no winner yet to name. Each row's own button reads "Play" for
+    there's no winner yet to name. All of that text lives in its own
+    `.lobby-info` wrapper, a flex sibling of the row's own action button
+    (`.lobby-row`'s own `display: flex; justify-content: space-between`)
+    rather than a plain child of the `<li>` -- keeps the button pinned to
+    the right of and vertically centered against however many lines the
+    text itself wraps to on a narrow (phone-width) viewport, instead of
+    always trailing on its own line below a wrapped winner line/status.
+    Each row's own button reads "Play" for
     a `waiting`/`in_progress` game (something there's still an actual turn
     to take) and "View" otherwise (`showBoard()` itself renders read-only
     once a game isn't `in_progress` regardless of the button's own label,
