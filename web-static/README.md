@@ -206,34 +206,50 @@ A discard pile only ever grows over a game -- unlike hand/in-play, which
 stay bounded by a player's own card count -- so a flat wrapping list of
 full-size thumbnails (the old layout) eventually dwarfs the rest of the
 board. `renderDiscardPile()` in `game.js` instead groups `state.discard_pile`
-into columns of up to `DISCARD_STACK_COLUMN_SIZE` (4) cards each, rendered
-as `<li class="discard-stack__column">` elements holding `buildCardThumb()`
-buttons directly (no per-card `<li>` needed, unlike hand/in-play). Kept
-deliberately small -- rather than large enough that most piles need only
-one or two columns -- so a modest pile still spreads across every column
-a given viewport can actually fit side by side instead of stacking
-needlessly deep in just one or two while unused width goes to waste next
-to them (a real mobile-viewport complaint the column size was tuned down
-to fix). `.discard-stack__column .card-thumb:not(:last-child) {
-margin-bottom: -6.6rem; }` pulls each card up to overlap all but a ~19px
-sliver of the one before it -- `.card-thumb__art` is a fixed 5.5rem wide
-with `height: auto`, so every card renders at the same height (5.5rem
-times the printed card art's own fixed 744:1039 intrinsic ratio, ~7.68rem,
-plus its own 1px top/bottom border); leaving a ~19px sliver means
-overlapping the rest, i.e. roughly `-(7.68rem + border - 1.19rem)`. That
-sliver still shows the covered card's own name and, if present, its value
-badge's upper-right corner, since both live in that card's own top strip
-and the next card (painted on top by DOM/paint order, not applied any
-negative margin since it's the last child) only starts further down. A
-column's own last card -- the most recently discarded, assuming the
-array's actual append-only order, though `BoardState`'s own docblock
-doesn't treat that as a hard contract -- therefore always renders in full.
-Multiple columns lay out side by side via `#discard-list`'s existing
-`flex-wrap`, wrapping to a new row once the viewport runs out of width,
-with `align-items: flex-start` keeping a shorter trailing column pinned to
-the top rather than centered/stretched against a taller neighbor.
-Clicking any card in the stack (even a mostly-covered one, via its
-visible sliver) opens the same read-only detail dialog as before, now
+into columns, rendered as `<li class="discard-stack__column">` elements
+holding `buildCardThumb()` buttons directly (no per-card `<li>` needed,
+unlike hand/in-play). How many columns exist is recomputed on every render
+from `discardStackColumnCount()` -- `#discard-list`'s own current
+`clientWidth` divided by `.card-thumb`'s fixed 5.5rem width plus the list's
+own 0.5rem gap (both hardcoded in pixels assuming the default 16px root
+font-size the rest of this file's own rem/px math already assumes)  --
+rather than a fixed cards-per-column cap, so however many columns actually
+fit side by side is however many there are: cards are dealt round-robin
+across them (card 0 into column 0, card 1 into column 1, ..., wrapping
+back to column 0 once every column has one), filling the available width
+before any single column stacks two deep, rather than filling column 0
+completely before starting column 1. A `resize` listener (debounced 150ms
+so a drag-resize or a slow orientation-change animation doesn't re-layout
+repeatedly mid-gesture) re-runs `renderDiscardPile()` against the same
+`state.discard_pile`/`canAct` it was last called with (remembered in
+`lastDiscardPile`/`lastDiscardCanAct`, since the normal 4s poll has no
+reason to fire just because the viewport changed shape) -- rotating a
+phone from portrait to landscape mid-game, for instance, immediately
+re-flows the same pile into more, shallower columns, and back again on
+rotating back, without waiting for the next poll.
+
+`.discard-stack__column .card-thumb:not(:last-child) { margin-bottom:
+-6.6rem; }` pulls each card up to overlap all but a ~19px sliver of the
+one before it -- `.card-thumb__art` is a fixed 5.5rem wide with `height:
+auto`, so every card renders at the same height (5.5rem times the printed
+card art's own fixed 744:1039 intrinsic ratio, ~7.68rem, plus its own 1px
+top/bottom border); leaving a ~19px sliver means overlapping the rest,
+i.e. roughly `-(7.68rem + border - 1.19rem)`. That sliver still shows the
+covered card's own name and, if present, its value badge's upper-right
+corner, since both live in that card's own top strip and the next card
+(painted on top by DOM/paint order, not applied any negative margin since
+it's the last child) only starts further down. A column's own last card
+-- the most recently discarded card assigned to it, assuming the array's
+actual append-only order, though `BoardState`'s own docblock doesn't treat
+that as a hard contract -- therefore always renders in full. Columns lay
+out side by side via `#discard-list`'s own `flex-wrap` -- normally exactly
+filling one row since the column count is computed to fit, though wrapping
+is kept as a defensive fallback in case that math is ever off by one --
+with `align-items: flex-start` keeping a shorter trailing column (whenever
+the pile's own card count isn't an exact multiple of the column count)
+pinned to the top rather than centered/stretched against a taller
+neighbor. Clicking any card in the stack (even a mostly-covered one, via
+its visible sliver) opens the same read-only detail dialog as before,
 passing `last_owner_name` explicitly as that dialog's own ownerLabel
 argument (previously conveyed by the per-thumb caption removed above).
 
