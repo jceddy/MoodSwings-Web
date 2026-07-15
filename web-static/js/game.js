@@ -333,7 +333,12 @@
 
         renderList(gamesList, document.getElementById('games-empty'), ok ? body.games : [], (game) => {
             const li = document.createElement('li');
-            li.className = 'lobby-row';
+            // The your-turn background (".lobby-row--your-turn") is a
+            // whole-row highlight on top of (not instead of) the bold
+            // "(your turn)" text tag on its own status line below --
+            // makes an actionable game stand out even before the text
+            // itself is read.
+            li.className = 'lobby-row' + (game.is_your_turn ? ' lobby-row--your-turn' : '');
 
             // Wrapped in its own container (rather than appended straight
             // to the li) so the action button below can sit beside the
@@ -355,21 +360,29 @@
                 : deckTypeLabel(game.deck_type) + ' deck';
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
-            formatEl.append(formatLabel(game.format) + ', ' + deckDescription + ' — ');
+            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
+            infoEl.appendChild(formatEl);
+
+            // Its own line beneath the format/deck line (rather than
+            // trailing on it) and above the opponents, so status -- the
+            // single most actionable piece of information in the row --
+            // isn't buried mid-line.
+            const statusLineEl = document.createElement('div');
+            statusLineEl.className = 'lobby-status-line';
 
             const statusEl = document.createElement('span');
             statusEl.className = 'lobby-status lobby-status--' + game.status;
             statusEl.textContent = humanizeStatus(game.status);
-            formatEl.appendChild(statusEl);
+            statusLineEl.appendChild(statusEl);
 
             if (game.is_your_turn) {
                 const yourTurnEl = document.createElement('span');
                 yourTurnEl.className = 'lobby-your-turn';
                 yourTurnEl.textContent = ' (your turn)';
-                formatEl.appendChild(yourTurnEl);
+                statusLineEl.appendChild(yourTurnEl);
             }
 
-            infoEl.appendChild(formatEl);
+            infoEl.appendChild(statusLineEl);
 
             const opponents = game.players.map((p) => p.username).join(', ');
             infoEl.append(opponents);
