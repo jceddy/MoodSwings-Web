@@ -235,6 +235,19 @@ body.game-page {
     gap: 0.5rem;
 }
 
+/* Quick Draft's own pack of cards to keep from (6 just-dealt, or 4
+   received from your opponent -- see renderQuickDraftDrafting() in
+   web-static/js/game.js) -- capped to exactly 3 .card-thumbs' worth of
+   width (3 * 5.5rem + 2 * 0.5rem gaps) so a 6-card pack always wraps into
+   two rows of three instead of one tall column, regardless of how much
+   spare width the surrounding board actually has. */
+#quick-draft-pack {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    max-width: 18rem;
+}
+
 #hand-list li,
 #discard-list li,
 #teammate-hand-list li,
