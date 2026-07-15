@@ -2505,7 +2505,25 @@
 
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
+        const playButton = document.getElementById('play-card-button');
+        // Disabled + relabeled immediately (not after the request settles)
+        // so a slow response can't be mistaken for a missed click and
+        // prompt a second, duplicate submission.
+        playButton.disabled = true;
+        playButton.textContent = 'Playing...';
         await submitPlay(selectedCard, choices);
+        // submitPlay() already hides the whole panel and clears
+        // selectedCard on success; only re-enable the button here if the
+        // panel is still open, i.e. the attempt failed and the player
+        // needs another shot at it. Just flip disabled back to false
+        // rather than calling updatePlayButtonEnabled() -- that recomputes
+        // (and would overwrite) #choices-validation from client-side field
+        // checks alone, clobbering the server's own rejection message that
+        // submitPlay() just placed there.
+        playButton.textContent = 'Play card';
+        if (selectedCard) {
+            playButton.disabled = false;
+        }
     });
 
     document.getElementById('friends-button').addEventListener('click', async () => {
