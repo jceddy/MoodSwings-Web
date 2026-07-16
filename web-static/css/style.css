@@ -260,6 +260,16 @@ body.game-page {
     gap: 0.5rem;
 }
 
+/* The 3 piles themselves (each its own heading + .winston-draft-pile-cards
+   above) side by side, filling the row before wrapping to a second one on
+   a narrow viewport -- same flex-wrap convention as every card list above,
+   just one level up (piles of cards, not cards). */
+#winston-draft-piles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+}
+
 #hand-list li,
 #discard-list li,
 #teammate-hand-list li,
