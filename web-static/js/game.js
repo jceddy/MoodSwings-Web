@@ -8,6 +8,8 @@
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
     startVersionWatcher();
+    checkFriendRequestNotification();
+    setInterval(checkFriendRequestNotification, 15000);
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
@@ -36,11 +38,33 @@
         return button;
     }
 
+    // Toggled by both refreshFriendsData() (the dialog's own data fetch)
+    // and checkFriendRequestNotification() (an independent low-frequency
+    // poll -- see below) so the dot appears the moment a request arrives
+    // even if the player never opens the Friends dialog to see it.
+    function setFriendRequestNotification(hasPending) {
+        document.getElementById('friends-button').classList.toggle('has-friend-request', hasPending);
+    }
+
+    // #friends-button is part of the page's always-visible header, not
+    // #lobby-view/#board-view, so unlike refreshLobby()/refreshBoard()
+    // this can't piggyback on pollTimer -- that timer is torn down and
+    // rebuilt by showLobby()/showBoard() on every view switch. A slower,
+    // independent interval is enough here since a friend request is far
+    // less time-sensitive than in-progress game state.
+    async function checkFriendRequestNotification() {
+        const { ok, body } = await listFriendInvites();
+        if (ok) {
+            setFriendRequestNotification(body.incoming.length > 0);
+        }
+    }
+
     async function refreshFriendsData() {
         const [friendsResp, invitesResp] = await Promise.all([listFriends(), listFriendInvites()]);
         const friends = friendsResp.ok ? friendsResp.body.friends : [];
         const incoming = invitesResp.ok ? invitesResp.body.incoming : [];
         const outgoing = invitesResp.ok ? invitesResp.body.outgoing : [];
+        setFriendRequestNotification(incoming.length > 0);
 
         renderList(
             document.getElementById('friends-list'),

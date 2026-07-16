@@ -1105,6 +1105,19 @@ too, proportional to the smaller card width.
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
     talks to the `/friends/*` endpoints.
+  - That same button gets a small red notification dot
+    (`.has-friend-request`, applied/removed by
+    `setFriendRequestNotification()`) whenever `/friends/invites` returns
+    at least one incoming request -- so a pending request is visible
+    without opening the dialog. `checkFriendRequestNotification()` polls
+    this independently of `refreshLobby()`/`refreshBoard()`'s own 4-second
+    `pollTimer` (a 15-second interval, since `#friends-button` lives in the
+    page's always-visible header, outside both `#lobby-view` and
+    `#board-view`, and a friend request is far less time-sensitive than
+    in-progress game state); `refreshFriendsData()` (the dialog's own data
+    fetch) also re-applies it immediately from the same `incoming` array
+    it already has, so accepting/declining/blocking a request clears the
+    dot right away rather than waiting for the next poll.
 
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
