@@ -17,6 +17,10 @@
     --color-error: #b00020;
     --color-success: #0a7a2e;
     --color-pending: #7a5b00;
+    --color-info: #0b5db3;
+    --color-your-turn-bg: #e8f7ec;
+    --color-brown: #8b5a2b;
+    --color-gold: #b8860b;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -32,6 +36,10 @@
         --color-error: #ff6b6b;
         --color-success: #4caf7d;
         --color-pending: #d4a94a;
+        --color-info: #6ab0f3;
+        --color-your-turn-bg: #1f3d2a;
+        --color-brown: #c58b52;
+        --color-gold: #e0b93a;
     }
 }
 
@@ -47,6 +55,10 @@
     --color-error: #ff6b6b;
     --color-success: #4caf7d;
     --color-pending: #d4a94a;
+    --color-info: #6ab0f3;
+    --color-your-turn-bg: #1f3d2a;
+    --color-brown: #c58b52;
+    --color-gold: #e0b93a;
 }
 
 body {
@@ -66,6 +78,41 @@ footer {
 
 #theme-select-label {
     margin-left: 1rem;
+}
+
+/* #friends-button/#logout-button sit directly above whichever of
+   #lobby-view/#board-view is currently visible -- without this they'd
+   touch it with no gap, most noticeably #board-view's own
+   #back-to-lobby-button immediately below. */
+#friends-button,
+#logout-button {
+    margin-bottom: 0.5rem;
+}
+
+/* A small notification dot on #friends-button while the user has at
+   least one incoming friend request they haven't yet accepted/declined
+   -- see checkFriendRequestNotification()/refreshFriendsData() in
+   game.js, which toggle this class based on state.incoming.length. */
+#friends-button {
+    position: relative;
+}
+
+#friends-button.has-friend-request::after {
+    content: '';
+    position: absolute;
+    top: -0.3rem;
+    right: -0.3rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background-color: var(--color-error);
+    border: 1px solid var(--color-bg);
+}
+
+/* #new-game-button otherwise touches #games-list directly beneath it
+   with no gap. */
+#new-game-button {
+    margin-bottom: 0.5rem;
 }
 
 .field {
@@ -139,7 +186,11 @@ body.game-page {
     margin: 0 0 1rem;
 }
 
-#lobby-view li,
+#lobby-view li {
+    padding: 0.4rem 0.5rem;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
 #players-list li {
     padding: 0.4rem 0;
     border-bottom: 1px solid var(--color-border-subtle);
@@ -149,16 +200,59 @@ body.game-page {
     margin-left: 1rem;
 }
 
+/* nowrap keeps .player-name and .player-icons on the same conceptual row no
+   matter how little room is left -- if they were allowed to wrap against
+   each other, the icons block would jump as a whole unit to a fresh line
+   starting back at the row's left edge the moment it didn't fit next to
+   the name, rather than wrapping internally at the icon column's own x
+   (see .player-icons below, which is where the actual wrapping happens). */
 #players-list li {
     display: flex;
     align-items: center;
+    flex-wrap: nowrap;
+    gap: 0.5rem;
+}
+
+/* min-width is set inline per render (see the players-list renderList call
+   in game.js) to the widest username in this game, so every row's icons
+   start at the same x regardless of how long that row's own username is;
+   flex-shrink: 0 keeps a shorter name from being squeezed back down to its
+   own natural width when the row wraps. */
+.player-name {
+    flex-shrink: 0;
+}
+
+/* Its own color rather than plain text, so "(you)" reads as a tag next to
+   the username instead of looking like part of the username itself. */
+.player-you-tag {
+    color: var(--color-info);
+    font-weight: bold;
+}
+
+/* Takes whatever width is left after the name (flex: 1 1 auto, with
+   min-width: 0 overriding a flex item's default auto min-width so it's
+   actually allowed to shrink below its content's natural size) and wraps
+   its own children -- the icons -- within that width via its own
+   flex-wrap. Because this box always starts right after the name (its
+   parent li never wraps against it -- see above), an overflowing icon
+   wraps to a second line starting at this box's own left edge, i.e. right
+   under the first icon, rather than back at the row's far-left edge. */
+.player-icons {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    flex: 1 1 auto;
+    min-width: 0;
     gap: 0.5rem;
 }
 
 #hand-list,
 #discard-list,
 #teammate-hand-list,
-#initial-card-pass-fields {
+#initial-card-pass-fields,
+#quick-draft-pack,
+#quick-draft-kept-so-far,
+#quick-draft-deck-picker {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -167,8 +261,18 @@ body.game-page {
 #hand-list li,
 #discard-list li,
 #teammate-hand-list li,
+#quick-draft-kept-so-far li,
 .in-play-zone__list li {
     list-style: none;
+}
+
+/* A pixel or two of breathing room between a card pack/picker above and
+   the submit button below it -- without this the button sits flush
+   against the bottom edge of the card thumbnails, which reads as a
+   layout mistake rather than intentional spacing. */
+#quick-draft-pick-submit-button,
+#quick-draft-deck-submit-button {
+    margin-top: 0.5rem;
 }
 
 /* -- In-play board (issue #124) --------------------------------------
@@ -196,6 +300,18 @@ body.game-page {
     transform: translateX(-50%);
     box-sizing: border-box;
     padding: 0 1rem;
+}
+
+/* #in-play-board's own `display: grid` above otherwise beats the
+   browser's default `[hidden] { display: none }` UA-stylesheet rule (an
+   author style always wins over the UA stylesheet, regardless of
+   selector specificity) -- without this, renderInPlay()'s own
+   `board.hidden = true` early return (whenever the newly-loaded game's
+   own in_play is empty) left whichever game's board rendered last still
+   fully visible underneath, cards and all, since setting the `hidden`
+   attribute alone did nothing to actually hide it. */
+#in-play-board[hidden] {
+    display: none;
 }
 
 #in-play-board.in-play-board--2 {
@@ -226,12 +342,21 @@ body.game-page {
 
 .in-play-zone {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     min-height: 3rem;
     padding: 0.5rem;
     border: 1px dashed var(--color-border-subtle);
     border-radius: 0.5rem;
+}
+
+/* Names the zone's own player once instead of repeating their name under
+   every card in it (issue #142) -- see renderInPlay() in web-static/js/
+   game.js. */
+.in-play-zone__label {
+    font-weight: bold;
+    margin-bottom: 0.25rem;
 }
 
 /* .in-play-zone's own `display: flex` above otherwise beats the browser's
@@ -411,13 +536,119 @@ body.game-page {
     background: #b00020;
 }
 
-.card-thumb__caption {
-    font-size: 0.7rem;
-    color: var(--color-text-secondary);
-    max-width: 100%;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+/* -- Discard pile stacking (issue #142) ------------------------------
+   Cards fan into however many columns discardStackColumnCount() (see
+   web-static/js/game.js) works out fit #discard-list's own current width,
+   each one pulled up to overlap all but a sliver of the card before it --
+   see .discard-stack__column .card-thumb below. Columns themselves lay
+   out left to right via flex-wrap -- normally exactly filling one row
+   since the column count is computed to fit, though it's kept as a
+   defensive fallback in case that math is ever off by one; flex-start
+   keeps a shorter final column (whenever the pile's own card count isn't
+   an exact multiple of the column count) pinned to the top rather than
+   centered/stretched against a taller neighboring column. */
+#discard-list {
+    align-items: flex-start;
+}
+
+.discard-stack__column {
+    display: flex;
+    flex-direction: column;
+}
+
+/* .card-thumb__art is a fixed 5.5rem wide with height: auto, so every
+   card renders at the same height: 5.5rem times the printed card art's
+   own (fixed, MSW-set-wide) 744:1039 intrinsic aspect ratio, ~7.68rem,
+   plus its own 1px top/bottom border. A negative margin-bottom of
+   -6.6rem pulls the next card in the column up to cover all but a ~19px
+   sliver of this one (~5px tighter than the original -6.3rem, per
+   follow-up feedback on issue #142) -- still enough to keep its name and,
+   if present, its value badge's upper-right corner visible. Not applied
+   to a column's own last card, so it alone renders in full, uncovered by
+   anything after it. */
+.discard-stack__column .card-thumb:not(:last-child) {
+    margin-bottom: -6.6rem;
+}
+
+/* -- Players list icons (issue #143) ---------------------------------
+   Replaces plain-text stat clauses ("4 point(s)", "went first this
+   round", ...) with an icon (see buildStatIcon()/PLAYER_STAT_ICON_PATHS
+   in web-static/js/game.js) plus, for the four counted stats, a numeric
+   badge overlaid on its lower-right corner -- the same overlay-badge
+   convention .card-thumb__badge already uses for a card's own current
+   value. Every icon keeps its original full text as a `title` tooltip
+   and `aria-label` (see buildPlayerStat()/buildPlayerFlag()), so none of
+   the information the old text conveyed is lost for a screen reader or a
+   sighted user who just wants to double check what an icon means. */
+.player-stat,
+.player-flag {
+    position: relative;
+    display: inline-flex;
+    color: var(--color-muted);
+}
+
+.player-stat {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.player-flag {
+    width: 1.25rem;
+    height: 1.25rem;
+}
+
+.player-stat svg,
+.player-flag svg {
+    width: 100%;
+    height: 100%;
+    fill: currentColor;
+}
+
+.player-stat__badge {
+    position: absolute;
+    right: -0.3rem;
+    bottom: -0.3rem;
+    min-width: 1rem;
+    padding: 0 0.2rem;
+    border-radius: 999px;
+    /* Translucent rather than solid so the icon underneath is still
+       visible through the badge instead of being mostly hidden behind
+       it -- the number is the important part, not an opaque plate. */
+    background: color-mix(in srgb, var(--color-surface) 40%, transparent);
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    font-size: 0.65rem;
+    font-weight: bold;
+    line-height: 1.3;
+    text-align: center;
+}
+
+/* Matches the board round status's/lobby's own "your turn" convention
+   (bold, --color-success) elsewhere on this page -- the one flag most
+   worth standing out from the rest at a glance. */
+.player-flag--turn {
+    color: var(--color-success);
+}
+
+/* A little color per stat/flag kind, echoing what each icon actually
+   depicts, rather than every one defaulting to the same muted gray --
+   seat/hand icons in brown (bench, cards), points/wins in gold (star,
+   trophy), and the went-first pennant in red. The badge overlaid on each
+   .player-stat icon keeps its own neutral --color-text/--color-surface
+   styling regardless (see .player-stat__badge above) so the number stays
+   legible no matter what color its icon is. */
+.player-stat--seat,
+.player-stat--hand {
+    color: var(--color-brown);
+}
+
+.player-stat--points,
+.player-stat--wins {
+    color: var(--color-gold);
+}
+
+.player-flag--wentFirst {
+    color: var(--color-error);
 }
 
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
@@ -448,6 +679,23 @@ dialog#card-detail-dialog {
     color: var(--color-text);
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
+}
+
+/* Format/Deck are plain inline <label> elements by default, so with
+   nothing else forcing a break between them they'd sit on the same line
+   as each other -- only their own <select> wraps once it runs out of
+   room. Block display puts each on its own line regardless of width. */
+.new-game-field {
+    display: block;
+    margin-bottom: 0.5rem;
+}
+
+/* The submit button (inside <form>) and the Close button (a sibling
+   after </form>) sit in different block boxes, so they stack instead of
+   flowing side by side -- margin-top gives them a little breathing room
+   instead of touching. */
+#new-game-close-button {
+    margin-top: 0.5rem;
 }
 
 dialog#art-preview-dialog {
@@ -533,4 +781,94 @@ dialog#art-preview-dialog {
 #pending-decision-banner {
     font-weight: bold;
     color: var(--color-pending);
+}
+
+/* -- Lobby (issue #136) ---------------------------------------------- */
+
+/* Keeps the Play/View button beside the row's text as a flex sibling,
+   vertically centered against however many lines that text itself wraps
+   to on a narrow (phone-width) viewport, rather than the button always
+   trailing on its own line below a wrapped winner line/status. */
+.lobby-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+/* Makes a game whose is_your_turn is true stand out at a glance, on top
+   of (not instead of) the bold "(your turn)" text tag below -- #lobby-view
+   li's own horizontal padding (rather than 0) is what keeps this
+   background from touching the row's left/right edges. */
+.lobby-row--your-turn {
+    background-color: var(--color-your-turn-bg);
+}
+
+.lobby-info {
+    min-width: 0;
+}
+
+/* Fixed width (rather than shrinking to fit "Play" vs the wider "View")
+   so every row's button lines up in a column regardless of which label
+   its own game's status picked. */
+.lobby-row button {
+    width: 4rem;
+    flex-shrink: 0;
+}
+
+.lobby-format {
+    font-size: 0.85rem;
+    color: var(--color-muted);
+}
+
+.lobby-status {
+    font-weight: bold;
+}
+
+.lobby-status--waiting {
+    color: var(--color-pending);
+}
+
+.lobby-status--in_progress {
+    color: var(--color-info);
+}
+
+.lobby-status--completed {
+    color: var(--color-muted);
+}
+
+.lobby-status--abandoned {
+    color: var(--color-error);
+}
+
+.lobby-your-turn {
+    font-weight: bold;
+    color: var(--color-success);
+}
+
+.lobby-winner {
+    color: var(--color-success);
+}
+
+/* A Quick Draft match's own grouped lobby entry (buildMatchGroupRow() in
+   game.js) -- a block-level header (format/deck, match scoreline, and,
+   once the match is done, its own result) sitting above a nested list of
+   each individual game's own compact row. Deliberately NOT .lobby-row --
+   the header itself isn't a Play/View-button row, just the block the
+   nested .lobby-match-games list hangs off of. */
+.lobby-match-group {
+    display: block;
+}
+
+.lobby-match-score {
+    font-size: 0.85rem;
+    color: var(--color-muted);
+}
+
+/* Indented slightly so a match's own games read as nested under its
+   header rather than as a second, unrelated list -- #lobby-view ul's own
+   list-style/padding/margin reset still applies here since it targets
+   every <ul>, nested or not. */
+.lobby-match-games {
+    margin: 0.5rem 0 0 1rem;
 }

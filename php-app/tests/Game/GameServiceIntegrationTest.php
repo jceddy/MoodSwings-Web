@@ -42,6 +42,9 @@ final class GameServiceIntegrationTest extends TestCase
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE game_events');
+        $pdo->exec('TRUNCATE TABLE draft_round_picks');
+        $pdo->exec('TRUNCATE TABLE draft_match_players');
+        $pdo->exec('TRUNCATE TABLE draft_matches');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
         $pdo->exec('TRUNCATE TABLE game_team_decisions');
         $pdo->exec('TRUNCATE TABLE game_pending_decisions');
@@ -79,6 +82,14 @@ final class GameServiceIntegrationTest extends TestCase
         $stmt->execute(['username' => $username, 'email' => "{$username}@example.com"]);
 
         return (int) $this->pdo->lastInsertId();
+    }
+
+    private function fetchUsername(int $userId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT username FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+
+        return (string) $stmt->fetchColumn();
     }
 
     /** @return int game_players.id */
@@ -1093,6 +1104,10 @@ final class GameServiceIntegrationTest extends TestCase
         // Exactly one of the two players is on turn; the flag should
         // disagree between their two lists.
         self::assertNotSame($creatorGames[0]['is_your_turn'], $bobGames[0]['is_your_turn']);
+
+        self::assertNull($summary['draft_match_id'], 'only Quick Draft games belong to a match');
+        self::assertNull($summary['match_game_number']);
+        self::assertNull($summary['quick_draft_match']);
     }
 
     public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void
@@ -1130,6 +1145,55 @@ final class GameServiceIntegrationTest extends TestCase
             $gameIds,
             'in-progress and waiting games must both sort above the completed one, regardless of raw recency',
         );
+    }
+
+    /**
+     * The lobby's own "who won" line (issue #136) depends on
+     * winner_usernames staying empty until there's actually a winner to
+     * name -- neither a still-waiting nor an in-progress game has one yet.
+     */
+    public function testListGamesForUserWinnerUsernamesEmptyUntilCompleted(): void
+    {
+        $creator = $this->insertUser('winnames-alice');
+        $bob = $this->insertUser('winnames-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        self::assertSame([], $this->games->listGamesForUser($creator)[0]['winner_usernames']);
+
+        $this->games->startGame($gameId);
+        self::assertSame([], $this->games->listGamesForUser($creator)[0]['winner_usernames']);
+
+        $winnerId = $this->games->gamePlayerIdFor($gameId, $creator);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $winnerId, 'id' => $gameId]);
+
+        self::assertSame(['winnames-alice'], $this->games->listGamesForUser($creator)[0]['winner_usernames']);
+    }
+
+    /**
+     * Mirrors getState()'s own "credit the whole winning team" logic (see
+     * "Open Team Play" in php-app/README.md) -- a team-format win's
+     * winner_usernames must name both teammates, not just the
+     * representative winner_game_player_id the games row itself stores.
+     */
+    public function testListGamesForUserWinnerUsernamesIncludesBothTeammatesForATeamWin(): void
+    {
+        $u1 = $this->insertUser('winteam-alice');
+        $u2 = $this->insertUser('winteam-bob');
+        $u3 = $this->insertUser('winteam-carol');
+        $u4 = $this->insertUser('winteam-dave');
+
+        // u1 (creator) + u2 (chosen partner) become team 0; u3/u4 are team 1.
+        $gameId = $this->games->createGame($u1, [$u1, $u2, $u3, $u4], 'team', 3, 'structure', null, null, $u2);
+
+        $winnerRepresentative = $this->games->gamePlayerIdFor($gameId, $u1);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner, winner_team_id = 0 WHERE id = :id"
+        )->execute(['winner' => $winnerRepresentative, 'id' => $gameId]);
+
+        $summary = $this->games->listGamesForUser($u1)[0];
+        self::assertEqualsCanonicalizing(['winteam-alice', 'winteam-bob'], $summary['winner_usernames']);
     }
 
     public function testPassStampsLastMoveAtButAnIllegalPassDoesNot(): void
@@ -6126,5 +6190,672 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p3, (int) $round2['first_game_player_id'], 'closed_team writes the chosen leader straight into first_game_player_id -- no team_turn_1/2 columns');
         self::assertSame($p3, (int) $round2['current_turn_game_player_id'], 'unfreezes immediately -- only one decision exists per round for this format');
         self::assertFalse($this->fetchOpenTeamDecision($gameId), 'no second decision opens, unlike Open Team Play');
+    }
+
+    // -- Quick Draft (issue #88) --------------------------------------------
+
+    /** @return array{gameId:int, u1:int, u2:int} */
+    private function buildQuickDraftFixture(
+        string $poolSource = 'random_48',
+        ?string $customPoolText = null,
+        int $winsNeeded = 1,
+    ): array {
+        $u1 = $this->insertUser('quickdraft-' . uniqid('u1'));
+        $u2 = $this->insertUser('quickdraft-' . uniqid('u2'));
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            winsNeeded: $winsNeeded,
+            deckType: 'quick_draft',
+            quickDraftPoolSource: $poolSource,
+            quickDraftCustomPoolText: $customPoolText,
+        );
+
+        return ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2];
+    }
+
+    private function fetchDraftMatch(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_matches WHERE id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    private function fetchDraftMatchPlayer(int $draftMatchId, int $userId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id');
+        $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * Drives a full 4-round Quick Draft to completion for both $u1/$u2,
+     * always keeping the pack's first QUICK_DRAFT_KEEP_PER_STAGE cards at
+     * each stage -- exercised purely through the public API
+     * (submitQuickDraftPick()/getState()), the same surface the real
+     * frontend uses. The getState()-reported pack size is asserted at
+     * every single stage of every round (6 for 'draw', 4 for 'received') --
+     * this alone proves both the multiset-subtraction math (a wrong
+     * array_diff()-based passed/received computation would desync these
+     * counts the moment a duplicate catalog id was involved) and the
+     * round-4 discard-reshuffle top-up path (a pool smaller than 48 would
+     * short round 4's draw pack below 6 without it).
+     */
+    private function driveQuickDraftToDeckBuilding(int $gameId, int $u1, int $u2): void
+    {
+        for ($round = 1; $round <= 4; $round++) {
+            foreach ([$u1, $u2] as $userId) {
+                $state = $this->games->getState($gameId, $userId);
+                self::assertSame('drafting', $state['quick_draft']['status']);
+                self::assertSame($round, $state['quick_draft']['drafting']['round']);
+                self::assertSame('draw', $state['quick_draft']['drafting']['stage']);
+                $pack = $state['quick_draft']['drafting']['pack'];
+                self::assertCount(6, $pack, "round {$round} draw pack for user {$userId}");
+
+                $this->games->submitQuickDraftPick($gameId, $userId, $round, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+            }
+
+            foreach ([$u1, $u2] as $userId) {
+                $state = $this->games->getState($gameId, $userId);
+                self::assertSame('received', $state['quick_draft']['drafting']['stage']);
+                $pack = $state['quick_draft']['drafting']['pack'];
+                self::assertCount(4, $pack, "round {$round} received pack for user {$userId}");
+
+                $this->games->submitQuickDraftPick($gameId, $userId, $round, 'received', [$pack[0]['card_id'], $pack[1]['card_id']]);
+            }
+        }
+    }
+
+    /** Submits all 16 of $userId's own drafted cards as their deck (the max end of the 14-16 range). */
+    private function submitFullQuickDraftDeck(int $gameId, int $userId): void
+    {
+        $state = $this->games->getState($gameId, $userId);
+        $cardIds = array_column($state['quick_draft']['deck_building']['drafted_cards'], 'card_id');
+        self::assertCount(16, $cardIds);
+
+        $this->games->submitQuickDraftDeck($gameId, $userId, $cardIds);
+    }
+
+    /**
+     * Both players pass immediately -- the round scores 0-0, and
+     * RoundScorer::winner() breaks that tie in favor of whoever's turn was
+     * first this round, so this deterministically hands the game to
+     * $round['first_game_player_id'] regardless of which user that
+     * happens to be for this particular game.
+     *
+     * @return int the winner's user_id
+     */
+    private function completeQuickDraftGameByPassing(int $gameId): int
+    {
+        $round = $this->fetchRound($gameId);
+        $firstGamePlayerId = (int) $round['first_game_player_id'];
+
+        $result1 = $this->games->pass($gameId, $firstGamePlayerId);
+        self::assertFalse($result1['game_completed']);
+
+        $round = $this->fetchRound($gameId);
+        $secondGamePlayerId = (int) $round['current_turn_game_player_id'];
+        $result2 = $this->games->pass($gameId, $secondGamePlayerId);
+        self::assertTrue($result2['game_completed']);
+        self::assertSame($firstGamePlayerId, $result2['winner_game_player_id']);
+
+        $userIdStmt = $this->pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $userIdStmt->execute(['id' => $firstGamePlayerId]);
+
+        return (int) $userIdStmt->fetchColumn();
+    }
+
+    public function testCreateGameRejectsQuickDraftForNonDraftFormat(): void
+    {
+        $creator = $this->insertUser('quickdraft-nondraft-alice');
+        $bob = $this->insertUser('quickdraft-nondraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for the "draft" format');
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameRejectsDraftFormatForNonQuickDraftDeckType(): void
+    {
+        $creator = $this->insertUser('draft-nonquickdraft-alice');
+        $bob = $this->insertUser('draft-nonquickdraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supports the "quick_draft" deck type');
+
+        $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
+    }
+
+    public function testCreateGameRejectsADraftGameWithMoreThanTwoPlayers(): void
+    {
+        $u1 = $this->insertUser('drafttoomany1');
+        $u2 = $this->insertUser('drafttoomany2');
+        $u3 = $this->insertUser('drafttoomany3');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameRejectsADraftGameWithFewerThanTwoPlayers(): void
+    {
+        $u1 = $this->insertUser('drafttoofew1');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($u1, [$u1], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+    }
+
+    public function testStartGameGivesEachDraftPlayerTheirOwnIndependentDeck(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('random_48');
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $u2);
+
+        $nullOwnerStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'deck' AND owner_game_player_id IS NULL"
+        );
+        $nullOwnerStmt->execute(['game_id' => $gameId]);
+        self::assertSame(0, (int) $nullOwnerStmt->fetchColumn(), 'a draft-format game must not deal into a shared, ownerless pool');
+
+        foreach ([$p1, $p2] as $playerId) {
+            $deckCountStmt = $this->pdo->prepare(
+                "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND zone = 'deck' AND owner_game_player_id = :owner"
+            );
+            $deckCountStmt->execute(['game_id' => $gameId, 'owner' => $playerId]);
+            self::assertGreaterThan(0, (int) $deckCountStmt->fetchColumn(), "player {$playerId} must have their own separate deck");
+        }
+    }
+
+    public function testCreateGameQuickDraftRandom48PoolHasFortyEightDistinctCards(): void
+    {
+        ['gameId' => $gameId] = $this->buildQuickDraftFixture('random_48');
+
+        $game = $this->fetchGame($gameId);
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $game['draft_match_id'])['pool_card_ids'], true);
+
+        self::assertCount(48, $poolCardIds);
+        self::assertCount(48, array_unique($poolCardIds), 'random_48 is drawn without replacement -- always singleton');
+    }
+
+    public function testCreateGameQuickDraftStructurePoolHasFortyFiveCards(): void
+    {
+        ['gameId' => $gameId] = $this->buildQuickDraftFixture('structure');
+
+        $game = $this->fetchGame($gameId);
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $game['draft_match_id'])['pool_card_ids'], true);
+
+        self::assertCount(45, $poolCardIds);
+    }
+
+    public function testCreateGameQuickDraftOneOfEachPoolIsTruncatedToFortyEight(): void
+    {
+        ['gameId' => $gameId] = $this->buildQuickDraftFixture('one_of_each');
+
+        $game = $this->fetchGame($gameId);
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $game['draft_match_id'])['pool_card_ids'], true);
+
+        // "if more than 48 cards are in the pool, just ignore the extra
+        // cards at the end of the draft" -- the repo owner's own words for
+        // this feature -- 133 cards randomly truncated down to 48.
+        self::assertCount(48, $poolCardIds);
+    }
+
+    public function testCreateGameQuickDraftJceddys75PoolIsTruncatedToFortyEight(): void
+    {
+        ['gameId' => $gameId] = $this->buildQuickDraftFixture('jceddys_75');
+
+        $game = $this->fetchGame($gameId);
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $game['draft_match_id'])['pool_card_ids'], true);
+
+        // Same truncation rule as one_of_each's 133 -- jceddy's 75 Card
+        // deck's own 75-card pool (see GameService::buildJceddys75DeckCardIds())
+        // gets randomly narrowed down to 48 before drafting begins.
+        self::assertCount(48, $poolCardIds);
+    }
+
+    public function testCreateGameQuickDraftCustomPoolRejectsFewerThanFortyFiveCards(): void
+    {
+        $u1 = $this->insertUser('quickdraft-toofewpool1');
+        $u2 = $this->insertUser('quickdraft-toofewpool2');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 45 are required');
+
+        $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'custom',
+            quickDraftCustomPoolText: "1 Charity\n1 Chivalry",
+        );
+    }
+
+    public function testFullDraftWithARandom48PoolProducesSixteenKeptCardsPerPlayer(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('random_48');
+
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $game = $this->fetchGame($gameId);
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status']);
+
+        foreach ([$u1, $u2] as $userId) {
+            $player = $this->fetchDraftMatchPlayer($draftMatchId, $userId);
+            $draftedCardIds = json_decode($player['drafted_card_ids'], true);
+            self::assertCount(16, $draftedCardIds, "user {$userId} should have drafted exactly 16 cards");
+        }
+    }
+
+    public function testFullDraftWithAFortySixCardCustomPoolContainingADuplicateForcesTheRoundFourTopUp(): void
+    {
+        // 45 distinct catalog ids (1-45) plus one extra copy of Altruism
+        // (id 1) -- 46 total, exercising both the multiset-duplicate path
+        // (Altruism can legally appear twice in the shared pool) and the
+        // round-4 discard-reshuffle top-up (46 < 48, so by round 4 the
+        // remaining pool alone would be short of the 12 cards that round
+        // needs -- see dealQuickDraftRound()).
+        $poolText = "1 Altruism\n1 Benevolence\n1 Charity\n1 Chivalry\n1 Complacency\n1 Conviction\n1 Courage\n1 Dignity\n"
+            . "1 Discipline\n1 Disillusionment\n1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Honor\n1 Idealism\n"
+            . "1 Kindness\n1 Loyalty\n1 Meekness\n1 Pacifism\n1 Patience\n1 Pride\n1 Repentance\n1 Scorn\n1 Shame\n1 Validation\n"
+            . "1 Ambivalence\n1 Anxiety\n1 Avoidance\n1 Bashfulness\n1 Confusion\n1 Creativity\n1 Curiosity\n1 Denial\n"
+            . "1 Disorientation\n1 Doubt\n1 Duplicity\n1 Fear\n1 Fickleness\n1 Guile\n1 Hesitation\n1 Imagination\n"
+            . "1 Indecisiveness\n1 Indifference\n1 Insecurity\n1 Altruism";
+
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('custom', $poolText);
+
+        $game = $this->fetchGame($gameId);
+        $draftMatchId = (int) $game['draft_match_id'];
+        self::assertCount(46, json_decode($this->fetchDraftMatch($draftMatchId)['pool_card_ids'], true));
+
+        // driveQuickDraftToDeckBuilding() itself asserts a full 6-card draw
+        // pack and 4-card received pack every round, including round 4 --
+        // that's only possible if the shortfall (46 - 36 = 10 remaining,
+        // 2 short of the 12 round 4 needs) was actually topped up from
+        // already-discarded cards.
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        foreach ([$u1, $u2] as $userId) {
+            $draftedCardIds = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            self::assertCount(16, $draftedCardIds);
+        }
+    }
+
+    public function testSubmitQuickDraftPickRejectsTheWrongNumberOfCards(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $state = $this->games->getState($gameId, $u1);
+        $pack = $state['quick_draft']['drafting']['pack'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('exactly 2 cards');
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id']]);
+    }
+
+    public function testSubmitQuickDraftPickRejectsACardNotInYourDrawnPack(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $state = $this->games->getState($gameId, $u1);
+        $pack = $state['quick_draft']['drafting']['pack'];
+        $packCardIds = array_column($pack, 'card_id');
+
+        $notInPack = null;
+        for ($cardId = 1; $cardId <= 133; $cardId++) {
+            if (!in_array($cardId, $packCardIds, true)) {
+                $notInPack = $cardId;
+                break;
+            }
+        }
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only keep cards you were actually dealt');
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id'], $notInPack]);
+    }
+
+    public function testSubmitQuickDraftPickRejectsResubmittingTheSameStage(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $state = $this->games->getState($gameId, $u1);
+        $pack = $state['quick_draft']['drafting']['pack'];
+        $keep = [$pack[0]['card_id'], $pack[1]['card_id']];
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', $keep);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('already made your pick');
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', $keep);
+    }
+
+    public function testSubmitQuickDraftPickRejectsReceivedStageBeforeDrawStage(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('must submit your draw pick before your received-card pick');
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'received', [1, 2]);
+    }
+
+    public function testSubmitQuickDraftPickRejectsReceivedStageBeforeTheOpponentHasSubmittedDraw(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $state = $this->games->getState($gameId, $u1);
+        $pack = $state['quick_draft']['drafting']['pack'];
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("opponent hasn't made their draw pick yet");
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'received', [$pack[2]['card_id'], $pack[3]['card_id']]);
+    }
+
+    public function testStartGameRejectsAQuickDraftGameUntilBothPlayersHaveSubmittedADeck(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
+
+        $this->games->startGame($gameId);
+    }
+
+    public function testSubmitQuickDraftDeckRejectsAnOutOfRangeCardCount(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftedCardIds = array_column(
+            $this->games->getState($gameId, $u1)['quick_draft']['deck_building']['drafted_cards'],
+            'card_id',
+        );
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 14 and 16 cards');
+
+        $this->games->submitQuickDraftDeck($gameId, $u1, array_slice($draftedCardIds, 0, 10));
+    }
+
+    public function testSubmitQuickDraftDeckRejectsACardNotInYourDraftedPool(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftedCardIds = array_column(
+            $this->games->getState($gameId, $u1)['quick_draft']['deck_building']['drafted_cards'],
+            'card_id',
+        );
+        $notDrafted = null;
+        for ($cardId = 1; $cardId <= 133; $cardId++) {
+            if (!in_array($cardId, $draftedCardIds, true)) {
+                $notDrafted = $cardId;
+                break;
+            }
+        }
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('can only contain cards you drafted');
+
+        $this->games->submitQuickDraftDeck($gameId, $u1, [...array_slice($draftedCardIds, 0, 13), $notDrafted]);
+    }
+
+    public function testGetStateNeverExposesTheOpponentsDraftedOrKeptCards(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $u1State = $this->games->getState($gameId, $u1);
+        $u2State = $this->games->getState($gameId, $u2);
+
+        self::assertArrayNotHasKey('opponent_drafted_cards', $u1State['quick_draft']['deck_building']);
+        self::assertArrayNotHasKey('opponent_deck_card_ids', $u1State['quick_draft']['deck_building']);
+
+        // Each player's own drafted 16 are theirs alone -- the two hands
+        // should essentially never end up identical for a 48-card draft.
+        $u1Drafted = array_column($u1State['quick_draft']['deck_building']['drafted_cards'], 'card_id');
+        $u2Drafted = array_column($u2State['quick_draft']['deck_building']['drafted_cards'], 'card_id');
+        sort($u1Drafted);
+        sort($u2Drafted);
+        self::assertNotSame($u1Drafted, $u2Drafted);
+    }
+
+    public function testQuickDraftMatchProgressesGamesAndCompletesAtTwoWins(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $matchWins = [$u1 => 0, $u2 => 0];
+        $currentGameId = $gameId;
+        $gamesPlayed = 0;
+
+        while (true) {
+            $winnerUserId = $this->completeQuickDraftGameByPassing($currentGameId);
+            $matchWins[$winnerUserId]++;
+            $gamesPlayed++;
+            self::assertLessThanOrEqual(3, $gamesPlayed, 'a best-of-three match can never need a 4th game');
+
+            $match = $this->fetchDraftMatch($draftMatchId);
+
+            if ($matchWins[$winnerUserId] >= 2) {
+                self::assertSame('completed', $match['status']);
+                self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+                self::assertNull(
+                    $this->games->getState($currentGameId, $u1)['quick_draft']['next_game_id'],
+                    'no next_game_id once the match itself has completed -- there is no next game to link to',
+                );
+                break;
+            }
+
+            self::assertSame('deck_building', $match['status'], 'match resets to deck_building for the next game\'s sideboard step');
+
+            foreach ([$u1, $u2] as $userId) {
+                $playerRow = $this->fetchDraftMatchPlayer($draftMatchId, $userId);
+                self::assertNull(
+                    $playerRow['deck_card_ids'],
+                    "user {$userId}'s deck_card_ids must be nulled out so the sideboard step can't be silently skipped",
+                );
+                self::assertNotNull(
+                    $playerRow['previous_deck_card_ids'],
+                    "user {$userId}'s previous_deck_card_ids must carry over the deck just used, for the next sideboard's default",
+                );
+            }
+
+            $nextGameStmt = $this->pdo->prepare(
+                "SELECT id, match_game_number FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $nextGame = $nextGameStmt->fetch();
+            self::assertNotFalse($nextGame, 'the next game in the match should already exist');
+            self::assertNotSame($currentGameId, (int) $nextGame['id']);
+            self::assertSame($gamesPlayed + 1, (int) $nextGame['match_game_number']);
+            self::assertSame(
+                $gamesPlayed + 1,
+                $this->games->getState((int) $nextGame['id'], $u1)['game']['match_game_number'],
+                'getState() must expose match_game_number so the frontend scoreline can show the right game number',
+            );
+            self::assertSame(
+                (int) $nextGame['id'],
+                $this->games->getState($currentGameId, $u1)['quick_draft']['next_game_id'],
+                'the just-completed game must point at the next game so the board can offer a direct link to it',
+            );
+
+            $this->submitFullQuickDraftDeck((int) $nextGame['id'], $u1);
+            $this->submitFullQuickDraftDeck((int) $nextGame['id'], $u2);
+            $this->games->startGame((int) $nextGame['id']);
+
+            $currentGameId = (int) $nextGame['id'];
+        }
+    }
+
+    /**
+     * A genuinely-trimmed (not full-16) deck must reappear as the new
+     * game's previous_deck_card_ids once the match advances, so the
+     * frontend's sideboard picker can default to it instead of forcing the
+     * player to redo their whole trim from scratch every game.
+     */
+    public function testPreviousDeckCardIdsCarriesOverForSideboardPrefill(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $u1Drafted = array_column($this->games->getState($gameId, $u1)['quick_draft']['deck_building']['drafted_cards'], 'card_id');
+        $u1Deck = array_slice($u1Drafted, 0, 15);
+        $this->games->submitQuickDraftDeck($gameId, $u1, $u1Deck);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+
+        // Before the very first game of a match, there's no previous deck
+        // to fall back to yet -- confirms this doesn't false-positive on a
+        // stale value from some earlier match.
+        self::assertNull($this->games->getState($gameId, $u1)['quick_draft']['deck_building']['previous_deck_card_ids']);
+
+        $this->games->startGame($gameId);
+        $this->completeQuickDraftGameByPassing($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $deckBuilding = $this->games->getState($nextGameId, $u1)['quick_draft']['deck_building'];
+        self::assertNull(
+            $deckBuilding['deck_card_ids'],
+            'this new game\'s own deck_card_ids must still be null -- previous_deck_card_ids is only a prefill hint',
+        );
+        $previousDeck = $deckBuilding['previous_deck_card_ids'];
+        sort($u1Deck);
+        sort($previousDeck);
+        self::assertSame($u1Deck, $previousDeck, 'previous_deck_card_ids must be exactly the 15-card deck just used, not all 16 drafted cards');
+        self::assertNotSame($u1Drafted, $previousDeck, 'sanity check: the trimmed deck actually differs from the full drafted pool');
+    }
+
+    /**
+     * listGamesForUser()'s draft_match_id/quick_draft_match fields let the
+     * lobby group a match's up-to-3 games together and, once it's done,
+     * show the result -- see quickDraftMatchSummaryFor().
+     */
+    public function testListGamesForUserGroupsQuickDraftMatchGamesAndSummarizesTheResultOnceCompleted(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $u1Summary = $summaryFor($u1);
+        self::assertSame($draftMatchId, $u1Summary['draft_match_id']);
+        self::assertSame(1, $u1Summary['match_game_number']);
+        // driveQuickDraftToDeckBuilding() above already ran the draft to
+        // completion, so the match is already at 'deck_building' by here.
+        self::assertSame('deck_building', $u1Summary['quick_draft_match']['status']);
+        self::assertSame(0, $u1Summary['quick_draft_match']['your_wins']);
+        self::assertSame(0, $u1Summary['quick_draft_match']['opponent_wins']);
+        self::assertSame(2, $u1Summary['quick_draft_match']['games_to_win']);
+        self::assertNull($u1Summary['quick_draft_match']['winner_username']);
+
+        // Drive the match to completion the same way
+        // testQuickDraftMatchProgressesGamesAndCompletesAtTwoWins() does --
+        // completeQuickDraftGameByPassing() hands each game to whichever
+        // seat went first that round, not necessarily the same user twice
+        // in a row, so this can't assume a clean 2-0 for either side.
+        $matchWins = [$u1 => 0, $u2 => 0];
+        $currentGameId = $gameId;
+        for ($gamesPlayed = 0; $gamesPlayed < 3; $gamesPlayed++) {
+            $winnerUserId = $this->completeQuickDraftGameByPassing($currentGameId);
+            $matchWins[$winnerUserId]++;
+
+            $summaryForCurrent = function (int $userId) use ($currentGameId): array {
+                foreach ($this->games->listGamesForUser($userId) as $summary) {
+                    if ($summary['id'] === $currentGameId) {
+                        return $summary;
+                    }
+                }
+                self::fail("game {$currentGameId} missing from listGamesForUser()");
+            };
+
+            if ($matchWins[$winnerUserId] >= 2) {
+                $winnerUsername = $this->fetchUsername($winnerUserId);
+                $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+                $finalWinnerSummary = $summaryForCurrent($winnerUserId);
+                self::assertSame($draftMatchId, $finalWinnerSummary['draft_match_id']);
+                self::assertSame('completed', $finalWinnerSummary['quick_draft_match']['status']);
+                self::assertSame(2, $finalWinnerSummary['quick_draft_match']['your_wins']);
+                self::assertSame($matchWins[$loserUserId], $finalWinnerSummary['quick_draft_match']['opponent_wins']);
+                self::assertSame($winnerUsername, $finalWinnerSummary['quick_draft_match']['winner_username']);
+
+                $finalLoserSummary = $summaryForCurrent($loserUserId);
+                self::assertSame('completed', $finalLoserSummary['quick_draft_match']['status']);
+                self::assertSame($matchWins[$loserUserId], $finalLoserSummary['quick_draft_match']['your_wins']);
+                self::assertSame(2, $finalLoserSummary['quick_draft_match']['opponent_wins']);
+                self::assertSame($winnerUsername, $finalLoserSummary['quick_draft_match']['winner_username'], 'winner_username names the actual winner regardless of which side is asking');
+
+                return;
+            }
+
+            // Match isn't done yet -- the next game already exists and
+            // shares the same draft_match_id, so the lobby can still group
+            // them even though this row's own status just flipped to
+            // 'completed'.
+            $winnerSummary = $summaryForCurrent($winnerUserId);
+            self::assertSame('deck_building', $winnerSummary['quick_draft_match']['status']);
+            self::assertNull($winnerSummary['quick_draft_match']['winner_username'], 'match not over yet');
+
+            $nextGameStmt = $this->pdo->prepare(
+                "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+            $nextGameSummaryFor = function (int $userId) use ($nextGameId): array {
+                foreach ($this->games->listGamesForUser($userId) as $summary) {
+                    if ($summary['id'] === $nextGameId) {
+                        return $summary;
+                    }
+                }
+                self::fail("game {$nextGameId} missing from listGamesForUser()");
+            };
+            self::assertSame($draftMatchId, $nextGameSummaryFor($winnerUserId)['draft_match_id'], 'the next game in the match shares the same draft_match_id, so the lobby can group it with the previous one');
+
+            $this->submitFullQuickDraftDeck($nextGameId, $u1);
+            $this->submitFullQuickDraftDeck($nextGameId, $u2);
+            $this->games->startGame($nextGameId);
+            $currentGameId = $nextGameId;
+        }
+
+        self::fail('a best-of-three match can never need a 4th game');
     }
 }

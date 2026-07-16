@@ -39,6 +39,31 @@ empty database (see the file's own header for why); once your schema
 history grows past `0020`, apply whichever migrations came after it
 individually, the same as always.
 
+**Applying a range of migrations to an existing database in one paste**
+(e.g. bringing a Bluehost production database that's already on `0026`
+straight up to `0031` without 5 separate phpMyAdmin pastes): unlike
+`0001-0020_consolidated.sql` above, which only targets a brand-new/empty
+database,
+[`consolidated/0027-0031_consolidated.sql`](consolidated/0027-0031_consolidated.sql)
+is meant for a database that already has migrations `0001` through `0026`
+applied — it folds Quick Draft (issue #88) and its follow-up fixes/polish
+into one script, ending with the same `schema_migrations` bookkeeping so
+`composer migrate` correctly resumes at `0032` onward afterward.
+
+**Reconciling `schema_migrations` when a migration's schema change was
+already applied by hand, but the table doesn't know it** (this can happen
+on production specifically because pasting a migration file into
+phpMyAdmin runs its DDL but never touches `schema_migrations` — only
+`composer migrate`'s own runner writes to that table; see "Applying
+migrations" above):
+[`consolidated/0021-0026_schema_migrations_only.sql`](consolidated/0021-0026_schema_migrations_only.sql)
+contains no schema changes at all, only the `INSERT IGNORE`s recording
+migrations `0021` through `0026` as already-applied. Only run it against
+a database where those 6 migrations' actual schema changes are already
+present (see the file's own header for how to confirm that) — otherwise
+`composer migrate` will believe they're done and never go back and apply
+them.
+
 ## Adding a new migration
 
 Add a new file named `NNNN_description.sql` (next sequential 4-digit
@@ -184,3 +209,40 @@ half-migrated schema.
   Hope's/Grace's own grant is lost unused because its source card left
   play before it was spent (`BoardState::consumeGrantsLost()`) — see
   `php-app/README.md`.
+- **Quick Draft** (`0027`): adds `deck_type = 'quick_draft'` plus
+  `draft_match_id`/`match_game_number` on `games`, and three new tables —
+  `draft_matches` (one row per best-of-three match: pool config, drafting/
+  deck_building/completed status, current round, winner), `draft_match_players`
+  (per `(draft_match_id, user_id)`: the fixed 16-card `drafted_card_ids`
+  result of the draft, the player's current 14-16 card `deck_card_ids`, and
+  this match's own win counter — keyed by `user_id` rather than
+  `game_player_id` since this data spans up to 3 separate `games` rows, one
+  per game of the match), and `draft_round_picks` (one row per player per
+  draft round: cards drawn and kept at each of the round's two blind
+  sub-steps — passed/received/discarded cards are derived from these at
+  read time, never stored separately). See "Quick Draft" in
+  `php-app/README.md`.
+- **Draft format** (`0028`): adds `format = 'draft'` — functionally
+  identical to `'duel'` (same 2-player, separate-per-player-deck rules
+  engine), but scoped to deck_type values that build a deck through some
+  kind of live drafting process. `quick_draft` (`0027`, previously gated
+  on `format = 'duel'`) is the first such deck_type and, for now, the only
+  one `'draft'` supports; more are expected to join it later. See "Quick
+  Draft" in `php-app/README.md`.
+- **Quick Draft sideboard prefill** (`0029`): adds
+  `draft_match_players.previous_deck_card_ids` — a copy of whatever
+  `deck_card_ids` held right before it's nulled out for the next game in
+  the match, so the frontend's sideboard picker can default to the deck
+  the player actually used last game instead of every drafted card. Plays
+  no part in `startGame()`'s "deck submitted" gate, which still only ever
+  looks at `deck_card_ids`. See "Quick Draft" in `php-app/README.md`.
+- **Rationalization optional fix** (`0030`): corrects `cards.rules_text`
+  for id 49 -- the 0003 catalog seed dropped "you may" from the printed
+  "you may choose one: ...", which made the after-playing ability look
+  mandatory; `RationalizationEffect` was fixed in the same change to
+  actually let a player decline (no `mode` submitted) instead of throwing.
+- **Quick Draft jceddy's 75 Card pool** (`0031`): adds `jceddys_75` to
+  `draft_matches.pool_source`'s enum -- reuses
+  `GameService::buildJceddys75DeckCardIds()`'s existing 75-card pool
+  as-is, randomly narrowed down to 48 before drafting begins the same way
+  `one_of_each`'s 133 already are. See "Quick Draft" in `php-app/README.md`.

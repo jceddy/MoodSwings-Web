@@ -141,6 +141,27 @@ final class GameService
     private const PASSION_DECISION_TYPE = 'passion_score_opponent_mood';
     private const SCORING_DECISION_TYPES = [self::ENTHUSIASM_DECISION_TYPE, self::PASSION_DECISION_TYPE];
 
+    /**
+     * Quick Draft (issue #88, format 'draft' only): a shared pool of up to
+     * this many cards, drafted over QUICK_DRAFT_ROUNDS rounds -- each round
+     * both players draw QUICK_DRAFT_DRAW_PER_ROUND cards, keep
+     * QUICK_DRAFT_KEEP_PER_STAGE from their own draw and pass the rest to
+     * their opponent, then keep QUICK_DRAFT_KEEP_PER_STAGE more from what
+     * they receive (see dealQuickDraftRound()/submitQuickDraftPick()) --
+     * QUICK_DRAFT_ROUNDS * QUICK_DRAFT_KEEP_PER_STAGE * 2 = 16 cards
+     * drafted per player. QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE is the floor for
+     * a 'custom' pool (smaller than that and a full draft can't be dealt
+     * even with dealQuickDraftRound()'s own discard-reshuffle top-up).
+     */
+    private const QUICK_DRAFT_POOL_SIZE = 48;
+    private const QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE = 45;
+    private const QUICK_DRAFT_ROUNDS = 4;
+    private const QUICK_DRAFT_DRAW_PER_ROUND = 6;
+    private const QUICK_DRAFT_KEEP_PER_STAGE = 2;
+    private const QUICK_DRAFT_MIN_DECK_SIZE = 14;
+    private const QUICK_DRAFT_MAX_DECK_SIZE = 16;
+    private const QUICK_DRAFT_GAMES_TO_WIN = 2;
+
     /** @var array<int, array<int, string>> gameId => (card_id => name), memoized per instance by cardNamesFor() */
     private array $cardNamesByGame = [];
 
@@ -166,6 +187,12 @@ final class GameService
      *        become the second team automatically.
      * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>, even_color_distribution_rarities?: string[]} $duelDeckRules
      *        only meaningful when $deckType is 'custom_duel' -- see resolveDuelDeckRules().
+     * @param ?string $quickDraftPoolSource only meaningful (and required) when $deckType
+     *        is 'quick_draft' -- one of 'random_48'/'structure'/'one_of_each'/'custom', see
+     *        buildQuickDraftPool().
+     * @param ?string $quickDraftCustomPoolText only meaningful when $quickDraftPoolSource
+     *        is 'custom' -- a decklist-line pool of 45+ cards (same format as the 'custom'
+     *        deck_type, see DecklistParser), no About/Sideboard sections expected.
      */
     public function createGame(
         int $createdByUserId,
@@ -176,12 +203,14 @@ final class GameService
         ?string $decklistText = null,
         ?array $duelDeckRules = null,
         ?int $partnerUserId = null,
+        ?string $quickDraftPoolSource = null,
+        ?string $quickDraftCustomPoolText = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
-        if ($format === 'duel' && count($userIds) !== 2) {
-            throw new GameStateException('A duel game must have exactly 2 players');
+        if (self::isDuelShapedFormat($format) && count($userIds) !== 2) {
+            throw new GameStateException("A {$format} game must have exactly 2 players");
         }
         if (self::isTeamFormat($format)) {
             if (count($userIds) !== self::TEAM_PLAYER_COUNT) {
@@ -203,6 +232,13 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
+        if ($format === 'draft' && $deckType !== 'quick_draft') {
+            throw new GameStateException('The "draft" format only supports the "quick_draft" deck type');
+        }
+        if ($deckType === 'quick_draft' && $format !== 'draft') {
+            throw new GameStateException('The "quick_draft" deck type is only supported for the "draft" format');
+        }
+
         if ($deckType === 'custom') {
             if ($format === 'duel') {
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
@@ -222,20 +258,42 @@ final class GameService
             $duelEvenColorDistributionRarities = $rules->evenColorDistributionRarities;
         }
 
+        // Built (and, for a 'custom' pool, fully validated) before the
+        // transaction starts, same rationale as parseCustomDecklist()/
+        // resolveDuelDeckRules() above -- a bad pool should fail loudly
+        // before anything is written, not mid-transaction.
+        $quickDraftPoolCardIds = $deckType === 'quick_draft'
+            ? $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText)
+            : null;
+
         $pdo = Connection::get();
         $pdo->beginTransaction();
 
         try {
+            $draftMatchId = null;
+            if ($deckType === 'quick_draft') {
+                $insertMatch = $pdo->prepare(
+                    'INSERT INTO draft_matches (created_by_user_id, pool_source, pool_card_ids)
+                     VALUES (:created_by, :pool_source, :pool_card_ids)'
+                );
+                $insertMatch->execute([
+                    'created_by' => $createdByUserId,
+                    'pool_source' => $quickDraftPoolSource,
+                    'pool_card_ids' => json_encode($quickDraftPoolCardIds),
+                ]);
+                $draftMatchId = (int) $pdo->lastInsertId();
+            }
+
             $insertGame = $pdo->prepare(
                 "INSERT INTO games (
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
-                    custom_duel_even_color_distribution_rarities,
+                    custom_duel_even_color_distribution_rarities, draft_match_id, match_game_number,
                     status, created_by_user_id, wins_needed
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
-                    :duel_even_color_distribution_rarities,
+                    :duel_even_color_distribution_rarities, :draft_match_id, :match_game_number,
                     'waiting', :created_by, :wins_needed
                  )"
             );
@@ -249,6 +307,8 @@ final class GameService
                 'duel_rarity_limits' => $duelRarityLimits !== null ? json_encode($duelRarityLimits) : null,
                 'duel_duplicate_limits' => $duelDuplicateLimits !== null ? json_encode($duelDuplicateLimits) : null,
                 'duel_even_color_distribution_rarities' => $duelEvenColorDistributionRarities !== null ? json_encode($duelEvenColorDistributionRarities) : null,
+                'draft_match_id' => $draftMatchId,
+                'match_game_number' => $draftMatchId !== null ? 1 : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
             ]);
@@ -274,6 +334,17 @@ final class GameService
                     'seat_order' => $seatOrder,
                     'team_id' => $teamId,
                 ]);
+            }
+
+            if ($draftMatchId !== null) {
+                $insertMatchPlayer = $pdo->prepare(
+                    'INSERT INTO draft_match_players (draft_match_id, user_id) VALUES (:match_id, :user_id)'
+                );
+                foreach ($seatedUserIds as $userId) {
+                    $insertMatchPlayer->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+                }
+
+                $this->dealQuickDraftRound($draftMatchId, 1, $quickDraftPoolCardIds, array_values($seatedUserIds));
             }
 
             $pdo->commit();
@@ -340,6 +411,19 @@ final class GameService
     private static function isTeamFormat(string $format): bool
     {
         return $format === 'team' || $format === 'closed_team';
+    }
+
+    /**
+     * 'draft' (issue #88's Quick Draft and any future live-drafting deck
+     * types -- see the "Quick Draft" docblock above and
+     * database/migrations/0028_add_draft_format.sql) reuses 'duel''s rules
+     * engine completely unchanged -- same 2-player, separate-per-player-deck
+     * shape (see BoardStateRepository::load()'s own $hasSeparateDecks
+     * check) -- it only differs in which deck_type values it allows.
+     */
+    private static function isDuelShapedFormat(string $format): bool
+    {
+        return $format === 'duel' || $format === 'draft';
     }
 
     /**
@@ -549,6 +633,44 @@ final class GameService
         return $cardIdsByPlayer;
     }
 
+    /**
+     * A 'quick_draft' game's own startGame()-time gate: every seated
+     * player must have already called submitQuickDraftDeck() (the initial
+     * 16-to-14/15/16 trim) for this specific game -- mirrors
+     * requireCustomDuelDecksSubmitted(), but reads
+     * draft_match_players.deck_card_ids, keyed by user_id, since that's
+     * where a Quick Draft player's deck lives (see the draft_matches/
+     * draft_match_players docblocks in migration 0027).
+     *
+     * @param int[] $playerIds
+     * @return array<int, int[]> game_player id => resolved catalog card ids
+     */
+    private function requireQuickDraftDecksSubmitted(int $gameId, array $playerIds): array
+    {
+        $game = $this->fetchGame($gameId);
+
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id AS game_player_id, dmp.deck_card_ids
+             FROM game_players gp
+             JOIN draft_match_players dmp ON dmp.draft_match_id = :match_id AND dmp.user_id = gp.user_id
+             WHERE gp.game_id = :game_id'
+        );
+        $stmt->execute(['match_id' => (int) $game['draft_match_id'], 'game_id' => $gameId]);
+
+        $cardIdsByPlayer = [];
+        foreach ($stmt->fetchAll() as $row) {
+            if ($row['deck_card_ids'] !== null) {
+                $cardIdsByPlayer[(int) $row['game_player_id']] = array_map(intval(...), json_decode((string) $row['deck_card_ids'], true));
+            }
+        }
+
+        if (array_diff($playerIds, array_keys($cardIdsByPlayer)) !== []) {
+            throw new GameStateException("Game {$gameId} cannot start until both players have submitted their drafted deck");
+        }
+
+        return $cardIdsByPlayer;
+    }
+
     public function startGame(int $gameId): void
     {
         $game = $this->fetchGame($gameId);
@@ -564,6 +686,9 @@ final class GameService
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
+        $quickDraftDeckCardIds = $game['deck_type'] === 'quick_draft'
+            ? $this->requireQuickDraftDecksSubmitted($gameId, $playerIds)
+            : [];
 
         $pdo = Connection::get();
         $pdo->beginTransaction();
@@ -574,21 +699,23 @@ final class GameService
                  VALUES (:game_id, :card_id, :zone, :owner, :deck_position)'
             );
 
-            // 'duel' gives each player their OWN complete deck -- built,
-            // and shuffled, independently per player by the exact same
-            // rules a normal single-player deck uses -- rather than
+            // 'duel'/'draft' each give the player their OWN complete deck --
+            // built, and shuffled, independently per player by the exact
+            // same rules a normal single-player deck uses -- rather than
             // splitting one shared pool (createGame() already rejected any
-            // 'duel' game without exactly 2 players; see
+            // duel-shaped game without exactly 2 players; see
             // BoardState::$hasSeparateDecks). The same catalog card can
             // therefore legitimately end up in both players' pools at
             // once; a card's identity within the game is its own
             // game_cards.id, not its catalog card_id -- see
             // BoardState::$catalogCardIdFor.
-            if ($game['format'] === 'duel') {
+            if (self::isDuelShapedFormat($game['format'])) {
                 foreach ($playerIds as $playerId) {
-                    $playerCardIds = $game['deck_type'] === 'custom_duel'
-                        ? $customDuelDeckCardIds[$playerId]
-                        : $this->deckCardIdsFor($game);
+                    $playerCardIds = match ($game['deck_type']) {
+                        'custom_duel' => $customDuelDeckCardIds[$playerId],
+                        'quick_draft' => $quickDraftDeckCardIds[$playerId],
+                        default => $this->deckCardIdsFor($game),
+                    };
                     shuffle($playerCardIds);
 
                     for ($i = 0; $i < self::STARTING_HAND_SIZE; $i++) {
@@ -731,6 +858,12 @@ final class GameService
             // call here would silently hand back a nonsense deck (there's
             // no single "the" custom_duel deck), so this fails loudly instead.
             'custom_duel' => throw new \LogicException('deckCardIdsFor() cannot build a "custom_duel" deck -- each duel player\'s own deck must be read via requireCustomDuelDecksSubmitted()'),
+            // Each 'quick_draft' player's own deck lives on
+            // draft_match_players.deck_card_ids, keyed by user_id, not by
+            // anything this method's $game argument alone can resolve --
+            // startGame() reads it directly via requireQuickDraftDecksSubmitted()
+            // and never reaches this method for that deck_type.
+            'quick_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "quick_draft" deck -- each duel player\'s own deck must be read via requireQuickDraftDecksSubmitted()'),
             default => range(1, self::TOTAL_CARDS), // 'one_of_each'
         };
     }
@@ -865,6 +998,550 @@ final class GameService
         shuffle($expandedPool);
 
         return array_slice($expandedPool, 0, $count);
+    }
+
+    // -- Quick Draft (issue #88) -------------------------------------------
+
+    /**
+     * Assembles a Quick Draft match's shared card pool, per $poolSource --
+     * 'random_48' (QUICK_DRAFT_POOL_SIZE random *distinct* catalog cards,
+     * singleton like buildStructureDeckCardIds()), 'structure' (reuses
+     * buildStructureDeckCardIds() as-is -- its own 45-card pool), 'jceddys_75'
+     * (reuses buildJceddys75DeckCardIds() as-is -- its own 75-card pool),
+     * 'one_of_each' (the full TOTAL_CARDS catalog), or 'custom'
+     * (parseQuickDraftCustomPool()). Whatever the source produces, anything
+     * over QUICK_DRAFT_POOL_SIZE is randomly truncated down to it -- "if
+     * more than 48 cards are in the pool, just ignore the extra cards"
+     * (the repo owner's own words for this feature) -- so 'jceddys_75's 75,
+     * 'one_of_each's 133, and an oversized 'custom' pool all end up the
+     * same size as 'random_48'/'structure' before drafting ever starts.
+     *
+     * @return int[]
+     */
+    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText): array
+    {
+        $cardIds = match ($poolSource) {
+            'random_48' => $this->buildRandomQuickDraftCardIds(),
+            'structure' => $this->buildStructureDeckCardIds(),
+            'jceddys_75' => $this->buildJceddys75DeckCardIds(),
+            'one_of_each' => range(1, self::TOTAL_CARDS),
+            'custom' => $this->parseQuickDraftCustomPool($customPoolText),
+            default => throw new GameStateException("Unknown quick_draft_pool_source \"{$poolSource}\""),
+        };
+
+        if (count($cardIds) <= self::QUICK_DRAFT_POOL_SIZE) {
+            return array_values($cardIds);
+        }
+
+        shuffle($cardIds);
+
+        return array_slice($cardIds, 0, self::QUICK_DRAFT_POOL_SIZE);
+    }
+
+    /** @return int[] QUICK_DRAFT_POOL_SIZE distinct catalog card ids, chosen uniformly at random. */
+    private function buildRandomQuickDraftCardIds(): array
+    {
+        $allCardIds = range(1, self::TOTAL_CARDS);
+        $chosenKeys = (array) array_rand($allCardIds, self::QUICK_DRAFT_POOL_SIZE);
+
+        return array_map(fn (int $key): int => $allCardIds[$key], $chosenKeys);
+    }
+
+    /**
+     * The 'custom' pool source's own decklist text -- same file/paste
+     * format as the 'custom' deck_type (see DecklistParser), just with a
+     * different minimum card count (QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE
+     * rather than parseCustomDecklist()'s player-count-scaled minimum) and
+     * no use for whatever optional name DecklistParser's own "About" block
+     * might parse out -- a draft pool isn't a named deck.
+     *
+     * @return int[]
+     */
+    private function parseQuickDraftCustomPool(?string $poolText): array
+    {
+        if ($poolText === null || trim($poolText) === '') {
+            throw new GameStateException('A custom pool decklist is required when quick_draft_pool_source is "custom"');
+        }
+
+        $parsed = (new DecklistParser($this->loadCardCatalog()['idsByName']))->parse($poolText);
+
+        if (count($parsed['cardIds']) < self::QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE) {
+            throw new GameStateException(
+                'The custom pool has only ' . count($parsed['cardIds']) . ' card(s), but at least '
+                . self::QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE . ' are required'
+            );
+        }
+
+        return $parsed['cardIds'];
+    }
+
+    /**
+     * Subtracts $toRemove from $cardIds as MULTISETS: removes exactly one
+     * matching instance per element of $toRemove, not every instance --
+     * array_diff()/array_intersect() are unsafe for this because Quick
+     * Draft pools/hands can legally contain duplicate catalog card ids (a
+     * 'custom' pool may list "2 Charity"); those functions would silently
+     * drop every matching value instead of just one, corrupting a
+     * legitimate duplicate. Used for every pool/drawn/kept/passed/discarded
+     * computation in this section.
+     *
+     * @param int[] $cardIds
+     * @param int[] $toRemove
+     * @return int[]
+     */
+    private function multisetSubtract(array $cardIds, array $toRemove): array
+    {
+        $remaining = array_values($cardIds);
+        foreach ($toRemove as $cardId) {
+            $key = array_search($cardId, $remaining, true);
+            if ($key !== false) {
+                unset($remaining[$key]);
+            }
+        }
+
+        return array_values($remaining);
+    }
+
+    private function fetchDraftMatch(int $draftMatchId): array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_matches WHERE id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $match = $stmt->fetch();
+
+        if ($match === false) {
+            throw new GameStateException("No such draft match {$draftMatchId}");
+        }
+
+        return $match;
+    }
+
+    /** @return int[] the match's 2 user ids, in a stable (insertion) order. */
+    private function draftMatchUserIds(int $draftMatchId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT user_id FROM draft_match_players WHERE draft_match_id = :id ORDER BY id ASC'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * @return array<int, array<int, array{drawn:int[], kept_from_draw:?int[], kept_from_received:?int[]}>>
+     *         round_number => user_id => that player's pick data for the round
+     */
+    private function loadDraftRoundPicks(int $draftMatchId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT round_number, user_id, drawn_card_ids, kept_from_draw_ids, kept_from_received_ids
+             FROM draft_round_picks WHERE draft_match_id = :id ORDER BY round_number ASC'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+
+        $picksByRound = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $picksByRound[(int) $row['round_number']][(int) $row['user_id']] = [
+                'drawn' => array_map(intval(...), json_decode((string) $row['drawn_card_ids'], true)),
+                'kept_from_draw' => $row['kept_from_draw_ids'] !== null
+                    ? array_map(intval(...), json_decode((string) $row['kept_from_draw_ids'], true))
+                    : null,
+                'kept_from_received' => $row['kept_from_received_ids'] !== null
+                    ? array_map(intval(...), json_decode((string) $row['kept_from_received_ids'], true))
+                    : null,
+            ];
+        }
+
+        return $picksByRound;
+    }
+
+    /**
+     * Everything dealQuickDraftRound()/finalizeQuickDraft()/getState() need
+     * to derive from the round picks dealt so far -- passed (= drawn minus
+     * kept_from_draw), received (= the OPPONENT's own passed cards that
+     * same round), and discarded (= received minus kept_from_received) are
+     * deliberately never stored (see migration 0027's own docblock);
+     * they're recomputed here every time instead, the same "derive from
+     * source rows" approach BoardStateRepository already takes for board
+     * state generally.
+     *
+     * @param int[] $userIds exactly the match's 2 user ids
+     * @return array{picksByRound: array, allDrawnCardIds: int[], allDiscardedCardIds: int[]}
+     */
+    private function draftDerivedState(int $draftMatchId, array $userIds): array
+    {
+        $picksByRound = $this->loadDraftRoundPicks($draftMatchId);
+        [$userA, $userB] = $userIds;
+
+        $allDrawnCardIds = [];
+        $allDiscardedCardIds = [];
+
+        foreach ($picksByRound as $picks) {
+            foreach ($picks as $pick) {
+                $allDrawnCardIds = [...$allDrawnCardIds, ...$pick['drawn']];
+            }
+
+            if (!isset($picks[$userA], $picks[$userB])) {
+                continue;
+            }
+
+            $passedByA = $picks[$userA]['kept_from_draw'] !== null
+                ? $this->multisetSubtract($picks[$userA]['drawn'], $picks[$userA]['kept_from_draw'])
+                : null;
+            $passedByB = $picks[$userB]['kept_from_draw'] !== null
+                ? $this->multisetSubtract($picks[$userB]['drawn'], $picks[$userB]['kept_from_draw'])
+                : null;
+
+            if ($passedByA !== null && $picks[$userB]['kept_from_received'] !== null) {
+                $allDiscardedCardIds = [...$allDiscardedCardIds, ...$this->multisetSubtract($passedByA, $picks[$userB]['kept_from_received'])];
+            }
+            if ($passedByB !== null && $picks[$userA]['kept_from_received'] !== null) {
+                $allDiscardedCardIds = [...$allDiscardedCardIds, ...$this->multisetSubtract($passedByB, $picks[$userA]['kept_from_received'])];
+            }
+        }
+
+        return ['picksByRound' => $picksByRound, 'allDrawnCardIds' => $allDrawnCardIds, 'allDiscardedCardIds' => $allDiscardedCardIds];
+    }
+
+    /**
+     * Deals $roundNumber for a Quick Draft match: both players draw
+     * QUICK_DRAFT_DRAW_PER_ROUND fresh cards from whatever of the pool
+     * hasn't been drawn in an earlier round. If the remaining pool would be
+     * short of what this round needs (only possible for a pool smaller
+     * than QUICK_DRAFT_POOL_SIZE -- the 'structure' source's 45, or a
+     * 45-47 card 'custom' pool), tops it back up first by randomly pulling
+     * enough already-discarded cards (from any earlier round, either
+     * player) back in -- replicating the physical game's own "reshuffle 3
+     * discards back in before the last draw" workaround for a 45-card box,
+     * generalized to whatever the actual shortfall is. Called once from
+     * createGame() (round 1) and once from submitQuickDraftPick() each time
+     * a round's stage 'received' fully resolves for both players (rounds
+     * 2-4).
+     *
+     * @param int[] $poolCardIds the match's full configured pool
+     * @param int[] $userIds exactly the match's 2 user ids
+     */
+    private function dealQuickDraftRound(int $draftMatchId, int $roundNumber, array $poolCardIds, array $userIds): void
+    {
+        $derived = $this->draftDerivedState($draftMatchId, $userIds);
+        $remainingPool = $this->multisetSubtract($poolCardIds, $derived['allDrawnCardIds']);
+
+        $neededThisRound = count($userIds) * self::QUICK_DRAFT_DRAW_PER_ROUND;
+        if (count($remainingPool) < $neededThisRound) {
+            $shortfall = $neededThisRound - count($remainingPool);
+            $discardPool = $derived['allDiscardedCardIds'];
+            shuffle($discardPool);
+            $remainingPool = [...$remainingPool, ...array_slice($discardPool, 0, min($shortfall, count($discardPool)))];
+        }
+
+        shuffle($remainingPool);
+
+        $insert = Connection::get()->prepare(
+            'INSERT INTO draft_round_picks (draft_match_id, user_id, round_number, drawn_card_ids)
+             VALUES (:match_id, :user_id, :round, :drawn)'
+        );
+        foreach ($userIds as $userId) {
+            $drawnCardIds = array_splice($remainingPool, 0, self::QUICK_DRAFT_DRAW_PER_ROUND);
+            $insert->execute([
+                'match_id' => $draftMatchId,
+                'user_id' => $userId,
+                'round' => $roundNumber,
+                'drawn' => json_encode($drawnCardIds),
+            ]);
+        }
+    }
+
+    /**
+     * Round 4's stage 'received' resolving for both players ends the draft
+     * itself: each player's final 16-card drafted_card_ids is the union of
+     * their own kept_from_draw/kept_from_received across all 4 rounds, and
+     * the match moves on to 'deck_building' (the initial 16-to-14/15/16
+     * trim -- see submitQuickDraftDeck()).
+     *
+     * @param int[] $userIds exactly the match's 2 user ids
+     */
+    private function finalizeQuickDraft(int $draftMatchId, array $userIds): void
+    {
+        $picksByRound = $this->loadDraftRoundPicks($draftMatchId);
+        $pdo = Connection::get();
+
+        foreach ($userIds as $userId) {
+            $draftedCardIds = [];
+            foreach ($picksByRound as $picks) {
+                $draftedCardIds = [...$draftedCardIds, ...$picks[$userId]['kept_from_draw'], ...$picks[$userId]['kept_from_received']];
+            }
+
+            $pdo->prepare(
+                'UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id'
+            )->execute([
+                'ids' => json_encode($draftedCardIds),
+                'match_id' => $draftMatchId,
+                'user_id' => $userId,
+            ]);
+        }
+
+        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
+            ->execute(['id' => $draftMatchId]);
+    }
+
+    /**
+     * One player's submission for one of a Quick Draft round's two blind
+     * sub-steps: stage 'draw' (keep QUICK_DRAFT_KEEP_PER_STAGE of your own
+     * just-dealt cards, passing the rest to your opponent) or stage
+     * 'received' (once BOTH players have submitted stage 'draw' -- only
+     * then are "the cards you received" determined -- keep
+     * QUICK_DRAFT_KEEP_PER_STAGE of those, discarding the rest). Each
+     * stage is a one-time, unrevisable submission (mirrors
+     * submitInitialCardPass()'s own "your choice is locked the moment you
+     * submit it" contract) -- neither player can see the other's choice
+     * for a stage until they've submitted their own for it. Once both
+     * players have submitted stage 'received' for the current round, this
+     * either deals the next round or, for round QUICK_DRAFT_ROUNDS,
+     * finalizes the draft (see finalizeQuickDraft()).
+     *
+     * @param int[] $cardIds exactly QUICK_DRAFT_KEEP_PER_STAGE catalog card ids to keep
+     * @return array{stage_completed:string, round_advanced:bool, draft_completed:bool}
+     */
+    public function submitQuickDraftPick(int $gameId, int $userId, int $roundNumber, string $stage, array $cardIds): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'quick_draft' || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a Quick Draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+
+        return $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $roundNumber, $stage, $cardIds): array {
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if ($match['status'] !== 'drafting') {
+                throw new GameStateException('This match is not currently drafting');
+            }
+            if ($roundNumber !== (int) $match['current_round']) {
+                throw new GameStateException("Round {$roundNumber} is not this match's current draft round");
+            }
+            if (!in_array($stage, ['draw', 'received'], true)) {
+                throw new GameStateException('stage must be "draw" or "received"');
+            }
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            if (!in_array($userId, $userIds, true)) {
+                throw new GameStateException("User {$userId} is not part of this draft match");
+            }
+            $opponentId = $userIds[0] === $userId ? $userIds[1] : $userIds[0];
+
+            $pdo = Connection::get();
+            $pickStmt = $pdo->prepare(
+                'SELECT * FROM draft_round_picks WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
+            );
+            $pickStmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId, 'round' => $roundNumber]);
+            $pick = $pickStmt->fetch();
+            if ($pick === false) {
+                throw new GameStateException('No draft cards have been dealt to you for this round yet');
+            }
+
+            $cardIds = array_values(array_map(intval(...), $cardIds));
+            if (count($cardIds) !== self::QUICK_DRAFT_KEEP_PER_STAGE) {
+                throw new GameStateException('You must choose exactly ' . self::QUICK_DRAFT_KEEP_PER_STAGE . ' cards');
+            }
+
+            if ($stage === 'draw') {
+                if ($pick['kept_from_draw_ids'] !== null) {
+                    throw new GameStateException("You've already made your pick from this round's draw");
+                }
+
+                $drawnCardIds = array_map(intval(...), json_decode((string) $pick['drawn_card_ids'], true));
+                if ($this->multisetSubtract($cardIds, $drawnCardIds) !== []) {
+                    throw new GameStateException('You can only keep cards you were actually dealt this round');
+                }
+
+                $pdo->prepare(
+                    'UPDATE draft_round_picks SET kept_from_draw_ids = :kept, submitted_draw_at = NOW()
+                     WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
+                )->execute([
+                    'kept' => json_encode($cardIds),
+                    'match_id' => $draftMatchId,
+                    'user_id' => $userId,
+                    'round' => $roundNumber,
+                ]);
+
+                return ['stage_completed' => 'draw', 'round_advanced' => false, 'draft_completed' => false];
+            }
+
+            // stage === 'received'
+            if ($pick['kept_from_draw_ids'] === null) {
+                throw new GameStateException('You must submit your draw pick before your received-card pick');
+            }
+            if ($pick['kept_from_received_ids'] !== null) {
+                throw new GameStateException("You've already made your pick from this round's received cards");
+            }
+
+            $opponentPickStmt = $pdo->prepare(
+                'SELECT * FROM draft_round_picks WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
+            );
+            $opponentPickStmt->execute(['match_id' => $draftMatchId, 'user_id' => $opponentId, 'round' => $roundNumber]);
+            $opponentPick = $opponentPickStmt->fetch();
+            if ($opponentPick === false || $opponentPick['kept_from_draw_ids'] === null) {
+                throw new GameStateException("Your opponent hasn't made their draw pick yet -- received cards aren't determined until they do");
+            }
+
+            $opponentDrawnCardIds = array_map(intval(...), json_decode((string) $opponentPick['drawn_card_ids'], true));
+            $opponentKeptFromDraw = array_map(intval(...), json_decode((string) $opponentPick['kept_from_draw_ids'], true));
+            $receivedCardIds = $this->multisetSubtract($opponentDrawnCardIds, $opponentKeptFromDraw);
+
+            if ($this->multisetSubtract($cardIds, $receivedCardIds) !== []) {
+                throw new GameStateException('You can only keep cards you actually received this round');
+            }
+
+            $pdo->prepare(
+                'UPDATE draft_round_picks SET kept_from_received_ids = :kept, submitted_received_at = NOW()
+                 WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
+            )->execute([
+                'kept' => json_encode($cardIds),
+                'match_id' => $draftMatchId,
+                'user_id' => $userId,
+                'round' => $roundNumber,
+            ]);
+
+            $bothDoneStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM draft_round_picks
+                 WHERE draft_match_id = :match_id AND round_number = :round AND kept_from_received_ids IS NOT NULL'
+            );
+            $bothDoneStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber]);
+            $bothDone = (int) $bothDoneStmt->fetchColumn() >= count($userIds);
+
+            if (!$bothDone) {
+                return ['stage_completed' => 'received', 'round_advanced' => false, 'draft_completed' => false];
+            }
+
+            if ($roundNumber >= self::QUICK_DRAFT_ROUNDS) {
+                $this->finalizeQuickDraft($draftMatchId, $userIds);
+
+                return ['stage_completed' => 'received', 'round_advanced' => false, 'draft_completed' => true];
+            }
+
+            $poolCardIds = array_map(intval(...), json_decode((string) $match['pool_card_ids'], true));
+            $this->dealQuickDraftRound($draftMatchId, $roundNumber + 1, $poolCardIds, $userIds);
+            $pdo->prepare('UPDATE draft_matches SET current_round = :round WHERE id = :id')
+                ->execute(['round' => $roundNumber + 1, 'id' => $draftMatchId]);
+
+            return ['stage_completed' => 'received', 'round_advanced' => true, 'draft_completed' => false];
+        });
+    }
+
+    /**
+     * Submits (or resubmits, sideboarding between the match's up-to-3
+     * games) a Quick Draft player's own current deck -- QUICK_DRAFT_MIN_DECK_SIZE
+     * to QUICK_DRAFT_MAX_DECK_SIZE cards, chosen from their fixed 16-card
+     * drafted_card_ids (never expanded or replaced -- only which of those
+     * 16 are IN the deck this game changes). The very first call (right
+     * after drafting finishes) and every later sideboard call are the same
+     * operation against the same 'deck_building' status -- there's no
+     * "first trim" vs. "a sideboard" distinction worth making, since both
+     * just overwrite deck_card_ids outright.
+     *
+     * @param int[] $deckCardIds
+     */
+    public function submitQuickDraftDeck(int $gameId, int $userId, array $deckCardIds): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'quick_draft' || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a Quick Draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+
+        $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $deckCardIds): void {
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if ($match['status'] !== 'deck_building') {
+                throw new GameStateException('This match is not currently building/sideboarding a deck');
+            }
+
+            $pdo = Connection::get();
+            $playerStmt = $pdo->prepare(
+                'SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+            );
+            $playerStmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+            $draftedCardIdsJson = $playerStmt->fetchColumn();
+            if ($draftedCardIdsJson === false || $draftedCardIdsJson === null) {
+                throw new GameStateException("User {$userId} has no drafted cards in this match yet");
+            }
+            $draftedCardIds = array_map(intval(...), json_decode((string) $draftedCardIdsJson, true));
+
+            $deckCardIds = array_values(array_map(intval(...), $deckCardIds));
+            $count = count($deckCardIds);
+            if ($count < self::QUICK_DRAFT_MIN_DECK_SIZE || $count > self::QUICK_DRAFT_MAX_DECK_SIZE) {
+                throw new GameStateException(
+                    'Your deck must have between ' . self::QUICK_DRAFT_MIN_DECK_SIZE
+                    . ' and ' . self::QUICK_DRAFT_MAX_DECK_SIZE . ' cards'
+                );
+            }
+            if ($this->multisetSubtract($deckCardIds, $draftedCardIds) !== []) {
+                throw new GameStateException('Your deck can only contain cards you drafted');
+            }
+
+            $pdo->prepare(
+                'UPDATE draft_match_players SET deck_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id'
+            )->execute([
+                'ids' => json_encode($deckCardIds),
+                'match_id' => $draftMatchId,
+                'user_id' => $userId,
+            ]);
+        });
+    }
+
+    /**
+     * A plain catalog-row view of $cardIds -- no BoardState, no
+     * game_cards.id, for cards that haven't been dealt into a game yet (a
+     * Quick Draft match's shared pool/pack/drafted cards). Shaped to
+     * exactly the fields buildCardThumb()/openCardDetail() (web-static/js/game.js)
+     * already read off a normal serializeCard() result, with every
+     * in-play-only field defaulted to false/null, so those two functions
+     * work completely unchanged against a card that was never actually
+     * played.
+     *
+     * @param int[] $cardIds
+     * @return array<int, array<string, mixed>>
+     */
+    private function serializeCatalogCards(array $cardIds): array
+    {
+        if ($cardIds === []) {
+            return [];
+        }
+
+        // Deduplicated for the query -- $cardIds itself may legally contain
+        // the same catalog id twice (a custom pool can list "2 Charity"),
+        // but a card's own row only needs fetching once regardless of how
+        // many times it appears in the caller's list.
+        $distinctCardIds = array_values(array_unique($cardIds));
+        $placeholders = implode(',', array_fill(0, count($distinctCardIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT * FROM cards WHERE id IN ({$placeholders})");
+        $stmt->execute($distinctCardIds);
+
+        $rowsById = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $rowsById[(int) $row['id']] = $row;
+        }
+
+        return array_map(function (int $cardId) use ($rowsById): array {
+            $row = $rowsById[$cardId] ?? throw new GameStateException("No such card {$cardId}");
+
+            return [
+                'card_id' => $cardId,
+                'catalog_card_id' => $cardId,
+                'name' => $row['name'],
+                'color' => $row['color'],
+                'base_color' => $row['color'],
+                'value' => (int) $row['base_value'],
+                'base_value' => (int) $row['base_value'],
+                'alt_value' => $row['alt_value'] !== null ? (int) $row['alt_value'] : null,
+                'has_dice_value' => $row['alt_value'] !== null,
+                'effect_key' => $row['effect_key'],
+                'rules_text' => $row['rules_text'],
+                'choice_fields' => [],
+                'is_playable' => false,
+                'is_suppressed' => false,
+                'value_locked' => false,
+                'is_creativity_copy' => false,
+                'copy_simulation' => null,
+            ];
+        }, $cardIds);
     }
 
     /**
@@ -1945,6 +2622,10 @@ final class GameService
             );
             $completeGame->execute(['winner' => $winnerId, 'game_id' => $gameId]);
 
+            // A no-op for every non-quick_draft game (games.draft_match_id
+            // is only ever set for that deck_type) -- see its own docblock.
+            $this->advanceQuickDraftMatch($gameId, $winnerId);
+
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerId];
         }
 
@@ -1963,6 +2644,96 @@ final class GameService
         ]);
 
         return ['round_scored' => true, 'game_completed' => false];
+    }
+
+    /**
+     * Quick Draft's own best-of-three match progression, run once a game
+     * that belongs to one (games.draft_match_id is non-null) completes --
+     * a no-op for every other game. Credits $winnerGamePlayerId's own USER
+     * (draft_match_players is keyed by user_id, not game_player_id -- see
+     * migration 0027's docblock) with a match win; at QUICK_DRAFT_GAMES_TO_WIN
+     * the match itself is done, otherwise this creates the next game in
+     * the match (same 2 seats, same format/deck_type/wins_needed,
+     * match_game_number + 1) and resets the match to 'deck_building' so
+     * both players must sideboard before it can start. Both players'
+     * deck_card_ids are explicitly nulled out here -- without that, a
+     * leftover value from the game that just finished would silently
+     * satisfy startGame()'s own "deck submitted" gate for the new game,
+     * skipping the required sideboard step entirely. Whatever deck_card_ids
+     * held right before that null-out is copied to previous_deck_card_ids
+     * first, purely so getState() can hand the frontend something to
+     * pre-select in the new sideboard picker instead of defaulting back to
+     * every drafted card -- it plays no part in the "deck submitted" gate
+     * itself, which still only ever looks at deck_card_ids.
+     */
+    private function advanceQuickDraftMatch(int $gameId, int $winnerGamePlayerId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['draft_match_id'] === null) {
+            return;
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+        $pdo = Connection::get();
+
+        $winnerUserStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $winnerUserStmt->execute(['id' => $winnerGamePlayerId]);
+        $winnerUserId = (int) $winnerUserStmt->fetchColumn();
+
+        $pdo->prepare(
+            'UPDATE draft_match_players SET wins = wins + 1 WHERE draft_match_id = :match_id AND user_id = :user_id'
+        )->execute(['match_id' => $draftMatchId, 'user_id' => $winnerUserId]);
+
+        $winsStmt = $pdo->prepare(
+            'SELECT wins FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+        );
+        $winsStmt->execute(['match_id' => $draftMatchId, 'user_id' => $winnerUserId]);
+        $winnerMatchWins = (int) $winsStmt->fetchColumn();
+
+        if ($winnerMatchWins >= self::QUICK_DRAFT_GAMES_TO_WIN) {
+            $pdo->prepare(
+                "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
+            )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
+
+            return;
+        }
+
+        $seatStmt = $pdo->prepare(
+            'SELECT user_id, seat_order FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+        );
+        $seatStmt->execute(['game_id' => $gameId]);
+        $seats = $seatStmt->fetchAll();
+
+        $insertGame = $pdo->prepare(
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed)
+             VALUES (:format, 'quick_draft', :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed)"
+        );
+        $insertGame->execute([
+            'format' => $game['format'],
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => (int) $game['match_game_number'] + 1,
+            'created_by' => (int) $game['created_by_user_id'],
+            'wins_needed' => (int) $game['wins_needed'],
+        ]);
+        $nextGameId = (int) $pdo->lastInsertId();
+
+        $insertPlayer = $pdo->prepare(
+            'INSERT INTO game_players (game_id, user_id, seat_order) VALUES (:game_id, :user_id, :seat_order)'
+        );
+        foreach ($seats as $seat) {
+            $insertPlayer->execute([
+                'game_id' => $nextGameId,
+                'user_id' => (int) $seat['user_id'],
+                'seat_order' => (int) $seat['seat_order'],
+            ]);
+        }
+
+        $pdo->prepare(
+            'UPDATE draft_match_players SET previous_deck_card_ids = deck_card_ids, deck_card_ids = NULL
+             WHERE draft_match_id = :match_id'
+        )->execute(['match_id' => $draftMatchId]);
+
+        $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
+            ->execute(['id' => $draftMatchId]);
     }
 
     /**
@@ -2551,7 +3322,7 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,quick_draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
@@ -2579,7 +3350,7 @@ final class GameService
             $game = $this->fetchGame($gameId);
 
             $playersStmt = $pdo->prepare(
-                'SELECT gp.id, gp.user_id, gp.seat_order, u.username FROM game_players gp
+                'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username FROM game_players gp
                  JOIN users u ON u.id = gp.user_id
                  WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
             );
@@ -2599,6 +3370,26 @@ final class GameService
                 ];
             }
 
+            // Same "credit the whole winning team" logic as getState()'s own
+            // 'winner_usernames' -- both teammates' usernames for a
+            // team-format win, just the one player's otherwise. Empty until
+            // the game actually completes (winner_team_id/winner_game_player_id
+            // are both still null).
+            $winnerUsernames = [];
+            if ($game['winner_team_id'] !== null) {
+                foreach ($playerRows as $row) {
+                    if ($row['team_id'] !== null && (int) $row['team_id'] === (int) $game['winner_team_id']) {
+                        $winnerUsernames[] = $row['username'];
+                    }
+                }
+            } elseif ($game['winner_game_player_id'] !== null) {
+                foreach ($playerRows as $row) {
+                    if ((int) $row['id'] === (int) $game['winner_game_player_id']) {
+                        $winnerUsernames[] = $row['username'];
+                    }
+                }
+            }
+
             $currentTurnGamePlayerId = null;
             if ($game['status'] === 'in_progress') {
                 $roundStmt = $pdo->prepare(
@@ -2610,6 +3401,8 @@ final class GameService
                 $currentTurnGamePlayerId = $roundStmt->fetchColumn();
                 $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
             }
+
+            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
 
             $games[] = [
                 'id' => $gameId,
@@ -2624,10 +3417,234 @@ final class GameService
                 'completed_at' => $game['completed_at'],
                 'players' => $players,
                 'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
+                'winner_usernames' => $winnerUsernames,
+                // Lets the lobby group a Quick Draft match's up-to-3 games
+                // together (same draft_match_id) instead of listing them
+                // as unrelated rows, and show the match's own result once
+                // it's done -- see quickDraftMatchSummaryFor().
+                'draft_match_id' => $draftMatchId,
+                'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+                'quick_draft_match' => $draftMatchId !== null ? $this->quickDraftMatchSummaryFor($draftMatchId, $userId) : null,
             ];
         }
 
         return $games;
+    }
+
+    /**
+     * The match-level scoreline shared by listGamesForUser()'s own
+     * per-game 'quick_draft_match' entries (so the lobby can group a
+     * match's up-to-3 games together and, once it's done, show who won)
+     * -- {status, your_wins, opponent_wins, games_to_win, winner_username}.
+     * winner_username is null except once status is 'completed'
+     * (draft_matches.winner_user_id is null until then). A separate,
+     * leaner query from quickDraftStateFor()'s own draft_match_players
+     * read below -- that one also needs drafted/deck/previous_deck card
+     * ids for the deck-building sub-state, which would be wasted work
+     * here.
+     *
+     * @return array<string, mixed>
+     */
+    private function quickDraftMatchSummaryFor(int $draftMatchId, int $viewerUserId): array
+    {
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $winsStmt = Connection::get()->prepare(
+            'SELECT user_id, wins FROM draft_match_players WHERE draft_match_id = :id'
+        );
+        $winsStmt->execute(['id' => $draftMatchId]);
+        $winsByUser = [];
+        foreach ($winsStmt->fetchAll() as $row) {
+            $winsByUser[(int) $row['user_id']] = (int) $row['wins'];
+        }
+
+        $winnerUsername = null;
+        if ($match['winner_user_id'] !== null) {
+            $winnerStmt = Connection::get()->prepare('SELECT username FROM users WHERE id = :id');
+            $winnerStmt->execute(['id' => (int) $match['winner_user_id']]);
+            $winnerUsername = $winnerStmt->fetchColumn() ?: null;
+        }
+
+        return [
+            'status' => $match['status'],
+            'your_wins' => $winsByUser[$viewerUserId] ?? 0,
+            'opponent_wins' => $opponentUserId !== null ? ($winsByUser[$opponentUserId] ?? 0) : 0,
+            'games_to_win' => self::QUICK_DRAFT_GAMES_TO_WIN,
+            'winner_username' => $winnerUsername,
+        ];
+    }
+
+    /**
+     * getState()'s own 'quick_draft' field -- the match-level scoreline
+     * (always present once a draft_match_id exists) plus whichever one of
+     * 'drafting'/'deck_building' is currently live (null if the match has
+     * already completed). Never exposes the opponent's own drafted/kept
+     * cards -- only $viewerUserId's own. 'next_game_id' is only ever set
+     * once THIS game has completed and advanceQuickDraftMatch() has
+     * already created the next one (i.e. the match itself isn't
+     * 'completed' either) -- lets the frontend offer a direct "Go to next
+     * game" link from a finished game's own board instead of making the
+     * player find it back in the lobby list themselves.
+     *
+     * @param array<string, mixed> $game
+     */
+    private function quickDraftStateFor(array $game, int $viewerUserId): array
+    {
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $playersStmt = Connection::get()->prepare(
+            'SELECT user_id, wins, drafted_card_ids, deck_card_ids, previous_deck_card_ids
+             FROM draft_match_players WHERE draft_match_id = :id'
+        );
+        $playersStmt->execute(['id' => $draftMatchId]);
+        $playersByUser = [];
+        foreach ($playersStmt->fetchAll() as $row) {
+            $playersByUser[(int) $row['user_id']] = $row;
+        }
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $match['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE draft_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        $state = [
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            'status' => $match['status'],
+            'games_to_win' => self::QUICK_DRAFT_GAMES_TO_WIN,
+            'next_game_id' => $nextGameId,
+            'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
+            'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'drafting' => null,
+            'deck_building' => null,
+        ];
+
+        if ($match['status'] === 'drafting') {
+            $state['drafting'] = $this->quickDraftDraftingStateFor($draftMatchId, (int) $match['current_round'], $viewerUserId, $userIds);
+        } elseif ($match['status'] === 'deck_building') {
+            $viewerRow = $playersByUser[$viewerUserId] ?? null;
+            $draftedCardIds = $viewerRow !== null && $viewerRow['drafted_card_ids'] !== null
+                ? array_map(intval(...), json_decode((string) $viewerRow['drafted_card_ids'], true))
+                : [];
+            $deckCardIds = $viewerRow !== null && $viewerRow['deck_card_ids'] !== null
+                ? array_map(intval(...), json_decode((string) $viewerRow['deck_card_ids'], true))
+                : null;
+            // Only ever meaningful while $deckCardIds is still null (this
+            // game's own deck hasn't been (re)submitted yet) -- the very
+            // first game of a match has no previous game to carry a deck
+            // over from, so this stays null there too, and the frontend
+            // falls back to preselecting every drafted card exactly as it
+            // did before this field existed.
+            $previousDeckCardIds = $viewerRow !== null && $viewerRow['previous_deck_card_ids'] !== null
+                ? array_map(intval(...), json_decode((string) $viewerRow['previous_deck_card_ids'], true))
+                : null;
+            $opponentSubmitted = $opponentUserId !== null
+                && ($playersByUser[$opponentUserId]['deck_card_ids'] ?? null) !== null;
+
+            $state['deck_building'] = [
+                'drafted_cards' => $this->serializeCatalogCards($draftedCardIds),
+                'deck_card_ids' => $deckCardIds,
+                'previous_deck_card_ids' => $previousDeckCardIds,
+                'min_deck_size' => self::QUICK_DRAFT_MIN_DECK_SIZE,
+                'max_deck_size' => self::QUICK_DRAFT_MAX_DECK_SIZE,
+                'you_submitted' => $deckCardIds !== null,
+                'opponent_submitted' => $opponentSubmitted,
+            ];
+        }
+
+        return $state;
+    }
+
+    /**
+     * getState()'s own view of the current draft round for $viewerUserId --
+     * 'stage' is one of 'draw' (haven't submitted this round's draw pick
+     * yet -- 'pack' is your own 6 just-dealt cards), 'awaiting_opponent_draw'
+     * (you've submitted, but received cards aren't determined until your
+     * opponent also submits their own draw pick), 'received' (both of you
+     * have submitted the draw stage -- 'pack' is the 4 cards you actually
+     * received), or 'awaiting_opponent_received' (you've submitted both
+     * stages already; this round advances automatically the moment your
+     * opponent also finishes stage 'received', so this state is normally
+     * brief). 'kept_so_far' is every card $viewerUserId has kept in this
+     * match's draft so far, across every round including whatever's
+     * already resolved this round -- never the opponent's own kept/passed/
+     * received cards, which stay fully invisible until the draft ends and
+     * both full 16-card drafted_card_ids are each player's own private
+     * data on draft_match_players.
+     *
+     * @param int[] $userIds exactly the match's 2 user ids
+     */
+    private function quickDraftDraftingStateFor(int $draftMatchId, int $currentRound, int $viewerUserId, array $userIds): array
+    {
+        $opponentUserId = $userIds[0] === $viewerUserId ? ($userIds[1] ?? $userIds[0]) : $userIds[0];
+        $picksByRound = $this->loadDraftRoundPicks($draftMatchId);
+
+        $keptSoFar = [];
+        foreach ($picksByRound as $roundNumber => $picks) {
+            if ($roundNumber >= $currentRound) {
+                continue;
+            }
+            $pick = $picks[$viewerUserId] ?? null;
+            if ($pick !== null) {
+                $keptSoFar = [...$keptSoFar, ...($pick['kept_from_draw'] ?? []), ...($pick['kept_from_received'] ?? [])];
+            }
+        }
+
+        $viewerPick = $picksByRound[$currentRound][$viewerUserId] ?? null;
+        $opponentPick = $picksByRound[$currentRound][$opponentUserId] ?? null;
+
+        $stage = 'draw';
+        $pack = [];
+
+        if ($viewerPick !== null) {
+            if ($viewerPick['kept_from_draw'] === null) {
+                $stage = 'draw';
+                $pack = $viewerPick['drawn'];
+            } elseif ($viewerPick['kept_from_received'] === null) {
+                if ($opponentPick !== null && $opponentPick['kept_from_draw'] !== null) {
+                    $stage = 'received';
+                    $pack = $this->multisetSubtract($opponentPick['drawn'], $opponentPick['kept_from_draw']);
+                } else {
+                    $stage = 'awaiting_opponent_draw';
+                }
+            } else {
+                $stage = 'awaiting_opponent_received';
+            }
+
+            $keptSoFar = [...$keptSoFar, ...($viewerPick['kept_from_draw'] ?? []), ...($viewerPick['kept_from_received'] ?? [])];
+        }
+
+        return [
+            'round' => $currentRound,
+            'total_rounds' => self::QUICK_DRAFT_ROUNDS,
+            'stage' => $stage,
+            'pack' => $this->serializeCatalogCards($pack),
+            'kept_so_far' => $this->serializeCatalogCards($keptSoFar),
+        ];
     }
 
     /** @return array<string, mixed> */
@@ -2739,6 +3756,11 @@ final class GameService
                 // display), but this is the authoritative "which team
                 // actually won" -- see "Open Team Play" in php-app/README.md.
                 'winner_team_id' => $game['winner_team_id'] !== null ? (int) $game['winner_team_id'] : null,
+                // Only meaningful for deck_type = 'quick_draft' -- which of
+                // the match's up to 3 games this one is (1/2/3). Null for
+                // every other deck_type. See the 'quick_draft' field below
+                // for the match-level scoreline this drives on the frontend.
+                'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             ],
             'players' => $players,
             'you' => ['game_player_id' => $viewerGamePlayerId],
@@ -2757,7 +3779,18 @@ final class GameService
             // see submitInitialCardPass() and "Closed Team Play" in
             // php-app/README.md.
             'initial_card_pass' => null,
+            // Only populated for deck_type = 'quick_draft' -- unlike every
+            // other quick_draft/custom_duel-style pregame field above,
+            // this is populated regardless of $game['status'] (a Quick
+            // Draft match's drafting/deck_building phases both happen
+            // while the game itself is still 'waiting') -- see
+            // quickDraftStateFor().
+            'quick_draft' => null,
         ];
+
+        if ($game['deck_type'] === 'quick_draft' && $game['draft_match_id'] !== null) {
+            $response['quick_draft'] = $this->quickDraftStateFor($game, $viewerUserId);
+        }
 
         if ($game['status'] !== 'in_progress' && $game['status'] !== 'completed') {
             return $response;

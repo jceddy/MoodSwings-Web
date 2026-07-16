@@ -8,6 +8,8 @@
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
     startVersionWatcher();
+    checkFriendRequestNotification();
+    setInterval(checkFriendRequestNotification, 15000);
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
@@ -36,11 +38,33 @@
         return button;
     }
 
+    // Toggled by both refreshFriendsData() (the dialog's own data fetch)
+    // and checkFriendRequestNotification() (an independent low-frequency
+    // poll -- see below) so the dot appears the moment a request arrives
+    // even if the player never opens the Friends dialog to see it.
+    function setFriendRequestNotification(hasPending) {
+        document.getElementById('friends-button').classList.toggle('has-friend-request', hasPending);
+    }
+
+    // #friends-button is part of the page's always-visible header, not
+    // #lobby-view/#board-view, so unlike refreshLobby()/refreshBoard()
+    // this can't piggyback on pollTimer -- that timer is torn down and
+    // rebuilt by showLobby()/showBoard() on every view switch. A slower,
+    // independent interval is enough here since a friend request is far
+    // less time-sensitive than in-progress game state.
+    async function checkFriendRequestNotification() {
+        const { ok, body } = await listFriendInvites();
+        if (ok) {
+            setFriendRequestNotification(body.incoming.length > 0);
+        }
+    }
+
     async function refreshFriendsData() {
         const [friendsResp, invitesResp] = await Promise.all([listFriends(), listFriendInvites()]);
         const friends = friendsResp.ok ? friendsResp.body.friends : [];
         const incoming = invitesResp.ok ? invitesResp.body.incoming : [];
         const outgoing = invitesResp.ok ? invitesResp.body.outgoing : [];
+        setFriendRequestNotification(incoming.length > 0);
 
         renderList(
             document.getElementById('friends-list'),
@@ -157,6 +181,13 @@
         // doesn't need the same treatment -- refreshBoard() itself
         // already clears it on every successful load.
         boardMessage.hidden = true;
+        // Quick Draft's own picker state is scoped to whichever game/match
+        // was previously open -- reset here (rather than only when a
+        // selection is actually submitted) so switching games never
+        // carries over a stale selection into a different match's picker.
+        quickDraftPickSelection = new Set();
+        quickDraftPickSelectionKey = null;
+        quickDraftDeckSelectionInitialized = false;
         refreshBoard();
         if (pollTimer) {
             clearInterval(pollTimer);
@@ -198,6 +229,7 @@
         jceddys_75: 'jceddy\'s 75 Card',
         custom: 'Custom Decklist',
         custom_duel: 'Custom Decklists (Duel)',
+        quick_draft: 'Quick Draft',
         one_of_each: 'One of Each Card',
     };
 
@@ -216,7 +248,19 @@
         jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
+        quick_draft: 'Both players draft their own 16-card deck live from a shared card pool, trim it to 14-16 cards, then play a best-of-three match -- sideboarding freely between games.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
+    };
+
+    // Plain-language explanation shown under Quick Draft's own Pool
+    // dropdown -- kept in sync with GameService::buildQuickDraftPool()'s
+    // actual behavior for each pool_source.
+    const QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
+        random_48: '48 random cards, no duplicates.',
+        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- short of the 48 cards a full draft needs, so round 4 tops back up from already-discarded cards, same as a physical 45-card box.',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to 48 before the draft begins.",
+        one_of_each: 'The full 133-card pool, randomly narrowed down to 48 before the draft begins.',
+        custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 48 if you provide more.',
     };
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
@@ -237,9 +281,23 @@
         document.getElementById('new-game-deck-type-description').textContent = DECK_TYPE_DESCRIPTIONS[deckType] || '';
         document.getElementById('new-game-decklist-fields').hidden = deckType !== 'custom';
         document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
+        document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
+        if (deckType === 'quick_draft') {
+            updateQuickDraftPoolSourceVisibility();
+        }
+    }
+
+    // Shows the custom-pool file/textarea fields only for the 'custom'
+    // pool source -- mirrors updateDeckTypeDescription()'s own
+    // description-plus-conditional-fields pattern one level up.
+    function updateQuickDraftPoolSourceVisibility() {
+        const poolSource = document.getElementById('new-game-quick-draft-pool-source').value;
+        document.getElementById('new-game-quick-draft-pool-source-description').textContent =
+            QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
+        document.getElementById('new-game-quick-draft-custom-pool-fields').hidden = poolSource !== 'custom';
     }
 
     // Shows the locked-in summary for a built-in preset, or the editable
@@ -255,34 +313,55 @@
         document.getElementById('new-game-duel-rules-user-defined').hidden = preset !== 'user_defined';
     }
 
-    // 'custom' decklists aren't supported for duel games, and 'custom_duel'
-    // (each player supplying their own decklist against rules the creator
-    // defines) only makes sense FOR a duel -- both enforced server-side by
-    // GameService::createGame(), disabled here too so a doomed combination
-    // can't even be selected, matching updateOpponentSelectionLimit()'s own
-    // proactive-prevention approach for format-dependent constraints.
-    // Either team format similarly disables 'power' -- its 15 cards fall
+    // The 'draft' format only supports the 'quick_draft' deck type (see
+    // GameService::createGame()'s own format<->deck_type validation, and
+    // database/migrations/0028_add_draft_format.sql for why 'draft' is a
+    // separate format rather than a duel deck_type) -- checked first since
+    // it overrides every other rule below. Otherwise: 'custom' decklists
+    // aren't supported for duel games, 'custom_duel' (each player supplying
+    // their own decklist against rules the creator defines) only makes
+    // sense FOR a duel, and 'quick_draft' only makes sense for 'draft'.
+    // Either team format similarly rules out 'power' -- its 15 cards fall
     // short of the 45-card minimum both team formats share (see
-    // php-app/README.md). Falls back to 'structure' if the now-disallowed
-    // option was selected.
+    // php-app/README.md).
+    function isDeckTypeAvailableForFormat(deckType, format) {
+        if (format === 'draft') {
+            return deckType === 'quick_draft';
+        }
+        switch (deckType) {
+            case 'custom': return format !== 'duel';
+            case 'custom_duel': return format === 'duel';
+            case 'quick_draft': return false;
+            case 'power': return format !== 'team' && format !== 'closed_team';
+            default: return true;
+        }
+    }
+
+    // Unavailable deck types are hidden (not merely disabled) so the
+    // dropdown only ever lists options that actually make sense for the
+    // currently-selected format. If the previously-selected option becomes
+    // unavailable, falls back to the first option that IS available for
+    // the new format (in <option> document order) -- e.g. 'structure' for
+    // most formats, but 'quick_draft' for 'draft', since it's the only
+    // option 'draft' allows.
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
         const format = document.getElementById('new-game-format').value;
-        const isDuel = format === 'duel';
-        const isTeam = format === 'team' || format === 'closed_team';
-        const customOption = deckTypeSelect.querySelector('option[value="custom"]');
-        const customDuelOption = deckTypeSelect.querySelector('option[value="custom_duel"]');
-        const powerOption = deckTypeSelect.querySelector('option[value="power"]');
 
-        customOption.disabled = isDuel;
-        customDuelOption.disabled = !isDuel;
-        powerOption.disabled = isTeam;
-        if (
-            (isDuel && deckTypeSelect.value === 'custom')
-            || (!isDuel && deckTypeSelect.value === 'custom_duel')
-            || (isTeam && deckTypeSelect.value === 'power')
-        ) {
-            deckTypeSelect.value = 'structure';
+        let fallbackValue = null;
+        let selectedStillAvailable = false;
+        for (const option of deckTypeSelect.options) {
+            const available = isDeckTypeAvailableForFormat(option.value, format);
+            option.hidden = !available;
+            if (available && fallbackValue === null) {
+                fallbackValue = option.value;
+            }
+            if (available && option.value === deckTypeSelect.value) {
+                selectedStillAvailable = true;
+            }
+        }
+        if (!selectedStillAvailable) {
+            deckTypeSelect.value = fallbackValue;
         }
 
         updateDeckTypeDescription();
@@ -327,17 +406,198 @@
         }
     }
 
+    // Builds one game's own lobby row. $opts.compact drops the
+    // format/deck-type line and the opponents line (shown once already at
+    // the Quick Draft match group's own header -- see buildMatchGroupRow())
+    // and prefixes the status with "Game N" instead, so a match's own
+    // per-game sub-rows read as "Game 1 — Completed" rather than repeating
+    // "Draft, Quick Draft deck" three times.
+    function buildGameRow(game, opts = {}) {
+        const li = document.createElement('li');
+        // The your-turn background (".lobby-row--your-turn") is a
+        // whole-row highlight on top of (not instead of) the bold
+        // "(your turn)" text tag on its own status line below --
+        // makes an actionable game stand out even before the text
+        // itself is read.
+        li.className = 'lobby-row' + (game.is_your_turn ? ' lobby-row--your-turn' : '');
+
+        // Wrapped in its own container (rather than appended straight
+        // to the li) so the action button below can sit beside the
+        // text as a flex sibling -- see the ".lobby-row"/".lobby-info"
+        // rules in style.css -- instead of always trailing after
+        // however many lines the text itself wraps to on a narrow
+        // (phone-width) viewport.
+        const infoEl = document.createElement('div');
+        infoEl.className = 'lobby-info';
+
+        if (!opts.compact) {
+            // Matches renderBoard()'s own deckDescription logic one level up
+            // (board title), except there's no per-viewer custom_deck_name
+            // available for 'custom_duel' at this list level -- each
+            // player's own submitted deck name only comes back from
+            // getState(), not listGamesForUser() -- so that case falls back
+            // to deckTypeLabel()'s generic label like every other deck_type.
+            const deckDescription = game.deck_type === 'custom'
+                ? (game.custom_deck_name || 'Uploaded Deck')
+                : deckTypeLabel(game.deck_type) + ' deck';
+            const formatEl = document.createElement('div');
+            formatEl.className = 'lobby-format';
+            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
+            infoEl.appendChild(formatEl);
+        }
+
+        // Its own line beneath the format/deck line (rather than
+        // trailing on it) and above the opponents, so status -- the
+        // single most actionable piece of information in the row --
+        // isn't buried mid-line.
+        const statusLineEl = document.createElement('div');
+        statusLineEl.className = 'lobby-status-line';
+
+        const statusEl = document.createElement('span');
+        statusEl.className = 'lobby-status lobby-status--' + game.status;
+        statusEl.textContent = (opts.compact ? 'Game ' + game.match_game_number + ' — ' : '') + humanizeStatus(game.status);
+        statusLineEl.appendChild(statusEl);
+
+        if (game.is_your_turn) {
+            const yourTurnEl = document.createElement('span');
+            yourTurnEl.className = 'lobby-your-turn';
+            yourTurnEl.textContent = ' (your turn)';
+            statusLineEl.appendChild(yourTurnEl);
+        }
+
+        infoEl.appendChild(statusLineEl);
+
+        if (!opts.compact) {
+            const opponents = game.players.map((p) => p.username).join(', ');
+            infoEl.append(opponents);
+        }
+
+        // winner_usernames is only ever non-empty once the game is
+        // actually 'completed' (see GameService::listGamesForUser()) --
+        // both teammates' names for a team-format win, just the one
+        // player's otherwise, matching how the board's own end-of-game
+        // display already credits a team win. Still shown in compact mode
+        // (a match's own per-game sub-rows) -- a Quick Draft match's games
+        // aren't necessarily all won by the same player (see
+        // completeQuickDraftGameByPassing()'s own docblock), so this is
+        // distinct information from the match group header's own overall
+        // result, not a repeat of it.
+        if (game.winner_usernames.length > 0) {
+            const winnerEl = document.createElement('div');
+            winnerEl.className = 'lobby-winner';
+            winnerEl.textContent = game.winner_usernames.join(' & ') + ' won';
+            infoEl.appendChild(winnerEl);
+        }
+
+        li.appendChild(infoEl);
+
+        // A 'waiting'/'in_progress' game is still something to actually
+        // play; anything else (completed, or the rarer abandoned) is
+        // read-only from here on, so the button reads "View" instead --
+        // matches what actually happens when it's clicked (showBoard()
+        // renders a read-only board once the game itself isn't
+        // in_progress, see GameService::getState()'s own round: null).
+        const canPlay = game.status === 'waiting' || game.status === 'in_progress';
+        li.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
+        return li;
+    }
+
+    // Groups a Quick Draft match's up-to-3 games (games.draft_match_id) --
+    // one shared header (format/deck line, opponents, and the match's own
+    // scoreline/result from quick_draft_match) above a nested list of each
+    // individual game's own compact row (see buildGameRow()'s opts.compact),
+    // newest game first so the most relevant one (the active game, or the
+    // most recently finished one) sits closest to the header.
+    function buildMatchGroupRow(matchGames) {
+        const games = matchGames.slice().sort((a, b) => b.match_game_number - a.match_game_number);
+        const firstGame = games[0];
+        const match = firstGame.quick_draft_match;
+
+        const li = document.createElement('li');
+        li.className = 'lobby-match-group';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'lobby-info';
+
+        const deckDescription = firstGame.deck_type === 'custom'
+            ? (firstGame.custom_deck_name || 'Uploaded Deck')
+            : deckTypeLabel(firstGame.deck_type) + ' deck';
+        const formatEl = document.createElement('div');
+        formatEl.className = 'lobby-format';
+        formatEl.textContent = formatLabel(firstGame.format) + ', ' + deckDescription;
+        headerEl.appendChild(formatEl);
+
+        const scoreEl = document.createElement('div');
+        scoreEl.className = 'lobby-match-score';
+        scoreEl.textContent = 'Match score: you ' + match.your_wins + ', opponent ' + match.opponent_wins
+            + ' (first to ' + match.games_to_win + ' wins)';
+        headerEl.appendChild(scoreEl);
+
+        // winner_username is only ever set once quick_draft_match.status is
+        // 'completed' (see GameService::quickDraftMatchSummaryFor()) --
+        // this is the match's own overall result, distinct from (and shown
+        // alongside, not instead of) each individual game's own
+        // winner_usernames, which buildGameRow() still renders per sub-row.
+        if (match.winner_username) {
+            const resultEl = document.createElement('div');
+            resultEl.className = 'lobby-winner';
+            resultEl.textContent = match.winner_username + ' won the match';
+            headerEl.appendChild(resultEl);
+        }
+
+        const opponents = firstGame.players.map((p) => p.username).join(', ');
+        headerEl.append(opponents);
+
+        li.appendChild(headerEl);
+
+        const gamesListEl = document.createElement('ul');
+        gamesListEl.className = 'lobby-match-games';
+        for (const game of games) {
+            gamesListEl.appendChild(buildGameRow(game, { compact: true }));
+        }
+        li.appendChild(gamesListEl);
+
+        return li;
+    }
+
     async function refreshLobby() {
         const { ok, body } = await listGames();
+        const games = ok ? body.games : [];
         const gamesList = document.getElementById('games-list');
 
-        renderList(gamesList, document.getElementById('games-empty'), ok ? body.games : [], (game) => {
-            const li = document.createElement('li');
-            const opponents = game.players.map((p) => p.username).join(', ');
-            li.append(opponents + ' — ' + humanizeStatus(game.status) + (game.is_your_turn ? ' (your turn)' : ''));
-            li.appendChild(actionButton('Open', () => showBoard(game.id)));
-            return li;
-        });
+        // Groups every game sharing a draft_match_id into one entry (see
+        // buildMatchGroupRow()) instead of listing a Quick Draft match's
+        // up-to-3 games as unrelated rows -- each entry keeps its position
+        // at wherever the first (already-sorted) game belonging to it
+        // appears, so an active match still surfaces as high in the list
+        // as its most actionable game does.
+        const matchGamesById = new Map();
+        for (const game of games) {
+            if (game.draft_match_id === null) {
+                continue;
+            }
+            if (!matchGamesById.has(game.draft_match_id)) {
+                matchGamesById.set(game.draft_match_id, []);
+            }
+            matchGamesById.get(game.draft_match_id).push(game);
+        }
+
+        const entries = [];
+        const renderedMatchIds = new Set();
+        for (const game of games) {
+            if (game.draft_match_id === null) {
+                entries.push(() => buildGameRow(game));
+                continue;
+            }
+            if (renderedMatchIds.has(game.draft_match_id)) {
+                continue;
+            }
+            renderedMatchIds.add(game.draft_match_id);
+            const matchGames = matchGamesById.get(game.draft_match_id);
+            entries.push(() => buildMatchGroupRow(matchGames));
+        }
+
+        renderList(gamesList, document.getElementById('games-empty'), entries, (buildEntry) => buildEntry());
     }
 
     document.getElementById('back-to-lobby-button').addEventListener('click', showLobby);
@@ -349,15 +609,17 @@
     const newGameError = document.getElementById('new-game-error');
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
-    // A 'duel' game requires exactly 2 players total (enforced server-side
-    // by GameService::createGame()), so at most 1 opponent may be chosen
-    // for it -- every other format allows up to 3. Re-run on every
+    // 'duel' and 'draft' games each require exactly 2 players total
+    // (enforced server-side by GameService::isDuelShapedFormat()'s own
+    // check in createGame()), so at most 1 opponent may be chosen for
+    // either -- every other format allows up to 3. Re-run on every
     // checkbox change and every format-dropdown change, so switching to
-    // 'duel' with 2+ opponents already checked un-checks the extras
-    // (keeping the first one) rather than leaving a selection the server
-    // would just reject.
+    // 'duel'/'draft' with 2+ opponents already checked un-checks the
+    // extras (keeping the first one) rather than leaving a selection the
+    // server would just reject.
     function updateOpponentSelectionLimit() {
-        const maxOpponents = document.getElementById('new-game-format').value === 'duel' ? 1 : 3;
+        const format = document.getElementById('new-game-format').value;
+        const maxOpponents = format === 'duel' || format === 'draft' ? 1 : 3;
         const boxes = opponentCheckboxes.querySelectorAll('input');
 
         let checkedCount = 0;
@@ -381,6 +643,16 @@
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
+    document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
+
+    document.getElementById('new-game-quick-draft-custom-pool-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-game-quick-draft-custom-pool-text').value = await file.text();
+    });
 
     // Reading an uploaded decklist file into the textarea lets both input
     // methods (file upload or pasted text) share the same submit-time
@@ -492,7 +764,21 @@
         const deckType = document.getElementById('new-game-deck-type').value;
         const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
-        const { ok, body } = await createGame(opponentUserIds, format, undefined, deckType, decklistText, duelDeckRules, partnerUserId);
+        const quickDraftPoolSource = deckType === 'quick_draft' ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
+        const quickDraftCustomPoolText = deckType === 'quick_draft' && quickDraftPoolSource === 'custom'
+            ? document.getElementById('new-game-quick-draft-custom-pool-text').value
+            : undefined;
+        const { ok, body } = await createGame(
+            opponentUserIds,
+            format,
+            undefined,
+            deckType,
+            decklistText,
+            duelDeckRules,
+            partnerUserId,
+            quickDraftPoolSource,
+            quickDraftCustomPoolText,
+        );
 
         if (!ok) {
             newGameError.textContent = body.message || 'Could not create the game.';
@@ -539,9 +825,10 @@
     // the printed art already conveys name/color/base value/rules text (all
     // included as alt text for accessibility), so only whatever ISN'T part
     // of the static art -- a value currently different from what's printed,
-    // suppression, an owner caption, or a disabled state -- needs to be
-    // overlaid on top of it.
-    function buildCardThumb(card, { caption, onClick, notPlayable = false } = {}) {
+    // suppression, or a disabled state -- needs to be overlaid on top of it.
+    // Owner information (issue #142) instead lives in the in-play zone's own
+    // label and the card-detail dialog's meta line, not a per-thumb caption.
+    function buildCardThumb(card, { onClick, notPlayable = false } = {}) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'card-thumb';
@@ -592,13 +879,6 @@
         if (notPlayable) {
             button.classList.add('not-playable');
             button.title = "This card can't be played right now";
-        }
-
-        if (caption) {
-            const captionEl = document.createElement('span');
-            captionEl.className = 'card-thumb__caption';
-            captionEl.textContent = caption;
-            button.appendChild(captionEl);
         }
 
         return button;
@@ -805,6 +1085,15 @@
         const zoneByGamePlayerId = inPlayZoneAssignments(state);
         const activeZones = new Set(Object.values(zoneByGamePlayerId));
 
+        // A zone's own label (issue #142) replaces the identical owner
+        // caption every card in it used to carry individually -- one name
+        // per zone instead of one per card frees up the vertical space
+        // that repetition cost.
+        const playerByZone = {};
+        for (const player of state.players) {
+            playerByZone[zoneByGamePlayerId[player.game_player_id]] = player;
+        }
+
         const cardsByZone = {};
         for (const zone of IN_PLAY_ZONE_NAMES) {
             cardsByZone[zone] = [];
@@ -816,6 +1105,8 @@
         for (const zone of IN_PLAY_ZONE_NAMES) {
             const zoneEl = document.getElementById('in-play-zone-' + zone);
             zoneEl.hidden = !activeZones.has(zone);
+            zoneEl.querySelector('.in-play-zone__label').textContent =
+                playerByZone[zone] ? playerByZone[zone].username : '';
 
             const listEl = zoneEl.querySelector('.in-play-zone__list');
             listEl.innerHTML = '';
@@ -824,13 +1115,109 @@
                 const ownerLabel = owner ? owner.username : '?';
                 const li = document.createElement('li');
                 li.appendChild(buildCardThumb(card, {
-                    caption: ownerLabel,
                     onClick: () => openCardDetail(card, ownerLabel),
                 }));
                 listEl.appendChild(li);
             }
         }
     }
+
+    // A discard pile only ever grows over a game, so a flat wrapping list
+    // of full-size thumbnails (issue #142) eventually dwarfs the rest of
+    // the board. Cards instead stack into columns, each pulled up to
+    // overlap all but a sliver of the card before it (see
+    // .discard-stack__column's own negative margin-bottom in style.css) --
+    // that sliver still shows a covered card's own name and, when present,
+    // its current-value badge's upper-right corner, while the last
+    // (most recently discarded, assuming append order -- see BoardState's
+    // own $discard docblock) card in each column renders in full, painted
+    // on top of the one before it by DOM order.
+    //
+    // How many columns exist is recomputed from #discard-list's own actual
+    // width every render (issue #142 follow-up) rather than a fixed
+    // cards-per-column cap, and cards are dealt round-robin across however
+    // many columns that is -- card 0 into column 0, card 1 into column 1,
+    // ..., wrapping back to column 0 once every column has one -- so the
+    // pile fills available width before it stacks any column deeper than
+    // one card, instead of filling column 0 completely before starting
+    // column 1. Combined with the resize listener below, this keeps the
+    // pile's own vertical footprint as small as the current viewport
+    // allows at all times, including e.g. a phone rotating from portrait
+    // to landscape mid-game.
+    const DISCARD_STACK_CARD_WIDTH_PX = 5.5 * 16; // .card-thumb's own fixed 5.5rem width
+    const DISCARD_STACK_GAP_PX = 0.5 * 16; // #discard-list's own flex gap
+
+    // Both pixel constants above assume the default 16px root font-size
+    // the rest of this file's own rem/px math already assumes (no page
+    // here overrides it) -- clientWidth itself is only ever available in
+    // pixels, so there's no way to ask for "how many 5.5rem slots fit"
+    // directly.
+    function discardStackColumnCount() {
+        const availableWidth = document.getElementById('discard-list').clientWidth;
+        const columns = Math.floor(
+            (availableWidth + DISCARD_STACK_GAP_PX) / (DISCARD_STACK_CARD_WIDTH_PX + DISCARD_STACK_GAP_PX)
+        );
+        return Math.max(1, columns);
+    }
+
+    // Remembered so the resize listener below can re-run the same layout
+    // from scratch -- renderBoard() itself only re-runs on the next 4s
+    // poll (see startPolling()) or an explicit action, neither of which
+    // fires just because the viewport changed shape.
+    let lastDiscardPile = [];
+    let lastDiscardCanAct = false;
+
+    function renderDiscardPile(discardPile, canAct) {
+        lastDiscardPile = discardPile;
+        lastDiscardCanAct = canAct;
+
+        const listEl = document.getElementById('discard-list');
+        listEl.innerHTML = '';
+        if (discardPile.length === 0) {
+            return;
+        }
+
+        const columnCount = Math.min(discardStackColumnCount(), discardPile.length);
+        for (let col = 0; col < columnCount; col++) {
+            const column = document.createElement('li');
+            column.className = 'discard-stack__column';
+            for (let i = col; i < discardPile.length; i += columnCount) {
+                const card = discardPile[i];
+                // Almost always just informational (a discard-pile card
+                // can't normally be played), but Angst/Harmony/Grief's
+                // discard-sourced extra play, or Melancholy's "play from
+                // the discard pile as though it were your hand," can make
+                // a specific one playable for the rest of this turn --
+                // is_playable already reflects that (see GameService::
+                // getState()'s discard_pile mapping), so route straight to
+                // the same Play/Cancel panel a hand card uses instead of
+                // the read-only detail view in that case. last_owner_name
+                // disambiguates two players' identical catalog cards both
+                // sitting in the shared discard pile at once (see the
+                // 'discard_card' case in fieldOptions() below) -- shown in
+                // the detail dialog now that the per-thumb caption is gone.
+                const onClick = (canAct && card.is_playable)
+                    ? () => handleHandCardClick(card)
+                    : () => openCardDetail(card, card.last_owner_name);
+                column.appendChild(buildCardThumb(card, { onClick }));
+            }
+            listEl.appendChild(column);
+        }
+    }
+
+    // Debounced so a drag-resize (or a slow orientation-change animation)
+    // doesn't re-layout the pile dozens of times a second -- only once the
+    // size has actually settled. Harmless to fire while the board itself
+    // isn't visible (e.g. still on the lobby view): lastDiscardPile is
+    // still whatever the last-rendered board's own pile was, and the next
+    // real refreshBoard() poll overwrites it regardless.
+    let discardStackResizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(discardStackResizeTimer);
+        discardStackResizeTimer = setTimeout(() => {
+            renderDiscardPile(lastDiscardPile, lastDiscardCanAct);
+        }, 150);
+    });
 
     // Generic enlarged-art viewer for game-level art not tied to a specific
     // printed card (e.g. Hurt Feelings) -- see "Assets" in
@@ -848,6 +1235,80 @@
     document.getElementById('art-preview-close-button').addEventListener('click', () => {
         artPreviewDialog.close();
     });
+
+    // Small inline pictograms (issue #143) replacing the players list's own
+    // plain-text stat clauses ("4 point(s)", "went first this round", ...)
+    // -- self-contained straight-line shapes rather than curves, so each is
+    // easy to eyeball for correctness by hand without a design tool, and
+    // `fill="currentColor"` lets every one inherit (and be recolored via)
+    // its own wrapping element's CSS `color`, same as any text glyph would.
+    // Not an exhaustive icon set -- just what this one list currently
+    // needs -- so a future stat would add its own entry here rather than
+    // this doubling as a general-purpose icon library.
+    const PLAYER_STAT_ICON_PATHS = {
+        // A seat at the table: a backed bench on two legs.
+        seat: '<rect x="6" y="4" width="12" height="9" rx="1"/>'
+            + '<rect x="7" y="13" width="2" height="6"/><rect x="15" y="13" width="2" height="6"/>',
+        // Score: a plain 5-point star.
+        points: '<polygon points="12,2 14.4,8.8 21.5,8.9 15.8,13.2 17.9,20.1 '
+            + '12,16 6.1,20.1 8.2,13.2 2.5,8.9 9.6,8.8"/>',
+        // Round wins: a trophy cup on a stem and base.
+        wins: '<polygon points="6,4 18,4 15,13 9,13"/>'
+            + '<rect x="11" y="13" width="2" height="4"/><rect x="8" y="18" width="8" height="2"/>',
+        // Hand size: two overlapping cards, echoing the printed cards'
+        // own portrait shape elsewhere on this page.
+        hand: '<rect x="4" y="7" width="10" height="14" rx="1.5" transform="rotate(-8 9 14)"/>'
+            + '<rect x="7" y="5" width="10" height="14" rx="1.5"/>',
+        // Went first this round: a small flag on a pole.
+        wentFirst: '<rect x="5" y="3" width="2" height="18"/><polygon points="7,4 19,7 7,10"/>',
+        // Whose turn it currently is: a play/active triangle.
+        onTurn: '<polygon points="7,4 20,12 7,20"/>',
+    };
+
+    // <template> parses its own innerHTML through the HTML parser's SVG
+    // foreign-content handling, unlike setting .innerHTML directly on an
+    // element created via createElementNS -- which isn't reliably
+    // supported -- so this is the simplest robust way to build an inline
+    // icon from a plain markup string.
+    function buildStatIcon(kind) {
+        const template = document.createElement('template');
+        template.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + PLAYER_STAT_ICON_PATHS[kind] + '</svg>';
+        return template.content.firstChild;
+    }
+
+    // Icon + numeric badge overlay replacing a plain "N thing(s)" text
+    // clause. `label` (the full original text, e.g. "4 point(s)") becomes
+    // both a `title` tooltip for a mouse and an `aria-label` for a screen
+    // reader -- a `title` alone is only ever exposed on hover/focus, never
+    // announced outright, so accessibility needs the explicit label too;
+    // `role="img"` tells assistive tech to treat the whole span as a single
+    // image-with-text-alternative rather than trying to read its
+    // (redundant, aria-hidden) SVG and badge separately.
+    function buildPlayerStat(kind, value, label) {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'player-stat player-stat--' + kind;
+        wrapper.title = label;
+        wrapper.setAttribute('role', 'img');
+        wrapper.setAttribute('aria-label', label);
+        wrapper.appendChild(buildStatIcon(kind));
+        const badge = document.createElement('span');
+        badge.className = 'player-stat__badge';
+        badge.textContent = String(value);
+        wrapper.appendChild(badge);
+        return wrapper;
+    }
+
+    // Same icon/tooltip/label treatment for a binary flag with no count to
+    // badge (went-first, on-turn).
+    function buildPlayerFlag(kind, label, extraClass) {
+        const wrapper = document.createElement('span');
+        wrapper.className = 'player-flag player-flag--' + kind + (extraClass ? ' ' + extraClass : '');
+        wrapper.title = label;
+        wrapper.setAttribute('role', 'img');
+        wrapper.setAttribute('aria-label', label);
+        wrapper.appendChild(buildStatIcon(kind));
+        return wrapper;
+    }
 
     async function refreshBoard() {
         const seq = ++boardRequestSeq;
@@ -885,6 +1346,8 @@
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
 
+        renderQuickDraftScoreline(state);
+
         const inProgressArea = document.getElementById('in-progress-area');
         const startButton = document.getElementById('start-game-button');
 
@@ -916,13 +1379,52 @@
                     ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
                     : '';
 
-                const infoEl = document.createElement('span');
-                infoEl.textContent = player.username + ' — seat ' + player.seat_order +
-                    ', ' + player.total_score + ' point(s), ' + player.total_wins + ' win(s), ' +
-                    player.hand_count + ' card(s) in hand' + deckLabel + teamLabel +
-                    (wentFirst ? ' — went first this round' : '') +
-                    (isTurn ? ' — on turn' : '');
-                li.appendChild(infoEl);
+                const isYou = state.you.game_player_id === player.game_player_id;
+
+                const nameEl = document.createElement('span');
+                nameEl.className = 'player-name';
+                nameEl.appendChild(document.createTextNode(player.username));
+                if (isYou) {
+                    // Its own span/color rather than folded into the plain
+                    // username text, so it reads as a tag rather than
+                    // looking like part of the username itself.
+                    const youTag = document.createElement('span');
+                    youTag.className = 'player-you-tag';
+                    youTag.textContent = ' (you)';
+                    nameEl.appendChild(youTag);
+                }
+                nameEl.appendChild(document.createTextNode(deckLabel + teamLabel));
+                li.appendChild(nameEl);
+
+                // All the icons/flags/thumbnail below share one wrapper (its
+                // own flex-wrap container) rather than wrapping directly as
+                // children of `li` -- that way, if a row runs out of width,
+                // the overflow wraps to a second line starting right under
+                // the first icon (this wrapper's own left edge, just after
+                // the name column) instead of back at the far-left edge of
+                // the whole row underneath the username.
+                const iconsEl = document.createElement('span');
+                iconsEl.className = 'player-icons';
+                li.appendChild(iconsEl);
+
+                // Issue #143: seat/points/wins/hand-count each become an
+                // icon with a numeric badge overlay instead of a plain
+                // "N thing(s)" clause; went-first/on-turn become an
+                // icon-only flag (nothing to count) instead of an appended
+                // "— went first this round"/"— on turn" clause. Every one
+                // keeps its original full text as a tooltip/aria-label
+                // (see buildPlayerStat()/buildPlayerFlag()) so none of that
+                // information is lost, just no longer spelled out inline.
+                iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
+                iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
+                iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
+                iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
+                if (wentFirst) {
+                    iconsEl.appendChild(buildPlayerFlag('wentFirst', 'Went first this round'));
+                }
+                if (isTurn) {
+                    iconsEl.appendChild(buildPlayerFlag('onTurn', 'On turn', 'player-flag--turn'));
+                }
 
                 // A small Hurt Feelings art thumbnail replaces the old plain
                 // text tag -- Hurt Feelings is a round-level marker/token,
@@ -942,24 +1444,49 @@
                     img.src = '../img/hurt-feelings.webp';
                     img.alt = 'Hurt Feelings';
                     thumb.appendChild(img);
-                    li.appendChild(thumb);
+                    iconsEl.appendChild(thumb);
                 }
 
                 return li;
             }
         );
 
+        // Line up every row's icons at the same horizontal position
+        // regardless of username length -- easier to scan than icons
+        // staggered at whatever x each row's own username happened to end
+        // at. Measured after the fact (rather than fixed in CSS) since the
+        // right width depends on this game's actual usernames/labels, not
+        // any single value that would either clip a long one or leave a
+        // short one with a lot of wasted gap.
+        const playerNameEls = document.querySelectorAll('#players-list .player-name');
+        playerNameEls.forEach((el) => { el.style.minWidth = ''; });
+        const maxNameWidth = Math.max(0, ...Array.from(playerNameEls, (el) => el.offsetWidth));
+        playerNameEls.forEach((el) => { el.style.minWidth = maxNameWidth + 'px'; });
+
         renderTeamScores(state.teams);
 
         if (state.game.status === 'waiting') {
-            document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
             inProgressArea.hidden = true;
 
             if (state.game.deck_type === 'custom_duel') {
+                document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                document.getElementById('quick-draft-panel').hidden = true;
                 renderDuelDeckSubmission(state);
                 startButton.hidden = !state.players.every((p) => p.deck_submitted);
-            } else {
+            } else if (state.game.deck_type === 'quick_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
+                document.getElementById('board-round-status').textContent =
+                    state.quick_draft.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
+                renderQuickDraftPanel(state);
+                startButton.hidden = !(
+                    state.quick_draft.status === 'deck_building'
+                    && state.quick_draft.deck_building.you_submitted
+                    && state.quick_draft.deck_building.opponent_submitted
+                );
+            } else {
+                document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
+                document.getElementById('duel-deck-submission').hidden = true;
+                document.getElementById('quick-draft-panel').hidden = true;
                 startButton.hidden = false;
             }
 
@@ -968,6 +1495,7 @@
 
         startButton.hidden = true;
         document.getElementById('duel-deck-submission').hidden = true;
+        document.getElementById('quick-draft-panel').hidden = true;
         inProgressArea.hidden = false;
 
         if (state.game.status === 'completed') {
@@ -997,28 +1525,7 @@
 
         document.getElementById('discard-count').textContent = state.discard_pile.length;
         document.getElementById('deck-count').textContent = state.deck_count;
-        renderList(document.getElementById('discard-list'), { hidden: true }, state.discard_pile, (card) => {
-            const li = document.createElement('li');
-            // last_owner_name disambiguates two players' identical catalog
-            // cards both sitting in the shared discard pile at once (see
-            // the 'discard_card' case in fieldOptions() below) -- shown
-            // here too so the thumbnail itself isn't ambiguous either.
-            const caption = card.last_owner_name || null;
-            // Almost always just informational (a discard-pile card can't
-            // normally be played), but Angst/Harmony/Grief's discard-sourced
-            // extra play, or Melancholy's "play from the discard pile as
-            // though it were your hand," can make a specific one playable
-            // for the rest of this turn -- is_playable already reflects
-            // that (see GameService::getState()'s discard_pile mapping), so
-            // route straight to the same Play/Cancel panel a hand card
-            // uses instead of the read-only detail view in that case.
-            if (canAct && card.is_playable) {
-                li.appendChild(buildCardThumb(card, { caption, onClick: () => handleHandCardClick(card) }));
-            } else {
-                li.appendChild(buildCardThumb(card, { caption, onClick: () => openCardDetail(card) }));
-            }
-            return li;
-        });
+        renderDiscardPile(state.discard_pile, canAct);
 
         // While the viewer is the one being asked to answer a pending
         // decision (e.g. Confusion's "choose a hand card to give away"),
@@ -1340,6 +1847,218 @@
         initialCardPassSelection = new Set();
         await refreshBoard();
     });
+
+    // -- Quick Draft (issue #88) -------------------------------------------
+    //
+    // A Quick Draft match's own drafting/deck_building phases both happen
+    // while games.status is still 'waiting' (see GameService::getState()'s
+    // 'quick_draft' field) -- shown in the same waiting-room area
+    // renderDuelDeckSubmission() occupies for custom_duel, mutually
+    // exclusive with it. quickDraftPickSelection/quickDraftDeckSelection
+    // are plain client-side Sets, the same "nothing is sent until submit"
+    // pattern initialCardPassSelection already uses -- re-rendered from
+    // scratch every refreshBoard() poll, but not reset on every render
+    // (only when the underlying round/stage or game actually changes --
+    // see showBoard()'s own reset and the two selection-key checks below),
+    // so an in-progress selection survives an ordinary poll uneventfully.
+
+    function renderQuickDraftScoreline(state) {
+        const el = document.getElementById('quick-draft-scoreline');
+        const nextGameButton = document.getElementById('quick-draft-next-game-button');
+        const qd = state.quick_draft;
+        if (!qd) {
+            el.hidden = true;
+            nextGameButton.hidden = true;
+            return;
+        }
+
+        el.hidden = false;
+        el.textContent = 'Quick Draft match — game ' + (state.game.match_game_number || 1) + ' of up to 3 — ' +
+            'you ' + qd.your_wins + ', opponent ' + qd.opponent_wins +
+            ' (first to ' + qd.games_to_win + ' wins the match)';
+
+        // next_game_id is only ever set once this game has completed and
+        // advanceQuickDraftMatch() has already created the next one -- see
+        // GameService::quickDraftStateFor(). A prominent button right next
+        // to the scoreline (rather than making the player go back to the
+        // lobby and find it themselves) takes them straight to it.
+        nextGameButton.hidden = !qd.next_game_id;
+        nextGameButton.onclick = qd.next_game_id ? () => showBoard(qd.next_game_id) : null;
+    }
+
+    let quickDraftPickSelection = new Set();
+    let quickDraftPickSelectionKey = null;
+
+    const QUICK_DRAFT_STAGE_STATUS = {
+        draw: 'Choose 2 cards to keep from your 6 just-dealt cards -- the other 4 will be passed to your opponent. Tap a card to view it and select/de-select it.',
+        awaiting_opponent_draw: "You've kept your 2 -- your received cards aren't determined until your opponent also makes their own pick.",
+        received: 'Choose 2 cards to keep from the 4 cards you received from your opponent -- the other 2 are discarded. Tap a card to view it and select/de-select it.',
+        awaiting_opponent_received: "You've made both picks this round -- waiting for your opponent to finish theirs.",
+    };
+
+    function renderQuickDraftDrafting(drafting) {
+        document.getElementById('quick-draft-drafting-title').textContent =
+            'Draft round ' + drafting.round + ' of ' + drafting.total_rounds;
+        document.getElementById('quick-draft-drafting-status').textContent = QUICK_DRAFT_STAGE_STATUS[drafting.stage] || '';
+
+        const selectionKey = drafting.round + ':' + drafting.stage;
+        if (quickDraftPickSelectionKey !== selectionKey) {
+            quickDraftPickSelection = new Set();
+            quickDraftPickSelectionKey = selectionKey;
+        }
+
+        const packContainer = document.getElementById('quick-draft-pack');
+        packContainer.innerHTML = '';
+        const submitButton = document.getElementById('quick-draft-pick-submit-button');
+        const pickable = drafting.stage === 'draw' || drafting.stage === 'received';
+
+        drafting.pack.forEach((card) => {
+            const selected = quickDraftPickSelection.has(card.card_id);
+            const thumb = buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: !selected && quickDraftPickSelection.size >= 2,
+                    onToggle: () => {
+                        if (quickDraftPickSelection.has(card.card_id)) {
+                            quickDraftPickSelection.delete(card.card_id);
+                        } else {
+                            quickDraftPickSelection.add(card.card_id);
+                        }
+                        renderQuickDraftDrafting(drafting);
+                    },
+                }),
+            });
+            thumb.classList.toggle('selected', selected);
+            packContainer.appendChild(thumb);
+        });
+
+        submitButton.hidden = !pickable;
+        submitButton.disabled = quickDraftPickSelection.size !== 2;
+
+        renderList(document.getElementById('quick-draft-kept-so-far'), { hidden: true }, drafting.kept_so_far, (card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            return li;
+        });
+    }
+
+    document.getElementById('quick-draft-pick-submit-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const drafting = currentState.quick_draft.drafting;
+        const { ok, body } = await submitQuickDraftPick(currentGameId, drafting.round, drafting.stage, Array.from(quickDraftPickSelection));
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit that pick.';
+            boardError.hidden = false;
+            return;
+        }
+        quickDraftPickSelection = new Set();
+        quickDraftPickSelectionKey = null;
+        await refreshBoard();
+    });
+
+    // Used for both the initial 16-to-14/15/16 trim and every later
+    // sideboard between the match's up-to-3 games -- same picker, same
+    // endpoint (submitQuickDraftDeck()). Seeded once from the player's
+    // current deck_card_ids; if that's null (a fresh game whose deck
+    // hasn't been (re)submitted yet), falls back to previous_deck_card_ids
+    // -- whatever deck they last submitted, for the game that just ended --
+    // so sideboarding starts from their existing deck instead of forcing a
+    // full retrim from scratch every game. Only the very first game of a
+    // match (no previous deck to fall back to) still defaults to all 16
+    // drafted cards. quickDraftDeckSelectionInitialized is reset by
+    // showBoard() so switching games/sideboarding for a new game always
+    // re-seeds rather than carrying over a stale selection.
+    let quickDraftDeckSelection = new Set();
+    let quickDraftDeckSelectionInitialized = false;
+
+    function renderQuickDraftDeckBuilding(deckBuilding) {
+        document.getElementById('quick-draft-deck-building-title').textContent = 'Build your deck (14-16 cards)';
+        const picker = document.getElementById('quick-draft-deck-picker');
+        const submitButton = document.getElementById('quick-draft-deck-submit-button');
+        const statusEl = document.getElementById('quick-draft-deck-building-status');
+
+        if (deckBuilding.you_submitted) {
+            statusEl.textContent = deckBuilding.opponent_submitted
+                ? 'Both decks are in -- start the game when ready.'
+                : "Your deck is submitted -- waiting for your opponent's deck.";
+            picker.innerHTML = '';
+            submitButton.hidden = true;
+            return;
+        }
+
+        if (!quickDraftDeckSelectionInitialized) {
+            quickDraftDeckSelection = new Set(
+                deckBuilding.deck_card_ids
+                || deckBuilding.previous_deck_card_ids
+                || deckBuilding.drafted_cards.map((card) => card.card_id),
+            );
+            quickDraftDeckSelectionInitialized = true;
+        }
+
+        statusEl.textContent = 'Choose 14-16 of your 16 drafted cards for your deck. Tap a card to select/de-select it.';
+        picker.innerHTML = '';
+
+        deckBuilding.drafted_cards.forEach((card) => {
+            const selected = quickDraftDeckSelection.has(card.card_id);
+            const thumb = buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, {
+                    selected,
+                    disabled: false,
+                    onToggle: () => {
+                        if (quickDraftDeckSelection.has(card.card_id)) {
+                            quickDraftDeckSelection.delete(card.card_id);
+                        } else {
+                            quickDraftDeckSelection.add(card.card_id);
+                        }
+                        renderQuickDraftDeckBuilding(deckBuilding);
+                    },
+                }),
+                // Reuses the same dimmed/dashed-border treatment the
+                // in-game hand list gives a card that can't be played
+                // (.not-playable) -- here it means "not in the deck", not
+                // "can't be played", but the same at-a-glance "this one's
+                // excluded" signal applies.
+                notPlayable: !selected,
+            });
+            thumb.classList.toggle('selected', selected);
+            picker.appendChild(thumb);
+        });
+
+        submitButton.hidden = false;
+        submitButton.disabled = quickDraftDeckSelection.size < 14 || quickDraftDeckSelection.size > 16;
+    }
+
+    document.getElementById('quick-draft-deck-submit-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const errorEl = document.getElementById('quick-draft-deck-error');
+        errorEl.hidden = true;
+
+        const { ok, body } = await submitQuickDraftDeck(currentGameId, Array.from(quickDraftDeckSelection));
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not submit that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+        quickDraftDeckSelectionInitialized = false;
+        await refreshBoard();
+    });
+
+    function renderQuickDraftPanel(state) {
+        const panel = document.getElementById('quick-draft-panel');
+        const qd = state.quick_draft;
+        panel.hidden = false;
+
+        document.getElementById('quick-draft-drafting').hidden = qd.status !== 'drafting';
+        document.getElementById('quick-draft-deck-building').hidden = qd.status !== 'deck_building';
+
+        if (qd.status === 'drafting') {
+            renderQuickDraftDrafting(qd.drafting);
+        } else if (qd.status === 'deck_building') {
+            renderQuickDraftDeckBuilding(qd.deck_building);
+        }
+    }
 
     // The 'custom_duel' waiting-room view: shows the creator's own locked-
     // in deck-building rules, both players' submission status (never the
@@ -2227,7 +2946,25 @@
 
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
+        const playButton = document.getElementById('play-card-button');
+        // Disabled + relabeled immediately (not after the request settles)
+        // so a slow response can't be mistaken for a missed click and
+        // prompt a second, duplicate submission.
+        playButton.disabled = true;
+        playButton.textContent = 'Playing...';
         await submitPlay(selectedCard, choices);
+        // submitPlay() already hides the whole panel and clears
+        // selectedCard on success; only re-enable the button here if the
+        // panel is still open, i.e. the attempt failed and the player
+        // needs another shot at it. Just flip disabled back to false
+        // rather than calling updatePlayButtonEnabled() -- that recomputes
+        // (and would overwrite) #choices-validation from client-side field
+        // checks alone, clobbering the server's own rejection message that
+        // submitPlay() just placed there.
+        playButton.textContent = 'Play card';
+        if (selectedCard) {
+            playButton.disabled = false;
+        }
     });
 
     document.getElementById('friends-button').addEventListener('click', async () => {

@@ -162,18 +162,21 @@ is the shared element builder every card zone (hand, in-play, discard pile)
 uses in place of the old text-only buttons: a `<button class="card-thumb">`
 containing the art `<img>` (its `alt` text is `name + '. ' + rules_text`,
 covering what the printed art itself can't convey to a screen reader) plus
-whatever ISN'T part of the static art overlaid as small badges/captions on
-top of it -- a current value badge (only shown when `card.value` differs
-from `card.base_value`, since the printed value is already baked into the
-art otherwise), a "Copy" badge for an in-play Creativity copy, a
-"Suppressed" ribbon, and an owner/last-owner caption below the thumbnail
-for in-play and discard-pile cards. An unplayable hand card keeps the same
-dashed, lower-opacity `.not-playable` treatment the old text button had,
-just applied to the thumbnail instead. Two tabletop conventions are
-conveyed by rotating the art itself (badges/captions are siblings of the
-`<img>`, not children of it, so they always stay upright and legible --
-the rotation is a visual reinforcement of the badge, never a replacement
-for it): a suppressed in-play mood's `.card-thumb--suppressed` class
+whatever ISN'T part of the static art overlaid as small badges on top of
+it -- a current value badge (only shown when `card.value` differs from
+`card.base_value`, since the printed value is already baked into the art
+otherwise), a "Copy" badge for an in-play Creativity copy, and a
+"Suppressed" ribbon. Ownership (issue #142) is no longer a per-thumb
+caption -- it's redundant once every zone already identifies whose cards
+are in it (see "Discard pile stacking" and "In-play board layout" below),
+and it cost each card its own line of vertical space repeated across the
+whole board. An unplayable hand card keeps the same dashed,
+lower-opacity `.not-playable` treatment the old text button had, just
+applied to the thumbnail instead. Two tabletop conventions are conveyed by
+rotating the art itself (badges are siblings of the `<img>`, not children
+of it, so they always stay upright and legible -- the rotation is a
+visual reinforcement of the badge, never a replacement for it): a
+suppressed in-play mood's `.card-thumb--suppressed` class
 rotates it 90 degrees, and a mood whose `value_locked` flag is true --
 a permanent "after playing this mood" trigger (Dignity, Delight, ...)
 has locked in its alt value, as opposed to a continuously-recomputed
@@ -197,13 +200,67 @@ is still outstanding or has already been spent (losing track of that
 matters more for Hope/Grace than an ordinary grant -- see
 `BoardState::grantIsActive()`'s own docblock).
 
+### Discard pile stacking
+
+A discard pile only ever grows over a game -- unlike hand/in-play, which
+stay bounded by a player's own card count -- so a flat wrapping list of
+full-size thumbnails (the old layout) eventually dwarfs the rest of the
+board. `renderDiscardPile()` in `game.js` instead groups `state.discard_pile`
+into columns, rendered as `<li class="discard-stack__column">` elements
+holding `buildCardThumb()` buttons directly (no per-card `<li>` needed,
+unlike hand/in-play). How many columns exist is recomputed on every render
+from `discardStackColumnCount()` -- `#discard-list`'s own current
+`clientWidth` divided by `.card-thumb`'s fixed 5.5rem width plus the list's
+own 0.5rem gap (both hardcoded in pixels assuming the default 16px root
+font-size the rest of this file's own rem/px math already assumes)  --
+rather than a fixed cards-per-column cap, so however many columns actually
+fit side by side is however many there are: cards are dealt round-robin
+across them (card 0 into column 0, card 1 into column 1, ..., wrapping
+back to column 0 once every column has one), filling the available width
+before any single column stacks two deep, rather than filling column 0
+completely before starting column 1. A `resize` listener (debounced 150ms
+so a drag-resize or a slow orientation-change animation doesn't re-layout
+repeatedly mid-gesture) re-runs `renderDiscardPile()` against the same
+`state.discard_pile`/`canAct` it was last called with (remembered in
+`lastDiscardPile`/`lastDiscardCanAct`, since the normal 4s poll has no
+reason to fire just because the viewport changed shape) -- rotating a
+phone from portrait to landscape mid-game, for instance, immediately
+re-flows the same pile into more, shallower columns, and back again on
+rotating back, without waiting for the next poll.
+
+`.discard-stack__column .card-thumb:not(:last-child) { margin-bottom:
+-6.6rem; }` pulls each card up to overlap all but a ~19px sliver of the
+one before it -- `.card-thumb__art` is a fixed 5.5rem wide with `height:
+auto`, so every card renders at the same height (5.5rem times the printed
+card art's own fixed 744:1039 intrinsic ratio, ~7.68rem, plus its own 1px
+top/bottom border); leaving a ~19px sliver means overlapping the rest,
+i.e. roughly `-(7.68rem + border - 1.19rem)`. That sliver still shows the
+covered card's own name and, if present, its value badge's upper-right
+corner, since both live in that card's own top strip and the next card
+(painted on top by DOM/paint order, not applied any negative margin since
+it's the last child) only starts further down. A column's own last card
+-- the most recently discarded card assigned to it, assuming the array's
+actual append-only order, though `BoardState`'s own docblock doesn't treat
+that as a hard contract -- therefore always renders in full. Columns lay
+out side by side via `#discard-list`'s own `flex-wrap` -- normally exactly
+filling one row since the column count is computed to fit, though wrapping
+is kept as a defensive fallback in case that math is ever off by one --
+with `align-items: flex-start` keeping a shorter trailing column (whenever
+the pile's own card count isn't an exact multiple of the column count)
+pinned to the top rather than centered/stretched against a taller
+neighbor. Clicking any card in the stack (even a mostly-covered one, via
+its visible sliver) opens the same read-only detail dialog as before,
+passing `last_owner_name` explicitly as that dialog's own ownerLabel
+argument (previously conveyed by the per-thumb caption removed above).
+
 ### In-play board layout
 
 The "In play" area (issue #124) groups moods by seating position relative
 to the viewer instead of one flat list -- `#in-play-board` is a CSS grid
 with 6 zone `<div>`s (`#in-play-zone-north`/`-northwest`/`-northeast`/
-`-west`/`-east`/`-south`, each a flex container that centers its cards both
-ways), and one of three modifier classes (`in-play-board--2/3/4`, matching
+`-west`/`-east`/`-south`, each a flex container -- `flex-direction: column`
+-- that centers its own `.in-play-zone__label` above its cards both ways),
+and one of three modifier classes (`in-play-board--2/3/4`, matching
 `state.players.length`) picks which `grid-template-areas` -- and so which
 of those 6 zones actually participate -- apply for this game: `north`/
 `south` for a 2-player game (opponent above, you below), `northwest`/
@@ -219,7 +276,10 @@ viewer's own left (`west`/`northwest`); the remaining index(es) fill
 viewer's right) in that same clockwise order. `renderInPlay()` then buckets
 `state.in_play` by each card's `owner_game_player_id` into its assigned
 zone's own `<ul class="in-play-zone__list">`, reusing `buildCardThumb()`
-exactly as the old flat list did. This is purely a seating-position
+exactly as the old flat list did -- except each card's own owner caption
+(issue #142) is gone; the zone's own `.in-play-zone__label` (inverted from
+the same `zoneByGamePlayerId` map, one lookup per zone rather than one per
+card) names its player once instead. This is purely a seating-position
 grouping -- Open/Closed Team Play's own team pairing (`team_id`) plays no
 part in it, unlike the players list's own "Team 1"/"Team 2" tags.
 
@@ -235,7 +295,18 @@ selector specificity) for whichever zones aren't used at the current
 player count -- `.in-play-zone[hidden] { display: none; }` overrides that
 back, so an unused zone (e.g. northwest/northeast in a 2-player game)
 doesn't render as a stray empty dashed box, auto-placed by the grid into
-an extra implicit row/column past the real zones.
+an extra implicit row/column past the real zones. `#in-play-board`
+itself needs the identical `#in-play-board[hidden] { display: none; }`
+override for the same reason, one level up: `renderInPlay()` sets
+`board.hidden = true` and returns early whenever the just-loaded game's
+own `state.in_play` is empty, without touching that game's own zone
+`hidden`/list contents at all (there's nothing to bucket) -- without the
+CSS override, that early return did nothing visible, and whichever other
+game's board had rendered last stayed fully on screen underneath, cards
+and all, until a game whose own `in_play` wasn't empty happened to load
+next. Concretely: viewing a finished game with moods still in play, going
+back to the lobby, then opening a different, fresh in-progress game
+before its first play left that first game's own in-play area showing.
 
 `#in-play-board`'s own grid `gap` is `0` -- the rows/columns of zones sit
 flush against each other, with no visible seam between e.g. the `north`
@@ -268,29 +339,105 @@ too, proportional to the smaller card width.
   redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
-  "Friends" button (see below), and the game lobby/board itself:
-  - **Lobby**: your games (via `GET /games`), each showing opponents,
-    status, and whether it's your turn — status reads as e.g. "In
-    Progress" rather than the raw `in_progress` the API returns
+  "Friends" button (see below), and the game lobby/board itself. The
+  "Friends"/"Log out" buttons carry their own `margin-bottom` so they don't
+  touch whichever of the lobby or board view is showing directly beneath
+  them (most noticeably the board view's own "Back to your games" button).
+  - **Lobby**: a "New game" button (`#new-game-button`, also with its own
+    `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
+    opens the New game dialog described below. Your games (via
+    `GET /games`), each rendered as three
+    stacked lines above the row's own action button. First, a format/deck
+    line (`.lobby-format`, muted/smaller text) -- e.g. "Traditional,
+    Structure deck" -- built from the same `format`/`deck_type` labels
+    (`formatLabel()`/`deckTypeLabel()`) the board's own title uses,
+    substituting the game's `custom_deck_name` for a `custom` deck_type
+    just like the board title does. `custom_duel` falls back to
+    `deckTypeLabel()`'s generic label here since each player's own
+    submitted deck name (unlike `custom`'s single game-wide name) only
+    comes back from `GET /games/:id`, not the lobby list. Second, its own
+    status line (`.lobby-status-line`) -- status reads as e.g.
+    "In Progress" rather than the raw `in_progress` the API returns
     (`humanizeStatus()`, a generic snake_case-to-Title-Case transform, not
     a fixed per-status lookup table, so any future status value still
-    reads reasonably without needing an update here). The list itself is
+    reads reasonably without needing an update here). Third, the
+    opponents themselves. The list itself is
     rendered in whatever order the API returns (no client-side re-sort) --
     `GET /games` always puts `waiting`/`in_progress` games above
     `completed` ones regardless of recency, so a stalled active game never
     gets buried below a long-finished one; see "Game timestamps" in
-    `php-app/README.md`. A "New game" dialog
+    `php-app/README.md`. Status is also color-coded (issue #136) via a
+    `.lobby-status--<status>` class per row -- `waiting` reads in
+    `--color-pending`, `in_progress` in a new `--color-info` (blue, added
+    alongside the existing error/success/pending theme variables --
+    see "Dark mode" below), `completed` in `--color-muted`, and the rarer
+    `abandoned` in `--color-error` -- distinguishing what needs attention
+    at a glance rather than requiring every row's text to be read in full.
+    `is_your_turn` gets its own bold `--color-success` "(your turn)" tag
+    on that same status line, plus a whole-row background
+    (`.lobby-row--your-turn`, a new `--color-your-turn-bg` theme variable)
+    so an actionable game stands out even before any of the row's text is
+    read; `#lobby-view li`'s own horizontal padding (rather than 0) is what
+    keeps that background from touching the row's edges. Once a game is
+    `completed`,
+    `winner_usernames` (both teammates' for a team-format win, just the
+    one player's otherwise -- see `php-app/README.md`) renders as an extra
+    line below the players, e.g. "alice won" or "alice & bob won" --
+    absent (and the line omitted entirely) for every other status, since
+    there's no winner yet to name. All of that text lives in its own
+    `.lobby-info` wrapper, a flex sibling of the row's own action button
+    (`.lobby-row`'s own `display: flex; justify-content: space-between`)
+    rather than a plain child of the `<li>` -- keeps the button pinned to
+    the right of and vertically centered against however many lines the
+    text itself wraps to on a narrow (phone-width) viewport, instead of
+    always trailing on its own line below a wrapped winner line/status.
+    The button itself has a fixed width (`.lobby-row button`) so every
+    row's button lines up in a column regardless of whether that row's own
+    label is the shorter "Play" or the wider "View". Each row's own button
+    reads "Play" for
+    a `waiting`/`in_progress` game (something there's still an actual turn
+    to take) and "View" otherwise (`showBoard()` itself renders read-only
+    once a game isn't `in_progress` regardless of the button's own label,
+    so this is purely about setting the right expectation before
+    clicking, not a new access restriction). A `quick_draft` game's up-to-3
+    `games` rows (sharing one `draft_match_id`) are grouped into a single
+    `<li class="lobby-match-group">` instead of showing as unrelated rows --
+    `refreshLobby()` walks `GET /games`'s already-sorted array once,
+    bucketing by `draft_match_id` into a `Map`, and renders one
+    `buildMatchGroupRow()` per match at the position of its first (best-
+    sorted) game; every other format's games are unaffected (no
+    `draft_match_id`, so each stays its own top-level row). The group's own
+    header carries the format/deck line and a `.lobby-match-score` line
+    ("Match score: you 1, opponent 0 (first to 2 wins)", from the game's
+    own `quick_draft_match` field) once, plus -- only once the match itself
+    is decided -- a `.lobby-winner`-styled result line ("alice won the
+    match"); each game nested underneath (`.lobby-match-games`, indented)
+    renders via the same `buildGameRow()` the flat list uses, but with
+    `{ compact: true }` to drop the now-redundant format/deck/opponents
+    lines and prefix its own status with "Game N --", keeping its own
+    Play/View button and its own `winner_usernames` line once that
+    particular game is `completed` -- not redundant with the group header's
+    own result, since a match's games aren't necessarily all won by the
+    same player. A "New game" dialog
+    (`.new-game-field` puts the Format and Deck `<label>`s each on their
+    own line -- plain inline `<label>` elements otherwise sit side by side
+    until their own `<select>` runs out of room, rather than breaking
+    predictably between fields; `#new-game-close-button`'s small
+    margin-top keeps it from touching the submit button directly above
+    it, which are two separate block boxes -- the button's inside
+    `<form>`, Close is a sibling after it -- that would otherwise stack
+    flush against each other)
     picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
-    Duel, Open Team Play, or Closed Team Play), then calls `POST /games`.
-    `updateOpponentSelectionLimit()` caps how many friends
+    Duel, Draft, Open Team Play, or Closed Team Play), then calls
+    `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
-    3 normally, but only 1 for Duel, since a duel is exactly 2 players and
-    the server rejects anything else (see "Duel: separate per-player
-    decks" in `php-app/README.md`). It runs on every checkbox's own
-    `change` as well as the format `<select>`'s: switching to Duel with 2
-    friends already checked auto-unchecks the second one and disables the
-    rest, and switching back to Traditional re-enables them, so you can't
-    submit a Duel request the server will just reject with a 400.
+    3 normally, but only 1 for Duel or Draft, since both are exactly 2
+    players and the server rejects anything else (see "Duel: separate
+    per-player decks" in `php-app/README.md`). It runs on every checkbox's
+    own `change` as well as the format `<select>`'s: switching to Duel or
+    Draft with 2 friends already checked auto-unchecks the second one and
+    disables the rest, and switching back to Traditional re-enables them,
+    so you can't submit a request the server will just reject with a 400.
     Selecting Open Team Play or Closed Team Play reveals
     `#new-game-team-fields` (`updateTeamFields()`, wired to the same
     checkbox/format `change` events): a partner `<select>` populated from
@@ -304,9 +451,9 @@ too, proportional to the smaller card width.
     the selected partner as `partner_user_id`. See "Open Team Play"/
     "Closed Team Play" in `php-app/README.md` for the formats themselves. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
-    jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), One of Each
-    Card, in that order, matching `deck_type`'s own six values -- see
-    "Deck types" in
+    jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
+    Draft, One of Each Card, in that order, matching `deck_type`'s
+    own seven values -- see "Deck types" in
     `php-app/README.md`) has a plain-language
     description shown right below it (`#new-game-deck-type-description`,
     `updateDeckTypeDescription()`) that updates live as the selection
@@ -320,23 +467,29 @@ too, proportional to the smaller card width.
     reads its text into the textarea via `FileReader`, so the server only
     ever sees one input shape regardless of which the player used) -- see
     "Custom decklists" in `php-app/README.md` for the format itself.
-    `updateDeckTypeAvailability()` disables that option (mirroring
-    `updateOpponentSelectionLimit()`'s own proactive approach) whenever
-    Duel is selected, since custom decklists aren't supported for duel
-    games, falling back to Structure if Custom Decklist was already
-    selected when the format switches -- and, the other way round,
-    disables Custom Decklists (Duel) whenever Duel *isn't* selected, since
-    that option only makes sense for a duel. The same function also
-    disables Power whenever either team format is selected -- Power's 15
-    cards fall short of the 45-card minimum both team formats share (see
-    "Open Team Play"/"Closed Team Play" in
-    `php-app/README.md`) -- falling back to Structure if Power was already
-    selected. Selecting Custom Decklists
-    (Duel) reveals `#new-game-duel-rules-fields` instead of the decklist
-    fields -- no decklist is entered here at all, only the deck-building
-    *rules* both players' own decklists (submitted later, see the Board
-    bullet below) will have to satisfy. A `#new-game-duel-rules-preset`
-    dropdown (Structure/Power/jceddy's 75 Card/User-Defined) either shows a
+    `updateDeckTypeAvailability()` **hides** (`option.hidden`, not merely
+    `option.disabled`) whichever deck-type options don't make sense for
+    the currently-selected format -- so the dropdown only ever *lists*
+    options that are actually legal, rather than showing a doomed one
+    grayed out -- via a small `isDeckTypeAvailableForFormat(deckType,
+    format)` allow-list function: Custom Decklist whenever Duel is
+    selected (custom decklists aren't supported for duel games), Custom
+    Decklists (Duel) whenever Duel *isn't* selected (that option only
+    makes sense for a duel), Power whenever either team format is
+    selected (Power's 15 cards fall short of the 45-card minimum both team
+    formats share -- see "Open Team Play"/"Closed Team Play" in
+    `php-app/README.md`), and -- since the Draft format supports nothing
+    but Quick Draft -- every option *except* Quick Draft whenever Draft is
+    selected, and Quick Draft itself whenever Draft *isn't* selected. If
+    the previously-selected option becomes unavailable, the dropdown falls
+    back to the first option that's still available in document order --
+    Structure for most formats, but Quick Draft for Draft, since it's the
+    only option Draft allows. Selecting Custom Decklists (Duel) reveals
+    `#new-game-duel-rules-fields` instead of the decklist fields -- no
+    decklist is entered here at all, only the deck-building *rules* both
+    players' own decklists (submitted later, see the Board bullet below)
+    will have to satisfy. A `#new-game-duel-rules-preset` dropdown
+    (Structure/Power/jceddy's 75 Card/User-Defined) either shows a
     read-only summary of that preset's locked-in values
     (`DUEL_RULES_PRESET_SUMMARIES`, a client-side mirror of
     `DuelDeckRules::forPreset()` purely for display -- the actual values
@@ -349,7 +502,22 @@ too, proportional to the smaller card width.
     plain list of checked rarity names rather than a `{rarity: value}`
     map, since it's a flag rather than a count) -- see "Custom decklists
     for Duel games" in `php-app/README.md` for what these rules actually
-    mean. Polls `GET /games` every 4 seconds while the lobby is
+    mean. Selecting Quick Draft reveals `#new-game-quick-draft-fields`
+    instead -- a Pool dropdown (`#new-game-quick-draft-pool-source`: 48
+    random cards, Structure deck, jceddy's 75 Card deck, One of Each Card,
+    or Custom pool) with its own plain-language description below it
+    (`QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS`, `updateQuickDraftPoolSourceVisibility()`),
+    and, only for Custom pool, the same file-upload/paste pair the
+    Traditional `custom` deck_type and the `custom_duel` waiting room both
+    already use, feeding `quick_draft_custom_pool_text` instead of
+    `decklist_text`/`custom_duel`'s own decklist field. Quick Draft is only
+    ever offered under the Draft format (`#new-game-format` has its own
+    Draft option, functionally identical to Duel -- same 2-player,
+    separate-per-player-deck engine, `updateOpponentSelectionLimit()` caps
+    it at 1 opponent the same way Duel is -- but restricted to deck types
+    that build a deck through some kind of live drafting process; Quick
+    Draft is the first, and so far only, one -- see "Draft format" in
+    `php-app/README.md`). Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just
@@ -438,6 +606,83 @@ too, proportional to the smaller card width.
     have or haven't submitted yet -- never which 2 cards anyone chose).
     See "Closed Team Play" in `php-app/README.md`.
 
+    A `#quick-draft-scoreline` line (`renderQuickDraftScoreline()`, reading
+    `state.quick_draft`, hidden for every other deck_type) sits just below
+    the round-status line and is always shown once a `quick_draft` game
+    exists, regardless of whether the game itself is `waiting`/
+    `in_progress`/`completed` -- "Quick Draft match — game N of up to 3 —
+    you X, opponent Y (first to 2 wins the match)". The same function also
+    owns `#quick-draft-next-game-button`, right next to the scoreline:
+    hidden unless `state.quick_draft.next_game_id` is set (only true once
+    this specific game has completed but the match itself hasn't --
+    `advanceQuickDraftMatch()` already created the next game), and its
+    `onclick` is just `showBoard(qd.next_game_id)` -- a direct, prominent
+    link to the next game from a just-finished one, instead of making the
+    player go back to the lobby and pick the new `waiting` row out by hand.
+    A `#quick-draft-panel`
+    (mutually exclusive with `#duel-deck-submission`, occupying the same
+    waiting-room slot while `state.game.status` is `'waiting'`) covers this
+    format's own two pregame phases, both read from `state.quick_draft`:
+    - **Drafting** (`#quick-draft-drafting`, `renderQuickDraftDrafting()`,
+      shown while `state.quick_draft.status` is `'drafting'`) -- shows the
+      current round number and one of four stage messages
+      (`QUICK_DRAFT_STAGE_STATUS`) depending on `state.quick_draft.drafting.stage`:
+      `'draw'` (your own 6 just-dealt cards, keep 2), `'received'` (the 4
+      cards you actually received from your opponent, keep 2 — only
+      determined once both players have submitted `'draw'`), or one of the
+      two `awaiting_opponent_*` stages (an empty pack, a "waiting on your
+      opponent" message — transient, since the round/stage advances
+      automatically the moment they finish too). The pack itself
+      (`#quick-draft-pack`) reuses the exact same click-thumbnail-to-open-
+      `#card-detail-dialog`-with-a-`selection`-object picker pattern
+      `renderInitialCardPass()` already established (a plain client-side
+      `Set`, capped at 2, never sent until `#quick-draft-pick-submit-button`
+      is pressed, which calls `submitQuickDraftPick()` — `POST
+      /games/draft/pick`). That selection Set is keyed to the current
+      `round:stage` pair (reset the moment either changes) rather than
+      reset on every render, so it survives an ordinary 4-second poll
+      mid-pick the same way `renderInitialCardPass()`'s own selection does.
+      A `#quick-draft-kept-so-far` list shows every card you've kept in the
+      draft so far (across all rounds, including whatever's already
+      resolved this one), read-only.
+    - **Deck building** (`#quick-draft-deck-building`,
+      `renderQuickDraftDeckBuilding()`, shown while `state.quick_draft.status`
+      is `'deck_building'`) -- the exact same picker/endpoint
+      (`submitQuickDraftDeck()`, `POST /games/draft/deck`) serves both the
+      very first 16-to-14/15/16 trim and every later sideboard between the
+      match's games; there's no "first trim" vs. "sideboard" distinction in
+      the UI either. All 16 of your own drafted cards
+      (`state.quick_draft.deck_building.drafted_cards`) show as toggleable
+      thumbnails (same picker pattern again, no 2-card cap this time — any
+      count from 14 to 16 is valid), pre-seeded from your current
+      `deck_card_ids`; if that's null (this game's deck hasn't been
+      (re)submitted yet), falls back to `previous_deck_card_ids` — whatever
+      deck you last submitted, for the game that just ended — so
+      sideboarding starts from your existing deck instead of forcing a full
+      retrim from scratch before every game. Only the very first game of a
+      match (no previous deck yet) still defaults to all 16 drafted cards.
+      A card currently excluded from the deck is dimmed with a dashed
+      border -- `buildCardThumb()`'s existing `.not-playable` treatment for
+      an unplayable in-game hand card, reused here via its `notPlayable`
+      option (`notPlayable: !selected`) purely for its "this one's excluded"
+      visual, not its original "can't be played" meaning -- so it's obvious
+      at a glance which of the 16 have actually been cut. That seeding only
+      happens once per game (`quickDraftDeckSelectionInitialized`,
+      reset by `showBoard()` whenever you switch games/sideboard into a new
+      one) so an in-progress selection isn't silently overwritten by an
+      ordinary poll. Once you've submitted, the picker itself hides in
+      favor of a status line ("waiting for your opponent's deck" or "both
+      decks are in"). "Start game" itself stays hidden until
+      `state.quick_draft.deck_building.you_submitted` AND
+      `.opponent_submitted` are both true. Pool/pack/drafted cards are all
+      served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
+      rather than the usual in-play `serializeCard()` result, but with the
+      exact same field names `buildCardThumb()`/`openCardDetail()` already
+      read (`card_id`, `name`, `color`, `value`, `rules_text`, etc.), so
+      neither function needed any change to render a card that hasn't been
+      dealt into a game yet. See "Quick Draft" in `php-app/README.md` for
+      the format itself.
+
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
     block element (not a `<dialog>`/overlay, deliberately: an overlay was
@@ -446,12 +691,25 @@ too, proportional to the smaller card width.
     still choosing a target) showing an enlarged view of the card's own
     art in place of a separate name/rules-text heading (its `alt` text
     carries both, for accessibility) plus whatever choice fields it
-    needs and Play/Cancel. A server-side rejection from actually
+    needs and Play/"Close" (labeled "Close" rather than "Cancel" --
+    once a play is actually submitted, closing the panel can't retract
+    it, and "Cancel" reads as if it might). A server-side rejection from actually
     submitting the play (caught after the panel's own client-side checks
     below already passed) surfaces inside the panel itself, reusing
     `#choices-validation`'s existing spot right next to the Play button,
     rather than the board's own `#board-error` above the hand -- easy to
-    miss while attention is still on the fields just below it. Cards with
+    miss while attention is still on the fields just below it. The Play
+    button itself disables and relabels to "Playing..." the instant it's
+    clicked, before the request even resolves, so a slow response can't
+    read as a missed click and prompt a second, duplicate submission; on a
+    server-side rejection it re-labels back to "Play card" and re-enables
+    (a plain `disabled = false`, not a recomputed
+    `updatePlayButtonEnabled()` call, which would otherwise overwrite
+    `#choices-validation` with its own client-side-only verdict and
+    clobber the server's actual rejection message that was just shown
+    there) so the player can adjust their choice and try again; on success
+    the whole panel closes anyway, so there's nothing left to re-enable.
+    Cards with
     no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
@@ -620,8 +878,8 @@ too, proportional to the smaller card width.
     (Angst/Harmony/Grief) or by Melancholy's "play from the discard pile as
     though it were your hand" — the same `is_playable` flag that already
     filters a hand card routes a click on one of those straight to the
-    ordinary Play/Cancel choices panel instead. The viewer's own hand cards
-    make this same read-only-vs-Play/Cancel split whenever it isn't their
+    ordinary Play/Close choices panel instead. The viewer's own hand cards
+    make this same read-only-vs-Play/Close split whenever it isn't their
     turn to act at all (not their turn, or a pending decision elsewhere is
     freezing the round) — a card sitting in your own hand is never hidden
     *from you*, only playing it is turn-gated, so the button stays clickable
@@ -782,20 +1040,65 @@ too, proportional to the smaller card width.
     *other* game's board opened, including a freshly created one that had
     never even started yet.
 
-    The "Players" list near the top of the board shows each player's
-    current point total alongside their win count and hand size
-    (`player.total_score` — a live sum of what's actually on the board
-    right now, i.e. what each player would score if the round ended this
-    instant, not anything accumulated from earlier rounds; distinct from
-    `total_wins`, which only counts outright round victories) — "Alice —
-    seat 0, 12 point(s), 2 win(s), 5 card(s) in hand" — so nobody has to
-    manually add up the values on their own moods. It also marks whoever
-    went first this round (`state.round.first_game_player_id`, already
-    tracked server-side for Chivalry/Honor/Triumph-style effects but
-    previously never surfaced to the client) with its own "— went first
-    this round" tag, independent of (and possibly a different player
-    from) whoever the "— on turn" tag currently marks. In games of 3+
-    players, whoever holds Hurt Feelings (`state.round.hurt_feelings_game_player_id`,
+    The "Players" list near the top of the board tags the viewer's own row
+    with a "(you)" suffix right after their username
+    (`state.you.game_player_id === player.game_player_id`), so it's
+    unambiguous at a glance which row is theirs even in a 4-player game with
+    similar-looking usernames. The suffix has its own `.player-you-tag`
+    color (`--color-info`, bold) rather than being plain text, so it reads
+    as a tag next to the name instead of looking like part of the username
+    itself. It also shows each player's seat,
+    current point total, win count, and hand size as small inline SVG
+    icons (issue #143) rather than spelled-out text — a bench (seat), a
+    star (points), a trophy (wins), and two overlapping cards (hand size)
+    — each colored to match what it depicts rather than every one
+    defaulting to the same muted gray: seat/hand-count in brown
+    (`--color-brown`, a bench and a hand of cards), points/wins in gold
+    (`--color-gold`, a star and a trophy), and the went-first pennant in
+    red (reusing `--color-error`, already theme-tuned for both light and
+    dark). The on-turn triangle keeps its own existing green
+    (`--color-success` via `.player-flag--turn`) — each with a numeric badge overlaid on its lower-right corner
+    (`.player-stat__badge`, the same overlay convention `.card-thumb__badge`
+    already uses for a card's own current value). The badge's background is
+    a 40%-opacity mix of the theme's surface color
+    (`color-mix(in srgb, var(--color-surface) 40%, transparent)`) rather
+    than solid, so the icon underneath is still partly visible through it
+    instead of being almost entirely hidden behind an opaque plate — the
+    number is the point of the badge, not full coverage of the icon it
+    sits on. `player.total_score` is
+    a live sum of what's actually on the board right now, i.e. what each
+    player would score if the round ended this instant, not anything
+    accumulated from earlier rounds; distinct from `total_wins`, which only
+    counts outright round victories. Every icon keeps its full original
+    text (e.g. "12 point(s)", "Seat 0") as both a `title` tooltip and an
+    `aria-label` on its wrapping `<span role="img">`, so a screen reader or
+    a sighted user hovering for a reminder still gets the exact same
+    information the old plain-text clauses gave (see `buildPlayerStat()`/
+    `buildStatIcon()`/`PLAYER_STAT_ICON_PATHS` in `game.js`, and the
+    `.player-stat`/`.player-flag` rules in `style.css`). It also marks
+    whoever went first this round (`state.round.first_game_player_id`,
+    already tracked server-side for Chivalry/Honor/Triumph-style effects
+    but previously never surfaced to the client) with its own small flag
+    icon (`buildPlayerFlag()`), independent of (and possibly a different
+    player from) whoever the current-turn marker — a play/active triangle,
+    rendered in `--color-success` via `.player-flag--turn` to match this
+    app's existing "your turn" bold/success-color convention — currently
+    marks. Every row's icons line up at the same horizontal position
+    regardless of how long that row's own username is: `renderBoard()`
+    measures the widest `.player-name` span in the just-rendered list and
+    applies that as a shared `min-width` to all of them, rather than
+    hardcoding one width that would either clip a long username or leave a
+    short one with an oddly large gap before its icons start. All the
+    icons/flags/thumbnail for a row share one `.player-icons` wrapper (its
+    own flex-wrap container) rather than wrapping directly as children of
+    the row itself, and the row is `flex-wrap: nowrap` so the name and this
+    wrapper always stay on the same line — the wrapper just shrinks (see
+    its `flex: 1 1 auto; min-width: 0`) and wraps its own children within
+    whatever width is left. On a narrow viewport this means an overflowing
+    icon continues on a second line starting right under the first icon
+    (this wrapper's own left edge), not back at the row's far-left edge
+    underneath the username. In games of 3+ players, whoever holds Hurt Feelings
+    (`state.round.hurt_feelings_game_player_id`,
     already tracked server-side to grant that player 2 plays instead of 1
     this round, but previously never surfaced to the client either) gets a
     small `img/hurt-feelings.webp` thumbnail next to their row instead of a
@@ -832,6 +1135,19 @@ too, proportional to the smaller card width.
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
     talks to the `/friends/*` endpoints.
+  - That same button gets a small red notification dot
+    (`.has-friend-request`, applied/removed by
+    `setFriendRequestNotification()`) whenever `/friends/invites` returns
+    at least one incoming request -- so a pending request is visible
+    without opening the dialog. `checkFriendRequestNotification()` polls
+    this independently of `refreshLobby()`/`refreshBoard()`'s own 4-second
+    `pollTimer` (a 15-second interval, since `#friends-button` lives in the
+    page's always-visible header, outside both `#lobby-view` and
+    `#board-view`, and a friend request is far less time-sensitive than
+    in-progress game state); `refreshFriendsData()` (the dialog's own data
+    fetch) also re-applies it immediately from the same `incoming` array
+    it already has, so accepting/declining/blocking a request clears the
+    dot right away rather than waiting for the next poll.
 
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
