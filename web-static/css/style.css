@@ -138,6 +138,23 @@ footer {
     color: var(--color-success);
 }
 
+.waiting-icon {
+    display: inline-block;
+    margin-right: 0.35rem;
+    animation: waiting-icon-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes waiting-icon-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .waiting-icon {
+        animation: none;
+    }
+}
+
 dialog#friends-dialog {
     box-sizing: border-box;
     max-width: 30rem;
