@@ -592,7 +592,15 @@ too, proportional to the smaller card width.
     the round-status line and is always shown once a `quick_draft` game
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Quick Draft match — game N of up to 3 —
-    you X, opponent Y (first to 2 wins the match)". A `#quick-draft-panel`
+    you X, opponent Y (first to 2 wins the match)". The same function also
+    owns `#quick-draft-next-game-button`, right next to the scoreline:
+    hidden unless `state.quick_draft.next_game_id` is set (only true once
+    this specific game has completed but the match itself hasn't --
+    `advanceQuickDraftMatch()` already created the next game), and its
+    `onclick` is just `showBoard(qd.next_game_id)` -- a direct, prominent
+    link to the next game from a just-finished one, instead of making the
+    player go back to the lobby and pick the new `waiting` row out by hand.
+    A `#quick-draft-panel`
     (mutually exclusive with `#duel-deck-submission`, occupying the same
     waiting-room slot while `state.game.status` is `'waiting'`) covers this
     format's own two pregame phases, both read from `state.quick_draft`:

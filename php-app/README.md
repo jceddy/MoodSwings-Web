@@ -1663,6 +1663,13 @@ to false/null, so the frontend reuses those two functions unchanged.
 Never exposes the opponent's own drafted/kept/received cards -- only the
 viewer's own.
 
+`quick_draft.next_game_id` is `null` except in the one specific window
+where it matters: viewing a game whose own `status` is `'completed'` but
+whose match isn't -- i.e. `advanceQuickDraftMatch()` has already created
+the next game in the match. Lets the frontend offer a direct "Go to next
+game" link from a just-finished game's own board, rather than making the
+player go back to the lobby and pick the new `'waiting'` row out by hand.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next

@@ -1731,9 +1731,11 @@
 
     function renderQuickDraftScoreline(state) {
         const el = document.getElementById('quick-draft-scoreline');
+        const nextGameButton = document.getElementById('quick-draft-next-game-button');
         const qd = state.quick_draft;
         if (!qd) {
             el.hidden = true;
+            nextGameButton.hidden = true;
             return;
         }
 
@@ -1741,6 +1743,14 @@
         el.textContent = 'Quick Draft match — game ' + (state.game.match_game_number || 1) + ' of up to 3 — ' +
             'you ' + qd.your_wins + ', opponent ' + qd.opponent_wins +
             ' (first to ' + qd.games_to_win + ' wins the match)';
+
+        // next_game_id is only ever set once this game has completed and
+        // advanceQuickDraftMatch() has already created the next one -- see
+        // GameService::quickDraftStateFor(). A prominent button right next
+        // to the scoreline (rather than making the player go back to the
+        // lobby and find it themselves) takes them straight to it.
+        nextGameButton.hidden = !qd.next_game_id;
+        nextGameButton.onclick = qd.next_game_id ? () => showBoard(qd.next_game_id) : null;
     }
 
     let quickDraftPickSelection = new Set();
