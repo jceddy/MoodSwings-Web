@@ -278,7 +278,7 @@ final class CardChoiceSchema
             ['key' => 'direction', 'type' => 'mode', 'required' => true, 'options' => ['left', 'right'], 'label' => 'Direction to pass a hand card around the table'],
         ],
         'rationalization' => [
-            ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['refresh', 'rotate'], 'label' => 'Refresh your own hand, or rotate hands with everyone'],
+            ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['refresh', 'rotate'], 'label' => 'Refresh your own hand, or rotate hands with everyone (optional)'],
             ['key' => 'direction', 'type' => 'mode', 'required' => false, 'options' => ['left', 'right'], 'label' => 'Direction to rotate (required if mode is rotate)'],
         ],
         'instability' => [

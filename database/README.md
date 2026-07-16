@@ -211,3 +211,8 @@ half-migrated schema.
   the player actually used last game instead of every drafted card. Plays
   no part in `startGame()`'s "deck submitted" gate, which still only ever
   looks at `deck_card_ids`. See "Quick Draft" in `php-app/README.md`.
+- **Rationalization optional fix** (`0030`): corrects `cards.rules_text`
+  for id 49 -- the 0003 catalog seed dropped "you may" from the printed
+  "you may choose one: ...", which made the after-playing ability look
+  mandatory; `RationalizationEffect` was fixed in the same change to
+  actually let a player decline (no `mode` submitted) instead of throwing.

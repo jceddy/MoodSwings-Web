@@ -10,20 +10,25 @@ use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\PlayerChoices;
 
 /**
- * Rationalization: "After playing this mood, choose one: put your hand
- * on the bottom of the deck then draw that many cards, or choose left or
- * right and have each player simultaneously give their hand to the next
- * player in that direction." The 'rotate' mode reuses Avoidance/
- * Confusion's direction-to-neighbor mapping, but swaps whole hands
- * (snapshotted before any transfers, so a hand received from one neighbor
- * never gets forwarded again in the same resolution) instead of one
- * random card each.
+ * Rationalization: "After playing this mood, you may choose one: put
+ * your hand on the bottom of the deck then draw that many cards, or
+ * choose left or right and have each player simultaneously give their
+ * hand to the next player in that direction." The whole thing is
+ * optional ("you may choose one") -- declining (no 'mode' submitted) is
+ * a no-op. The 'rotate' mode reuses Avoidance/Confusion's
+ * direction-to-neighbor mapping, but swaps whole hands (snapshotted
+ * before any transfers, so a hand received from one neighbor never gets
+ * forwarded again in the same resolution) instead of one random card
+ * each.
  */
 final class RationalizationEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $mode = $choices->requireString('mode');
+        $mode = $choices->string('mode');
+        if ($mode === null) {
+            return;
+        }
 
         match ($mode) {
             'refresh' => $this->refreshHand($state, $playerId),
