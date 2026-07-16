@@ -214,7 +214,7 @@ half-migrated schema.
   `draft_matches` (one row per best-of-three match: pool config, drafting/
   deck_building/completed status, current round, winner), `draft_match_players`
   (per `(draft_match_id, user_id)`: the fixed 16-card `drafted_card_ids`
-  result of the draft, the player's current 14-16 card `deck_card_ids`, and
+  result of the draft, the player's current 12-16 card `deck_card_ids`, and
   this match's own win counter — keyed by `user_id` rather than
   `game_player_id` since this data spans up to 3 separate `games` rows, one
   per game of the match), and `draft_round_picks` (one row per player per
