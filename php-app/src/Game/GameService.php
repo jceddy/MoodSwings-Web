@@ -1006,14 +1006,15 @@ final class GameService
      * Assembles a Quick Draft match's shared card pool, per $poolSource --
      * 'random_48' (QUICK_DRAFT_POOL_SIZE random *distinct* catalog cards,
      * singleton like buildStructureDeckCardIds()), 'structure' (reuses
-     * buildStructureDeckCardIds() as-is -- its own 45-card pool), 'one_of_each'
-     * (the full TOTAL_CARDS catalog), or 'custom' (parseQuickDraftCustomPool()).
-     * Whatever the source produces, anything over QUICK_DRAFT_POOL_SIZE is
-     * randomly truncated down to it -- "if more than 48 cards are in the
-     * pool, just ignore the extra cards" (the repo owner's own words for
-     * this feature) -- so 'one_of_each's 133 and an oversized 'custom' pool
-     * both end up the same size as 'random_48'/'structure' before drafting
-     * ever starts.
+     * buildStructureDeckCardIds() as-is -- its own 45-card pool), 'jceddys_75'
+     * (reuses buildJceddys75DeckCardIds() as-is -- its own 75-card pool),
+     * 'one_of_each' (the full TOTAL_CARDS catalog), or 'custom'
+     * (parseQuickDraftCustomPool()). Whatever the source produces, anything
+     * over QUICK_DRAFT_POOL_SIZE is randomly truncated down to it -- "if
+     * more than 48 cards are in the pool, just ignore the extra cards"
+     * (the repo owner's own words for this feature) -- so 'jceddys_75's 75,
+     * 'one_of_each's 133, and an oversized 'custom' pool all end up the
+     * same size as 'random_48'/'structure' before drafting ever starts.
      *
      * @return int[]
      */
@@ -1022,6 +1023,7 @@ final class GameService
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomQuickDraftCardIds(),
             'structure' => $this->buildStructureDeckCardIds(),
+            'jceddys_75' => $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseQuickDraftCustomPool($customPoolText),
             default => throw new GameStateException("Unknown quick_draft_pool_source \"{$poolSource}\""),

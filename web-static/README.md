@@ -485,8 +485,8 @@ too, proportional to the smaller card width.
     for Duel games" in `php-app/README.md` for what these rules actually
     mean. Selecting Quick Draft reveals `#new-game-quick-draft-fields`
     instead -- a Pool dropdown (`#new-game-quick-draft-pool-source`: 48
-    random cards, Structure deck, One of Each Card, or Custom pool) with
-    its own plain-language description below it
+    random cards, Structure deck, jceddy's 75 Card deck, One of Each Card,
+    or Custom pool) with its own plain-language description below it
     (`QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS`, `updateQuickDraftPoolSourceVisibility()`),
     and, only for Custom pool, the same file-upload/paste pair the
     Traditional `custom` deck_type and the `custom_duel` waiting room both

@@ -2703,6 +2703,24 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 49, new PlayerChoices(['mode' => 'bogus']));
     }
 
+    /**
+     * "You may choose one" -- unlike Confusion/Avoidance's mandatory
+     * direction choice, declining Rationalization's after-playing ability
+     * entirely (no 'mode' submitted) must be a no-op, not an error.
+     */
+    public function testRationalizationDecliningLeavesHandsAndDeckUntouched(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 9, 3], 2 => [106]], deck: [42]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 49, new PlayerChoices([]));
+
+        self::assertTrue($state->isInHand(1, 9));
+        self::assertTrue($state->isInHand(1, 3));
+        self::assertTrue($state->isInHand(2, 106));
+        self::assertSame([42], $state->deck());
+    }
+
     public function testInstabilityPausesForTheOpponentsOwnChoiceThenGivesBackOneOfYourOwn(): void
     {
         $state = $this->boardState(hands: [1 => [96, 9], 2 => [3, 7]]);
