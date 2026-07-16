@@ -1905,6 +1905,12 @@
                         renderQuickDraftDeckBuilding(deckBuilding);
                     },
                 }),
+                // Reuses the same dimmed/dashed-border treatment the
+                // in-game hand list gives a card that can't be played
+                // (.not-playable) -- here it means "not in the deck", not
+                // "can't be played", but the same at-a-glance "this one's
+                // excluded" signal applies.
+                notPlayable: !selected,
             });
             thumb.classList.toggle('selected', selected);
             picker.appendChild(thumb);

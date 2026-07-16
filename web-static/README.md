@@ -642,7 +642,13 @@ too, proportional to the smaller card width.
       sideboarding starts from your existing deck instead of forcing a full
       retrim from scratch before every game. Only the very first game of a
       match (no previous deck yet) still defaults to all 16 drafted cards.
-      That seeding only happens once per game (`quickDraftDeckSelectionInitialized`,
+      A card currently excluded from the deck is dimmed with a dashed
+      border -- `buildCardThumb()`'s existing `.not-playable` treatment for
+      an unplayable in-game hand card, reused here via its `notPlayable`
+      option (`notPlayable: !selected`) purely for its "this one's excluded"
+      visual, not its original "can't be played" meaning -- so it's obvious
+      at a glance which of the 16 have actually been cut. That seeding only
+      happens once per game (`quickDraftDeckSelectionInitialized`,
       reset by `showBoard()` whenever you switch games/sideboard into a new
       one) so an in-progress selection isn't silently overwritten by an
       ordinary poll. Once you've submitted, the picker itself hides in
