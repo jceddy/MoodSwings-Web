@@ -413,9 +413,12 @@ too, proportional to the smaller card width.
     is decided -- a `.lobby-winner`-styled result line ("alice won the
     match"); each game nested underneath (`.lobby-match-games`, indented)
     renders via the same `buildGameRow()` the flat list uses, but with
-    `{ compact: true }` to drop the now-redundant format/deck/opponents/
-    winner lines and prefix its own status with "Game N --", keeping its own
-    Play/View button. A "New game" dialog
+    `{ compact: true }` to drop the now-redundant format/deck/opponents
+    lines and prefix its own status with "Game N --", keeping its own
+    Play/View button and its own `winner_usernames` line once that
+    particular game is `completed` -- not redundant with the group header's
+    own result, since a match's games aren't necessarily all won by the
+    same player. A "New game" dialog
     (`.new-game-field` puts the Format and Deck `<label>`s each on their
     own line -- plain inline `<label>` elements otherwise sit side by side
     until their own `<select>` runs out of room, rather than breaking

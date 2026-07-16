@@ -476,10 +476,13 @@
         // actually 'completed' (see GameService::listGamesForUser()) --
         // both teammates' names for a team-format win, just the one
         // player's otherwise, matching how the board's own end-of-game
-        // display already credits a team win. Quick Draft's own per-game
-        // winner is redundant once the match group header above already
-        // shows the match's own result, so it's skipped there.
-        if (!opts.compact && game.winner_usernames.length > 0) {
+        // display already credits a team win. Still shown in compact mode
+        // (a match's own per-game sub-rows) -- a Quick Draft match's games
+        // aren't necessarily all won by the same player (see
+        // completeQuickDraftGameByPassing()'s own docblock), so this is
+        // distinct information from the match group header's own overall
+        // result, not a repeat of it.
+        if (game.winner_usernames.length > 0) {
             const winnerEl = document.createElement('div');
             winnerEl.className = 'lobby-winner';
             winnerEl.textContent = game.winner_usernames.join(' & ') + ' won';
@@ -532,9 +535,9 @@
 
         // winner_username is only ever set once quick_draft_match.status is
         // 'completed' (see GameService::quickDraftMatchSummaryFor()) --
-        // this is the match's own result, distinct from any single game's
-        // own winner_usernames (which buildGameRow() skips in compact mode
-        // to avoid saying the same thing twice).
+        // this is the match's own overall result, distinct from (and shown
+        // alongside, not instead of) each individual game's own
+        // winner_usernames, which buildGameRow() still renders per sub-row.
         if (match.winner_username) {
             const resultEl = document.createElement('div');
             resultEl.className = 'lobby-winner';
