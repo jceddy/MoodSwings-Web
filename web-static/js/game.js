@@ -2068,7 +2068,13 @@
         const takeButton = document.getElementById('winston-draft-take-button');
         const passButton = document.getElementById('winston-draft-pass-button');
         takeButton.hidden = !drafting.is_your_turn;
-        passButton.hidden = !drafting.is_your_turn || drafting.current_pile_number === 3;
+        // Passing pile 3 is a legal action -- it isn't "look at another
+        // pile" (there isn't one), but it's how the mandatory top-of-deck
+        // draw described in the physical rules is triggered (see
+        // GameService::submitWinstonDraftPick()'s own 'pass' branch for
+        // pile 3). Only hide Pass when it's not your turn at all.
+        passButton.hidden = !drafting.is_your_turn;
+        passButton.textContent = drafting.current_pile_number === 3 ? 'Pass (draw from deck)' : 'Pass';
 
         renderList(document.getElementById('winston-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
             const li = document.createElement('li');
