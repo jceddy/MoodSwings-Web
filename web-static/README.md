@@ -636,8 +636,13 @@ too, proportional to the smaller card width.
       (`state.quick_draft.deck_building.drafted_cards`) show as toggleable
       thumbnails (same picker pattern again, no 2-card cap this time — any
       count from 14 to 16 is valid), pre-seeded from your current
-      `deck_card_ids` (or, before your very first submission, all 16) —
-      that seeding only happens once per game (`quickDraftDeckSelectionInitialized`,
+      `deck_card_ids`; if that's null (this game's deck hasn't been
+      (re)submitted yet), falls back to `previous_deck_card_ids` — whatever
+      deck you last submitted, for the game that just ended — so
+      sideboarding starts from your existing deck instead of forcing a full
+      retrim from scratch before every game. Only the very first game of a
+      match (no previous deck yet) still defaults to all 16 drafted cards.
+      That seeding only happens once per game (`quickDraftDeckSelectionInitialized`,
       reset by `showBoard()` whenever you switch games/sideboard into a new
       one) so an in-progress selection isn't silently overwritten by an
       ordinary poll. Once you've submitted, the picker itself hides in

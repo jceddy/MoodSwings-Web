@@ -204,3 +204,10 @@ half-migrated schema.
   on `format = 'duel'`) is the first such deck_type and, for now, the only
   one `'draft'` supports; more are expected to join it later. See "Quick
   Draft" in `php-app/README.md`.
+- **Quick Draft sideboard prefill** (`0029`): adds
+  `draft_match_players.previous_deck_card_ids` — a copy of whatever
+  `deck_card_ids` held right before it's nulled out for the next game in
+  the match, so the frontend's sideboard picker can default to the deck
+  the player actually used last game instead of every drafted card. Plays
+  no part in `startGame()`'s "deck submitted" gate, which still only ever
+  looks at `deck_card_ids`. See "Quick Draft" in `php-app/README.md`.

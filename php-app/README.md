@@ -1643,7 +1643,13 @@ created (same 2 seats, same `format`/`deck_type`/`wins_needed`,
 players' `deck_card_ids` are explicitly nulled out here -- without that, a
 leftover value from the game that just finished would silently satisfy
 `startGame()`'s own "deck submitted" gate for the next game, skipping the
-required sideboard step entirely.
+required sideboard step entirely. Whatever `deck_card_ids` held right
+before that null-out is copied to `previous_deck_card_ids`
+(`draft_match_players`, migration `0029`) first, purely so the frontend's
+new sideboard picker can pre-select it as a starting point instead of
+defaulting to every drafted card and forcing a full retrim from scratch
+before every single game -- it plays no part in `startGame()`'s own
+"deck submitted" gate, which still only ever looks at `deck_card_ids`.
 
 **State exposure** -- `getState()`'s own `game.match_game_number` and
 `quick_draft` field (`null` for every other deck_type) are populated
