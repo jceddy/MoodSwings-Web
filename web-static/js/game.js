@@ -901,13 +901,18 @@
             copyBadge.className = 'card-thumb__badge card-thumb__badge--copy';
             copyBadge.textContent = 'Copy';
             button.appendChild(copyBadge);
-        } else if (card.base_color && card.base_color !== card.color) {
-            // Same top-left slot as the Copy badge above -- a Creativity
-            // copy's own "Copy" badge already implies its color changed
-            // (see openCardDetail()'s own base_color docblock), so the two
-            // badges are mutually exclusive and never need to share the
-            // corner. This covers the other way a mood's color can change
-            // while in play: Imagination's board-wide recolor effect.
+        }
+
+        // Not mutually exclusive with the Copy badge above -- copying
+        // another mood only sets base_color to that mood's own printed
+        // color, which normally does equal its current color too, so this
+        // stays silent for a plain copy. It only fires *in addition* to
+        // Copy when something else (Imagination's board-wide recolor
+        // effect) has since overridden that copy's color as well -- the
+        // CSS stacks this badge below Copy's when both are present (see
+        // .card-thumb__badge--copy + .card-thumb__badge--recolored) so
+        // neither one covers the other.
+        if (card.base_color && card.base_color !== card.color) {
             const colorBadge = document.createElement('span');
             colorBadge.className = 'card-thumb__badge card-thumb__badge--recolored';
             colorBadge.textContent = '→ ' + capitalize(card.color);

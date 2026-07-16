@@ -568,6 +568,15 @@ body.game-page {
     background: #8a5a00;
 }
 
+/* A card can be both a Creativity copy AND separately recolored (e.g.
+   Imagination is also in play, overriding the copied mood's own color) --
+   buildCardThumb() appends Copy first when both apply, so this sibling
+   selector drops the recolored badge below it instead of the two
+   overlapping in the same corner. */
+.card-thumb__badge--copy + .card-thumb__badge--recolored {
+    top: calc(0.25rem + 20px + 22px);
+}
+
 .card-thumb__badge--suppressed {
     left: 0.25rem;
     right: 0.25rem;
