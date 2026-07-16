@@ -901,6 +901,18 @@
             copyBadge.className = 'card-thumb__badge card-thumb__badge--copy';
             copyBadge.textContent = 'Copy';
             button.appendChild(copyBadge);
+        } else if (card.base_color && card.base_color !== card.color) {
+            // Same top-left slot as the Copy badge above -- a Creativity
+            // copy's own "Copy" badge already implies its color changed
+            // (see openCardDetail()'s own base_color docblock), so the two
+            // badges are mutually exclusive and never need to share the
+            // corner. This covers the other way a mood's color can change
+            // while in play: Imagination's board-wide recolor effect.
+            const colorBadge = document.createElement('span');
+            colorBadge.className = 'card-thumb__badge card-thumb__badge--recolored';
+            colorBadge.textContent = '→ ' + capitalize(card.color);
+            colorBadge.title = 'Currently counts as ' + card.color + ' (printed ' + card.base_color + ')';
+            button.appendChild(colorBadge);
         }
 
         if (card.is_suppressed) {

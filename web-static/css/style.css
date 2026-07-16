@@ -558,6 +558,12 @@ body.game-page {
     background: #0a5b8a;
 }
 
+.card-thumb__badge--recolored {
+    top: 0.25rem;
+    left: 0.25rem;
+    background: #8a5a00;
+}
+
 .card-thumb__badge--suppressed {
     left: 0.25rem;
     right: 0.25rem;
