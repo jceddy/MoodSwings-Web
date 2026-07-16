@@ -43,8 +43,8 @@
             <button id="back-to-lobby-button" type="button">&larr; Back to your games</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
-            <p id="quick-draft-scoreline" hidden></p>
-            <button id="quick-draft-next-game-button" type="button" hidden>Go to next game &rarr;</button>
+            <p id="draft-match-scoreline" hidden></p>
+            <button id="draft-match-next-game-button" type="button" hidden>Go to next game &rarr;</button>
             <p id="board-message" class="success" hidden></p>
             <p id="board-error" class="error" hidden></p>
             <p id="pending-decision-banner" hidden></p>
@@ -94,14 +94,27 @@
                     <h4>Kept so far</h4>
                     <ul id="quick-draft-kept-so-far"></ul>
                 </div>
+            </div>
 
-                <div id="quick-draft-deck-building" hidden>
-                    <h3 id="quick-draft-deck-building-title"></h3>
-                    <p id="quick-draft-deck-building-status"></p>
-                    <div id="quick-draft-deck-picker"></div>
-                    <p id="quick-draft-deck-error" class="error" hidden></p>
-                    <button id="quick-draft-deck-submit-button" type="button">Submit deck</button>
+            <div id="winston-draft-panel" hidden>
+                <div id="winston-draft-drafting" hidden>
+                    <h3 id="winston-draft-drafting-title"></h3>
+                    <p id="winston-draft-drafting-status"></p>
+                    <div id="winston-draft-piles"></div>
+                    <p id="winston-draft-remaining-deck-count"></p>
+                    <button id="winston-draft-take-button" type="button" hidden>Take pile</button>
+                    <button id="winston-draft-pass-button" type="button" hidden>Pass</button>
+                    <h4>Drafted so far</h4>
+                    <ul id="winston-draft-drafted-so-far"></ul>
                 </div>
+            </div>
+
+            <div id="draft-deck-building" hidden>
+                <h3 id="draft-deck-building-title"></h3>
+                <p id="draft-deck-building-status"></p>
+                <div id="draft-deck-picker"></div>
+                <p id="draft-deck-error" class="error" hidden></p>
+                <button id="draft-deck-submit-button" type="button">Submit deck</button>
             </div>
 
             <div id="in-progress-area" hidden>
@@ -234,6 +247,7 @@
                     <option value="custom">Custom Decklist</option>
                     <option value="custom_duel">Custom Decklists (Duel)</option>
                     <option value="quick_draft">Quick Draft</option>
+                    <option value="winston_draft">Winston Draft</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -317,6 +331,29 @@
                     </label>
                     <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards)
                         <textarea id="new-game-quick-draft-custom-pool-text" rows="10"></textarea>
+                    </label>
+                </div>
+            </div>
+
+            <div id="new-game-winston-draft-fields" hidden>
+                <p>Choose the shared pool to draft from:</p>
+                <label>Pool
+                    <select id="new-game-winston-draft-pool-source">
+                        <option value="random_48">45 random cards</option>
+                        <option value="structure">Structure deck (45 cards)</option>
+                        <option value="jceddys_75">jceddy's 75 Card deck (75 cards)</option>
+                        <option value="one_of_each">One of Each Card (133 cards)</option>
+                        <option value="custom">Custom pool</option>
+                    </select>
+                </label>
+                <p id="new-game-winston-draft-pool-source-description"></p>
+
+                <div id="new-game-winston-draft-custom-pool-fields" hidden>
+                    <label>Upload a pool file
+                        <input type="file" id="new-game-winston-draft-custom-pool-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards)
+                        <textarea id="new-game-winston-draft-custom-pool-text" rows="10"></textarea>
                     </label>
                 </div>
             </div>

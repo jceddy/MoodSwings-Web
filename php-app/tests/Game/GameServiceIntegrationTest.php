@@ -43,6 +43,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE draft_round_picks');
+        $pdo->exec('TRUNCATE TABLE draft_winston_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
@@ -1107,7 +1108,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertNull($summary['draft_match_id'], 'only Quick Draft games belong to a match');
         self::assertNull($summary['match_game_number']);
-        self::assertNull($summary['quick_draft_match']);
+        self::assertNull($summary['draft_match']);
     }
 
     public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void
@@ -6277,7 +6278,7 @@ final class GameServiceIntegrationTest extends TestCase
         $cardIds = array_column($state['quick_draft']['deck_building']['drafted_cards'], 'card_id');
         self::assertCount(16, $cardIds);
 
-        $this->games->submitQuickDraftDeck($gameId, $userId, $cardIds);
+        $this->games->submitDraftDeck($gameId, $userId, $cardIds);
     }
 
     /**
@@ -6326,7 +6327,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft" deck type');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -6590,7 +6591,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('between 14 and 16 cards');
 
-        $this->games->submitQuickDraftDeck($gameId, $u1, array_slice($draftedCardIds, 0, 10));
+        $this->games->submitDraftDeck($gameId, $u1, array_slice($draftedCardIds, 0, 10));
     }
 
     public function testSubmitQuickDraftDeckRejectsACardNotInYourDraftedPool(): void
@@ -6613,7 +6614,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('can only contain cards you drafted');
 
-        $this->games->submitQuickDraftDeck($gameId, $u1, [...array_slice($draftedCardIds, 0, 13), $notDrafted]);
+        $this->games->submitDraftDeck($gameId, $u1, [...array_slice($draftedCardIds, 0, 13), $notDrafted]);
     }
 
     public function testGetStateNeverExposesTheOpponentsDraftedOrKeptCards(): void
@@ -6721,7 +6722,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         $u1Drafted = array_column($this->games->getState($gameId, $u1)['quick_draft']['deck_building']['drafted_cards'], 'card_id');
         $u1Deck = array_slice($u1Drafted, 0, 15);
-        $this->games->submitQuickDraftDeck($gameId, $u1, $u1Deck);
+        $this->games->submitDraftDeck($gameId, $u1, $u1Deck);
         $this->submitFullQuickDraftDeck($gameId, $u2);
 
         // Before the very first game of a match, there's no previous deck
@@ -6752,9 +6753,9 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * listGamesForUser()'s draft_match_id/quick_draft_match fields let the
+     * listGamesForUser()'s draft_match_id/draft_match fields let the
      * lobby group a match's up-to-3 games together and, once it's done,
-     * show the result -- see quickDraftMatchSummaryFor().
+     * show the result -- see draftMatchSummaryFor().
      */
     public function testListGamesForUserGroupsQuickDraftMatchGamesAndSummarizesTheResultOnceCompleted(): void
     {
@@ -6780,11 +6781,11 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(1, $u1Summary['match_game_number']);
         // driveQuickDraftToDeckBuilding() above already ran the draft to
         // completion, so the match is already at 'deck_building' by here.
-        self::assertSame('deck_building', $u1Summary['quick_draft_match']['status']);
-        self::assertSame(0, $u1Summary['quick_draft_match']['your_wins']);
-        self::assertSame(0, $u1Summary['quick_draft_match']['opponent_wins']);
-        self::assertSame(2, $u1Summary['quick_draft_match']['games_to_win']);
-        self::assertNull($u1Summary['quick_draft_match']['winner_username']);
+        self::assertSame('deck_building', $u1Summary['draft_match']['status']);
+        self::assertSame(0, $u1Summary['draft_match']['your_wins']);
+        self::assertSame(0, $u1Summary['draft_match']['opponent_wins']);
+        self::assertSame(2, $u1Summary['draft_match']['games_to_win']);
+        self::assertNull($u1Summary['draft_match']['winner_username']);
 
         // Drive the match to completion the same way
         // testQuickDraftMatchProgressesGamesAndCompletesAtTwoWins() does --
@@ -6812,16 +6813,16 @@ final class GameServiceIntegrationTest extends TestCase
 
                 $finalWinnerSummary = $summaryForCurrent($winnerUserId);
                 self::assertSame($draftMatchId, $finalWinnerSummary['draft_match_id']);
-                self::assertSame('completed', $finalWinnerSummary['quick_draft_match']['status']);
-                self::assertSame(2, $finalWinnerSummary['quick_draft_match']['your_wins']);
-                self::assertSame($matchWins[$loserUserId], $finalWinnerSummary['quick_draft_match']['opponent_wins']);
-                self::assertSame($winnerUsername, $finalWinnerSummary['quick_draft_match']['winner_username']);
+                self::assertSame('completed', $finalWinnerSummary['draft_match']['status']);
+                self::assertSame(2, $finalWinnerSummary['draft_match']['your_wins']);
+                self::assertSame($matchWins[$loserUserId], $finalWinnerSummary['draft_match']['opponent_wins']);
+                self::assertSame($winnerUsername, $finalWinnerSummary['draft_match']['winner_username']);
 
                 $finalLoserSummary = $summaryForCurrent($loserUserId);
-                self::assertSame('completed', $finalLoserSummary['quick_draft_match']['status']);
-                self::assertSame($matchWins[$loserUserId], $finalLoserSummary['quick_draft_match']['your_wins']);
-                self::assertSame(2, $finalLoserSummary['quick_draft_match']['opponent_wins']);
-                self::assertSame($winnerUsername, $finalLoserSummary['quick_draft_match']['winner_username'], 'winner_username names the actual winner regardless of which side is asking');
+                self::assertSame('completed', $finalLoserSummary['draft_match']['status']);
+                self::assertSame($matchWins[$loserUserId], $finalLoserSummary['draft_match']['your_wins']);
+                self::assertSame(2, $finalLoserSummary['draft_match']['opponent_wins']);
+                self::assertSame($winnerUsername, $finalLoserSummary['draft_match']['winner_username'], 'winner_username names the actual winner regardless of which side is asking');
 
                 return;
             }
@@ -6831,8 +6832,8 @@ final class GameServiceIntegrationTest extends TestCase
             // them even though this row's own status just flipped to
             // 'completed'.
             $winnerSummary = $summaryForCurrent($winnerUserId);
-            self::assertSame('deck_building', $winnerSummary['quick_draft_match']['status']);
-            self::assertNull($winnerSummary['quick_draft_match']['winner_username'], 'match not over yet');
+            self::assertSame('deck_building', $winnerSummary['draft_match']['status']);
+            self::assertNull($winnerSummary['draft_match']['winner_username'], 'match not over yet');
 
             $nextGameStmt = $this->pdo->prepare(
                 "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
@@ -6857,5 +6858,401 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    // -- Winston Draft (issue #89) -------------------------------------------
+
+    /** @return array{gameId:int, u1:int, u2:int} */
+    private function buildWinstonDraftFixture(
+        string $poolSource = 'random_48',
+        ?string $customPoolText = null,
+        int $winsNeeded = 1,
+    ): array {
+        $u1 = $this->insertUser('winstondraft-' . uniqid('u1'));
+        $u2 = $this->insertUser('winstondraft-' . uniqid('u2'));
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            winsNeeded: $winsNeeded,
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: $poolSource,
+            winstonDraftCustomPoolText: $customPoolText,
+        );
+
+        return ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2];
+    }
+
+    private function fetchWinstonState(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_winston_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * Drives a Winston Draft to completion for both $u1/$u2 via a simple
+     * deterministic policy, exercised purely through the public API
+     * (submitWinstonDraftPick()/getState()), the same surface the real
+     * frontend uses: take the currently-active pile once it has at least
+     * 2 cards, or -- once the shared deck is exhausted, since nothing
+     * will ever grow again from that point on -- take it as soon as it
+     * has at least 1. Otherwise pass. This guarantees every pile
+     * eventually gets taken by whichever player's turn next lands on it
+     * (current_pile_number always resets to 1 at the start of a turn),
+     * so the draft always terminates rather than stalling forever on a
+     * pile stuck below a fixed threshold with nothing left to grow it.
+     * Capped at a generous iteration count purely as a safety net against
+     * an infinite-loop regression, not because the real mechanic could
+     * plausibly need this many turns for a single 45-card pool.
+     */
+    private function driveWinstonDraftToDeckBuilding(int $gameId, int $u1, int $u2): void
+    {
+        for ($i = 0; $i < 500; $i++) {
+            $state = $this->games->getState($gameId, $u1);
+            $winston = $state['winston_draft'];
+            if ($winston['status'] !== 'drafting') {
+                return;
+            }
+
+            $drafting = $winston['drafting'];
+            $currentUserId = $drafting['is_your_turn'] ? $u1 : $u2;
+            $currentPileSize = $drafting['pile_sizes'][$drafting['current_pile_number'] - 1];
+            $deckExhausted = $drafting['remaining_deck_count'] === 0;
+
+            $action = ($currentPileSize >= 2 || ($deckExhausted && $currentPileSize >= 1)) ? 'take' : 'pass';
+            $this->games->submitWinstonDraftPick($gameId, $currentUserId, $action);
+        }
+
+        self::fail('Winston Draft did not complete within 500 picks -- possible infinite loop');
+    }
+
+    /** Submits all of $userId's own drafted cards as their deck (the max end of the open-ended range). */
+    private function submitFullWinstonDraftDeck(int $gameId, int $userId): void
+    {
+        $state = $this->games->getState($gameId, $userId);
+        $cardIds = array_column($state['winston_draft']['deck_building']['drafted_cards'], 'card_id');
+        self::assertGreaterThanOrEqual(12, count($cardIds));
+
+        $this->games->submitDraftDeck($gameId, $userId, $cardIds);
+    }
+
+    public function testCreateGameRejectsWinstonDraftForNonDraftFormat(): void
+    {
+        $creator = $this->insertUser('winstondraft-nondraft-alice');
+        $bob = $this->insertUser('winstondraft-nondraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for the "draft" format');
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'winston_draft', winstonDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameWinstonDraftPoolIsTruncatedToFortyFive(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture('one_of_each');
+
+        $draftMatchId = (int) $this->fetchGame($fixture['gameId'])['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+
+        self::assertCount(45, json_decode((string) $match['pool_card_ids'], true), 'one_of_each\'s 133 cards are randomly narrowed down to 45 before the draft begins, same as Quick Draft\'s own 48-card cap');
+    }
+
+    public function testCreateGameWinstonDraftCustomPoolBelowMinimumIsRejected(): void
+    {
+        $creator = $this->insertUser('winstondraft-undersized-alice');
+        $bob = $this->insertUser('winstondraft-undersized-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 45 are required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: 'custom',
+            winstonDraftCustomPoolText: "20 Charity\n",
+        );
+    }
+
+    public function testWinstonDraftDealsThreeSingleCardPilesAndRandomlyPicksFirstPlayer(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $winstonState = $this->fetchWinstonState($draftMatchId);
+
+        self::assertCount(1, json_decode((string) $winstonState['pile_1_card_ids'], true));
+        self::assertCount(1, json_decode((string) $winstonState['pile_2_card_ids'], true));
+        self::assertCount(1, json_decode((string) $winstonState['pile_3_card_ids'], true));
+        self::assertCount(42, json_decode((string) $winstonState['remaining_deck_card_ids'], true), '45-card pool minus 1 card dealt to each of the 3 piles');
+        self::assertContains((int) $winstonState['current_player_user_id'], [$u1, $u2]);
+        self::assertSame(1, (int) $winstonState['current_pile_number']);
+
+        $state = $this->games->getState($gameId, $u1);
+        self::assertSame('drafting', $state['winston_draft']['status']);
+        self::assertSame(3, count($state['winston_draft']['drafting']['pile_sizes']));
+        self::assertSame(42, $state['winston_draft']['drafting']['remaining_deck_count']);
+    }
+
+    public function testWinstonDraftRejectsAPickFromWhoeverIsNotTheCurrentPlayer(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $otherUserId = $currentPlayerUserId === $u1 ? $u2 : $u1;
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("It's not your turn");
+
+        $this->games->submitWinstonDraftPick($gameId, $otherUserId, 'pass');
+    }
+
+    public function testWinstonDraftRejectsAnInvalidAction(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('action must be "take" or "pass"');
+
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'steal');
+    }
+
+    public function testWinstonDraftOnlyRevealsTheActivePileToTheCurrentPlayer(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $otherUserId = $currentPlayerUserId === $u1 ? $u2 : $u1;
+
+        $currentPlayerState = $this->games->getState($gameId, $currentPlayerUserId)['winston_draft']['drafting'];
+        self::assertTrue($currentPlayerState['is_your_turn']);
+        self::assertCount(1, $currentPlayerState['current_pile_cards'], 'the active player sees the pile they are actually looking at');
+
+        $otherPlayerState = $this->games->getState($gameId, $otherUserId)['winston_draft']['drafting'];
+        self::assertFalse($otherPlayerState['is_your_turn']);
+        self::assertSame([], $otherPlayerState['current_pile_cards'], 'the opponent never sees the active player\'s own pile contents, only its size');
+        self::assertSame($currentPlayerState['pile_sizes'], $otherPlayerState['pile_sizes'], 'pile sizes -- unlike contents -- are visible to both, like a real face-down stack\'s height');
+    }
+
+    /**
+     * Directly exercises the one specific edge case in submitWinstonDraftPick()'s
+     * own docblock: declining pile 3 replenishes it FIRST (consuming
+     * whatever's left of the deck), and only THEN attempts the mandatory
+     * auto-draw from whatever remains -- so if the deck has exactly 1
+     * card left, that card goes to pile 3's own replenish, and the
+     * auto-draw gets nothing at all that turn. State is seeded directly
+     * (rather than driven organically through 45 cards of shuffled play)
+     * so this exact deck-size boundary is hit deterministically.
+     */
+    public function testWinstonDraftPileThreeReplenishConsumesLastCardBeforeAutoDraw(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+
+        $this->pdo->prepare(
+            'UPDATE draft_winston_state
+             SET remaining_deck_card_ids = :deck, pile_1_card_ids = :pile1, pile_2_card_ids = :pile2, pile_3_card_ids = :pile3, current_pile_number = 3
+             WHERE draft_match_id = :match_id'
+        )->execute([
+            'deck' => json_encode([99]),
+            'pile1' => json_encode([]),
+            'pile2' => json_encode([]),
+            'pile3' => json_encode([50]),
+            'match_id' => $draftMatchId,
+        ]);
+
+        $beforeDrafted = json_decode(
+            (string) $this->fetchDraftMatchPlayer($draftMatchId, $currentPlayerUserId)['drafted_card_ids'],
+            true
+        );
+
+        $result = $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+        self::assertFalse($result['draft_completed'], 'pile 3 now holds 2 undrafted cards -- the draft only ends once every card has actually been TAKEN by a player, not merely moved between the deck and a pile');
+
+        $afterDrafted = json_decode(
+            (string) $this->fetchDraftMatchPlayer($draftMatchId, $currentPlayerUserId)['drafted_card_ids'],
+            true
+        );
+        self::assertSame($beforeDrafted, $afterDrafted, 'the last deck card went to replenishing pile 3, not to the acting player -- the auto-draw found nothing left');
+
+        $winstonState = $this->fetchWinstonState($draftMatchId);
+        self::assertSame([], json_decode((string) $winstonState['remaining_deck_card_ids'], true));
+        self::assertEqualsCanonicalizing([50, 99], json_decode((string) $winstonState['pile_3_card_ids'], true), 'pile 3 grew from the replenish, not from a second auto-draw');
+    }
+
+    public function testWinstonDraftProceedsToDeckBuildingAndConservesEveryPoolCard(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->driveWinstonDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $u1Cards = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true);
+        $u2Cards = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true);
+        self::assertSame(45, count($u1Cards) + count($u2Cards), 'every card in the 45-card pool ends up with exactly one of the two players -- none are ever discarded in Winston Draft, unlike Quick Draft');
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        if ($match['status'] === 'deck_building') {
+            // The expected/normal outcome for this deterministic policy.
+            self::assertGreaterThanOrEqual(12, count($u1Cards));
+            self::assertGreaterThanOrEqual(12, count($u2Cards));
+        } elseif ($match['status'] === 'completed') {
+            // Only possible if the random shuffle happened to leave one
+            // side short of WINSTON_MIN_DECK_SIZE -- see
+            // testWinstonDraftAutoLosesPlayerWithFewerThanTwelveDraftedCards()
+            // for a deterministic exercise of this same path.
+            $shortUserId = count($u1Cards) < 12 ? $u1 : $u2;
+            $winnerUserId = $shortUserId === $u1 ? $u2 : $u1;
+            self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+        } else {
+            self::fail("unexpected draft_matches.status \"{$match['status']}\" after the draft completed");
+        }
+    }
+
+    public function testWinstonDraftAutoLosesPlayerWithFewerThanTwelveDraftedCards(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Seed a lopsided split directly rather than relying on chance --
+        // u1 ends up with only 5 cards (short of WINSTON_MIN_DECK_SIZE),
+        // u2 with the other 40, for a pool of 45 total.
+        $u1CardIds = range(1, 5);
+        $u2CardIds = range(6, 45);
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode($u1CardIds), 'match_id' => $draftMatchId, 'user_id' => $u1]);
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode($u2CardIds), 'match_id' => $draftMatchId, 'user_id' => $u2]);
+
+        // Force the very next pick to be the one that empties the deck
+        // and all 3 piles simultaneously, triggering finalizeWinstonDraft().
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->pdo->prepare(
+            'UPDATE draft_winston_state
+             SET remaining_deck_card_ids = :deck, pile_1_card_ids = :pile1, pile_2_card_ids = :pile2, pile_3_card_ids = :pile3, current_pile_number = 1
+             WHERE draft_match_id = :match_id'
+        )->execute([
+            'deck' => json_encode([]),
+            'pile1' => json_encode([50]),
+            'pile2' => json_encode([]),
+            'pile3' => json_encode([]),
+            'match_id' => $draftMatchId,
+        ]);
+
+        $result = $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'take');
+        self::assertTrue($result['draft_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status'], 'the whole match completes immediately -- no deck_building/sideboard step, no further games');
+        self::assertSame($u2, (int) $match['winner_user_id'], 'u1 never even reaches 12 total drafted cards (5, plus whatever this last pick added), so u2 automatically wins');
+
+        $gameRow = $this->fetchGame($gameId);
+        self::assertSame('abandoned', $gameRow['status'], 'the match\'s own already-created game 1 is marked abandoned rather than left stuck in \'waiting\' forever -- no games are actually played');
+    }
+
+    public function testWinstonDraftMatchProgressesGamesAndCompletesAtTwoWins(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture(winsNeeded: 1);
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->driveWinstonDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        if ($match['status'] !== 'deck_building') {
+            self::markTestSkipped('this particular shuffle produced an auto-loss before any games were played -- see testWinstonDraftAutoLosesPlayerWithFewerThanTwelveDraftedCards() for a deterministic exercise of that path');
+        }
+
+        $this->submitFullWinstonDraftDeck($gameId, $u1);
+        $this->submitFullWinstonDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        // completeQuickDraftGameByPassing() is itself format-agnostic (it
+        // only ever calls pass() twice against whatever game id it's
+        // given) -- reused here unchanged for Winston Draft's own
+        // best-of-three progression.
+        $matchWins = [$u1 => 0, $u2 => 0];
+        $currentGameId = $gameId;
+        for ($gamesPlayed = 0; $gamesPlayed < 3; $gamesPlayed++) {
+            $winnerUserId = $this->completeQuickDraftGameByPassing($currentGameId);
+            $matchWins[$winnerUserId]++;
+
+            if ($matchWins[$winnerUserId] >= 2) {
+                $finalMatch = $this->fetchDraftMatch($draftMatchId);
+                self::assertSame('completed', $finalMatch['status']);
+                self::assertSame($winnerUserId, (int) $finalMatch['winner_user_id']);
+
+                return;
+            }
+
+            $nextGameStmt = $this->pdo->prepare(
+                "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $nextGameId = (int) $nextGameStmt->fetchColumn();
+            self::assertSame($fixture['gameId'] !== $nextGameId, true);
+
+            $nextGameRow = $this->fetchGame($nextGameId);
+            self::assertSame('winston_draft', $nextGameRow['deck_type'], 'the next game in the match keeps the same deck_type -- regression test for the deck_type hardcoding bug fixed alongside this feature');
+
+            $this->submitFullWinstonDraftDeck($nextGameId, $u1);
+            $this->submitFullWinstonDraftDeck($nextGameId, $u2);
+            $this->games->startGame($nextGameId);
+            $currentGameId = $nextGameId;
+        }
+
+        self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    public function testWinstonDraftStartGameRequiresBothDecksSubmitted(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $this->driveWinstonDraftToDeckBuilding($gameId, $u1, $u2);
+        $match = $this->fetchDraftMatch((int) $this->fetchGame($gameId)['draft_match_id']);
+        if ($match['status'] !== 'deck_building') {
+            self::markTestSkipped('this particular shuffle produced an auto-loss -- see testWinstonDraftAutoLosesPlayerWithFewerThanTwelveDraftedCards()');
+        }
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
+
+        $this->submitFullWinstonDraftDeck($gameId, $u1);
+        $this->games->startGame($gameId);
     }
 }
