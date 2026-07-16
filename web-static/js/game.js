@@ -8,6 +8,8 @@
     document.getElementById('username').textContent = user.username;
     document.getElementById('game-main').hidden = false;
     startVersionWatcher();
+    checkFriendRequestNotification();
+    setInterval(checkFriendRequestNotification, 15000);
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
@@ -36,11 +38,33 @@
         return button;
     }
 
+    // Toggled by both refreshFriendsData() (the dialog's own data fetch)
+    // and checkFriendRequestNotification() (an independent low-frequency
+    // poll -- see below) so the dot appears the moment a request arrives
+    // even if the player never opens the Friends dialog to see it.
+    function setFriendRequestNotification(hasPending) {
+        document.getElementById('friends-button').classList.toggle('has-friend-request', hasPending);
+    }
+
+    // #friends-button is part of the page's always-visible header, not
+    // #lobby-view/#board-view, so unlike refreshLobby()/refreshBoard()
+    // this can't piggyback on pollTimer -- that timer is torn down and
+    // rebuilt by showLobby()/showBoard() on every view switch. A slower,
+    // independent interval is enough here since a friend request is far
+    // less time-sensitive than in-progress game state.
+    async function checkFriendRequestNotification() {
+        const { ok, body } = await listFriendInvites();
+        if (ok) {
+            setFriendRequestNotification(body.incoming.length > 0);
+        }
+    }
+
     async function refreshFriendsData() {
         const [friendsResp, invitesResp] = await Promise.all([listFriends(), listFriendInvites()]);
         const friends = friendsResp.ok ? friendsResp.body.friends : [];
         const incoming = invitesResp.ok ? invitesResp.body.incoming : [];
         const outgoing = invitesResp.ok ? invitesResp.body.outgoing : [];
+        setFriendRequestNotification(incoming.length > 0);
 
         renderList(
             document.getElementById('friends-list'),
@@ -1731,9 +1755,11 @@
 
     function renderQuickDraftScoreline(state) {
         const el = document.getElementById('quick-draft-scoreline');
+        const nextGameButton = document.getElementById('quick-draft-next-game-button');
         const qd = state.quick_draft;
         if (!qd) {
             el.hidden = true;
+            nextGameButton.hidden = true;
             return;
         }
 
@@ -1741,6 +1767,14 @@
         el.textContent = 'Quick Draft match — game ' + (state.game.match_game_number || 1) + ' of up to 3 — ' +
             'you ' + qd.your_wins + ', opponent ' + qd.opponent_wins +
             ' (first to ' + qd.games_to_win + ' wins the match)';
+
+        // next_game_id is only ever set once this game has completed and
+        // advanceQuickDraftMatch() has already created the next one -- see
+        // GameService::quickDraftStateFor(). A prominent button right next
+        // to the scoreline (rather than making the player go back to the
+        // lobby and find it themselves) takes them straight to it.
+        nextGameButton.hidden = !qd.next_game_id;
+        nextGameButton.onclick = qd.next_game_id ? () => showBoard(qd.next_game_id) : null;
     }
 
     let quickDraftPickSelection = new Set();

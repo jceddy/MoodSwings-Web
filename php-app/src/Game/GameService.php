@@ -3419,7 +3419,12 @@ final class GameService
      * (always present once a draft_match_id exists) plus whichever one of
      * 'drafting'/'deck_building' is currently live (null if the match has
      * already completed). Never exposes the opponent's own drafted/kept
-     * cards -- only $viewerUserId's own.
+     * cards -- only $viewerUserId's own. 'next_game_id' is only ever set
+     * once THIS game has completed and advanceQuickDraftMatch() has
+     * already created the next one (i.e. the match itself isn't
+     * 'completed' either) -- lets the frontend offer a direct "Go to next
+     * game" link from a finished game's own board instead of making the
+     * player find it back in the lobby list themselves.
      *
      * @param array<string, mixed> $game
      */
@@ -3445,11 +3450,24 @@ final class GameService
             $playersByUser[(int) $row['user_id']] = $row;
         }
 
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $match['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE draft_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
         $state = [
             'draft_match_id' => $draftMatchId,
             'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             'status' => $match['status'],
             'games_to_win' => self::QUICK_DRAFT_GAMES_TO_WIN,
+            'next_game_id' => $nextGameId,
             'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
             'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
             'drafting' => null,

@@ -6635,6 +6635,10 @@ final class GameServiceIntegrationTest extends TestCase
             if ($matchWins[$winnerUserId] >= 2) {
                 self::assertSame('completed', $match['status']);
                 self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+                self::assertNull(
+                    $this->games->getState($currentGameId, $u1)['quick_draft']['next_game_id'],
+                    'no next_game_id once the match itself has completed -- there is no next game to link to',
+                );
                 break;
             }
 
@@ -6659,6 +6663,11 @@ final class GameServiceIntegrationTest extends TestCase
                 $gamesPlayed + 1,
                 $this->games->getState((int) $nextGame['id'], $u1)['game']['match_game_number'],
                 'getState() must expose match_game_number so the frontend scoreline can show the right game number',
+            );
+            self::assertSame(
+                (int) $nextGame['id'],
+                $this->games->getState($currentGameId, $u1)['quick_draft']['next_game_id'],
+                'the just-completed game must point at the next game so the board can offer a direct link to it',
             );
 
             $this->submitFullQuickDraftDeck((int) $nextGame['id'], $u1);

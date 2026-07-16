@@ -592,7 +592,15 @@ too, proportional to the smaller card width.
     the round-status line and is always shown once a `quick_draft` game
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Quick Draft match — game N of up to 3 —
-    you X, opponent Y (first to 2 wins the match)". A `#quick-draft-panel`
+    you X, opponent Y (first to 2 wins the match)". The same function also
+    owns `#quick-draft-next-game-button`, right next to the scoreline:
+    hidden unless `state.quick_draft.next_game_id` is set (only true once
+    this specific game has completed but the match itself hasn't --
+    `advanceQuickDraftMatch()` already created the next game), and its
+    `onclick` is just `showBoard(qd.next_game_id)` -- a direct, prominent
+    link to the next game from a just-finished one, instead of making the
+    player go back to the lobby and pick the new `waiting` row out by hand.
+    A `#quick-draft-panel`
     (mutually exclusive with `#duel-deck-submission`, occupying the same
     waiting-room slot while `state.game.status` is `'waiting'`) covers this
     format's own two pregame phases, both read from `state.quick_draft`:
@@ -1097,6 +1105,19 @@ too, proportional to the smaller card width.
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
     talks to the `/friends/*` endpoints.
+  - That same button gets a small red notification dot
+    (`.has-friend-request`, applied/removed by
+    `setFriendRequestNotification()`) whenever `/friends/invites` returns
+    at least one incoming request -- so a pending request is visible
+    without opening the dialog. `checkFriendRequestNotification()` polls
+    this independently of `refreshLobby()`/`refreshBoard()`'s own 4-second
+    `pollTimer` (a 15-second interval, since `#friends-button` lives in the
+    page's always-visible header, outside both `#lobby-view` and
+    `#board-view`, and a friend request is far less time-sensitive than
+    in-progress game state); `refreshFriendsData()` (the dialog's own data
+    fetch) also re-applies it immediately from the same `incoming` array
+    it already has, so accepting/declining/blocking a request clears the
+    dot right away rather than waiting for the next poll.
 
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
