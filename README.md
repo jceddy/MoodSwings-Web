@@ -169,3 +169,8 @@ into it) deploys automatically to the dev domain. As with production,
 apply any new migration to the dev database yourself when a PR merges into
 `development` — before, or right after, its own dev deploy goes live.
 
+## Credits
+
+- **Developer:** [jceddy](https://github.com/jceddy)
+- **Play testers:** Dr Potato, Tori_Tumbleweed
+

@@ -440,6 +440,9 @@ if ($path === '/games' && $method === 'POST') {
     // Only meaningful for deck_type 'quick_draft' -- see createGame()'s own docblock.
     $quickDraftPoolSource = isset($body['quick_draft_pool_source']) ? (string) $body['quick_draft_pool_source'] : null;
     $quickDraftCustomPoolText = isset($body['quick_draft_custom_pool_text']) ? (string) $body['quick_draft_custom_pool_text'] : null;
+    // Only meaningful for deck_type 'winston_draft' -- see createGame()'s own docblock.
+    $winstonDraftPoolSource = isset($body['winston_draft_pool_source']) ? (string) $body['winston_draft_pool_source'] : null;
+    $winstonDraftCustomPoolText = isset($body['winston_draft_custom_pool_text']) ? (string) $body['winston_draft_custom_pool_text'] : null;
 
     try {
         $gameId = $games->createGame(
@@ -453,6 +456,8 @@ if ($path === '/games' && $method === 'POST') {
             $partnerUserId,
             $quickDraftPoolSource,
             $quickDraftCustomPoolText,
+            $winstonDraftPoolSource,
+            $winstonDraftCustomPoolText,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -629,8 +634,28 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
     requireGamePlayer($games, $gameId, (int) $currentUser['id']);
 
     try {
-        $games->submitQuickDraftDeck($gameId, (int) $currentUser['id'], $cardIds);
+        $games->submitDraftDeck($gameId, (int) $currentUser['id'], $cardIds);
         respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/winston-pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $action = (string) ($body['action'] ?? '');
+
+    // Winston Draft's own picks are keyed by user_id, not game_player_id
+    // (same rationale as /games/draft/pick above) -- requireGamePlayer()
+    // here is purely the seated-in-this-game auth check every other route
+    // already uses.
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitWinstonDraftPick($gameId, (int) $currentUser['id'], $action);
+        respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }

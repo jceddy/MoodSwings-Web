@@ -214,7 +214,7 @@ half-migrated schema.
   `draft_matches` (one row per best-of-three match: pool config, drafting/
   deck_building/completed status, current round, winner), `draft_match_players`
   (per `(draft_match_id, user_id)`: the fixed 16-card `drafted_card_ids`
-  result of the draft, the player's current 14-16 card `deck_card_ids`, and
+  result of the draft, the player's current 12-16 card `deck_card_ids`, and
   this match's own win counter — keyed by `user_id` rather than
   `game_player_id` since this data spans up to 3 separate `games` rows, one
   per game of the match), and `draft_round_picks` (one row per player per
@@ -226,9 +226,9 @@ half-migrated schema.
   identical to `'duel'` (same 2-player, separate-per-player-deck rules
   engine), but scoped to deck_type values that build a deck through some
   kind of live drafting process. `quick_draft` (`0027`, previously gated
-  on `format = 'duel'`) is the first such deck_type and, for now, the only
-  one `'draft'` supports; more are expected to join it later. See "Quick
-  Draft" in `php-app/README.md`.
+  on `format = 'duel'`) was the first such deck_type; `winston_draft`
+  (`0032`, below) joined it later. See "Quick Draft" in
+  `php-app/README.md`.
 - **Quick Draft sideboard prefill** (`0029`): adds
   `draft_match_players.previous_deck_card_ids` — a copy of whatever
   `deck_card_ids` held right before it's nulled out for the next game in
@@ -246,3 +246,15 @@ half-migrated schema.
   `GameService::buildJceddys75DeckCardIds()`'s existing 75-card pool
   as-is, randomly narrowed down to 48 before drafting begins the same way
   `one_of_each`'s 133 already are. See "Quick Draft" in `php-app/README.md`.
+- **Winston Draft** (`0032`, issue #89): adds `deck_type = 'winston_draft'`
+  and a new table, `draft_winston_state` (one row per match: the
+  remaining shuffled deck and the 3 face-down piles, all as ordered JSON
+  card-id arrays, plus whose turn it is and which pile they're currently
+  looking at). Reuses `draft_matches`/`draft_match_players` as-is (same
+  `pool_source` enum, same match-level win tracking) — unlike Quick
+  Draft's own deliberate avoidance of a mutable "remaining pool" row (that
+  design was specifically about *simultaneous blind* submissions racing
+  to update the same data), Winston Draft has no simultaneity at all —
+  exactly one player acts at a time — so a plain mutable row, protected by
+  the same per-game lock every draft mutation already uses, is both
+  simpler and just as safe. See "Winston Draft" in `php-app/README.md`.
