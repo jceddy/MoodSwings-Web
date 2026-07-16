@@ -274,8 +274,19 @@ body.game-page {
    against the bottom edge of the card thumbnails, which reads as a
    layout mistake rather than intentional spacing. */
 #quick-draft-pick-submit-button,
-#quick-draft-deck-submit-button {
+#draft-deck-select-all-button {
     margin-top: 0.5rem;
+}
+
+/* Same breathing room above the deck-building submit button itself,
+   pushed further down still since the select-all/clear-selection
+   buttons now sit between it and the picker. */
+#draft-deck-submit-button {
+    margin-top: 1rem;
+}
+
+#draft-deck-clear-selection-button {
+    margin-left: 0.5rem;
 }
 
 /* -- In-play board (issue #124) --------------------------------------
