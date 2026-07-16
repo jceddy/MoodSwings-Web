@@ -39,6 +39,17 @@ empty database (see the file's own header for why); once your schema
 history grows past `0020`, apply whichever migrations came after it
 individually, the same as always.
 
+**Applying a range of migrations to an existing database in one paste**
+(e.g. bringing a Bluehost production database that's already on `0026`
+straight up to `0031` without 5 separate phpMyAdmin pastes): unlike
+`0001-0020_consolidated.sql` above, which only targets a brand-new/empty
+database,
+[`consolidated/0027-0031_consolidated.sql`](consolidated/0027-0031_consolidated.sql)
+is meant for a database that already has migrations `0001` through `0026`
+applied — it folds Quick Draft (issue #88) and its follow-up fixes/polish
+into one script, ending with the same `schema_migrations` bookkeeping so
+`composer migrate` correctly resumes at `0032` onward afterward.
+
 ## Adding a new migration
 
 Add a new file named `NNNN_description.sql` (next sequential 4-digit
