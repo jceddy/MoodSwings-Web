@@ -1373,6 +1373,29 @@
         renderBoard(body);
     }
 
+    // Guards against firing startGame() more than once per "became ready"
+    // observation -- renderBoard() re-runs this check on every poll (every
+    // few seconds, see showBoard()'s pollTimer) until the game actually
+    // leaves 'waiting', so without this a still-in-flight request would
+    // get fired again before its response has come back. A failure here
+    // (most likely the opponent's own browser -- or this same one, on the
+    // very next poll -- already won the race and started it first) is
+    // silently ignored: the next regular poll picks up whatever the real
+    // state is, and there's nothing else useful to show the player for it.
+    let autoStartInFlight = false;
+
+    async function autoStartGameIfReady(ready) {
+        if (!ready || autoStartInFlight) {
+            return;
+        }
+        autoStartInFlight = true;
+        const { ok } = await startGame(currentGameId);
+        autoStartInFlight = false;
+        if (ok) {
+            await refreshBoard();
+        }
+    }
+
     function renderBoard(state) {
         // A custom decklist's own name (or "Uploaded Deck" if none was
         // specified) replaces "<deck type> deck" entirely here, rather than
@@ -1396,7 +1419,6 @@
         renderDraftMatchScoreline(state);
 
         const inProgressArea = document.getElementById('in-progress-area');
-        const startButton = document.getElementById('start-game-button');
 
         renderList(
             document.getElementById('players-list'),
@@ -1521,14 +1543,14 @@
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
-                startButton.hidden = !state.players.every((p) => p.deck_submitted);
+                autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
             } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft : state.winston_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
-                startButton.hidden = !(
+                autoStartGameIfReady(
                     draftState.status === 'deck_building'
                     && draftState.deck_building.you_submitted
                     && draftState.deck_building.opponent_submitted
@@ -1539,13 +1561,12 @@
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
-                startButton.hidden = false;
+                autoStartGameIfReady(true);
             }
 
             return;
         }
 
-        startButton.hidden = true;
         document.getElementById('duel-deck-submission').hidden = true;
         document.getElementById('quick-draft-panel').hidden = true;
         document.getElementById('winston-draft-panel').hidden = true;
@@ -1925,8 +1946,8 @@
     // label shown differs, so this one function (and one shared DOM slot)
     // covers both instead of duplicating the same rendering twice.
     const DRAFT_MATCH_LABELS = {
-        quick_draft: 'Quick Draft match',
-        winston_draft: 'Winston Draft match',
+        quick_draft: 'Quick Draft',
+        winston_draft: 'Winston Draft',
     };
 
     function renderDraftMatchScoreline(state) {
@@ -1939,11 +1960,19 @@
             return;
         }
 
+        // "<leader> n-m" convention: tied reads as "tied n-n" (no leader to
+        // name); otherwise whichever side is ahead is named first, with
+        // their own win count first -- "you lead 2-1", never "1-2".
+        const scoreText = draftState.your_wins === draftState.opponent_wins
+            ? 'tied ' + draftState.your_wins + '-' + draftState.opponent_wins
+            : draftState.your_wins > draftState.opponent_wins
+                ? 'you lead ' + draftState.your_wins + '-' + draftState.opponent_wins
+                : 'opponent leads ' + draftState.opponent_wins + '-' + draftState.your_wins;
+
         el.hidden = false;
-        el.textContent = (DRAFT_MATCH_LABELS[state.game.deck_type] || 'Draft match') +
-            ' — game ' + (state.game.match_game_number || 1) + ' of up to 3 — ' +
-            'you ' + draftState.your_wins + ', opponent ' + draftState.opponent_wins +
-            ' (first to ' + draftState.games_to_win + ' wins the match)';
+        el.textContent = (DRAFT_MATCH_LABELS[state.game.deck_type] || 'Draft') +
+            ' — best of ' + (draftState.games_to_win * 2 - 1) + ' match, game ' +
+            (state.game.match_game_number || 1) + ', ' + scoreText;
 
         // next_game_id is only ever set once this game has completed and
         // advanceDraftMatch() has already created the next one -- see
@@ -2160,6 +2189,12 @@
     // re-render without needing their own copy of the current
     // deckBuilding state.
     let currentDeckBuilding = null;
+    // Set by renderDraftPanel() (the only caller) just before it calls
+    // renderDraftDeckBuilding() -- read here for the "waiting for
+    // <opponent>'s deck" status text below, rather than threading it
+    // through every call site (including the select-all/clear-selection
+    // handlers' own re-renders, which don't otherwise need it).
+    let currentOpponentUsername = 'your opponent';
 
     function renderDraftDeckBuilding(deckBuilding) {
         currentDeckBuilding = deckBuilding;
@@ -2174,9 +2209,20 @@
         const statusEl = document.getElementById('draft-deck-building-status');
 
         if (deckBuilding.you_submitted) {
-            statusEl.textContent = deckBuilding.opponent_submitted
-                ? 'Both decks are in -- start the game when ready.'
-                : "Your deck is submitted -- waiting for your opponent's deck.";
+            statusEl.innerHTML = '';
+            if (deckBuilding.opponent_submitted) {
+                // The game auto-starts itself the moment both decks are in
+                // (see autoStartGameIfReady()) -- this text is only ever on
+                // screen for the brief moment before that happens.
+                statusEl.textContent = 'Both decks are in -- starting the game...';
+            } else {
+                const icon = document.createElement('span');
+                icon.className = 'waiting-icon';
+                icon.textContent = '⏳';
+                icon.setAttribute('aria-hidden', 'true');
+                statusEl.appendChild(icon);
+                statusEl.appendChild(document.createTextNode("Waiting for " + currentOpponentUsername + "'s deck submission"));
+            }
             picker.innerHTML = '';
             submitButton.hidden = true;
             selectAllButton.hidden = true;
@@ -2255,6 +2301,12 @@
 
     function renderDraftPanel(state) {
         document.getElementById('draft-deck-building').hidden = false;
+
+        // Quick Draft/Winston Draft are always exactly 2 players (see
+        // GameService::createGame()'s format === 'draft' guard), so the
+        // "other" seated player is always the opponent.
+        const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
+        currentOpponentUsername = opponent ? opponent.username : 'your opponent';
 
         if (state.game.deck_type === 'quick_draft') {
             const qd = state.quick_draft;
@@ -2354,17 +2406,6 @@
             return;
         }
 
-        await refreshBoard();
-    });
-
-    document.getElementById('start-game-button').addEventListener('click', async () => {
-        boardError.hidden = true;
-        const { ok, body } = await startGame(currentGameId);
-        if (!ok) {
-            boardError.textContent = body.message || 'Could not start the game.';
-            boardError.hidden = false;
-            return;
-        }
         await refreshBoard();
     });
 
