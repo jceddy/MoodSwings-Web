@@ -399,7 +399,26 @@ too, proportional to the smaller card width.
     to take) and "View" otherwise (`showBoard()` itself renders read-only
     once a game isn't `in_progress` regardless of the button's own label,
     so this is purely about setting the right expectation before
-    clicking, not a new access restriction). A "New game" dialog
+    clicking, not a new access restriction). A `quick_draft` game's up-to-3
+    `games` rows (sharing one `draft_match_id`) are grouped into a single
+    `<li class="lobby-match-group">` instead of showing as unrelated rows --
+    `refreshLobby()` walks `GET /games`'s already-sorted array once,
+    bucketing by `draft_match_id` into a `Map`, and renders one
+    `buildMatchGroupRow()` per match at the position of its first (best-
+    sorted) game; every other format's games are unaffected (no
+    `draft_match_id`, so each stays its own top-level row). The group's own
+    header carries the format/deck line and a `.lobby-match-score` line
+    ("Match score: you 1, opponent 0 (first to 2 wins)", from the game's
+    own `quick_draft_match` field) once, plus -- only once the match itself
+    is decided -- a `.lobby-winner`-styled result line ("alice won the
+    match"); each game nested underneath (`.lobby-match-games`, indented)
+    renders via the same `buildGameRow()` the flat list uses, but with
+    `{ compact: true }` to drop the now-redundant format/deck/opponents
+    lines and prefix its own status with "Game N --", keeping its own
+    Play/View button and its own `winner_usernames` line once that
+    particular game is `completed` -- not redundant with the group header's
+    own result, since a match's games aren't necessarily all won by the
+    same player. A "New game" dialog
     (`.new-game-field` puts the Format and Deck `<label>`s each on their
     own line -- plain inline `<label>` elements otherwise sit side by side
     until their own `<select>` runs out of room, rather than breaking

@@ -84,6 +84,14 @@ final class GameServiceIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
+    private function fetchUsername(int $userId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT username FROM users WHERE id = :id');
+        $stmt->execute(['id' => $userId]);
+
+        return (string) $stmt->fetchColumn();
+    }
+
     /** @return int game_players.id */
     private function insertGamePlayer(int $gameId, int $userId, int $seatOrder): int
     {
@@ -1096,6 +1104,10 @@ final class GameServiceIntegrationTest extends TestCase
         // Exactly one of the two players is on turn; the flag should
         // disagree between their two lists.
         self::assertNotSame($creatorGames[0]['is_your_turn'], $bobGames[0]['is_your_turn']);
+
+        self::assertNull($summary['draft_match_id'], 'only Quick Draft games belong to a match');
+        self::assertNull($summary['match_game_number']);
+        self::assertNull($summary['quick_draft_match']);
     }
 
     public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void
@@ -6737,5 +6749,113 @@ final class GameServiceIntegrationTest extends TestCase
         sort($previousDeck);
         self::assertSame($u1Deck, $previousDeck, 'previous_deck_card_ids must be exactly the 15-card deck just used, not all 16 drafted cards');
         self::assertNotSame($u1Drafted, $previousDeck, 'sanity check: the trimmed deck actually differs from the full drafted pool');
+    }
+
+    /**
+     * listGamesForUser()'s draft_match_id/quick_draft_match fields let the
+     * lobby group a match's up-to-3 games together and, once it's done,
+     * show the result -- see quickDraftMatchSummaryFor().
+     */
+    public function testListGamesForUserGroupsQuickDraftMatchGamesAndSummarizesTheResultOnceCompleted(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $u1Summary = $summaryFor($u1);
+        self::assertSame($draftMatchId, $u1Summary['draft_match_id']);
+        self::assertSame(1, $u1Summary['match_game_number']);
+        // driveQuickDraftToDeckBuilding() above already ran the draft to
+        // completion, so the match is already at 'deck_building' by here.
+        self::assertSame('deck_building', $u1Summary['quick_draft_match']['status']);
+        self::assertSame(0, $u1Summary['quick_draft_match']['your_wins']);
+        self::assertSame(0, $u1Summary['quick_draft_match']['opponent_wins']);
+        self::assertSame(2, $u1Summary['quick_draft_match']['games_to_win']);
+        self::assertNull($u1Summary['quick_draft_match']['winner_username']);
+
+        // Drive the match to completion the same way
+        // testQuickDraftMatchProgressesGamesAndCompletesAtTwoWins() does --
+        // completeQuickDraftGameByPassing() hands each game to whichever
+        // seat went first that round, not necessarily the same user twice
+        // in a row, so this can't assume a clean 2-0 for either side.
+        $matchWins = [$u1 => 0, $u2 => 0];
+        $currentGameId = $gameId;
+        for ($gamesPlayed = 0; $gamesPlayed < 3; $gamesPlayed++) {
+            $winnerUserId = $this->completeQuickDraftGameByPassing($currentGameId);
+            $matchWins[$winnerUserId]++;
+
+            $summaryForCurrent = function (int $userId) use ($currentGameId): array {
+                foreach ($this->games->listGamesForUser($userId) as $summary) {
+                    if ($summary['id'] === $currentGameId) {
+                        return $summary;
+                    }
+                }
+                self::fail("game {$currentGameId} missing from listGamesForUser()");
+            };
+
+            if ($matchWins[$winnerUserId] >= 2) {
+                $winnerUsername = $this->fetchUsername($winnerUserId);
+                $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+                $finalWinnerSummary = $summaryForCurrent($winnerUserId);
+                self::assertSame($draftMatchId, $finalWinnerSummary['draft_match_id']);
+                self::assertSame('completed', $finalWinnerSummary['quick_draft_match']['status']);
+                self::assertSame(2, $finalWinnerSummary['quick_draft_match']['your_wins']);
+                self::assertSame($matchWins[$loserUserId], $finalWinnerSummary['quick_draft_match']['opponent_wins']);
+                self::assertSame($winnerUsername, $finalWinnerSummary['quick_draft_match']['winner_username']);
+
+                $finalLoserSummary = $summaryForCurrent($loserUserId);
+                self::assertSame('completed', $finalLoserSummary['quick_draft_match']['status']);
+                self::assertSame($matchWins[$loserUserId], $finalLoserSummary['quick_draft_match']['your_wins']);
+                self::assertSame(2, $finalLoserSummary['quick_draft_match']['opponent_wins']);
+                self::assertSame($winnerUsername, $finalLoserSummary['quick_draft_match']['winner_username'], 'winner_username names the actual winner regardless of which side is asking');
+
+                return;
+            }
+
+            // Match isn't done yet -- the next game already exists and
+            // shares the same draft_match_id, so the lobby can still group
+            // them even though this row's own status just flipped to
+            // 'completed'.
+            $winnerSummary = $summaryForCurrent($winnerUserId);
+            self::assertSame('deck_building', $winnerSummary['quick_draft_match']['status']);
+            self::assertNull($winnerSummary['quick_draft_match']['winner_username'], 'match not over yet');
+
+            $nextGameStmt = $this->pdo->prepare(
+                "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+            $nextGameSummaryFor = function (int $userId) use ($nextGameId): array {
+                foreach ($this->games->listGamesForUser($userId) as $summary) {
+                    if ($summary['id'] === $nextGameId) {
+                        return $summary;
+                    }
+                }
+                self::fail("game {$nextGameId} missing from listGamesForUser()");
+            };
+            self::assertSame($draftMatchId, $nextGameSummaryFor($winnerUserId)['draft_match_id'], 'the next game in the match shares the same draft_match_id, so the lobby can group it with the previous one');
+
+            $this->submitFullQuickDraftDeck($nextGameId, $u1);
+            $this->submitFullQuickDraftDeck($nextGameId, $u2);
+            $this->games->startGame($nextGameId);
+            $currentGameId = $nextGameId;
+        }
+
+        self::fail('a best-of-three match can never need a 4th game');
     }
 }

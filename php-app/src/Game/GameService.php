@@ -3322,7 +3322,7 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,winner_usernames:array<int,string>}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,quick_draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
@@ -3402,6 +3402,8 @@ final class GameService
                 $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
             }
 
+            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+
             $games[] = [
                 'id' => $gameId,
                 'format' => $game['format'],
@@ -3416,10 +3418,68 @@ final class GameService
                 'players' => $players,
                 'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
                 'winner_usernames' => $winnerUsernames,
+                // Lets the lobby group a Quick Draft match's up-to-3 games
+                // together (same draft_match_id) instead of listing them
+                // as unrelated rows, and show the match's own result once
+                // it's done -- see quickDraftMatchSummaryFor().
+                'draft_match_id' => $draftMatchId,
+                'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+                'quick_draft_match' => $draftMatchId !== null ? $this->quickDraftMatchSummaryFor($draftMatchId, $userId) : null,
             ];
         }
 
         return $games;
+    }
+
+    /**
+     * The match-level scoreline shared by listGamesForUser()'s own
+     * per-game 'quick_draft_match' entries (so the lobby can group a
+     * match's up-to-3 games together and, once it's done, show who won)
+     * -- {status, your_wins, opponent_wins, games_to_win, winner_username}.
+     * winner_username is null except once status is 'completed'
+     * (draft_matches.winner_user_id is null until then). A separate,
+     * leaner query from quickDraftStateFor()'s own draft_match_players
+     * read below -- that one also needs drafted/deck/previous_deck card
+     * ids for the deck-building sub-state, which would be wasted work
+     * here.
+     *
+     * @return array<string, mixed>
+     */
+    private function quickDraftMatchSummaryFor(int $draftMatchId, int $viewerUserId): array
+    {
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $winsStmt = Connection::get()->prepare(
+            'SELECT user_id, wins FROM draft_match_players WHERE draft_match_id = :id'
+        );
+        $winsStmt->execute(['id' => $draftMatchId]);
+        $winsByUser = [];
+        foreach ($winsStmt->fetchAll() as $row) {
+            $winsByUser[(int) $row['user_id']] = (int) $row['wins'];
+        }
+
+        $winnerUsername = null;
+        if ($match['winner_user_id'] !== null) {
+            $winnerStmt = Connection::get()->prepare('SELECT username FROM users WHERE id = :id');
+            $winnerStmt->execute(['id' => (int) $match['winner_user_id']]);
+            $winnerUsername = $winnerStmt->fetchColumn() ?: null;
+        }
+
+        return [
+            'status' => $match['status'],
+            'your_wins' => $winsByUser[$viewerUserId] ?? 0,
+            'opponent_wins' => $opponentUserId !== null ? ($winsByUser[$opponentUserId] ?? 0) : 0,
+            'games_to_win' => self::QUICK_DRAFT_GAMES_TO_WIN,
+            'winner_username' => $winnerUsername,
+        ];
     }
 
     /**
