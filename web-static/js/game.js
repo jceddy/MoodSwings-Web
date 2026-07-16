@@ -258,6 +258,7 @@
     const QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
         random_48: '48 random cards, no duplicates.',
         structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- short of the 48 cards a full draft needs, so round 4 tops back up from already-discarded cards, same as a physical 45-card box.',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to 48 before the draft begins.",
         one_of_each: 'The full 133-card pool, randomly narrowed down to 48 before the draft begins.',
         custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 48 if you provide more.',
     };

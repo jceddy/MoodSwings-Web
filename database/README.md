@@ -216,3 +216,8 @@ half-migrated schema.
   "you may choose one: ...", which made the after-playing ability look
   mandatory; `RationalizationEffect` was fixed in the same change to
   actually let a player decline (no `mode` submitted) instead of throwing.
+- **Quick Draft jceddy's 75 Card pool** (`0031`): adds `jceddys_75` to
+  `draft_matches.pool_source`'s enum -- reuses
+  `GameService::buildJceddys75DeckCardIds()`'s existing 75-card pool
+  as-is, randomly narrowed down to 48 before drafting begins the same way
+  `one_of_each`'s 133 already are. See "Quick Draft" in `php-app/README.md`.

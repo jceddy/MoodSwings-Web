@@ -6397,6 +6397,19 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(48, $poolCardIds);
     }
 
+    public function testCreateGameQuickDraftJceddys75PoolIsTruncatedToFortyEight(): void
+    {
+        ['gameId' => $gameId] = $this->buildQuickDraftFixture('jceddys_75');
+
+        $game = $this->fetchGame($gameId);
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $game['draft_match_id'])['pool_card_ids'], true);
+
+        // Same truncation rule as one_of_each's 133 -- jceddy's 75 Card
+        // deck's own 75-card pool (see GameService::buildJceddys75DeckCardIds())
+        // gets randomly narrowed down to 48 before drafting begins.
+        self::assertCount(48, $poolCardIds);
+    }
+
     public function testCreateGameQuickDraftCustomPoolRejectsFewerThanFortyFiveCards(): void
     {
         $u1 = $this->insertUser('quickdraft-toofewpool1');
