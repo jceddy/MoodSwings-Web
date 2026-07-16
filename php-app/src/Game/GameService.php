@@ -158,7 +158,7 @@ final class GameService
     private const QUICK_DRAFT_ROUNDS = 4;
     private const QUICK_DRAFT_DRAW_PER_ROUND = 6;
     private const QUICK_DRAFT_KEEP_PER_STAGE = 2;
-    private const QUICK_DRAFT_MIN_DECK_SIZE = 14;
+    private const QUICK_DRAFT_MIN_DECK_SIZE = 12;
     private const QUICK_DRAFT_MAX_DECK_SIZE = 16;
 
     /**

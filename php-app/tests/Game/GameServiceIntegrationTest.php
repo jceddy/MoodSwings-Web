@@ -6271,7 +6271,7 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
-    /** Submits all 16 of $userId's own drafted cards as their deck (the max end of the 14-16 range). */
+    /** Submits all 16 of $userId's own drafted cards as their deck (the max end of the 12-16 range). */
     private function submitFullQuickDraftDeck(int $gameId, int $userId): void
     {
         $state = $this->games->getState($gameId, $userId);
@@ -6589,9 +6589,26 @@ final class GameServiceIntegrationTest extends TestCase
         );
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('between 14 and 16 cards');
+        $this->expectExceptionMessage('between 12 and 16 cards');
 
         $this->games->submitDraftDeck($gameId, $u1, array_slice($draftedCardIds, 0, 10));
+    }
+
+    /** Regression test: Quick Draft's own minimum deck size matches the physical rules' 12-card floor, same as Winston Draft's. */
+    public function testSubmitQuickDraftDeckAcceptsExactlyTheTwelveCardMinimum(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftedCardIds = array_column(
+            $this->games->getState($gameId, $u1)['quick_draft']['deck_building']['drafted_cards'],
+            'card_id',
+        );
+
+        $this->games->submitDraftDeck($gameId, $u1, array_slice($draftedCardIds, 0, 12));
+
+        $deckCardIds = $this->games->getState($gameId, $u1)['quick_draft']['deck_building']['deck_card_ids'];
+        self::assertCount(12, $deckCardIds);
     }
 
     public function testSubmitQuickDraftDeckRejectsACardNotInYourDraftedPool(): void

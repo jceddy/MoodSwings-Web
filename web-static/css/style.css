@@ -552,10 +552,29 @@ body.game-page {
     right: 0.25rem;
 }
 
+/* Nudged down ~20px from the other corner badges (see .card-thumb__badge
+   itself) -- the extreme top-left corner sits right over the card name
+   printed on the art, while a bit further down only covers non-functional
+   background art. */
 .card-thumb__badge--copy {
-    top: 0.25rem;
+    top: calc(0.25rem + 20px);
     left: 0.25rem;
     background: #0a5b8a;
+}
+
+.card-thumb__badge--recolored {
+    top: calc(0.25rem + 20px);
+    left: 0.25rem;
+    background: #8a5a00;
+}
+
+/* A card can be both a Creativity copy AND separately recolored (e.g.
+   Imagination is also in play, overriding the copied mood's own color) --
+   buildCardThumb() appends Copy first when both apply, so this sibling
+   selector drops the recolored badge below it instead of the two
+   overlapping in the same corner. */
+.card-thumb__badge--copy + .card-thumb__badge--recolored {
+    top: calc(0.25rem + 20px + 22px);
 }
 
 .card-thumb__badge--suppressed {

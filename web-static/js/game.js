@@ -249,7 +249,7 @@
         jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
-        quick_draft: 'Both players draft their own 16-card deck live from a shared card pool, trim it to 14-16 cards, then play a best-of-three match -- sideboarding freely between games.',
+        quick_draft: 'Both players draft their own 16-card deck live from a shared card pool, trim it to 12-16 cards, then play a best-of-three match -- sideboarding freely between games.',
         winston_draft: 'Both players draft their own deck from a shared 45-card pool by taking or passing on 3 growing face-down piles, then trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
@@ -901,6 +901,23 @@
             copyBadge.className = 'card-thumb__badge card-thumb__badge--copy';
             copyBadge.textContent = 'Copy';
             button.appendChild(copyBadge);
+        }
+
+        // Not mutually exclusive with the Copy badge above -- copying
+        // another mood only sets base_color to that mood's own printed
+        // color, which normally does equal its current color too, so this
+        // stays silent for a plain copy. It only fires *in addition* to
+        // Copy when something else (Imagination's board-wide recolor
+        // effect) has since overridden that copy's color as well -- the
+        // CSS stacks this badge below Copy's when both are present (see
+        // .card-thumb__badge--copy + .card-thumb__badge--recolored) so
+        // neither one covers the other.
+        if (card.base_color && card.base_color !== card.color) {
+            const colorBadge = document.createElement('span');
+            colorBadge.className = 'card-thumb__badge card-thumb__badge--recolored';
+            colorBadge.textContent = '→ ' + capitalize(card.color);
+            colorBadge.title = 'Currently counts as ' + card.color + ' (printed ' + card.base_color + ')';
+            button.appendChild(colorBadge);
         }
 
         if (card.is_suppressed) {
