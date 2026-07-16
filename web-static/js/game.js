@@ -2122,14 +2122,22 @@
     // game always re-seeds rather than carrying over a stale selection.
     let draftDeckSelection = new Set();
     let draftDeckSelectionInitialized = false;
+    // Set at the top of every renderDraftDeckBuilding() call so the
+    // select-all/clear-selection buttons' own click handlers (below) can
+    // re-render without needing their own copy of the current
+    // deckBuilding state.
+    let currentDeckBuilding = null;
 
     function renderDraftDeckBuilding(deckBuilding) {
+        currentDeckBuilding = deckBuilding;
         const sizeText = deckBuilding.min_deck_size === deckBuilding.max_deck_size
             ? deckBuilding.min_deck_size + ' cards'
             : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
         document.getElementById('draft-deck-building-title').textContent = 'Build your deck (' + sizeText + ')';
         const picker = document.getElementById('draft-deck-picker');
         const submitButton = document.getElementById('draft-deck-submit-button');
+        const selectAllButton = document.getElementById('draft-deck-select-all-button');
+        const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
         const statusEl = document.getElementById('draft-deck-building-status');
 
         if (deckBuilding.you_submitted) {
@@ -2138,6 +2146,8 @@
                 : "Your deck is submitted -- waiting for your opponent's deck.";
             picker.innerHTML = '';
             submitButton.hidden = true;
+            selectAllButton.hidden = true;
+            clearSelectionButton.hidden = true;
             return;
         }
 
@@ -2181,7 +2191,19 @@
 
         submitButton.hidden = false;
         submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size;
+        selectAllButton.hidden = false;
+        clearSelectionButton.hidden = false;
     }
+
+    document.getElementById('draft-deck-select-all-button').addEventListener('click', () => {
+        draftDeckSelection = new Set(currentDeckBuilding.drafted_cards.map((card) => card.card_id));
+        renderDraftDeckBuilding(currentDeckBuilding);
+    });
+
+    document.getElementById('draft-deck-clear-selection-button').addEventListener('click', () => {
+        draftDeckSelection = new Set();
+        renderDraftDeckBuilding(currentDeckBuilding);
+    });
 
     document.getElementById('draft-deck-submit-button').addEventListener('click', async () => {
         boardError.hidden = true;
