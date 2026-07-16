@@ -2053,11 +2053,19 @@
             heading.textContent = 'Pile ' + pileNumber + ' (' + size + ' card' + (size === 1 ? '' : 's') + ')';
             pileEl.appendChild(heading);
 
+            // A separate flex-wrap container from the heading above, so the
+            // cards themselves wrap onto new rows as they grow (same
+            // pattern as #hand-list/#quick-draft-kept-so-far -- see
+            // style.css) without the heading becoming a flex item
+            // alongside them.
+            const cardsEl = document.createElement('div');
+            cardsEl.className = 'winston-draft-pile-cards';
             if (drafting.is_your_turn && pileNumber === drafting.current_pile_number) {
                 drafting.current_pile_cards.forEach((card) => {
-                    pileEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                    cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
                 });
             }
+            pileEl.appendChild(cardsEl);
 
             pilesContainer.appendChild(pileEl);
         });

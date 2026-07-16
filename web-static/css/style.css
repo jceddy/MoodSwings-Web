@@ -252,7 +252,9 @@ body.game-page {
 #initial-card-pass-fields,
 #quick-draft-pack,
 #quick-draft-kept-so-far,
-#quick-draft-deck-picker {
+#draft-deck-picker,
+.winston-draft-pile-cards,
+#winston-draft-drafted-so-far {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -262,6 +264,7 @@ body.game-page {
 #discard-list li,
 #teammate-hand-list li,
 #quick-draft-kept-so-far li,
+#winston-draft-drafted-so-far li,
 .in-play-zone__list li {
     list-style: none;
 }
