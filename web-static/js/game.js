@@ -1955,6 +1955,12 @@
         nextGameButton.onclick = draftState.next_game_id ? () => showBoard(draftState.next_game_id) : null;
     }
 
+    // Tracks *indices* into drafting.pack rather than card_ids -- a
+    // jceddys_75 or custom pool can legally deal a pack containing
+    // duplicate cards, and a plain Set<card_id> can't distinguish "keep
+    // this one copy of Charity" from "keep both copies", toggling every
+    // copy of a duplicated card together (see cardIdsToDraftedCardIndices()
+    // above, which the deck-building picker uses for the same reason).
     let quickDraftPickSelection = new Set();
     let quickDraftPickSelectionKey = null;
 
@@ -1981,17 +1987,17 @@
         const submitButton = document.getElementById('quick-draft-pick-submit-button');
         const pickable = drafting.stage === 'draw' || drafting.stage === 'received';
 
-        drafting.pack.forEach((card) => {
-            const selected = quickDraftPickSelection.has(card.card_id);
+        drafting.pack.forEach((card, index) => {
+            const selected = quickDraftPickSelection.has(index);
             const thumb = buildCardThumb(card, {
                 onClick: () => openCardDetail(card, null, {
                     selected,
                     disabled: !selected && quickDraftPickSelection.size >= 2,
                     onToggle: () => {
-                        if (quickDraftPickSelection.has(card.card_id)) {
-                            quickDraftPickSelection.delete(card.card_id);
+                        if (quickDraftPickSelection.has(index)) {
+                            quickDraftPickSelection.delete(index);
                         } else {
-                            quickDraftPickSelection.add(card.card_id);
+                            quickDraftPickSelection.add(index);
                         }
                         renderQuickDraftDrafting(drafting);
                     },
@@ -2015,7 +2021,8 @@
         boardError.hidden = true;
         boardMessage.hidden = true;
         const drafting = currentState.quick_draft.drafting;
-        const { ok, body } = await submitQuickDraftPick(currentGameId, drafting.round, drafting.stage, Array.from(quickDraftPickSelection));
+        const cardIds = Array.from(quickDraftPickSelection).map((index) => drafting.pack[index].card_id);
+        const { ok, body } = await submitQuickDraftPick(currentGameId, drafting.round, drafting.stage, cardIds);
         if (!ok) {
             boardError.textContent = body.message || 'Could not submit that pick.';
             boardError.hidden = false;
@@ -2106,20 +2113,46 @@
     document.getElementById('winston-draft-take-button').addEventListener('click', () => submitWinstonDraftAction('take'));
     document.getElementById('winston-draft-pass-button').addEventListener('click', () => submitWinstonDraftAction('pass'));
 
+    // Converts a multiset of card_ids (e.g. deck_card_ids, which may
+    // legally contain duplicates -- a jceddys_75 or custom pool can draft
+    // more than one copy of the same card) into a Set of *indices* into
+    // draftedCards, claiming exactly one not-yet-claimed matching-card_id
+    // instance per occurrence. Needed because draftDeckSelection itself
+    // (below) tracks indices rather than card_ids -- a plain Set<card_id>
+    // can't represent "2 of these 3 copies of Charity are in the deck"
+    // and would toggle every copy of a duplicated card together.
+    function cardIdsToDraftedCardIndices(cardIds, draftedCards) {
+        const claimed = new Array(draftedCards.length).fill(false);
+        const indices = new Set();
+        cardIds.forEach((cardId) => {
+            const index = draftedCards.findIndex((card, i) => !claimed[i] && card.card_id === cardId);
+            if (index !== -1) {
+                claimed[index] = true;
+                indices.add(index);
+            }
+        });
+        return indices;
+    }
+
     // Used for both formats' initial trim and every later sideboard
     // between the match's up-to-3 games -- same picker, same endpoint
     // (submitDraftDeck()), shared between quick_draft and winston_draft
     // since deckBuilding's shape is identical (see
-    // GameService::draftDeckBuildingStateFor()). Seeded once from the
-    // player's current deck_card_ids; if that's null (a fresh game whose
-    // deck hasn't been (re)submitted yet), falls back to
-    // previous_deck_card_ids -- whatever deck they last submitted, for the
-    // game that just ended -- so sideboarding starts from their existing
-    // deck instead of forcing a full retrim from scratch every game. Only
-    // the very first game of a match (no previous deck to fall back to)
-    // still defaults to all drafted cards. draftDeckSelectionInitialized
-    // is reset by showBoard() so switching games/sideboarding for a new
-    // game always re-seeds rather than carrying over a stale selection.
+    // GameService::draftDeckBuildingStateFor()). Tracks *indices* into
+    // deckBuilding.drafted_cards rather than card_ids, since a drafted
+    // pool can legally contain duplicate cards (see
+    // cardIdsToDraftedCardIndices() above) -- otherwise selecting/
+    // de-selecting one copy of a duplicated card would toggle every copy
+    // of it at once. Seeded once from the player's current deck_card_ids;
+    // if that's null (a fresh game whose deck hasn't been (re)submitted
+    // yet), falls back to previous_deck_card_ids -- whatever deck they
+    // last submitted, for the game that just ended -- so sideboarding
+    // starts from their existing deck instead of forcing a full retrim
+    // from scratch every game. Only the very first game of a match (no
+    // previous deck to fall back to) still defaults to all drafted cards.
+    // draftDeckSelectionInitialized is reset by showBoard() so switching
+    // games/sideboarding for a new game always re-seeds rather than
+    // carrying over a stale selection.
     let draftDeckSelection = new Set();
     let draftDeckSelectionInitialized = false;
     // Set at the top of every renderDraftDeckBuilding() call so the
@@ -2152,28 +2185,26 @@
         }
 
         if (!draftDeckSelectionInitialized) {
-            draftDeckSelection = new Set(
-                deckBuilding.deck_card_ids
-                || deckBuilding.previous_deck_card_ids
-                || deckBuilding.drafted_cards.map((card) => card.card_id),
-            );
+            draftDeckSelection = deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids
+                ? cardIdsToDraftedCardIndices(deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids, deckBuilding.drafted_cards)
+                : new Set(deckBuilding.drafted_cards.map((card, index) => index));
             draftDeckSelectionInitialized = true;
         }
 
         statusEl.textContent = 'Choose ' + sizeText + ' from your ' + deckBuilding.drafted_cards.length + ' drafted cards for your deck. Tap a card to select/de-select it.';
         picker.innerHTML = '';
 
-        deckBuilding.drafted_cards.forEach((card) => {
-            const selected = draftDeckSelection.has(card.card_id);
+        deckBuilding.drafted_cards.forEach((card, index) => {
+            const selected = draftDeckSelection.has(index);
             const thumb = buildCardThumb(card, {
                 onClick: () => openCardDetail(card, null, {
                     selected,
                     disabled: false,
                     onToggle: () => {
-                        if (draftDeckSelection.has(card.card_id)) {
-                            draftDeckSelection.delete(card.card_id);
+                        if (draftDeckSelection.has(index)) {
+                            draftDeckSelection.delete(index);
                         } else {
-                            draftDeckSelection.add(card.card_id);
+                            draftDeckSelection.add(index);
                         }
                         renderDraftDeckBuilding(deckBuilding);
                     },
@@ -2196,7 +2227,7 @@
     }
 
     document.getElementById('draft-deck-select-all-button').addEventListener('click', () => {
-        draftDeckSelection = new Set(currentDeckBuilding.drafted_cards.map((card) => card.card_id));
+        draftDeckSelection = new Set(currentDeckBuilding.drafted_cards.map((card, index) => index));
         renderDraftDeckBuilding(currentDeckBuilding);
     });
 
@@ -2211,7 +2242,8 @@
         const errorEl = document.getElementById('draft-deck-error');
         errorEl.hidden = true;
 
-        const { ok, body } = await submitDraftDeck(currentGameId, Array.from(draftDeckSelection));
+        const deckCardIds = Array.from(draftDeckSelection).map((index) => currentDeckBuilding.drafted_cards[index].card_id);
+        const { ok, body } = await submitDraftDeck(currentGameId, deckCardIds);
         if (!ok) {
             errorEl.textContent = body.message || 'Could not submit that deck.';
             errorEl.hidden = false;
