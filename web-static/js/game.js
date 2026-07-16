@@ -1851,8 +1851,13 @@
     // Used for both the initial 16-to-14/15/16 trim and every later
     // sideboard between the match's up-to-3 games -- same picker, same
     // endpoint (submitQuickDraftDeck()). Seeded once from the player's
-    // current deck_card_ids (or, before their first-ever submission, all
-    // 16 drafted cards) -- quickDraftDeckSelectionInitialized is reset by
+    // current deck_card_ids; if that's null (a fresh game whose deck
+    // hasn't been (re)submitted yet), falls back to previous_deck_card_ids
+    // -- whatever deck they last submitted, for the game that just ended --
+    // so sideboarding starts from their existing deck instead of forcing a
+    // full retrim from scratch every game. Only the very first game of a
+    // match (no previous deck to fall back to) still defaults to all 16
+    // drafted cards. quickDraftDeckSelectionInitialized is reset by
     // showBoard() so switching games/sideboarding for a new game always
     // re-seeds rather than carrying over a stale selection.
     let quickDraftDeckSelection = new Set();
@@ -1874,7 +1879,11 @@
         }
 
         if (!quickDraftDeckSelectionInitialized) {
-            quickDraftDeckSelection = new Set(deckBuilding.deck_card_ids || deckBuilding.drafted_cards.map((card) => card.card_id));
+            quickDraftDeckSelection = new Set(
+                deckBuilding.deck_card_ids
+                || deckBuilding.previous_deck_card_ids
+                || deckBuilding.drafted_cards.map((card) => card.card_id),
+            );
             quickDraftDeckSelectionInitialized = true;
         }
 
@@ -1896,6 +1905,12 @@
                         renderQuickDraftDeckBuilding(deckBuilding);
                     },
                 }),
+                // Reuses the same dimmed/dashed-border treatment the
+                // in-game hand list gives a card that can't be played
+                // (.not-playable) -- here it means "not in the deck", not
+                // "can't be played", but the same at-a-glance "this one's
+                // excluded" signal applies.
+                notPlayable: !selected,
             });
             thumb.classList.toggle('selected', selected);
             picker.appendChild(thumb);

@@ -6645,9 +6645,14 @@ final class GameServiceIntegrationTest extends TestCase
             self::assertSame('deck_building', $match['status'], 'match resets to deck_building for the next game\'s sideboard step');
 
             foreach ([$u1, $u2] as $userId) {
+                $playerRow = $this->fetchDraftMatchPlayer($draftMatchId, $userId);
                 self::assertNull(
-                    $this->fetchDraftMatchPlayer($draftMatchId, $userId)['deck_card_ids'],
+                    $playerRow['deck_card_ids'],
                     "user {$userId}'s deck_card_ids must be nulled out so the sideboard step can't be silently skipped",
+                );
+                self::assertNotNull(
+                    $playerRow['previous_deck_card_ids'],
+                    "user {$userId}'s previous_deck_card_ids must carry over the deck just used, for the next sideboard's default",
                 );
             }
 
@@ -6676,5 +6681,48 @@ final class GameServiceIntegrationTest extends TestCase
 
             $currentGameId = (int) $nextGame['id'];
         }
+    }
+
+    /**
+     * A genuinely-trimmed (not full-16) deck must reappear as the new
+     * game's previous_deck_card_ids once the match advances, so the
+     * frontend's sideboard picker can default to it instead of forcing the
+     * player to redo their whole trim from scratch every game.
+     */
+    public function testPreviousDeckCardIdsCarriesOverForSideboardPrefill(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $u1Drafted = array_column($this->games->getState($gameId, $u1)['quick_draft']['deck_building']['drafted_cards'], 'card_id');
+        $u1Deck = array_slice($u1Drafted, 0, 15);
+        $this->games->submitQuickDraftDeck($gameId, $u1, $u1Deck);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+
+        // Before the very first game of a match, there's no previous deck
+        // to fall back to yet -- confirms this doesn't false-positive on a
+        // stale value from some earlier match.
+        self::assertNull($this->games->getState($gameId, $u1)['quick_draft']['deck_building']['previous_deck_card_ids']);
+
+        $this->games->startGame($gameId);
+        $this->completeQuickDraftGameByPassing($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $deckBuilding = $this->games->getState($nextGameId, $u1)['quick_draft']['deck_building'];
+        self::assertNull(
+            $deckBuilding['deck_card_ids'],
+            'this new game\'s own deck_card_ids must still be null -- previous_deck_card_ids is only a prefill hint',
+        );
+        $previousDeck = $deckBuilding['previous_deck_card_ids'];
+        sort($u1Deck);
+        sort($previousDeck);
+        self::assertSame($u1Deck, $previousDeck, 'previous_deck_card_ids must be exactly the 15-card deck just used, not all 16 drafted cards');
+        self::assertNotSame($u1Drafted, $previousDeck, 'sanity check: the trimmed deck actually differs from the full drafted pool');
     }
 }

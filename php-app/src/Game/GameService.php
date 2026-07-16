@@ -2657,7 +2657,12 @@ final class GameService
      * deck_card_ids are explicitly nulled out here -- without that, a
      * leftover value from the game that just finished would silently
      * satisfy startGame()'s own "deck submitted" gate for the new game,
-     * skipping the required sideboard step entirely.
+     * skipping the required sideboard step entirely. Whatever deck_card_ids
+     * held right before that null-out is copied to previous_deck_card_ids
+     * first, purely so getState() can hand the frontend something to
+     * pre-select in the new sideboard picker instead of defaulting back to
+     * every drafted card -- it plays no part in the "deck submitted" gate
+     * itself, which still only ever looks at deck_card_ids.
      */
     private function advanceQuickDraftMatch(int $gameId, int $winnerGamePlayerId): void
     {
@@ -2721,7 +2726,8 @@ final class GameService
         }
 
         $pdo->prepare(
-            'UPDATE draft_match_players SET deck_card_ids = NULL WHERE draft_match_id = :match_id'
+            'UPDATE draft_match_players SET previous_deck_card_ids = deck_card_ids, deck_card_ids = NULL
+             WHERE draft_match_id = :match_id'
         )->execute(['match_id' => $draftMatchId]);
 
         $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
@@ -3442,7 +3448,8 @@ final class GameService
         }
 
         $playersStmt = Connection::get()->prepare(
-            'SELECT user_id, wins, drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = :id'
+            'SELECT user_id, wins, drafted_card_ids, deck_card_ids, previous_deck_card_ids
+             FROM draft_match_players WHERE draft_match_id = :id'
         );
         $playersStmt->execute(['id' => $draftMatchId]);
         $playersByUser = [];
@@ -3484,12 +3491,22 @@ final class GameService
             $deckCardIds = $viewerRow !== null && $viewerRow['deck_card_ids'] !== null
                 ? array_map(intval(...), json_decode((string) $viewerRow['deck_card_ids'], true))
                 : null;
+            // Only ever meaningful while $deckCardIds is still null (this
+            // game's own deck hasn't been (re)submitted yet) -- the very
+            // first game of a match has no previous game to carry a deck
+            // over from, so this stays null there too, and the frontend
+            // falls back to preselecting every drafted card exactly as it
+            // did before this field existed.
+            $previousDeckCardIds = $viewerRow !== null && $viewerRow['previous_deck_card_ids'] !== null
+                ? array_map(intval(...), json_decode((string) $viewerRow['previous_deck_card_ids'], true))
+                : null;
             $opponentSubmitted = $opponentUserId !== null
                 && ($playersByUser[$opponentUserId]['deck_card_ids'] ?? null) !== null;
 
             $state['deck_building'] = [
                 'drafted_cards' => $this->serializeCatalogCards($draftedCardIds),
                 'deck_card_ids' => $deckCardIds,
+                'previous_deck_card_ids' => $previousDeckCardIds,
                 'min_deck_size' => self::QUICK_DRAFT_MIN_DECK_SIZE,
                 'max_deck_size' => self::QUICK_DRAFT_MAX_DECK_SIZE,
                 'you_submitted' => $deckCardIds !== null,
