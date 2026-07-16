@@ -274,19 +274,18 @@ body.game-page {
    against the bottom edge of the card thumbnails, which reads as a
    layout mistake rather than intentional spacing. */
 #quick-draft-pick-submit-button,
-#draft-deck-select-all-button {
+#draft-deck-selection-actions {
     margin-top: 0.5rem;
 }
 
-/* Same breathing room above the deck-building submit button itself,
-   pushed further down still since the select-all/clear-selection
-   buttons now sit between it and the picker. */
+/* The select-all/clear-selection pair are one class of action (adjusting
+   the current selection) and sit close together (a plain default inline
+   gap, same as any two adjacent buttons); "Submit deck" is a different
+   class of action entirely (committing the selection), so it gets a
+   deliberately larger gap above it instead of matching the tighter pair
+   above -- makes the visual grouping match the functional one. */
 #draft-deck-submit-button {
     margin-top: 1rem;
-}
-
-#draft-deck-clear-selection-button {
-    margin-left: 0.5rem;
 }
 
 /* -- In-play board (issue #124) --------------------------------------
