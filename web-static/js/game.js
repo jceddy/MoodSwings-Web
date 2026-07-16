@@ -406,28 +406,31 @@
         }
     }
 
-    async function refreshLobby() {
-        const { ok, body } = await listGames();
-        const gamesList = document.getElementById('games-list');
+    // Builds one game's own lobby row. $opts.compact drops the
+    // format/deck-type line and the opponents line (shown once already at
+    // the Quick Draft match group's own header -- see buildMatchGroupRow())
+    // and prefixes the status with "Game N" instead, so a match's own
+    // per-game sub-rows read as "Game 1 — Completed" rather than repeating
+    // "Draft, Quick Draft deck" three times.
+    function buildGameRow(game, opts = {}) {
+        const li = document.createElement('li');
+        // The your-turn background (".lobby-row--your-turn") is a
+        // whole-row highlight on top of (not instead of) the bold
+        // "(your turn)" text tag on its own status line below --
+        // makes an actionable game stand out even before the text
+        // itself is read.
+        li.className = 'lobby-row' + (game.is_your_turn ? ' lobby-row--your-turn' : '');
 
-        renderList(gamesList, document.getElementById('games-empty'), ok ? body.games : [], (game) => {
-            const li = document.createElement('li');
-            // The your-turn background (".lobby-row--your-turn") is a
-            // whole-row highlight on top of (not instead of) the bold
-            // "(your turn)" text tag on its own status line below --
-            // makes an actionable game stand out even before the text
-            // itself is read.
-            li.className = 'lobby-row' + (game.is_your_turn ? ' lobby-row--your-turn' : '');
+        // Wrapped in its own container (rather than appended straight
+        // to the li) so the action button below can sit beside the
+        // text as a flex sibling -- see the ".lobby-row"/".lobby-info"
+        // rules in style.css -- instead of always trailing after
+        // however many lines the text itself wraps to on a narrow
+        // (phone-width) viewport.
+        const infoEl = document.createElement('div');
+        infoEl.className = 'lobby-info';
 
-            // Wrapped in its own container (rather than appended straight
-            // to the li) so the action button below can sit beside the
-            // text as a flex sibling -- see the ".lobby-row"/".lobby-info"
-            // rules in style.css -- instead of always trailing after
-            // however many lines the text itself wraps to on a narrow
-            // (phone-width) viewport.
-            const infoEl = document.createElement('div');
-            infoEl.className = 'lobby-info';
-
+        if (!opts.compact) {
             // Matches renderBoard()'s own deckDescription logic one level up
             // (board title), except there's no per-viewer custom_deck_name
             // available for 'custom_duel' at this list level -- each
@@ -441,55 +444,157 @@
             formatEl.className = 'lobby-format';
             formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
             infoEl.appendChild(formatEl);
+        }
 
-            // Its own line beneath the format/deck line (rather than
-            // trailing on it) and above the opponents, so status -- the
-            // single most actionable piece of information in the row --
-            // isn't buried mid-line.
-            const statusLineEl = document.createElement('div');
-            statusLineEl.className = 'lobby-status-line';
+        // Its own line beneath the format/deck line (rather than
+        // trailing on it) and above the opponents, so status -- the
+        // single most actionable piece of information in the row --
+        // isn't buried mid-line.
+        const statusLineEl = document.createElement('div');
+        statusLineEl.className = 'lobby-status-line';
 
-            const statusEl = document.createElement('span');
-            statusEl.className = 'lobby-status lobby-status--' + game.status;
-            statusEl.textContent = humanizeStatus(game.status);
-            statusLineEl.appendChild(statusEl);
+        const statusEl = document.createElement('span');
+        statusEl.className = 'lobby-status lobby-status--' + game.status;
+        statusEl.textContent = (opts.compact ? 'Game ' + game.match_game_number + ' — ' : '') + humanizeStatus(game.status);
+        statusLineEl.appendChild(statusEl);
 
-            if (game.is_your_turn) {
-                const yourTurnEl = document.createElement('span');
-                yourTurnEl.className = 'lobby-your-turn';
-                yourTurnEl.textContent = ' (your turn)';
-                statusLineEl.appendChild(yourTurnEl);
-            }
+        if (game.is_your_turn) {
+            const yourTurnEl = document.createElement('span');
+            yourTurnEl.className = 'lobby-your-turn';
+            yourTurnEl.textContent = ' (your turn)';
+            statusLineEl.appendChild(yourTurnEl);
+        }
 
-            infoEl.appendChild(statusLineEl);
+        infoEl.appendChild(statusLineEl);
 
+        if (!opts.compact) {
             const opponents = game.players.map((p) => p.username).join(', ');
             infoEl.append(opponents);
+        }
 
-            // winner_usernames is only ever non-empty once the game is
-            // actually 'completed' (see GameService::listGamesForUser()) --
-            // both teammates' names for a team-format win, just the one
-            // player's otherwise, matching how the board's own end-of-game
-            // display already credits a team win.
-            if (game.winner_usernames.length > 0) {
-                const winnerEl = document.createElement('div');
-                winnerEl.className = 'lobby-winner';
-                winnerEl.textContent = game.winner_usernames.join(' & ') + ' won';
-                infoEl.appendChild(winnerEl);
+        // winner_usernames is only ever non-empty once the game is
+        // actually 'completed' (see GameService::listGamesForUser()) --
+        // both teammates' names for a team-format win, just the one
+        // player's otherwise, matching how the board's own end-of-game
+        // display already credits a team win. Quick Draft's own per-game
+        // winner is redundant once the match group header above already
+        // shows the match's own result, so it's skipped there.
+        if (!opts.compact && game.winner_usernames.length > 0) {
+            const winnerEl = document.createElement('div');
+            winnerEl.className = 'lobby-winner';
+            winnerEl.textContent = game.winner_usernames.join(' & ') + ' won';
+            infoEl.appendChild(winnerEl);
+        }
+
+        li.appendChild(infoEl);
+
+        // A 'waiting'/'in_progress' game is still something to actually
+        // play; anything else (completed, or the rarer abandoned) is
+        // read-only from here on, so the button reads "View" instead --
+        // matches what actually happens when it's clicked (showBoard()
+        // renders a read-only board once the game itself isn't
+        // in_progress, see GameService::getState()'s own round: null).
+        const canPlay = game.status === 'waiting' || game.status === 'in_progress';
+        li.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
+        return li;
+    }
+
+    // Groups a Quick Draft match's up-to-3 games (games.draft_match_id) --
+    // one shared header (format/deck line, opponents, and the match's own
+    // scoreline/result from quick_draft_match) above a nested list of each
+    // individual game's own compact row (see buildGameRow()'s opts.compact),
+    // newest game first so the most relevant one (the active game, or the
+    // most recently finished one) sits closest to the header.
+    function buildMatchGroupRow(matchGames) {
+        const games = matchGames.slice().sort((a, b) => b.match_game_number - a.match_game_number);
+        const firstGame = games[0];
+        const match = firstGame.quick_draft_match;
+
+        const li = document.createElement('li');
+        li.className = 'lobby-match-group';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'lobby-info';
+
+        const deckDescription = firstGame.deck_type === 'custom'
+            ? (firstGame.custom_deck_name || 'Uploaded Deck')
+            : deckTypeLabel(firstGame.deck_type) + ' deck';
+        const formatEl = document.createElement('div');
+        formatEl.className = 'lobby-format';
+        formatEl.textContent = formatLabel(firstGame.format) + ', ' + deckDescription;
+        headerEl.appendChild(formatEl);
+
+        const scoreEl = document.createElement('div');
+        scoreEl.className = 'lobby-match-score';
+        scoreEl.textContent = 'Match score: you ' + match.your_wins + ', opponent ' + match.opponent_wins
+            + ' (first to ' + match.games_to_win + ' wins)';
+        headerEl.appendChild(scoreEl);
+
+        // winner_username is only ever set once quick_draft_match.status is
+        // 'completed' (see GameService::quickDraftMatchSummaryFor()) --
+        // this is the match's own result, distinct from any single game's
+        // own winner_usernames (which buildGameRow() skips in compact mode
+        // to avoid saying the same thing twice).
+        if (match.winner_username) {
+            const resultEl = document.createElement('div');
+            resultEl.className = 'lobby-winner';
+            resultEl.textContent = match.winner_username + ' won the match';
+            headerEl.appendChild(resultEl);
+        }
+
+        const opponents = firstGame.players.map((p) => p.username).join(', ');
+        headerEl.append(opponents);
+
+        li.appendChild(headerEl);
+
+        const gamesListEl = document.createElement('ul');
+        gamesListEl.className = 'lobby-match-games';
+        for (const game of games) {
+            gamesListEl.appendChild(buildGameRow(game, { compact: true }));
+        }
+        li.appendChild(gamesListEl);
+
+        return li;
+    }
+
+    async function refreshLobby() {
+        const { ok, body } = await listGames();
+        const games = ok ? body.games : [];
+        const gamesList = document.getElementById('games-list');
+
+        // Groups every game sharing a draft_match_id into one entry (see
+        // buildMatchGroupRow()) instead of listing a Quick Draft match's
+        // up-to-3 games as unrelated rows -- each entry keeps its position
+        // at wherever the first (already-sorted) game belonging to it
+        // appears, so an active match still surfaces as high in the list
+        // as its most actionable game does.
+        const matchGamesById = new Map();
+        for (const game of games) {
+            if (game.draft_match_id === null) {
+                continue;
             }
+            if (!matchGamesById.has(game.draft_match_id)) {
+                matchGamesById.set(game.draft_match_id, []);
+            }
+            matchGamesById.get(game.draft_match_id).push(game);
+        }
 
-            li.appendChild(infoEl);
+        const entries = [];
+        const renderedMatchIds = new Set();
+        for (const game of games) {
+            if (game.draft_match_id === null) {
+                entries.push(() => buildGameRow(game));
+                continue;
+            }
+            if (renderedMatchIds.has(game.draft_match_id)) {
+                continue;
+            }
+            renderedMatchIds.add(game.draft_match_id);
+            const matchGames = matchGamesById.get(game.draft_match_id);
+            entries.push(() => buildMatchGroupRow(matchGames));
+        }
 
-            // A 'waiting'/'in_progress' game is still something to actually
-            // play; anything else (completed, or the rarer abandoned) is
-            // read-only from here on, so the button reads "View" instead --
-            // matches what actually happens when it's clicked (showBoard()
-            // renders a read-only board once the game itself isn't
-            // in_progress, see GameService::getState()'s own round: null).
-            const canPlay = game.status === 'waiting' || game.status === 'in_progress';
-            li.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
-            return li;
-        });
+        renderList(gamesList, document.getElementById('games-empty'), entries, (buildEntry) => buildEntry());
     }
 
     document.getElementById('back-to-lobby-button').addEventListener('click', showLobby);

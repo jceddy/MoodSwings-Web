@@ -849,3 +849,26 @@ dialog#art-preview-dialog {
 .lobby-winner {
     color: var(--color-success);
 }
+
+/* A Quick Draft match's own grouped lobby entry (buildMatchGroupRow() in
+   game.js) -- a block-level header (format/deck, match scoreline, and,
+   once the match is done, its own result) sitting above a nested list of
+   each individual game's own compact row. Deliberately NOT .lobby-row --
+   the header itself isn't a Play/View-button row, just the block the
+   nested .lobby-match-games list hangs off of. */
+.lobby-match-group {
+    display: block;
+}
+
+.lobby-match-score {
+    font-size: 0.85rem;
+    color: var(--color-muted);
+}
+
+/* Indented slightly so a match's own games read as nested under its
+   header rather than as a second, unrelated list -- #lobby-view ul's own
+   list-style/padding/margin reset still applies here since it targets
+   every <ul>, nested or not. */
+.lobby-match-games {
+    margin: 0.5rem 0 0 1rem;
+}
