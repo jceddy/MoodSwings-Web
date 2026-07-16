@@ -50,6 +50,20 @@ applied — it folds Quick Draft (issue #88) and its follow-up fixes/polish
 into one script, ending with the same `schema_migrations` bookkeeping so
 `composer migrate` correctly resumes at `0032` onward afterward.
 
+**Reconciling `schema_migrations` when a migration's schema change was
+already applied by hand, but the table doesn't know it** (this can happen
+on production specifically because pasting a migration file into
+phpMyAdmin runs its DDL but never touches `schema_migrations` — only
+`composer migrate`'s own runner writes to that table; see "Applying
+migrations" above):
+[`consolidated/0021-0026_schema_migrations_only.sql`](consolidated/0021-0026_schema_migrations_only.sql)
+contains no schema changes at all, only the `INSERT IGNORE`s recording
+migrations `0021` through `0026` as already-applied. Only run it against
+a database where those 6 migrations' actual schema changes are already
+present (see the file's own header for how to confirm that) — otherwise
+`composer migrate` will believe they're done and never go back and apply
+them.
+
 ## Adding a new migration
 
 Add a new file named `NNNN_description.sql` (next sequential 4-digit
