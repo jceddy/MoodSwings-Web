@@ -1973,6 +1973,147 @@ final class GameService
     }
 
     /**
+     * Lets a seated player give up instead of playing a game out.
+     *
+     * Team-format games (always exactly two opposing SIDES -- a 2v2 team
+     * is atomic) and every 2-player format (duel, draft) immediately
+     * complete the whole game crediting whoever's left -- the opposing
+     * team via winner_team_id, or the sole remaining player otherwise --
+     * exactly like a normal round-ending win, just without a round
+     * actually being scored (the round in progress is abandoned instead).
+     * 'standard' format uniquely supports 3-4 players though, and for
+     * that case the game does NOT end: the resigning player is marked
+     * out, their future turns are skipped (see advanceTurn()'s active-
+     * player filtering), and they're permanently excluded from winning
+     * any round or the game (see finishScoringAndAdvance()) -- everyone
+     * else keeps playing to a normal wins_needed finish. That "continue
+     * without them" case only ever reduces $activeIds' count by one at a
+     * time as further players resign, until it eventually drops to 1 and
+     * the next resignation completes the game the same way a 2-player
+     * game's own resignation always has.
+     *
+     * Resigning while a decision is pending is disallowed (mirrors
+     * playMood()/pass()'s own assertNoPendingDecision() gate) rather than
+     * trying to reason about completing a game or reassigning a turn out
+     * from under an outstanding Compulsion-style decision -- resolve the
+     * decision first, then resign.
+     *
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     */
+    public function resignGame(int $gameId, int $gamePlayerId): array
+    {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
+            $game = $this->fetchGame($gameId);
+            if ($game['status'] !== 'in_progress') {
+                throw new GameStateException("Game {$gameId} is not in progress");
+            }
+
+            $stmt = Connection::get()->prepare('SELECT * FROM game_players WHERE id = :id AND game_id = :game_id');
+            $stmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
+            $player = $stmt->fetch();
+            if ($player === false) {
+                throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
+            }
+            if ($player['resigned_at'] !== null) {
+                throw new GameStateException("Player {$gamePlayerId} has already resigned");
+            }
+
+            $round = $this->currentRound($gameId);
+            $this->assertNoPendingDecision((int) $round['id']);
+
+            Connection::get()->prepare('UPDATE game_players SET resigned_at = NOW() WHERE id = :id')
+                ->execute(['id' => $gamePlayerId]);
+
+            $activeIds = $this->activeGamePlayerIds($gameId);
+
+            if (self::isTeamFormat($game['format']) || count($activeIds) < 2) {
+                return $this->completeGameByResignation($gameId, $game, $round, $gamePlayerId, $activeIds);
+            }
+
+            return $this->skipTurnForResignedPlayer($gameId, $round, $gamePlayerId);
+        });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
+    }
+
+    /**
+     * The immediate-completion resign path -- 2-player games of any
+     * format, and team-format games regardless of how many active
+     * players remain (a team is atomic; there's no "continue without
+     * one teammate" concept the way there is for 'standard'). The round
+     * in progress is abandoned rather than scored (see migration 0033's
+     * own docblock for why 'abandoned' exists as a round status), so
+     * currentRound() -- the one thing gating playMood()/pass() -- can
+     * never find an 'in_progress' round for this game again.
+     *
+     * @param int[] $activeGamePlayerIds non-resigned seats, seat_order ASC (unused for team format)
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id: int}
+     */
+    private function completeGameByResignation(int $gameId, array $game, array $round, int $resigningGamePlayerId, array $activeGamePlayerIds): array
+    {
+        Connection::get()->prepare(
+            "UPDATE game_rounds SET status = 'abandoned', current_turn_game_player_id = NULL, plays_remaining = 0, pending_play_grants = '[]' WHERE id = :round_id"
+        )->execute(['round_id' => (int) $round['id']]);
+
+        $winnerTeamId = null;
+        if (self::isTeamFormat($game['format'])) {
+            $resigningTeamId = $this->teamIdByGamePlayer($gameId)[$resigningGamePlayerId];
+            $winnerTeamId = $resigningTeamId === 0 ? 1 : 0;
+            // Lowest seat_order member of the winning team, matching
+            // finishTeamScoringAndAdvance()'s own representative
+            // convention -- winner_team_id (set below) stays the
+            // authoritative record either way (see totalWinsForTeam()).
+            $winnerGamePlayerId = $this->teamMembers($gameId, $winnerTeamId)[0];
+        } else {
+            $winnerGamePlayerId = $activeGamePlayerIds[0];
+        }
+
+        Connection::get()->prepare(
+            "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = :winner_team, completed_at = NOW() WHERE id = :game_id"
+        )->execute(['winner' => $winnerGamePlayerId, 'winner_team' => $winnerTeamId, 'game_id' => $gameId]);
+
+        // A no-op for every non-draft game -- see its own docblock.
+        $this->advanceDraftMatch($gameId, $winnerGamePlayerId);
+
+        return ['round_scored' => false, 'game_completed' => true, 'winner_game_player_id' => $winnerGamePlayerId];
+    }
+
+    /**
+     * The 'standard' 3-4 player "continue without them" resign path --
+     * the game keeps going, so this only needs to hand the turn onward
+     * if it was actually the resigning player's turn (advanceTurn()'s own
+     * active-player filtering already keeps them from ever being handed
+     * a future one). Mirrors pass()'s own turn_passed logging/advance
+     * call -- resigning mid-turn forfeits whatever's left of it exactly
+     * like an explicit pass would.
+     *
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     */
+    private function skipTurnForResignedPlayer(int $gameId, array $round, int $resigningGamePlayerId): array
+    {
+        if ((int) $round['current_turn_game_player_id'] !== $resigningGamePlayerId) {
+            return ['round_scored' => false, 'game_completed' => false];
+        }
+
+        $this->logEvent($gameId, (int) $round['id'], $resigningGamePlayerId, 'turn_passed', null, ['resigned' => true]);
+
+        return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
+    }
+
+    /** @return int[] game_players.id for every seat that hasn't resigned, seat_order ASC */
+    private function activeGamePlayerIds(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT id FROM game_players WHERE game_id = :game_id AND resigned_at IS NULL ORDER BY seat_order ASC'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
      * The second player's own request, resolving one row of an outstanding
      * pending-decision batch (see MoodPlayService::playMood()'s
      * RequiresOpponentDecision handling) -- e.g. Compulsion's target
@@ -2626,15 +2767,36 @@ final class GameService
             return $this->advanceTeamTurn($gameId, $round, $state);
         }
 
-        $turnOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
-        $currentIndex = array_search((int) $round['current_turn_game_player_id'], $turnOrder, true);
-        $nextIndex = $currentIndex + 1;
+        // Positioned against the FULL (unfiltered) seat rotation, not just
+        // the active players -- current_turn_game_player_id can itself be
+        // a player who just resigned this exact call (see
+        // skipTurnForResignedPlayer()), and they wouldn't be found by
+        // array_search() against an already-filtered list. From that
+        // position, scan forward (never wrapping -- this is one round's
+        // single pass, not a repeating cycle) for the next still-active
+        // player; a resigned player's own seat is simply skipped over,
+        // which is what makes their future turns auto-skip. Reaching the
+        // end of the round without finding one scores the round, using
+        // only active players -- see turnOrderForRound()'s own docblock
+        // for why a resigned player must never appear there either.
+        $fullOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
+        $activeIds = $this->activeGamePlayerIds($gameId);
+        $currentIndex = array_search((int) $round['current_turn_game_player_id'], $fullOrder, true);
 
-        if ($nextIndex >= count($turnOrder)) {
-            return $this->scoreRoundAndAdvance($gameId, $round, $turnOrder, $state);
+        $nextPlayerId = null;
+        for ($i = $currentIndex + 1; $i < count($fullOrder); $i++) {
+            if (in_array($fullOrder[$i], $activeIds, true)) {
+                $nextPlayerId = $fullOrder[$i];
+                break;
+            }
         }
 
-        $nextPlayerId = $turnOrder[$nextIndex];
+        if ($nextPlayerId === null) {
+            $activeTurnOrder = array_values(array_filter($fullOrder, static fn (int $id): bool => in_array($id, $activeIds, true)));
+
+            return $this->scoreRoundAndAdvance($gameId, $round, $activeTurnOrder, $state);
+        }
+
         $hurtFeelingsHolder = $round['hurt_feelings_game_player_id'] !== null ? (int) $round['hurt_feelings_game_player_id'] : null;
 
         $freshGrants = $this->computeFreshGrants($state, $nextPlayerId, $nextPlayerId === $hurtFeelingsHolder ? 2 : 1);
@@ -2726,14 +2888,23 @@ final class GameService
      * "an ordered list of this round's player ids," not how it was
      * produced. Team format's own order is [team_turn_1, team_turn_2, team
      * 1's forced remaining member, team 2's forced remaining member] --
-     * see advanceTeamTurn().
+     * see advanceTeamTurn(). A resigned player is dropped from this list
+     * (relative order of everyone else preserved) -- team-format games
+     * always complete a game immediately on any resignation (see
+     * resignGame()), so this only ever actually removes anyone for
+     * 'standard' format's own 3-4 player "game continues without them"
+     * case, keeping a resigned player from ever being handed a turn or
+     * credited a round/game win via winner()/hurtFeelings() below.
      *
      * @return int[]
      */
     private function turnOrderForRound(int $gameId, array $round): array
     {
         if ($this->fetchGame($gameId)['format'] !== 'team') {
-            return $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
+            $fullOrder = $this->rotate($this->seatOrder($gameId), (int) $round['first_game_player_id']);
+            $activeIds = $this->activeGamePlayerIds($gameId);
+
+            return array_values(array_filter($fullOrder, static fn (int $id): bool => in_array($id, $activeIds, true)));
         }
 
         $turn1 = (int) $round['team_turn_1_game_player_id'];
@@ -2887,7 +3058,14 @@ final class GameService
             return $this->finishTeamScoringAndAdvance($gameId, $round, $state, $scores);
         }
 
-        $winnerId = $this->scorer->winner($scores, $turnOrder);
+        // $scores covers every seated player (BoardState has no notion of
+        // resignation), but $turnOrder is already active-players-only (see
+        // turnOrderForRound()) -- narrowed to match before handing it to
+        // winner()/hurtFeelings(), so a resigned player's own score can
+        // never make them the round's winner or Hurt Feelings holder even
+        // if it happens to be the highest/lowest in $scores.
+        $activeScores = array_intersect_key($scores, array_flip($turnOrder));
+        $winnerId = $this->scorer->winner($activeScores, $turnOrder);
         $winsAwarded = $this->consumeExtraWinMarker($state);
 
         $insertScore = $pdo->prepare(
@@ -2911,7 +3089,11 @@ final class GameService
         $gameCompleting = $totalWins >= $winsNeeded;
 
         if (!$gameCompleting) {
-            foreach (array_keys($scores) as $playerId) {
+            // A resigned player is still in $scores (their board state is
+            // untouched by resignation), but they're done playing -- skip
+            // their draw the same way $turnOrder already excludes them
+            // from winning.
+            foreach ($turnOrder as $playerId) {
                 if ($playerId !== $winnerId) {
                     $state->drawCard($playerId);
                 }
@@ -2919,8 +3101,8 @@ final class GameService
         }
         $this->applyAfterScoringHooks($state, [$winnerId]);
 
-        // Hurt Feelings only exists in games of 3 or more players.
-        $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($scores, $turnOrder) : null;
+        // Hurt Feelings only exists in games of 3 or more (active) players.
+        $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
 
         // Honor overrides who goes first next round regardless of who
         // won -- see BoardState::firstPlayerOverride(). Computed (and
@@ -4151,7 +4333,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -4200,6 +4382,12 @@ final class GameService
                 // decklist contents before the game starts.
                 'custom_deck_name' => $row['custom_deck_name'],
                 'deck_submitted' => $row['custom_deck_card_ids'] !== null,
+                // Whether this seat has resigned -- see resignGame(). For
+                // a 2-player/team-format game a resignation always
+                // completes the whole game immediately, so this is really
+                // only ever true mid-game for 'standard' format's own 3-4
+                // player "game continues without them" case.
+                'resigned' => $row['resigned_at'] !== null,
             ];
         }
 

@@ -1479,6 +1479,18 @@
                     youTag.textContent = ' (you)';
                     nameEl.appendChild(youTag);
                 }
+                if (player.resigned) {
+                    // Only ever seen mid-game for 'standard' format's own
+                    // 3-4 player "game continues without them" resign case
+                    // -- a 2-player/team-format resignation completes the
+                    // game outright instead (see GameService::resignGame()),
+                    // so there's no in-progress board left to show this tag
+                    // on for those.
+                    const resignedTag = document.createElement('span');
+                    resignedTag.className = 'player-resigned-tag';
+                    resignedTag.textContent = ' (resigned)';
+                    nameEl.appendChild(resignedTag);
+                }
                 nameEl.appendChild(document.createTextNode(deckLabel + teamLabel));
                 li.appendChild(nameEl);
 
@@ -1663,6 +1675,15 @@
         renderInitialCardPass(state);
 
         document.getElementById('pass-button').disabled = !canAct;
+
+        // Resigning isn't turn-gated the way passing is (see
+        // GameService::resignGame()) -- shown whenever the game is still
+        // in_progress and the viewer hasn't already resigned, hidden
+        // entirely once the game's over or they have (a resigned player
+        // has nothing left to resign from).
+        const resignButton = document.getElementById('resign-button');
+        resignButton.hidden = state.game.status !== 'in_progress' || Boolean(you && you.resigned);
+        resignButton.disabled = Boolean(pendingDecision);
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
@@ -2445,6 +2466,29 @@
         // otherwise polling stays suppressed indefinitely (see
         // showBoard()'s pollTimer) and the board silently goes stale
         // until the player happens to notice and clicks Cancel.
+        selectedCard = null;
+        choicesPanel.hidden = true;
+        announceOutcome(body);
+        await refreshBoard();
+    });
+
+    document.getElementById('resign-button').addEventListener('click', async () => {
+        // Resigning can't be undone (see GameService::resignGame()) --
+        // a confirmation dialog first, the same "make sure they meant it"
+        // gate any other hard-to-reverse, one-way action in this app would
+        // get.
+        if (!window.confirm('Resign this game? This cannot be undone.')) {
+            return;
+        }
+
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await resignGame(currentGameId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not resign.';
+            boardError.hidden = false;
+            return;
+        }
         selectedCard = null;
         choicesPanel.hidden = true;
         announceOutcome(body);

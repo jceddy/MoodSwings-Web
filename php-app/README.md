@@ -69,6 +69,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
+| POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress`, you've already resigned, or a decision is pending. Gives up instead of playing the game out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -2072,6 +2073,49 @@ game (e.g. `last_move_at` on a `waiting` game nothing has happened in yet)
 is expected, not a bug. `last_move_at` is also what the lobby list itself
 sorts by within its two status tiers -- see `GET /games` in the API table
 above.
+
+### Resigning
+
+`POST /games/resign` (`GameService::resignGame()`) lets a seated player
+give up on an `in_progress` game instead of playing it out. What happens
+next depends on the format and how many players are left:
+
+- **2-player games** (`duel`, and `draft`'s own `quick_draft`/
+  `winston_draft`) **and every team-format game** (`team`, `closed_team`
+  -- always exactly two opposing sides; a 2v2 team is atomic, so there's
+  no partial-team version of this) **complete the whole game
+  immediately**, crediting whoever's left -- the opposing team via
+  `winner_team_id` (with a representative `winner_game_player_id`, same
+  convention as a normal team win -- see "Open Team Play" below), or the
+  sole remaining player otherwise. This works exactly like a normal
+  round-ending win (`completed_at`/`winner_*` set, `advanceDraftMatch()`
+  run for a `quick_draft`/`winston_draft` game so best-of-three match
+  progression still advances correctly on a resign-induced win), except
+  the round in progress is *abandoned* (`game_rounds.status = 'abandoned'`,
+  a status introduced by migration `0033` specifically for this) rather
+  than actually scored.
+- **`standard` format is the one case that supports 3-4 players**, and
+  for that case resigning does **not** end the game: the resigning
+  player is marked out (`game_players.resigned_at`), their future turns
+  are automatically skipped, and they're permanently excluded from ever
+  being credited a round or game win -- but everyone else keeps playing
+  toward a normal `wins_needed` finish. This only actually reduces the
+  active player count by one at a time; if resignations eventually leave
+  only one active player, the next one completes the game the same way
+  a 2-player game's own resignation always has.
+
+Every play/pass already gates on `currentRound()` finding an
+`'in_progress'` round for the game -- an immediate-completion resign
+abandons that round specifically so nothing can be played against an
+already-finished game afterward. The "continue without them" path never
+needs that: the round stays `'in_progress'`, but `advanceTurn()`'s own
+turn-order (`turnOrderForRound()`) is filtered to active (non-resigned)
+players, so a resigned player is simply never handed a turn, and
+`finishScoringAndAdvance()`'s winner/Hurt Feelings selection is narrowed
+the same way so they can never be picked as either, no matter how their
+own board state happens to score. Resigning while a decision is pending
+is disallowed (mirrors `playMood()`/`pass()`'s own
+`assertNoPendingDecision()` gate) -- resolve the decision first.
 
 ### Duel: separate per-player decks
 
