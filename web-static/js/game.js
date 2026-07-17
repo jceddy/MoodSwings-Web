@@ -2248,6 +2248,7 @@
         const submitButton = document.getElementById('draft-deck-submit-button');
         const selectAllButton = document.getElementById('draft-deck-select-all-button');
         const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
+        const resetButton = document.getElementById('draft-deck-reset-button');
         const statusEl = document.getElementById('draft-deck-building-status');
 
         if (deckBuilding.you_submitted) {
@@ -2269,6 +2270,7 @@
             submitButton.hidden = true;
             selectAllButton.hidden = true;
             clearSelectionButton.hidden = true;
+            resetButton.hidden = true;
             return;
         }
 
@@ -2312,6 +2314,10 @@
         submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size;
         selectAllButton.hidden = false;
         clearSelectionButton.hidden = false;
+        // Only a sideboard (game 2+ of a match) has a previous deck to
+        // reset back to -- the very first game's own trim has nothing
+        // yet, so this stays hidden rather than resetting to nothing.
+        resetButton.hidden = !deckBuilding.previous_deck_card_ids;
     }
 
     document.getElementById('draft-deck-select-all-button').addEventListener('click', () => {
@@ -2321,6 +2327,11 @@
 
     document.getElementById('draft-deck-clear-selection-button').addEventListener('click', () => {
         draftDeckSelection = new Set();
+        renderDraftDeckBuilding(currentDeckBuilding);
+    });
+
+    document.getElementById('draft-deck-reset-button').addEventListener('click', () => {
+        draftDeckSelection = cardIdsToDraftedCardIndices(currentDeckBuilding.previous_deck_card_ids, currentDeckBuilding.drafted_cards);
         renderDraftDeckBuilding(currentDeckBuilding);
     });
 

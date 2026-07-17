@@ -688,6 +688,14 @@ too, proportional to the smaller card width.
       sideboarding starts from your existing deck instead of forcing a full
       retrim from scratch before every game. Only the very first game of a
       match (no previous deck yet) still defaults to every drafted card.
+      A `#draft-deck-reset-button` ("Reset to previous deck") sits next to
+      Select all/Clear selection -- it re-seeds the selection from
+      `deckBuilding.previous_deck_card_ids` on demand (via the same
+      `cardIdsToDraftedCardIndices()` helper the initial seeding uses),
+      undoing whatever sideboard changes have been made since without
+      forcing a full "Clear selection" + reselect. It's only shown when
+      `previous_deck_card_ids` is actually set -- i.e. never on the very
+      first game of a match, where there's no previous deck to reset to.
       A card currently excluded from the deck is dimmed with a dashed
       border -- `buildCardThumb()`'s existing `.not-playable` treatment for
       an unplayable in-game hand card, reused here via its `notPlayable`
