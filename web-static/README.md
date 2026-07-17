@@ -889,6 +889,16 @@ too, proportional to the smaller card width.
     it only ever actually shows for a `'mood'` option in practice — a hand
     or discard-pile card has no `has_unused_play_grant` field of its own to
     read.
+    The `'discard_card'` case also excludes `card.card_id` from its own
+    candidates, the same way `'hand_card'` already did -- normally a no-op
+    (the card being played hasn't reached the discard pile yet), but
+    Melancholy's "play moods from the discard pile as though they were in
+    your hand" makes it a real case: without this, Nostalgia (or Cynicism/
+    Corruption) played straight out of the discard pile could offer its
+    own just-about-to-be-played instance as a candidate, which the server
+    would then reject once it's actually moved into play (see
+    `MoodPlayService::playMood()`'s `moveDiscardToInPlay()` call, which
+    happens before any effect's `afterPlaying()` runs).
     This still disambiguates two players' identical printed cards the way
     an inline "— Owner" suffix used to (needed since a `'duel' game's two
     independent decks can put the same printed card in play at once, and

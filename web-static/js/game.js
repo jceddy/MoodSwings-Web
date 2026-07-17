@@ -2898,6 +2898,19 @@
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({ value: c.card_id, label: cardLabel(c) }));
             case 'discard_card':
+                // Excludes card.card_id the same way 'hand_card' above
+                // does -- normally a no-op (the card being played is still
+                // in hand/hasn't reached the discard pile yet), but
+                // Melancholy ("play moods from the discard pile as though
+                // they were in your hand") makes it a real case: without
+                // this, Nostalgia/Cynicism/Corruption could offer their own
+                // just-about-to-be-played instance as a candidate, which
+                // the server would then reject once it's actually moved
+                // out of the discard pile and into play (see
+                // MoodPlayService::playMood()'s own moveDiscardToInPlay()
+                // call, which happens before any effect's afterPlaying()
+                // runs).
+                //
                 // Same disambiguation as 'mood' above, using each card's
                 // last-known owner (state.discard_pile[].last_owner_name --
                 // see GameService::getState()) since the shared discard
@@ -2906,6 +2919,7 @@
                 // discard_card_ids field bottoms each cycled card onto its
                 // *owner's* deck in a duel.
                 return currentState.discard_pile
+                    .filter((c) => c.card_id !== card.card_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
                     .map((c) => ({
                         value: c.card_id,

@@ -2431,6 +2431,40 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInPlay(106));
     }
 
+    /**
+     * Melancholy ("play moods from the discard pile as though they were in
+     * your hand") makes it possible to play Nostalgia itself straight out
+     * of the discard pile -- at that point Nostalgia can't name itself as
+     * the "card to take into your hand" it's simultaneously being played
+     * from, since moveDiscardToInPlay() already moved it out of the
+     * discard pile before afterPlaying() ever runs (see
+     * MoodPlayService::playMood()). This locks in that the server-side
+     * guard actually rejects it, matching the frontend's own exclusion of
+     * the card being played from a 'discard_card' field's own candidate
+     * list (see fieldOptions() in game.js).
+     */
+    public function testNostalgiaCannotSelectItselfAsTheDiscardCardWhenPlayedFromTheDiscardPileViaMelancholy(): void
+    {
+        $state = $this->boardState(hands: [1 => [69]], discard: [128, 9]); // Melancholy, Nostalgia, Discipline
+        $state->moveHandToInPlay(1, 69);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 128, new PlayerChoices(['discard_card_id' => 128]));
+    }
+
+    public function testNostalgiaCanTakeAnotherDiscardPileCardWhenPlayedFromTheDiscardPileViaMelancholy(): void
+    {
+        $state = $this->boardState(hands: [1 => [69]], discard: [128, 9]); // Melancholy, Nostalgia, Discipline
+        $state->moveHandToInPlay(1, 69);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 128, new PlayerChoices(['discard_card_id' => 9]));
+
+        self::assertTrue($state->isInPlay(128));
+        self::assertTrue($state->isInHand(1, 9));
+    }
+
     public function testHarmonyGrantsAnExtraPlayUsableOnlyFromTheDiscardPile(): void
     {
         $state = $this->boardState(hands: [1 => [123, 9]], discard: [106]);
