@@ -27,7 +27,7 @@ final class AweEffect extends AbstractMoodEffect
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
         $chosenPlayerId = $choices->requireInt('target_player_id');
-        if (!in_array($chosenPlayerId, $state->playerOrder(), true)) {
+        if (!in_array($chosenPlayerId, $state->activePlayerOrder(), true)) {
             throw new InvalidChoiceException("Player {$chosenPlayerId} is not a valid player");
         }
 

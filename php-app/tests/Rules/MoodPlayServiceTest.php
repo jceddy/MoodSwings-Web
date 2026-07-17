@@ -58,6 +58,33 @@ final class MoodPlayServiceTest extends TestCase
         );
     }
 
+    /**
+     * Same shape as boardState(), plus resignedPlayerIds so
+     * BoardState::isResigned()/activePlayerOrder()/activeNeighbor() have
+     * something to reflect -- see the various "*RejectsAResignedPlayer" /
+     * "*SkipsAResignedPlayer" tests below. Uses a 4-seat order (unlike
+     * boardState()'s 3) so a neighbor-skip test can tell "skipped over the
+     * resigned seat" apart from "there was nowhere else to go".
+     *
+     * @param int[] $resignedPlayerIds
+     */
+    private function resignedBoardState(array $resignedPlayerIds, array $hands = [], array $deck = [], array $discard = []): BoardState
+    {
+        return new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3, 4],
+            $hands,
+            $deck,
+            $discard,
+            hasSeparateDecks: false,
+            discardOwners: [],
+            catalogCardIdFor: [],
+            teamIdByPlayer: [],
+            resignedPlayerIds: $resignedPlayerIds,
+        );
+    }
+
     public function testCannotPlayOutOfTurn(): void
     {
         $state = $this->boardState(hands: [1 => [3]]);
@@ -2404,6 +2431,40 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInPlay(106));
     }
 
+    /**
+     * Melancholy ("play moods from the discard pile as though they were in
+     * your hand") makes it possible to play Nostalgia itself straight out
+     * of the discard pile -- at that point Nostalgia can't name itself as
+     * the "card to take into your hand" it's simultaneously being played
+     * from, since moveDiscardToInPlay() already moved it out of the
+     * discard pile before afterPlaying() ever runs (see
+     * MoodPlayService::playMood()). This locks in that the server-side
+     * guard actually rejects it, matching the frontend's own exclusion of
+     * the card being played from a 'discard_card' field's own candidate
+     * list (see fieldOptions() in game.js).
+     */
+    public function testNostalgiaCannotSelectItselfAsTheDiscardCardWhenPlayedFromTheDiscardPileViaMelancholy(): void
+    {
+        $state = $this->boardState(hands: [1 => [69]], discard: [128, 9]); // Melancholy, Nostalgia, Discipline
+        $state->moveHandToInPlay(1, 69);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 128, new PlayerChoices(['discard_card_id' => 128]));
+    }
+
+    public function testNostalgiaCanTakeAnotherDiscardPileCardWhenPlayedFromTheDiscardPileViaMelancholy(): void
+    {
+        $state = $this->boardState(hands: [1 => [69]], discard: [128, 9]); // Melancholy, Nostalgia, Discipline
+        $state->moveHandToInPlay(1, 69);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 128, new PlayerChoices(['discard_card_id' => 9]));
+
+        self::assertTrue($state->isInPlay(128));
+        self::assertTrue($state->isInHand(1, 9));
+    }
+
     public function testHarmonyGrantsAnExtraPlayUsableOnlyFromTheDiscardPile(): void
     {
         $state = $this->boardState(hands: [1 => [123, 9]], discard: [106]);
@@ -2499,6 +2560,21 @@ final class MoodPlayServiceTest extends TestCase
     }
 
     /**
+     * A resigned player is still in $state->playerOrder() (their seat
+     * never disappears -- see BoardState::isResigned()'s own docblock),
+     * so a "choose a player" effect must reject them explicitly, the same
+     * way it already rejects a player id that was never seated at all.
+     */
+    public function testHonorRejectsAResignedPlayer(): void
+    {
+        $state = $this->resignedBoardState([3], hands: [1 => [15]]);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->plays->playMood($state, 1, 15, new PlayerChoices(['target_player_id' => 3]));
+    }
+
+    /**
      * "Each player chooses one of their moods" -- not "at random"
      * (contrast Cruelty/Paranoia/Indecisiveness) -- so every player with
      * at least one mood in play, including the acting player, gets their
@@ -2581,6 +2657,48 @@ final class MoodPlayServiceTest extends TestCase
         );
     }
 
+    /**
+     * A resigned player must never be asked to answer a pending decision
+     * (see BoardState::isResigned()'s own docblock -- they can't respond),
+     * and any mood that would otherwise be passed to them must instead
+     * skip to the next ACTIVE player in that direction. Player 3 (resigned)
+     * still has a mood in play -- resignGame() only discards moods on an
+     * actual resignation, this fixture just simulates "resigned but still
+     * has a mood" to prove the exclusion doesn't depend on them happening
+     * to have nothing left to give.
+     */
+    public function testAvoidanceSkipsAResignedPlayerBothAsGiverAndAsRecipient(): void
+    {
+        $state = $this->resignedBoardState([3], hands: [1 => [29], 2 => [9], 3 => [106], 4 => [42]]);
+        $state->moveHandToInPlay(2, 9);
+        $state->moveHandToInPlay(3, 106);
+        $state->moveHandToInPlay(4, 42);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['direction' => 'right']);
+        $result = $this->plays->playMood($state, 1, 29, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(3, $result->pendingDecisions); // players 1, 2, 4 -- resigned player 3 is never asked
+        self::assertSame(['given_mood_id_1', 'given_mood_id_2', 'given_mood_id_4'], array_map(static fn ($d) => $d->key, $result->pendingDecisions));
+
+        $this->plays->resolvePendingDecisions(
+            $state, 29, 1, $choices, $choices, 0,
+            [
+                'given_mood_id_1' => new PlayerChoices(['given_mood_id_1' => 29]),
+                'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
+                'given_mood_id_4' => new PlayerChoices(['given_mood_id_4' => 42]),
+            ],
+        );
+
+        // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
+        // seats is 1->2->4->1, skipping over 3 entirely.
+        self::assertSame(2, $state->ownerOf(29)); // from player 1
+        self::assertSame(4, $state->ownerOf(9)); // from player 2, skipping resigned player 3
+        self::assertSame(1, $state->ownerOf(42)); // from player 4, wraps to player 1
+        self::assertSame(3, $state->ownerOf(106)); // resigned player 3's own mood never moves
+    }
+
     public function testAvoidanceRejectsAnInvalidDirection(): void
     {
         $state = $this->boardState(hands: [1 => [29]]);
@@ -2643,6 +2761,43 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame('given_card_id_2', $result->pendingDecisions[0]->key);
     }
 
+    /**
+     * Same exclusion as Avoidance's own resigned-player test, but for
+     * Confusion's hand-card version -- this exercises the effect layer's
+     * own exclusion directly (a resigned player with a non-empty hand,
+     * regardless of whatever GameService itself did or didn't clear),
+     * so without it Confusion would still happily ask a resigned player
+     * to give away a card.
+     */
+    public function testConfusionSkipsAResignedPlayerBothAsGiverAndAsRecipient(): void
+    {
+        $state = $this->resignedBoardState([3], hands: [1 => [31, 3], 2 => [9], 3 => [106], 4 => [42]]);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices(['direction' => 'right']);
+        $result = $this->plays->playMood($state, 1, 31, $choices);
+
+        self::assertTrue($result->isPending);
+        self::assertCount(3, $result->pendingDecisions); // players 1, 2, 4 -- resigned player 3 is never asked
+        self::assertSame(['given_card_id_1', 'given_card_id_2', 'given_card_id_4'], array_map(static fn ($d) => $d->key, $result->pendingDecisions));
+
+        $this->plays->resolvePendingDecisions(
+            $state, 31, 1, $choices, $choices, 0,
+            [
+                'given_card_id_1' => new PlayerChoices(['given_card_id_1' => 3]),
+                'given_card_id_2' => new PlayerChoices(['given_card_id_2' => 9]),
+                'given_card_id_4' => new PlayerChoices(['given_card_id_4' => 42]),
+            ],
+        );
+
+        // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
+        // seats is 1->2->4->1, skipping over 3 entirely.
+        self::assertTrue($state->isInHand(2, 3)); // from player 1
+        self::assertTrue($state->isInHand(4, 9)); // from player 2, skipping resigned player 3
+        self::assertTrue($state->isInHand(1, 42)); // from player 4, wraps to player 1
+        self::assertTrue($state->isInHand(3, 106)); // resigned player 3's own card never moves
+    }
+
     public function testConfusionRejectsAnInvalidDirection(): void
     {
         $state = $this->boardState(hands: [1 => [31, 3]]);
@@ -2692,6 +2847,22 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInHand(2, 3));
         self::assertTrue($state->isInHand(3, 9));
         self::assertTrue($state->isInHand(1, 106));
+    }
+
+    public function testRationalizationRotateSkipsAResignedPlayerBothAsGiverAndAsRecipient(): void
+    {
+        $state = $this->resignedBoardState([3], hands: [1 => [49, 3], 2 => [9], 3 => [106], 4 => [42]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 49, new PlayerChoices(['mode' => 'rotate', 'direction' => 'right']));
+
+        // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
+        // seats is 1->2->4->1, skipping over 3 entirely -- 3 keeps their
+        // own hand and never receives anyone else's.
+        self::assertTrue($state->isInHand(2, 3));
+        self::assertTrue($state->isInHand(4, 9));
+        self::assertTrue($state->isInHand(1, 42));
+        self::assertTrue($state->isInHand(3, 106));
     }
 
     public function testRationalizationRejectsAnInvalidMode(): void
@@ -3953,6 +4124,47 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInPlay(9)); // white, not chosen by anyone -- survives
         self::assertFalse($state->isInPlay(28)); // blue
         self::assertFalse($state->isInPlay(53)); // black
+    }
+
+    public function testDisillusionmentAllowsAnyPlayerToDeclineChoosingAColor(): void
+    {
+        // The card's own wording is "each player MAY choose a color" --
+        // every field is required: false (see pendingDecisionsFor()), and
+        // a declining player's own decision row still resolves with a
+        // null answer rather than a real color (collectAnswers() always
+        // writes one PlayerChoices entry per requested key regardless of
+        // whether the player picked anything -- see resolveDecisions()'s
+        // own docblock).
+        $state = $this->boardState(hands: [1 => [10], 2 => [9, 28, 53]]);
+        $state->moveHandToInPlay(2, 9); // Discipline, white
+        $state->moveHandToInPlay(2, 28); // Anxiety, blue
+        $state->moveHandToInPlay(2, 53); // Ambition, black
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 10, $choices);
+        self::assertTrue($result->isPending);
+        foreach ($result->pendingDecisions as $decision) {
+            self::assertFalse($decision->field['required']);
+        }
+
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state, 10, 1, $choices, $choices, 0,
+            [
+                // Player 2 declines outright (null answer); player 3
+                // declines too; player 1 (the acting player themselves)
+                // actually picks a color.
+                'chosen_color_2' => new PlayerChoices(['chosen_color_2' => null]),
+                'chosen_color_3' => new PlayerChoices(['chosen_color_3' => null]),
+                'chosen_color_1' => new PlayerChoices(['chosen_color_1' => 'blue']),
+            ],
+        );
+
+        self::assertFalse($finalResult->isPending);
+        self::assertTrue($state->isInPlay(10));
+        self::assertTrue($state->isInPlay(9)); // white, not chosen -- survives
+        self::assertFalse($state->isInPlay(28)); // blue, chosen by player 1
+        self::assertTrue($state->isInPlay(53)); // black, not chosen -- survives
     }
 
     public function testDuplicityGrantsAnExtraPlayWhenPlayed(): void

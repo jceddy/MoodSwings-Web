@@ -31,6 +31,9 @@ final class ParanoiaEffect extends AbstractMoodEffect
         if ($targetPlayerId === null) {
             return;
         }
+        if (!in_array($targetPlayerId, $state->activePlayerOrder(), true)) {
+            throw new InvalidChoiceException("Player {$targetPlayerId} is not a valid player");
+        }
 
         $hand = $state->hand($targetPlayerId);
         if ($hand === []) {

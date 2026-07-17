@@ -25,7 +25,7 @@ final class CompulsionEffect extends AbstractMoodEffect implements RequiresOppon
     public function pendingDecisionsFor(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): array
     {
         $targetPlayerId = $choices->requireInt('target_player_id');
-        if (!in_array($targetPlayerId, $state->playerOrder(), true)) {
+        if (!in_array($targetPlayerId, $state->activePlayerOrder(), true)) {
             throw new InvalidChoiceException("Player {$targetPlayerId} is not a valid player");
         }
         if ($targetPlayerId === $playerId) {

@@ -44,6 +44,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE draft_round_picks');
         $pdo->exec('TRUNCATE TABLE draft_winston_state');
+        $pdo->exec('TRUNCATE TABLE draft_grid_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
@@ -1111,6 +1112,53 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($summary['draft_match']);
     }
 
+    /**
+     * is_awaiting_your_response is a distinct flag from is_your_turn --
+     * Compulsion's target has a decision on them regardless of whose turn
+     * it nominally is (the whole round is frozen while it's outstanding,
+     * see the "round is frozen" assertion in
+     * testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond()).
+     */
+    public function testListGamesForUserFlagsAwaitingYourResponseForAPendingDecisionTargetingYou(): void
+    {
+        $u1 = $this->insertUser('lobby-comp1');
+        $u2 = $this->insertUser('lobby-comp2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $this->insertGameCard($gameId, 7, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $u1GamesBefore = $this->games->listGamesForUser($u1);
+        $u2GamesBefore = $this->games->listGamesForUser($u2);
+        self::assertFalse($u1GamesBefore[0]['is_awaiting_your_response']);
+        self::assertFalse($u2GamesBefore[0]['is_awaiting_your_response']);
+
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
+
+        // p1 played the card (it's still their own turn otherwise), but
+        // the decision is on p2 -- is_awaiting_your_response should track
+        // p2, not whoever's turn it is.
+        $u1Games = $this->games->listGamesForUser($u1);
+        $u2Games = $this->games->listGamesForUser($u2);
+        self::assertFalse($u1Games[0]['is_awaiting_your_response']);
+        self::assertTrue($u2Games[0]['is_awaiting_your_response']);
+
+        $this->games->respondToDecision($gameId, $p2, ['given_card_id' => $card3Id]);
+
+        $u2GamesAfter = $this->games->listGamesForUser($u2);
+        self::assertFalse($u2GamesAfter[0]['is_awaiting_your_response'], 'no longer awaiting a response once answered');
+    }
+
     public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void
     {
         $creator = $this->insertUser('sortorder-alice');
@@ -1948,6 +1996,70 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame([], $state->hand($p1));
         self::assertSame([$charityId, $chivalryId, $convictionId], $state->discardPile());
         self::assertSame(5, $state->valueOf($dignityId));
+    }
+
+    /**
+     * Hurt Feelings' own second base play must be described as
+     * attributable to Hurt Feelings, not render as an indistinguishable
+     * second "Your normal turn" -- see
+     * GameService::describePlayGrant()/sourceCardNameFor(). Using it
+     * (the second play of the turn) must also attribute the resulting
+     * event to Hurt Feelings, the same way any other granted extra play
+     * already does -- unlike consuming the ordinary base allowance,
+     * which stays silent (see BoardState::$pendingGrantUsed's docblock).
+     */
+    public function testHurtFeelingsExtraPlayIsDescribedAsSuchInPlayGrantsAndTheEventLog(): void
+    {
+        $u1 = $this->insertUser('hurtfeelings1');
+        $u2 = $this->insertUser('hurtfeelings2');
+        $u3 = $this->insertUser('hurtfeelings3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p3); // Apathy -- blank, no after-playing effect
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p3); // Complacency -- same
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p3, 2, hurtFeelingsPlayerId: $p3);
+
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')
+            ->execute(['grants' => json_encode([null, ['sourceLabel' => 'Hurt Feelings']]), 'id' => $roundId]);
+
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+
+        self::assertCount(2, $playGrants);
+        self::assertSame('Your normal turn', $playGrants[0]['description']);
+        self::assertNull($playGrants[0]['source_card_id']);
+        self::assertSame('An extra play from Hurt Feelings', $playGrants[1]['description']);
+        self::assertNull($playGrants[1]['source_card_id']);
+
+        $this->games->playMood($gameId, $p3, $apathyId, []); // consumes the ordinary base allowance
+        // Consumes Hurt Feelings' own extra play -- also the last
+        // outstanding play this turn, so it scores (and completes) the
+        // round immediately afterward, same as any other last play would.
+        $this->games->playMood($gameId, $p3, $complacencyId, []);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        $mentioningHurtFeelingsUsage = array_values(array_filter(
+            $events,
+            fn (array $event) => str_contains($event['description'], 'using an extra play from Hurt Feelings'),
+        ));
+        self::assertCount(1, $mentioningHurtFeelingsUsage);
+        self::assertStringContainsString($complacencyName = $this->cardNameFor(5), $mentioningHurtFeelingsUsage[0]['description']);
+    }
+
+    private function cardNameFor(int $catalogCardId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT name FROM cards WHERE id = :id');
+        $stmt->execute(['id' => $catalogCardId]);
+
+        return (string) $stmt->fetchColumn();
     }
 
     public function testGetStateMarksOnlyTheCardARestrictedGrantCoversAsPlayable(): void
@@ -3081,6 +3193,14 @@ final class GameServiceIntegrationTest extends TestCase
         $round2 = $this->fetchRound($gameId);
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p3, (int) $round2['first_game_player_id']); // Honor's override, not the winner (p1)
+
+        // The round_scored log entry itself calls out the override --
+        // otherwise it'd only be inferable once round 2 actually starts.
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString(
+            "honor3 goes first next round instead of the round's winner",
+            $events[0]['description'],
+        );
     }
 
     /**
@@ -3178,6 +3298,9 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p2, (int) $round2['first_game_player_id']);
         self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString('awe2 goes first next round', $events[0]['description']);
     }
 
     /**
@@ -4288,6 +4411,59 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($state->isInPlay($disciplineId)); // white, not chosen by anyone
         self::assertFalse($state->isInPlay($ambitionId)); // black
         self::assertFalse($state->isInPlay($anxietyId)); // blue
+    }
+
+    /**
+     * Disillusionment's own "may" -- respondToDecision() is called with an
+     * empty choices array (no 'chosen_color_*' key at all), the same shape
+     * a real blank/"(none)" widget submission produces (see
+     * buildChoicesFromFields() in game.js, which omits the key entirely
+     * rather than sending an empty string), for every player in the queue
+     * except one. Declining must resolve cleanly (no InvalidChoiceException)
+     * and contribute no color at all.
+     */
+    public function testDisillusionmentAllowsEveryPlayerToDeclineThroughTheRealHttpServiceLayer(): void
+    {
+        $u1 = $this->insertUser('disildec1');
+        $u2 = $this->insertUser('disildec2');
+        $u3 = $this->insertUser('disildec3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $disillusionmentId = $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
+        $ambitionId = $this->insertGameCard($gameId, 53, 'in_play', $p2); // Ambition, black
+        $anxietyId = $this->insertGameCard($gameId, 28, 'in_play', $p3); // Anxiety, blue
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $disillusionmentId, []);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        // p2 and p3 both decline outright; only p1 (the acting player
+        // themselves) actually picks a color.
+        $result1 = $this->games->respondToDecision($gameId, $p2, []);
+        self::assertTrue($result1['pending_decision'] ?? false);
+
+        $result2 = $this->games->respondToDecision($gameId, $p3, []);
+        self::assertTrue($result2['pending_decision'] ?? false);
+
+        $result3 = $this->games->respondToDecision($gameId, $p1, ['chosen_color_' . $p1 => 'blue']);
+        self::assertArrayNotHasKey('pending_decision', $result3);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInPlay($disillusionmentId));
+        self::assertTrue($state->isInPlay($disciplineId)); // white, not chosen -- survives
+        self::assertTrue($state->isInPlay($ambitionId)); // black, not chosen -- survives
+        self::assertFalse($state->isInPlay($anxietyId)); // blue, chosen by p1
     }
 
     /**
@@ -6327,7 +6503,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -7071,6 +7247,87 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * opponent_last_take_pile_number/opponent_last_drew_from_deck/
+     * opponent_drafted_card_count never reveal card identities -- only
+     * which numbered pile the opponent most recently TOOK (never a pass),
+     * or that they instead declined all 3 piles and drew from the deck,
+     * and how many cards they've drafted in total. Since turns strictly
+     * alternate and either player can pass any number of times before
+     * eventually ending their turn, "the opponent's last action" has to be
+     * tracked per-user_id (draft_winston_state.
+     * last_draft_action_by_user_id) rather than a single shared "whoever
+     * acted last" value -- this drives both players taking different
+     * piles on different turns and confirms each one's own view stays
+     * independently correct throughout.
+     */
+    public function testWinstonDraftExposesEachPlayersOwnLastTakenPileAndTotalDraftedCountToTheOpponent(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $secondPlayerUserId = $firstPlayerUserId === $u1 ? $u2 : $u1;
+
+        // Before anyone has taken anything, neither player has a last-take
+        // pile, and neither has drafted any cards yet.
+        $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
+        self::assertNull($firstPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($firstPlayerState['opponent_last_drew_from_deck']);
+        self::assertSame(0, $firstPlayerState['opponent_drafted_card_count']);
+
+        // Player 1 passes pile 1 (a non-take action) then takes pile 2 --
+        // taking always ends the turn regardless of which pile it's on.
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'take');
+
+        // From player 2's perspective, player 1's own last take (pile 2)
+        // is now visible, and their drafted count reflects that one pile.
+        $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
+        self::assertSame(2, $secondPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($secondPlayerState['opponent_last_drew_from_deck']);
+        self::assertSame(1, $secondPlayerState['opponent_drafted_card_count']);
+
+        // Player 1's own view of "the opponent" (player 2) is still
+        // untouched -- player 2 hasn't taken anything yet.
+        $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
+        self::assertNull($firstPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($firstPlayerState['opponent_last_drew_from_deck']);
+        self::assertSame(0, $firstPlayerState['opponent_drafted_card_count']);
+
+        // Player 2 takes pile 1 immediately (no pass) -- pile 1 now holds 2
+        // cards (its original 1 plus the 1 it grew by by from player 1's
+        // earlier pass), so player 2's own drafted count is 2, not 1.
+        $this->games->submitWinstonDraftPick($gameId, $secondPlayerUserId, 'take');
+
+        // Now player 1 sees player 2's own last take (pile 1) -- and
+        // player 2's own view of player 1 is unaffected by their own action.
+        $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
+        self::assertSame(1, $firstPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($firstPlayerState['opponent_last_drew_from_deck']);
+        self::assertSame(2, $firstPlayerState['opponent_drafted_card_count']);
+
+        $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
+        self::assertSame(2, $secondPlayerState['opponent_last_take_pile_number'], 'player 1\'s own last take is still pile 2 from before -- unaffected by player 2\'s own turn');
+        self::assertFalse($secondPlayerState['opponent_last_drew_from_deck']);
+        self::assertSame(1, $secondPlayerState['opponent_drafted_card_count']);
+
+        // Player 1 now declines all 3 piles in a row, triggering the
+        // mandatory top-of-deck auto-draw -- this also ends their turn,
+        // just like a take, but should read as "drew from the deck"
+        // rather than showing a stale pile number from their earlier take.
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+
+        $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
+        self::assertNull($secondPlayerState['opponent_last_take_pile_number'], 'player 1\'s last action was a deck draw, not a take, so no pile number is reported');
+        self::assertTrue($secondPlayerState['opponent_last_drew_from_deck']);
+    }
+
+    /**
      * Directly exercises the one specific edge case in submitWinstonDraftPick()'s
      * own docblock: declining pile 3 replenishes it FIRST (consuming
      * whatever's left of the deck), and only THEN attempts the mandatory
@@ -7271,5 +7528,757 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->submitFullWinstonDraftDeck($gameId, $u1);
         $this->games->startGame($gameId);
+    }
+
+    // -- Grid Draft (issue #188) ---------------------------------------------
+
+    /** @return array{gameId:int, u1:int, u2:int} */
+    private function buildGridDraftFixture(
+        string $poolSource = 'random_48',
+        ?string $customPoolText = null,
+        int $winsNeeded = 1,
+    ): array {
+        $u1 = $this->insertUser('griddraft-' . uniqid('u1'));
+        $u2 = $this->insertUser('griddraft-' . uniqid('u2'));
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            winsNeeded: $winsNeeded,
+            deckType: 'grid_draft',
+            gridDraftPoolSource: $poolSource,
+            gridDraftCustomPoolText: $customPoolText,
+        );
+
+        return ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2];
+    }
+
+    private function fetchGridState(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * Drives a full 6-round Grid Draft to completion for both $u1/$u2 via a
+     * simple deterministic policy, exercised purely through the public API
+     * (submitGridDraftPick()/getState()), the same surface the real
+     * frontend uses: the round's first pick always takes row 0 (all 3
+     * cells, since nothing's been taken from a freshly-dealt grid yet);
+     * the second pick always takes column 0, which crosses row 0's own
+     * first cell and so always yields exactly 2 cards -- a deterministic
+     * exercise of the intersection-counting rule on every single round.
+     * Capped well above the exact 12 picks (6 rounds x 2 picks) a full
+     * draft actually needs, purely as a safety net against an
+     * infinite-loop regression.
+     */
+    private function driveGridDraftToDeckBuilding(int $gameId, int $u1, int $u2): void
+    {
+        for ($i = 0; $i < 50; $i++) {
+            $state = $this->games->getState($gameId, $u1);
+            $gridDraft = $state['grid_draft'];
+            if ($gridDraft['status'] !== 'drafting') {
+                return;
+            }
+
+            $drafting = $gridDraft['drafting'];
+            $currentUserId = $drafting['is_your_turn'] ? $u1 : $u2;
+            [$axis, $index] = $drafting['first_pick'] === null ? ['row', 0] : ['column', 0];
+
+            $this->games->submitGridDraftPick($gameId, $currentUserId, $axis, $index);
+        }
+
+        self::fail('Grid Draft did not complete within 50 picks -- possible infinite loop');
+    }
+
+    /** Submits all of $userId's own drafted cards as their deck (the max end of the open-ended range). */
+    private function submitFullGridDraftDeck(int $gameId, int $userId): void
+    {
+        $state = $this->games->getState($gameId, $userId);
+        $cardIds = array_column($state['grid_draft']['deck_building']['drafted_cards'], 'card_id');
+        self::assertGreaterThanOrEqual(12, count($cardIds));
+
+        $this->games->submitDraftDeck($gameId, $userId, $cardIds);
+    }
+
+    public function testCreateGameRejectsGridDraftForNonDraftFormat(): void
+    {
+        $creator = $this->insertUser('griddraft-nondraft-alice');
+        $bob = $this->insertUser('griddraft-nondraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for the "draft" format');
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'grid_draft', gridDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameGridDraftPoolIsTruncatedToFiftyFour(): void
+    {
+        $fixture = $this->buildGridDraftFixture('one_of_each');
+
+        $draftMatchId = (int) $this->fetchGame($fixture['gameId'])['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+
+        self::assertCount(54, json_decode((string) $match['pool_card_ids'], true), 'one_of_each\'s 133 cards are randomly narrowed down to 54 before the draft begins, same as Quick Draft\'s/Winston Draft\'s own pool caps');
+    }
+
+    public function testCreateGameGridDraftCustomPoolBelowMinimumIsRejected(): void
+    {
+        $creator = $this->insertUser('griddraft-undersized-alice');
+        $bob = $this->insertUser('griddraft-undersized-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 54 are required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'custom',
+            gridDraftCustomPoolText: "20 Charity\n",
+        );
+    }
+
+    public function testCreateGameGridDraftRejectsTheStructurePoolSourceAsUndersized(): void
+    {
+        $creator = $this->insertUser('griddraft-structure-alice');
+        $bob = $this->insertUser('griddraft-structure-bob');
+
+        // Unlike Quick Draft (which tops up a short pool mid-draft by
+        // reshuffling discards) or Winston Draft (whose own 45-card
+        // target matches the Structure deck's 45 cards exactly), Grid
+        // Draft has no top-up mechanism at all -- the Structure deck's 45
+        // cards fall short of the 54 Grid Draft always requires, so this
+        // pool source must be rejected outright rather than silently
+        // dealing a short final round.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('requires exactly 54');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'structure',
+        );
+    }
+
+    public function testGridDraftDealsNineCardGridAndRandomlyPicksFirstPicker(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $gridState = $this->fetchGridState($draftMatchId);
+
+        self::assertCount(9, json_decode((string) $gridState['grid_card_ids'], true));
+        self::assertCount(45, json_decode((string) $gridState['remaining_deck_card_ids'], true), '54-card pool minus the 9 cards dealt into round 1\'s grid');
+        self::assertSame(1, (int) $gridState['current_round']);
+        self::assertContains((int) $gridState['first_picker_user_id'], [$u1, $u2]);
+        self::assertSame((int) $gridState['first_picker_user_id'], (int) $gridState['current_turn_user_id']);
+        self::assertNull($gridState['first_pick_axis']);
+        self::assertNull($gridState['first_pick_index']);
+
+        $state = $this->games->getState($gameId, $u1);
+        self::assertSame('drafting', $state['grid_draft']['status']);
+        self::assertCount(9, $state['grid_draft']['drafting']['grid_cards']);
+        self::assertSame(1, $state['grid_draft']['drafting']['current_round']);
+        self::assertSame(6, $state['grid_draft']['drafting']['total_rounds']);
+        self::assertSame(45, $state['grid_draft']['drafting']['remaining_deck_count']);
+        self::assertNull($state['grid_draft']['drafting']['first_pick']);
+    }
+
+    public function testGridDraftRejectsAPickFromWhoeverIsNotTheCurrentTurn(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $otherUserId = $currentTurnUserId === $u1 ? $u2 : $u1;
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("It's not your turn");
+
+        $this->games->submitGridDraftPick($gameId, $otherUserId, 'row', 0);
+    }
+
+    public function testGridDraftRejectsAnInvalidAxis(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('axis must be "row" or "column"');
+
+        $this->games->submitGridDraftPick($gameId, $currentTurnUserId, 'diagonal', 0);
+    }
+
+    public function testGridDraftRejectsAnOutOfRangeIndex(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('index must be between 0 and 2');
+
+        $this->games->submitGridDraftPick($gameId, $currentTurnUserId, 'row', 3);
+    }
+
+    public function testGridDraftFirstPickTakesFullRowAndHandsTurnToOpponent(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $result = $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        self::assertCount(3, $result['cards_taken'], 'the round\'s first pick always yields a full 3 cards -- nothing has been taken from a freshly-dealt grid yet');
+        self::assertFalse($result['round_completed']);
+        self::assertTrue($result['turn_advanced']);
+        self::assertFalse($result['draft_completed']);
+
+        $drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $firstPickerUserId)['drafted_card_ids'], true);
+        self::assertCount(3, $drafted);
+
+        $gridState = $this->fetchGridState($draftMatchId);
+        self::assertSame($secondPickerUserId, (int) $gridState['current_turn_user_id']);
+        self::assertSame('row', $gridState['first_pick_axis']);
+        self::assertSame(0, (int) $gridState['first_pick_index']);
+
+        $grid = json_decode((string) $gridState['grid_card_ids'], true);
+        self::assertSame([null, null, null], [$grid[0], $grid[1], $grid[2]], 'row 0\'s own 3 cells are now empty');
+        self::assertNotNull($grid[3], 'row 1 is completely untouched by a row pick');
+        self::assertNotNull($grid[6], 'row 2 is completely untouched by a row pick');
+    }
+
+    public function testGridDraftDraftingStateExposesEachPlayersOwnDraftedCardsToTheOtherPlayer(): void
+    {
+        // Grid Draft's grid is dealt face-up and visible to both players the
+        // whole time, unlike Winston Draft's face-down piles -- so, unlike
+        // Winston/Quick Draft (where drafted_so_far is strictly the
+        // viewer's own picks), Grid Draft's getState() also hands the
+        // viewer their opponent's own accumulated picks.
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        $firstPickerDrafted = json_decode(
+            (string) $this->fetchDraftMatchPlayer($draftMatchId, $firstPickerUserId)['drafted_card_ids'],
+            true
+        );
+
+        $firstPickerState = $this->games->getState($gameId, $firstPickerUserId)['grid_draft']['drafting'];
+        self::assertSame($firstPickerDrafted, array_map(fn ($card) => $card['card_id'], $firstPickerState['drafted_so_far']));
+        self::assertSame([], $firstPickerState['opponent_drafted_so_far'], 'the opponent has not picked anything yet');
+
+        $secondPickerState = $this->games->getState($gameId, $secondPickerUserId)['grid_draft']['drafting'];
+        self::assertSame([], $secondPickerState['drafted_so_far'], 'the viewer has not picked anything yet');
+        self::assertSame(
+            $firstPickerDrafted,
+            array_map(fn ($card) => $card['card_id'], $secondPickerState['opponent_drafted_so_far']),
+            'the second picker can see the first picker\'s own drafted cards, since Grid Draft is open information'
+        );
+    }
+
+    public function testGridDraftSecondPickCrossingTheFirstRowYieldsOnlyTwoCards(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        // Column 0 crosses row 0 at cell 0 (already taken), leaving only
+        // cells 3 and 6 -- exactly 2 cards, derived purely by counting
+        // still-non-null cells, never by comparing axis/index explicitly.
+        $result = $this->games->submitGridDraftPick($gameId, $secondPickerUserId, 'column', 0);
+
+        self::assertCount(2, $result['cards_taken']);
+        self::assertTrue($result['round_completed']);
+        self::assertTrue($result['turn_advanced']);
+        self::assertFalse($result['draft_completed']);
+
+        $drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $secondPickerUserId)['drafted_card_ids'], true);
+        self::assertCount(2, $drafted);
+    }
+
+    public function testGridDraftSecondPickNotCrossingTheFirstRowYieldsThreeCards(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        // Row 1 is a completely different row from row 0 -- untouched, so
+        // it still yields all 3 of its own cards.
+        $result = $this->games->submitGridDraftPick($gameId, $secondPickerUserId, 'row', 1);
+
+        self::assertCount(3, $result['cards_taken']);
+        self::assertTrue($result['round_completed']);
+    }
+
+    public function testGridDraftRejectsASecondPickOfTheExactSameLineAlreadyFullyTaken(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('No cards remain in that row/column');
+
+        $this->games->submitGridDraftPick($gameId, $secondPickerUserId, 'row', 0);
+    }
+
+    public function testGridDraftAlternatesFirstPickerEachRoundAndDealsAFreshGrid(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $round1FirstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $round1SecondPickerUserId = $round1FirstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $round1FirstPickerUserId, 'row', 0);
+        $this->games->submitGridDraftPick($gameId, $round1SecondPickerUserId, 'column', 0);
+
+        $gridState = $this->fetchGridState($draftMatchId);
+        self::assertSame(2, (int) $gridState['current_round']);
+        self::assertSame($round1SecondPickerUserId, (int) $gridState['first_picker_user_id'], 'whoever picked second in round 1 picks first in round 2');
+        self::assertSame($round1SecondPickerUserId, (int) $gridState['current_turn_user_id']);
+        self::assertNull($gridState['first_pick_axis']);
+        self::assertNull($gridState['first_pick_index']);
+        self::assertCount(9, json_decode((string) $gridState['grid_card_ids'], true), 'round 2 deals a completely fresh 9-card grid');
+        self::assertCount(36, json_decode((string) $gridState['remaining_deck_card_ids'], true), '54 - 9 (round 1) - 9 (round 2)');
+
+        foreach (json_decode((string) $gridState['grid_card_ids'], true) as $cell) {
+            self::assertNotNull($cell, 'a freshly-dealt round has nothing taken from it yet');
+        }
+    }
+
+    public function testGridDraftProceedsToDeckBuildingAfterSixRoundsConservingFiftyFourMinusDiscards(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status'], 'Grid Draft always yields at least 12 cards per player (min 15 with this deterministic policy), so there\'s no auto-loss path the way Winston Draft has');
+
+        $u1Cards = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true);
+        $u2Cards = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true);
+
+        // This deterministic policy (row 0 then column 0 every round)
+        // always takes 3 + 2 = 5 of each round's 9 dealt cards, discarding
+        // the other 4 -- 6 rounds x 5 kept = 30 total drafted, 6 x 4 = 24
+        // discarded, 30 + 24 = 54.
+        self::assertSame(30, count($u1Cards) + count($u2Cards));
+        self::assertGreaterThanOrEqual(12, count($u1Cards));
+        self::assertGreaterThanOrEqual(12, count($u2Cards));
+
+        self::assertSame([], array_values(array_intersect($u1Cards, $u2Cards)), 'no catalog card id was drafted by both players -- random_48\'s own pool has no duplicate catalog ids to begin with');
+    }
+
+    public function testGridDraftMatchProgressesGamesAndCompletesAtTwoWins(): void
+    {
+        $fixture = $this->buildGridDraftFixture(winsNeeded: 1);
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $this->submitFullGridDraftDeck($gameId, $u1);
+        $this->submitFullGridDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $matchWins = [$u1 => 0, $u2 => 0];
+        $currentGameId = $gameId;
+        for ($gamesPlayed = 0; $gamesPlayed < 3; $gamesPlayed++) {
+            $winnerUserId = $this->completeQuickDraftGameByPassing($currentGameId);
+            $matchWins[$winnerUserId]++;
+
+            if ($matchWins[$winnerUserId] >= 2) {
+                $finalMatch = $this->fetchDraftMatch($draftMatchId);
+                self::assertSame('completed', $finalMatch['status']);
+                self::assertSame($winnerUserId, (int) $finalMatch['winner_user_id']);
+
+                return;
+            }
+
+            $nextGameStmt = $this->pdo->prepare(
+                "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $nextGameId = (int) $nextGameStmt->fetchColumn();
+            self::assertSame($fixture['gameId'] !== $nextGameId, true);
+
+            $nextGameRow = $this->fetchGame($nextGameId);
+            self::assertSame('grid_draft', $nextGameRow['deck_type']);
+
+            $this->submitFullGridDraftDeck($nextGameId, $u1);
+            $this->submitFullGridDraftDeck($nextGameId, $u2);
+            $this->games->startGame($nextGameId);
+            $currentGameId = $nextGameId;
+        }
+
+        self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    public function testGridDraftStartGameRequiresBothDecksSubmitted(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
+
+        $this->submitFullGridDraftDeck($gameId, $u1);
+        $this->games->startGame($gameId);
+    }
+
+    // -- Resigning (GameService::resignGame()) ------------------------------
+
+    private function fetchRoundByNumber(int $gameId, int $roundNumber): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_rounds WHERE game_id = :game_id AND round_number = :round_number');
+        $stmt->execute(['game_id' => $gameId, 'round_number' => $roundNumber]);
+
+        return $stmt->fetch();
+    }
+
+    private function fetchGamePlayer(int $gamePlayerId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+
+        return $stmt->fetch();
+    }
+
+    public function testResignInDuelFormatImmediatelyCompletesGameForTheOpponent(): void
+    {
+        $u1 = $this->insertUser('resign-duel-p1');
+        $u2 = $this->insertUser('resign-duel-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertFalse($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p2, $result['winner_game_player_id']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame($p2, (int) $game['winner_game_player_id']);
+        self::assertNotNull($game['completed_at']);
+
+        $round = $this->fetchRoundByNumber($gameId, 1);
+        self::assertSame('abandoned', $round['status']);
+        self::assertNull($round['current_turn_game_player_id']);
+
+        self::assertNotNull($this->fetchGamePlayer($p1)['resigned_at']);
+
+        // currentRound() -- the one thing playMood()/pass() gate on --
+        // can no longer find an 'in_progress' round for this game, so
+        // nothing can be played against it anymore.
+        $this->expectException(GameStateException::class);
+        $this->games->pass($gameId, $p2);
+    }
+
+    public function testResignInTeamFormatCreditsTheOpposingTeam(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p3' => $p3] = $this->buildTeamFixture();
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p3, $result['winner_game_player_id']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame(1, (int) $game['winner_team_id']);
+        // p3 is the lower-seat_order member of the winning team (team 1),
+        // matching finishTeamScoringAndAdvance()'s own representative
+        // convention -- see resignGame()'s docblock.
+        self::assertSame($p3, (int) $game['winner_game_player_id']);
+    }
+
+    public function testResigningOnYourOwnTurnSkipsToTheNextActivePlayerInStandardFormat(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, $apathyId, []);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+
+        $result = $this->games->resignGame($gameId, $p2);
+
+        self::assertFalse($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id'], 'p2\'s own turn should be skipped straight to p3');
+
+        self::assertNotNull($this->fetchGamePlayer($p2)['resigned_at']);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status'], 'a 3-player standard game must not end just because one player resigned');
+
+        // p2 no longer has a turn to pass on -- the round has already
+        // moved on to p3.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("not player {$p2}'s turn");
+        $this->games->pass($gameId, $p2);
+    }
+
+    /**
+     * "All of that player's cards leave play" -- only the 3-4 player
+     * 'standard' "continue without them" path needs this, since that's the
+     * only resignation outcome where the board keeps being played on by
+     * everyone else. Moods and hand cards both go to the bottom of the
+     * deck, not the discard pile -- a resignation isn't a scoring event,
+     * so it shouldn't feed discard-pile-driven effects (Altruism,
+     * Corruption, etc.). See GameService::removeResignedPlayerCardsFromBoard().
+     */
+    public function testResigningMovesAllOfThatPlayersInPlayMoodsAndHandToTheBottomOfTheDeck(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildThreePlayerFixture();
+
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p2); // Courage
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
+        $otherPlayersMoodId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- untouched
+        $p2HandCardId = $this->insertGameCard($gameId, 20, 'hand', $p2); // Pacifism -- p2's hand
+
+        $this->games->resignGame($gameId, $p2);
+
+        $stmt = $this->pdo->prepare(
+            'SELECT id, zone, owner_game_player_id FROM game_cards WHERE id IN (:c1, :c2, :c3, :c4)'
+        );
+        $stmt->execute(['c1' => $courageId, 'c2' => $charityId, 'c3' => $otherPlayersMoodId, 'c4' => $p2HandCardId]);
+        $rows = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $rows[(int) $row['id']] = $row;
+        }
+
+        self::assertSame('deck', $rows[$courageId]['zone']);
+        self::assertNull($rows[$courageId]['owner_game_player_id'], 'standard format uses one shared deck, not a per-player one');
+        self::assertSame('deck', $rows[$charityId]['zone']);
+        self::assertSame('deck', $rows[$p2HandCardId]['zone'], "a resigned player's hand must also go to the bottom of the deck");
+        self::assertSame('in_play', $rows[$otherPlayersMoodId]['zone'], 'another player\'s mood must be untouched by an opponent\'s resignation');
+    }
+
+    public function testResignedPlayerIsNeverCreditedARoundWinEvenWithTheHighestScore(): void
+    {
+        [
+            'gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3,
+            'apathyId' => $apathyId, 'complacencyId' => $complacencyId,
+        ] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, $apathyId, []); // p1 scores 4
+        $this->games->playMood($gameId, $p2, $complacencyId, []); // p2 also scores 4 -- tied with p1
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id']);
+
+        // p2 resigns after already playing (not their turn, so this
+        // doesn't touch turn state) -- 2 active players remain (p1, p3),
+        // so the game keeps going rather than completing.
+        $this->games->resignGame($gameId, $p2);
+
+        $final = $this->games->pass($gameId, $p3); // p3 scores 0, ending round 1
+
+        self::assertTrue($final['round_scored']);
+        self::assertFalse($final['game_completed']); // wins_needed is 2 for buildThreePlayerFixture()
+
+        $round1 = $this->fetchRoundByNumber($gameId, 1);
+        self::assertSame('scored', $round1['status']);
+        self::assertSame($p1, (int) $round1['winner_game_player_id'], 'p2 must never win despite tying the actual high score');
+        self::assertSame($p1, (int) $round1['winner_game_player_id']);
+    }
+
+    public function testResignationCascadesToGameCompletionWhenOnlyOneActivePlayerRemains(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3] = $this->buildThreePlayerFixture();
+
+        $first = $this->games->resignGame($gameId, $p2);
+        self::assertFalse($first['game_completed'], 'still 2 active players (p1, p3) -- the game must keep going');
+
+        $second = $this->games->resignGame($gameId, $p3);
+        self::assertTrue($second['game_completed'], 'down to 1 active player -- the game must complete the same way a 2-player resign always has');
+        self::assertSame($p1, $second['winner_game_player_id']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame($p1, (int) $game['winner_game_player_id']);
+
+        $round1 = $this->fetchRoundByNumber($gameId, 1);
+        self::assertSame('abandoned', $round1['status']);
+    }
+
+    public function testResignInDraftFormatAdvancesTheMatchLikeAnyOtherGameWin(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $u2);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p2, $result['winner_game_player_id']);
+
+        // Best-of-three needs 2 match wins -- a single resign-induced game
+        // win only credits ONE, so the match itself isn't over yet, but
+        // advanceDraftMatch() must still have run: the winner's match-win
+        // count went up and a game 2 was created for the match to continue.
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status']);
+        self::assertSame(1, (int) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['wins']);
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND match_game_number = 2"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        self::assertNotFalse($nextGameStmt->fetch(), 'a resign-induced win must still advance best-of-three match progression');
+    }
+
+    /**
+     * End-to-end version of BoardStateTest/MoodPlayServiceTest's own
+     * resigned-target coverage -- proves BoardStateRepository::load()
+     * actually threads game_players.resigned_at into the real BoardState
+     * a live playMood() call runs against, not just that BoardState's own
+     * constructor honors the flag when a test builds one directly.
+     */
+    public function testPlayingACardCannotTargetAResignedPlayerEndToEnd(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p3' => $p3] = $this->buildThreePlayerFixture();
+
+        $this->games->resignGame($gameId, $p3);
+
+        $honorId = $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->expectExceptionMessage('is not a valid player');
+        $this->games->playMood($gameId, $p1, $honorId, ['target_player_id' => $p3]);
+    }
+
+    public function testResignFailsWhenTheGameIsNotInProgress(): void
+    {
+        $u1 = $this->insertUser('resign-notstarted-p1');
+        $u2 = $this->insertUser('resign-notstarted-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'waiting', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not in progress');
+        $this->games->resignGame($gameId, $p1);
+    }
+
+    public function testResignFailsForAPlayerNotSeatedInTheGame(): void
+    {
+        ['gameId' => $gameId] = $this->buildThreePlayerFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not seated');
+        $this->games->resignGame($gameId, 999999);
+    }
+
+    public function testResignFailsIfThePlayerHasAlreadyResigned(): void
+    {
+        ['gameId' => $gameId, 'p2' => $p2] = $this->buildThreePlayerFixture();
+
+        $this->games->resignGame($gameId, $p2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('already resigned');
+        $this->games->resignGame($gameId, $p2);
+    }
+
+    public function testResignFailsWhileADecisionIsPending(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $round = $this->fetchRound($gameId);
+        $this->pdo->prepare(
+            'INSERT INTO game_pending_decision_batches (game_id, game_round_id, played_card_id, initiating_game_player_id, top_level_choices, invocation_choices)
+             VALUES (:game_id, :round_id, :card_id, :initiator, \'{}\', \'{}\')'
+        )->execute(['game_id' => $gameId, 'round_id' => (int) $round['id'], 'card_id' => $apathyId, 'initiator' => $p1]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('decision still pending');
+        $this->games->resignGame($gameId, $p2);
     }
 }

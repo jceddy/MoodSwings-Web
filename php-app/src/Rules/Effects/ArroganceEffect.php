@@ -35,7 +35,7 @@ final class ArroganceEffect extends AbstractMoodEffect implements RequiresOppone
         }
 
         $opponentId = $choices->requireInt('opponent_player_id');
-        if (!in_array($opponentId, $state->playerOrder(), true)) {
+        if (!in_array($opponentId, $state->activePlayerOrder(), true)) {
             throw new InvalidChoiceException("Player {$opponentId} is not a valid player");
         }
         if ($opponentId === $playerId) {

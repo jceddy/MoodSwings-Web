@@ -35,7 +35,7 @@ final class FascinationEffect extends AbstractMoodEffect
         }
 
         $recipientId = $choices->requireInt('recipient_player_id');
-        if ($recipientId === $playerId || !in_array($recipientId, $state->playerOrder(), true)) {
+        if ($recipientId === $playerId || !in_array($recipientId, $state->activePlayerOrder(), true)) {
             throw new InvalidChoiceException("Player {$recipientId} is not a valid recipient");
         }
 

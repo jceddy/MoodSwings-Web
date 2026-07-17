@@ -100,10 +100,25 @@
                     <p id="winston-draft-drafting-status"></p>
                     <div id="winston-draft-piles"></div>
                     <p id="winston-draft-remaining-deck-count"></p>
+                    <p id="winston-draft-opponent-info"></p>
                     <button id="winston-draft-take-button" type="button" hidden>Take pile</button>
                     <button id="winston-draft-pass-button" type="button" hidden>Pass</button>
                     <h4>Drafted so far</h4>
                     <ul id="winston-draft-drafted-so-far"></ul>
+                </div>
+            </div>
+
+            <div id="grid-draft-panel" hidden>
+                <div id="grid-draft-drafting" hidden>
+                    <h3 id="grid-draft-drafting-title"></h3>
+                    <p id="grid-draft-drafting-status"></p>
+                    <div id="grid-draft-grid"></div>
+                    <div id="grid-draft-picks"></div>
+                    <p id="grid-draft-remaining-deck-count"></p>
+                    <h4>Drafted so far</h4>
+                    <ul id="grid-draft-drafted-so-far"></ul>
+                    <h4 id="grid-draft-opponent-drafted-so-far-title"></h4>
+                    <ul id="grid-draft-opponent-drafted-so-far"></ul>
                 </div>
             </div>
 
@@ -114,6 +129,7 @@
                 <div id="draft-deck-selection-actions">
                     <button id="draft-deck-select-all-button" type="button">Select all</button>
                     <button id="draft-deck-clear-selection-button" type="button">Clear selection</button>
+                    <button id="draft-deck-reset-button" type="button" hidden>Reset to previous deck</button>
                 </div>
                 <p id="draft-deck-error" class="error" hidden></p>
                 <button id="draft-deck-submit-button" type="button">Submit deck</button>
@@ -207,6 +223,7 @@
                 </details>
 
                 <button id="pass-button" type="button">Pass</button>
+                <button id="resign-button" type="button" hidden>Resign game</button>
 
                 <h3>Recent plays</h3>
                 <ul id="recent-events-list"></ul>
@@ -250,6 +267,7 @@
                     <option value="custom_duel">Custom Decklists (Duel)</option>
                     <option value="quick_draft">Quick Draft</option>
                     <option value="winston_draft">Winston Draft</option>
+                    <option value="grid_draft">Grid Draft</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -356,6 +374,28 @@
                     </label>
                     <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards)
                         <textarea id="new-game-winston-draft-custom-pool-text" rows="10"></textarea>
+                    </label>
+                </div>
+            </div>
+
+            <div id="new-game-grid-draft-fields" hidden>
+                <p>Choose the shared pool to draft from:</p>
+                <label>Pool
+                    <select id="new-game-grid-draft-pool-source">
+                        <option value="random_48">54 random cards</option>
+                        <option value="jceddys_75">jceddy's 75 Card deck (75 cards)</option>
+                        <option value="one_of_each">One of Each Card (133 cards)</option>
+                        <option value="custom">Custom pool</option>
+                    </select>
+                </label>
+                <p id="new-game-grid-draft-pool-source-description"></p>
+
+                <div id="new-game-grid-draft-custom-pool-fields" hidden>
+                    <label>Upload a pool file
+                        <input type="file" id="new-game-grid-draft-custom-pool-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste the pool (one card per line, an optional leading count, at least 54 cards)
+                        <textarea id="new-game-grid-draft-custom-pool-text" rows="10"></textarea>
                     </label>
                 </div>
             </div>

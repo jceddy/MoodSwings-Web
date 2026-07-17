@@ -378,8 +378,19 @@ too, proportional to the smaller card width.
     (`.lobby-row--your-turn`, a new `--color-your-turn-bg` theme variable)
     so an actionable game stands out even before any of the row's text is
     read; `#lobby-view li`'s own horizontal padding (rather than 0) is what
-    keeps that background from touching the row's edges. Once a game is
-    `completed`,
+    keeps that background from touching the row's edges.
+    `is_awaiting_your_response` (a delayed choice is on you specifically
+    -- see `GameService::isAwaitingResponseFrom()`) gets the same
+    treatment with a distinct color: a bold `--color-pending` "(waiting on
+    you)" tag plus its own row background (`.lobby-row--awaiting-response`,
+    a new `--color-awaiting-response-bg` amber theme variable, distinct
+    from your-turn's green) -- deliberately a different color from
+    your-turn's, since the two mean different things and can both be true
+    at once (a pending decision freezes the round even on what's nominally
+    your own turn). `buildGameRow()` gives the row background priority to
+    awaiting-response over your-turn when both apply, since it's the more
+    urgent of the two, but still shows both text tags side by side either
+    way. Once a game is `completed`,
     `winner_usernames` (both teammates' for a team-format win, just the
     one player's otherwise -- see `php-app/README.md`) renders as an extra
     line below the players, e.g. "alice won" or "alice & bob won" --
@@ -399,7 +410,8 @@ too, proportional to the smaller card width.
     to take) and "View" otherwise (`showBoard()` itself renders read-only
     once a game isn't `in_progress` regardless of the button's own label,
     so this is purely about setting the right expectation before
-    clicking, not a new access restriction). A `quick_draft`/`winston_draft`
+    clicking, not a new access restriction). A `quick_draft`/`winston_draft`/
+    `grid_draft`
     game's up-to-3
     `games` rows (sharing one `draft_match_id`) are grouped into a single
     `<li class="lobby-match-group">` instead of showing as unrelated rows --
@@ -454,8 +466,8 @@ too, proportional to the smaller card width.
     "Closed Team Play" in `php-app/README.md` for the formats themselves. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
-    Draft, Winston Draft, One of Each Card, in that order, matching
-    `deck_type`'s own eight values -- see "Deck types" in
+    Draft, Winston Draft, Grid Draft, One of Each Card, in that order,
+    matching `deck_type`'s own nine values -- see "Deck types" in
     `php-app/README.md`) has a plain-language
     description shown right below it (`#new-game-deck-type-description`,
     `updateDeckTypeDescription()`) that updates live as the selection
@@ -481,14 +493,14 @@ too, proportional to the smaller card width.
     selected (Power's 15 cards fall short of the 45-card minimum both team
     formats share -- see "Open Team Play"/"Closed Team Play" in
     `php-app/README.md`), and -- since the Draft format supports only Quick
-    Draft/Winston Draft -- every option *except* those two whenever Draft is
-    selected, and Quick Draft/Winston Draft themselves whenever Draft
-    *isn't* selected. If
+    Draft/Winston Draft/Grid Draft -- every option *except* those three
+    whenever Draft is selected, and Quick Draft/Winston Draft/Grid Draft
+    themselves whenever Draft *isn't* selected. If
     the previously-selected option becomes unavailable, the dropdown falls
     back to the first option that's still available in document order --
     Structure for most formats, but Quick Draft for Draft (the first of the
-    two options in document order), since neither is available anywhere
-    else. Selecting Custom Decklists (Duel) reveals
+    three options in document order), since none of the three is available
+    anywhere else. Selecting Custom Decklists (Duel) reveals
     `#new-game-duel-rules-fields` instead of the decklist fields -- no
     decklist is entered here at all, only the deck-building *rules* both
     players' own decklists (submitted later, see the Board bullet below)
@@ -521,14 +533,26 @@ too, proportional to the smaller card width.
     reflecting its own 45-card target rather than Quick Draft's 48, and the
     same Custom-pool file/textarea pair feeding
     `winston_draft_custom_pool_text`) -- `updateWinstonDraftPoolSourceVisibility()`
-    mirrors `updateQuickDraftPoolSourceVisibility()` exactly. Both Quick
-    Draft and Winston Draft are only ever offered under the Draft format
+    mirrors `updateQuickDraftPoolSourceVisibility()` exactly. Selecting
+    Grid Draft reveals `#new-game-grid-draft-fields` instead -- the same
+    shape again (`#new-game-grid-draft-pool-source`, its own
+    `GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
+    54-card target, and the same Custom-pool file/textarea pair feeding
+    `grid_draft_custom_pool_text`) -- `updateGridDraftPoolSourceVisibility()`
+    mirrors the other two exactly, except its own pool-source `<select>`
+    has only 4 options, not 5: Structure deck is deliberately absent, since
+    its 45 cards fall short of the 54 Grid Draft always requires and there's
+    no top-up mechanism to cover the gap (see "Grid Draft" in
+    `php-app/README.md`) -- offering it in the dropdown would just be a
+    guaranteed `400` waiting to happen. Quick Draft, Winston Draft, and
+    Grid Draft are all three only ever offered under the Draft format
     (`#new-game-format` has its own
     Draft option, functionally identical to Duel -- same 2-player,
     separate-per-player-deck engine, `updateOpponentSelectionLimit()` caps
     it at 1 opponent the same way Duel is -- but restricted to deck types
     that build a deck through some kind of live drafting process; Quick
-    Draft was the first, Winston Draft joined it later -- see "Draft
+    Draft was the first, Winston Draft joined it next, Grid Draft joined
+    after that -- see "Draft
     format" in
     `php-app/README.md`). Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
@@ -551,10 +575,13 @@ too, proportional to the smaller card width.
     stays hidden until every player's own `deck_submitted` is true, since
     the server would just reject starting otherwise. Once a `custom_duel`
     game is actually in progress, each player's own row in the Players
-    list additionally shows `— deck: <name>` (or "Uploaded Deck") -- since
-    unlike every other deck_type, a `custom_duel` game has no single deck
-    the whole table shares, each player having submitted their own. The
-    board title itself shows the *viewer's own* submitted deck name for a
+    list additionally shows their deck name (or "Uploaded Deck") on its
+    own line underneath the username (`.player-deck-name`, a muted second
+    line inside the same `.player-name` block rather than appended inline
+    after the name) -- since unlike every other deck_type, a `custom_duel`
+    game has no single deck the whole table shares, each player having
+    submitted their own. The board title itself shows the *viewer's own*
+    submitted deck name for a
     `custom_duel` game (looked up from `state.players` by
     `state.you.game_player_id`, the same `custom_deck_name` field the
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
@@ -620,16 +647,19 @@ too, proportional to the smaller card width.
     See "Closed Team Play" in `php-app/README.md`.
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
-    whichever of `state.quick_draft`/`state.winston_draft` is non-null --
-    both share an identical outer shape, `your_wins`/`opponent_wins`/
+    whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
+    is non-null --
+    all three share an identical outer shape, `your_wins`/`opponent_wins`/
     `games_to_win`/`next_game_id`, even though their own `drafting`
     sub-shapes differ -- hidden for every other deck_type) sits just below
     the round-status line and is always shown once a `quick_draft`/
-    `winston_draft` game
+    `winston_draft`/`grid_draft` game
     exists, regardless of whether the game itself is `waiting`/
-    `in_progress`/`completed` -- "Quick Draft match — game N of up to 3 —
-    you X, opponent Y (first to 2 wins the match)" (or "Winston Draft
-    match" for that deck_type, via `DRAFT_MATCH_LABELS`). The same function also
+    `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
+    (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
+    ahead). No deck_type-specific label here (Quick Draft/Winston
+    Draft/Grid Draft) -- that's already shown elsewhere on the board (the
+    title), so this line stays purely about the match's own progress. The same function also
     owns `#draft-match-next-game-button`, right next to the scoreline:
     hidden unless `next_game_id` is set (only true once
     this specific game has completed but the match itself hasn't --
@@ -640,7 +670,8 @@ too, proportional to the smaller card width.
     A `renderDraftPanel(state)` dispatcher
     (mutually exclusive with `#duel-deck-submission`, occupying the same
     waiting-room slot while `state.game.status` is `'waiting'`) shows
-    either `#quick-draft-panel` or `#winston-draft-panel` depending on
+    whichever of `#quick-draft-panel`/`#winston-draft-panel`/
+    `#grid-draft-panel` matches
     `state.game.deck_type`, covering each
     format's own two pregame phases. Quick Draft's own two phases are read
     from `state.quick_draft`:
@@ -667,17 +698,19 @@ too, proportional to the smaller card width.
       draft so far (across all rounds, including whatever's already
       resolved this one), read-only.
     - **Deck building** (shared `#draft-deck-building` block, sitting
-      outside both `#quick-draft-panel` and `#winston-draft-panel` since
-      its shape is identical for both formats -- `renderDraftDeckBuilding()`,
-      shown while `state.quick_draft.status`/`state.winston_draft.status`
+      outside `#quick-draft-panel`/`#winston-draft-panel`/`#grid-draft-panel`
+      since its shape is identical for all three -- `renderDraftDeckBuilding()`,
+      shown while `state.quick_draft.status`/`state.winston_draft.status`/
+      `state.grid_draft.status`
       is `'deck_building'`) -- the exact same picker/endpoint
       (`submitDraftDeck()`, `POST /games/draft/deck`) serves both the
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
       the UI either. Its title/status text is built from
       `deckBuilding.min_deck_size`/`max_deck_size` (14/16 for Quick Draft,
-      12/however-many-you-drafted for Winston Draft), never hardcoded, so
-      one function serves both formats' own bounds correctly. All of your
+      12/however-many-you-drafted for Winston Draft and Grid Draft alike),
+      never hardcoded, so
+      one function serves all three formats' own bounds correctly. All of your
       own drafted cards
       (`deckBuilding.drafted_cards`) show as toggleable
       thumbnails (same picker pattern again, no 2-card cap this time — any
@@ -688,6 +721,14 @@ too, proportional to the smaller card width.
       sideboarding starts from your existing deck instead of forcing a full
       retrim from scratch before every game. Only the very first game of a
       match (no previous deck yet) still defaults to every drafted card.
+      A `#draft-deck-reset-button` ("Reset to previous deck") sits next to
+      Select all/Clear selection -- it re-seeds the selection from
+      `deckBuilding.previous_deck_card_ids` on demand (via the same
+      `cardIdsToDraftedCardIndices()` helper the initial seeding uses),
+      undoing whatever sideboard changes have been made since without
+      forcing a full "Clear selection" + reselect. It's only shown when
+      `previous_deck_card_ids` is actually set -- i.e. never on the very
+      first game of a match, where there's no previous deck to reset to.
       A card currently excluded from the deck is dimmed with a dashed
       border -- `buildCardThumb()`'s existing `.not-playable` treatment for
       an unplayable in-game hand card, reused here via its `notPlayable`
@@ -707,7 +748,8 @@ too, proportional to the smaller card width.
       exact same field names `buildCardThumb()`/`openCardDetail()` already
       read (`card_id`, `name`, `color`, `value`, `rules_text`, etc.), so
       neither function needed any change to render a card that hasn't been
-      dealt into a game yet. See "Quick Draft"/"Winston Draft" in
+      dealt into a game yet. See "Quick Draft"/"Winston Draft"/"Grid Draft"
+      in
       `php-app/README.md` for the formats themselves.
     - **Winston Draft's own drafting phase** (`#winston-draft-panel` >
       `#winston-draft-drafting`, `renderWinstonDraftDrafting()`, shown
@@ -727,7 +769,50 @@ too, proportional to the smaller card width.
       `action: 'take'`/`'pass'` -- no card selection needed, since taking a
       pile claims it whole. `drafting.remaining_deck_count` and a
       `#winston-draft-drafted-so-far` read-only list (your own accumulated
-      picks -- never your opponent's) round out the panel.
+      picks -- never your opponent's) round out the panel, along with a
+      `#winston-draft-opponent-info` line built from
+      `drafting.opponent_drafted_card_count` (how many cards the opponent
+      has drafted in total) and either `drafting.opponent_last_take_pile_number`
+      (which pile number -- never its contents -- they most recently
+      claimed) or `drafting.opponent_last_drew_from_deck` (`true` if they
+      instead most recently declined all 3 piles and took the mandatory
+      top-of-deck draw); neither is shown until the opponent has completed
+      at least one turn.
+    - **Grid Draft's own drafting phase** (`#grid-draft-panel` >
+      `#grid-draft-drafting`, `renderGridDraftDrafting()`, shown while
+      `state.grid_draft.status` is `'drafting'`) -- like Winston Draft,
+      only one player acts at a time, so there's no card-selection `Set`
+      either: the active player picks a whole row or column, never
+      individual cells. `#grid-draft-grid` renders all 9 cells of
+      `drafting.grid_cards` (always fully visible to both players -- unlike
+      Winston Draft's face-down piles, a dealt grid is face-up on the
+      table) in the same row-major order `getState()` reports them in, via
+      a CSS grid (`#grid-draft-grid { grid-template-columns: repeat(3, ...) }`);
+      a cell that's already been taken this round (`null` in
+      `grid_cards`) renders as a plain dashed placeholder
+      (`.grid-draft-cell--empty`) instead of a card thumbnail.
+      `#grid-draft-picks` renders 6 buttons (Row 1-3, Column 1-3), each
+      labeled with however many cells are actually still non-null along
+      that line (`gridDraftLineCells()`, a client-side mirror of
+      `GameService::submitGridDraftPick()`'s own cell-counting logic) --
+      "Row 2 (3 cards)", "Column 1 (2 cards)", etc. A line with 0 cards
+      left (the second pick choosing the exact same line the first pick
+      already fully cleared) renders disabled rather than being sent to
+      the server only to be rejected. Clicking a button calls
+      `submitGridDraftAction(axis, index)` (`submitGridDraftPick()`, `POST
+      /games/draft/grid-pick`). `drafting.remaining_deck_count` and a
+      `#grid-draft-drafted-so-far` read-only list (your own accumulated
+      picks) round out the panel. Unlike Winston Draft's own
+      drafted-so-far list (strictly your own picks, since its piles are
+      genuinely hidden from you until you take them), Grid Draft's grid is
+      face-up and visible to both players the whole time, so there's a
+      second `#grid-draft-opponent-drafted-so-far` read-only list right
+      underneath it showing your opponent's own accumulated picks too
+      (`drafting.opponent_drafted_so_far`) -- nothing there was ever hidden
+      information to begin with. Its heading (`#grid-draft-opponent-drafted-so-far-title`)
+      is set to the opponent's own username (the same `currentOpponentUsername`
+      the deck-building waiting-for-submission message already uses) rather
+      than a generic "Opponent", e.g. "alice's drafted so far".
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
@@ -812,6 +897,16 @@ too, proportional to the smaller card width.
     it only ever actually shows for a `'mood'` option in practice — a hand
     or discard-pile card has no `has_unused_play_grant` field of its own to
     read.
+    The `'discard_card'` case also excludes `card.card_id` from its own
+    candidates, the same way `'hand_card'` already did -- normally a no-op
+    (the card being played hasn't reached the discard pile yet), but
+    Melancholy's "play moods from the discard pile as though they were in
+    your hand" makes it a real case: without this, Nostalgia (or Cynicism/
+    Corruption) played straight out of the discard pile could offer its
+    own just-about-to-be-played instance as a candidate, which the server
+    would then reject once it's actually moved into play (see
+    `MoodPlayService::playMood()`'s `moveDiscardToInPlay()` call, which
+    happens before any effect's `afterPlaying()` runs).
     This still disambiguates two players' identical printed cards the way
     an inline "— Owner" suffix used to (needed since a `'duel' game's two
     independent decks can put the same printed card in play at once, and
@@ -948,7 +1043,11 @@ too, proportional to the smaller card width.
     banner, reusing the exact same field-rendering code as the regular
     choices panel (including multi-select validation for Malice's two
     moods and the `mode` dropdown for Disillusionment's color) — answered
-    via `POST /games/respond`. Betrayal uses this exact same pending-decision
+    via `POST /games/respond` — Disillusionment's own dropdown is optional
+    (its printed text is a "may"), so leaving it on its default "(none)"
+    option and responding anyway is a fully valid answer: the respond
+    button is never disabled for it the way it is for a `required` field
+    with nothing chosen. Betrayal uses this exact same pending-decision
     mechanism for a different reason than those seven: nobody else answers
     it (the panel appears immediately, in the same session, the moment
     Betrayal is played -- no "waiting on" banner ever shows for it, the
@@ -1130,11 +1229,12 @@ too, proportional to the smaller card width.
     rendered in `--color-success` via `.player-flag--turn` to match this
     app's existing "your turn" bold/success-color convention — currently
     marks. Every row's icons line up at the same horizontal position
-    regardless of how long that row's own username is: `renderBoard()`
-    measures the widest `.player-name` span in the just-rendered list and
-    applies that as a shared `min-width` to all of them, rather than
-    hardcoding one width that would either clip a long username or leave a
-    short one with an oddly large gap before its icons start. All the
+    regardless of how long that row's own username (or, for `custom_duel`,
+    deck name) is: `renderBoard()` measures the widest `.player-name` block
+    in the just-rendered list and applies that as a shared `min-width` to
+    all of them, rather than hardcoding one width that would either clip a
+    long username or leave a short one with an oddly large gap before its
+    icons start. All the
     icons/flags/thumbnail for a row share one `.player-icons` wrapper (its
     own flex-wrap container) rather than wrapping directly as children of
     the row itself, and the row is `flex-wrap: nowrap` so the name and this
@@ -1177,6 +1277,22 @@ too, proportional to the smaller card width.
     overwrite it with stale data (e.g. showing this indicator again after
     the game started with an opponent going first, until the page was
     reloaded).
+  - A "Resign game" button (`#resign-button`) sits right after Pass --
+    unlike Pass, it isn't turn-gated (you can resign any time it's
+    `in_progress`, not just on your own turn), so it's only ever hidden
+    once the game's over or the viewer has already resigned, and disabled
+    while a decision is pending (mirrors the backend's own
+    `assertNoPendingDecision()` gate -- resolve it first). Clicking it
+    shows a `window.confirm()` prompt first, since resigning can't be
+    undone, then calls `POST /games/resign` (`resignGame()` in `app.js`)
+    and runs the exact same success path Pass does
+    (`announceOutcome()`/`refreshBoard()`). For 2-player and team-format
+    games this ends the game immediately (`announceOutcome()` shows "Game
+    complete!" the same as any other game-ending action); for a 3-4
+    player `standard` game it doesn't -- the resigning player instead
+    gets a small `(resigned)` tag next to their name in the players list
+    (`.player-resigned-tag`) and the game carries on without them. See
+    "Resigning" in `php-app/README.md`.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

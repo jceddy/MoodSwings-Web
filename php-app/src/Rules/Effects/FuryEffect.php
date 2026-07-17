@@ -33,7 +33,7 @@ final class FuryEffect extends AbstractMoodEffect implements RequiresOpponentDec
     public function pendingDecisionsFor(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): array
     {
         $requests = [];
-        foreach ($state->playerOrder() as $ownerId) {
+        foreach ($state->activePlayerOrder() as $ownerId) {
             $candidates = $this->highestValueMoodIds($state, $ownerId);
             if ($candidates === []) {
                 continue;
@@ -59,7 +59,7 @@ final class FuryEffect extends AbstractMoodEffect implements RequiresOpponentDec
     public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         $targets = [];
-        foreach ($state->playerOrder() as $ownerId) {
+        foreach ($state->activePlayerOrder() as $ownerId) {
             $key = self::KEY_PREFIX . $ownerId;
             if (!isset($answers[$key])) {
                 continue;

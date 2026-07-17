@@ -443,6 +443,9 @@ if ($path === '/games' && $method === 'POST') {
     // Only meaningful for deck_type 'winston_draft' -- see createGame()'s own docblock.
     $winstonDraftPoolSource = isset($body['winston_draft_pool_source']) ? (string) $body['winston_draft_pool_source'] : null;
     $winstonDraftCustomPoolText = isset($body['winston_draft_custom_pool_text']) ? (string) $body['winston_draft_custom_pool_text'] : null;
+    // Only meaningful for deck_type 'grid_draft' -- see createGame()'s own docblock.
+    $gridDraftPoolSource = isset($body['grid_draft_pool_source']) ? (string) $body['grid_draft_pool_source'] : null;
+    $gridDraftCustomPoolText = isset($body['grid_draft_custom_pool_text']) ? (string) $body['grid_draft_custom_pool_text'] : null;
 
     try {
         $gameId = $games->createGame(
@@ -458,6 +461,8 @@ if ($path === '/games' && $method === 'POST') {
             $quickDraftCustomPoolText,
             $winstonDraftPoolSource,
             $winstonDraftCustomPoolText,
+            $gridDraftPoolSource,
+            $gridDraftCustomPoolText,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -541,6 +546,21 @@ if ($path === '/games/pass' && $method === 'POST') {
 
     try {
         $result = $games->pass($gameId, $gamePlayerId);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/resign' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->resignGame($gameId, $gamePlayerId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -655,6 +675,27 @@ if ($path === '/games/draft/winston-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitWinstonDraftPick($gameId, (int) $currentUser['id'], $action);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/grid-pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $axis = (string) ($body['axis'] ?? '');
+    $index = (int) ($body['index'] ?? -1);
+
+    // Grid Draft's own picks are keyed by user_id, not game_player_id
+    // (same rationale as /games/draft/pick above) -- requireGamePlayer()
+    // here is purely the seated-in-this-game auth check every other route
+    // already uses.
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitGridDraftPick($gameId, (int) $currentUser['id'], $axis, $index);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

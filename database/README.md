@@ -48,7 +48,12 @@ database,
 is meant for a database that already has migrations `0001` through `0026`
 applied — it folds Quick Draft (issue #88) and its follow-up fixes/polish
 into one script, ending with the same `schema_migrations` bookkeeping so
-`composer migrate` correctly resumes at `0032` onward afterward.
+`composer migrate` correctly resumes at `0032` onward afterward. Likewise,
+[`consolidated/0033-0036_consolidated.sql`](consolidated/0033-0036_consolidated.sql)
+targets a database already on `0001` through `0032` (`schema_version`
+`0.7.0`) and brings it up through `0036` (`0.11.0`) in one paste — game
+resignation, Grid Draft (issue #188), and Winston Draft's opponent-info
+follow-ups — resuming at `0037` onward afterward.
 
 **Reconciling `schema_migrations` when a migration's schema change was
 already applied by hand, but the table doesn't know it** (this can happen
@@ -258,3 +263,33 @@ half-migrated schema.
   exactly one player acts at a time — so a plain mutable row, protected by
   the same per-game lock every draft mutation already uses, is both
   simpler and just as safe. See "Winston Draft" in `php-app/README.md`.
+- **Resigning** (`0033`): adds `game_players.resigned_at` (nullable
+  timestamp, marks a seat as having given up) and widens
+  `game_rounds.status`'s enum to add `'abandoned'` -- used when a
+  resignation ends the game outright, so the round it happened during is
+  taken out of `'in_progress'` without pretending it was actually scored.
+  See "Resigning" in `php-app/README.md`.
+- **Grid Draft** (`0034`, issue #188): adds `deck_type = 'grid_draft'` and
+  a new table, `draft_grid_state` (one row per match: the not-yet-dealt
+  portion of the 54-card pool, the current round's 9-cell grid as an
+  ordered JSON array with a cell set to JSON `null` the instant either
+  player takes it, whose turn it is, and the first pick's own row/column
+  choice for the round). Reuses `draft_matches`/`draft_match_players` as-is
+  (same `pool_source` enum, same match-level win tracking), and like
+  Winston Draft has no simultaneity -- exactly one player acts at a time --
+  so the same plain-mutable-row-behind-a-lock approach applies. Unlike
+  Winston Draft, nothing ever gets reshuffled back into the pool -- 54
+  cards over 6 rounds of 9 divides evenly, so `remaining_deck_card_ids`
+  reaches exactly empty the moment the 6th round is dealt. See "Grid
+  Draft" in `php-app/README.md`.
+- **Winston Draft opponent info** (`0035`, widened by `0036`): adds
+  `draft_winston_state.last_draft_action_by_user_id` (nullable JSON map,
+  `user_id => pile_number | "deck"`), so each player's own most recent
+  turn-ending action can be looked up independently -- a single "the last
+  action, whoever it was" column isn't enough, since turns strictly
+  alternate and either player can pass any number of times before
+  eventually taking, so "the opponent's last action" can be several turns
+  back from the viewer's own perspective. The value is either the pile
+  number they took, or the string `"deck"` if they instead declined all 3
+  piles and took the mandatory top-of-deck draw. See "Winston Draft" in
+  `php-app/README.md`.

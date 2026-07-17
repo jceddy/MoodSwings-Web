@@ -38,7 +38,7 @@ final class AvoidanceEffect extends AbstractMoodEffect implements RequiresOppone
         }
 
         $requests = [];
-        foreach ($state->playerOrder() as $giverId) {
+        foreach ($state->activePlayerOrder() as $giverId) {
             if ($state->moodsOwnedBy($giverId) === []) {
                 continue;
             }
@@ -63,11 +63,9 @@ final class AvoidanceEffect extends AbstractMoodEffect implements RequiresOppone
     public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         $direction = $choices->requireString('direction');
-        $order = $state->playerOrder();
-        $count = count($order);
 
         $transfers = [];
-        foreach ($order as $index => $giverId) {
+        foreach ($state->activePlayerOrder() as $giverId) {
             $key = self::KEY_PREFIX . $giverId;
             if (!isset($answers[$key])) {
                 continue;
@@ -78,8 +76,11 @@ final class AvoidanceEffect extends AbstractMoodEffect implements RequiresOppone
                 throw new InvalidChoiceException("Mood {$givenMoodId} is not one of player {$giverId}'s moods in play");
             }
 
-            $neighborIndex = $direction === 'right' ? ($index + 1) % $count : ($index - 1 + $count) % $count;
-            $transfers[$givenMoodId] = $order[$neighborIndex];
+            $recipientId = $state->activeNeighbor($giverId, $direction);
+            if ($recipientId === null) {
+                continue;
+            }
+            $transfers[$givenMoodId] = $recipientId;
         }
 
         foreach ($transfers as $moodCardId => $recipientId) {
