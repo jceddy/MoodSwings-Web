@@ -25,10 +25,13 @@ select in its own `<footer>`, opening a static `<dialog id="resources-dialog">`
 in `js/app.js` alongside the theme-select/version-indicator footer logic
 every page already shares) -- issue #148. Contains external links to the
 official rules, formats, card-specific rulings, and card gallery pages, the
-Moodfall card repository, the community Discord/Reddit, this GitHub
-repository, and a "Buy Me a Coffee" button -- the same set documented in the
-top-level README's own "Resources" section, just reachable in-app rather
-than only from the repo itself.
+Moodfall card repository, and the community Discord/Reddit -- the same set
+documented in the top-level README's own "Resources" section, just
+reachable in-app rather than only from the repo itself -- plus a link to
+this GitHub repository. The dialog also embeds Buy Me a Coffee's own
+official `<script data-name="bmc-button">` widget (`cdnjs.buymeacoffee.com`),
+which renders its own floating support button independently of the
+dialog's open/closed state, rather than a plain in-dialog link/image.
 
 ## Dark mode
 

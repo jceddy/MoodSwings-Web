@@ -106,11 +106,6 @@ dialog#resources-dialog li {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
-.buy-me-a-coffee-image {
-    height: 60px;
-    width: 217px;
-}
-
 /* #friends-button/#logout-button sit directly above whichever of
    #lobby-view/#board-view is currently visible -- without this they'd
    touch it with no gap, most noticeably #board-view's own
