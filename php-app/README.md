@@ -1928,11 +1928,18 @@ is currently live). `drafting` (`gridDraftDraftingStateFor()`) is
 Winston Draft's face-down piles, a dealt grid is face-up on the table --
 with a `null` entry for any cell already taken this round),
 `first_pick` (`null` until the round's first pick has been made, then
-`{axis, index}`), `remaining_deck_count`, and `drafted_so_far` (always your
-own accumulated picks, never your opponent's). `deck_building` is the same
-shared shape Quick Draft/Winston Draft use (`draftDeckBuildingStateFor()`),
-called with `GRID_DRAFT_MIN_DECK_SIZE` (12) and no fixed max, same rationale
-as Winston Draft's own open-ended range.
+`{axis, index}`), `remaining_deck_count`, `drafted_so_far` (your own
+accumulated picks), and `opponent_drafted_so_far` (your opponent's own
+accumulated picks). Unlike Quick Draft's/Winston Draft's own
+`drafted_so_far` (each strictly the viewer's own picks, never the
+opponent's -- their drawn packs/piles are genuinely hidden), Grid Draft is
+open information end to end: every card either player has ever drafted was
+already visible to both of them the moment it was dealt into the face-up
+grid, so there's no game-integrity reason to hide either player's own
+drafted-so-far list from the other. `deck_building` is the same shared
+shape Quick Draft/Winston Draft use (`draftDeckBuildingStateFor()`), called
+with `GRID_DRAFT_MIN_DECK_SIZE` (12) and no fixed max, same rationale as
+Winston Draft's own open-ended range.
 
 ### Open Team Play
 

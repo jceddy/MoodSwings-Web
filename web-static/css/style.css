@@ -254,6 +254,11 @@ body.game-page {
     font-style: italic;
 }
 
+.player-deck-name {
+    font-size: 0.85rem;
+    color: var(--color-muted);
+}
+
 /* Takes whatever width is left after the name (flex: 1 1 auto, with
    min-width: 0 overriding a flex item's default auto min-width so it's
    actually allowed to shrink below its content's natural size) and wraps
@@ -280,7 +285,8 @@ body.game-page {
 #draft-deck-picker,
 .winston-draft-pile-cards,
 #winston-draft-drafted-so-far,
-#grid-draft-drafted-so-far {
+#grid-draft-drafted-so-far,
+#grid-draft-opponent-drafted-so-far {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -292,6 +298,7 @@ body.game-page {
 #quick-draft-kept-so-far li,
 #winston-draft-drafted-so-far li,
 #grid-draft-drafted-so-far li,
+#grid-draft-opponent-drafted-so-far li,
 .in-play-zone__list li {
     list-style: none;
 }

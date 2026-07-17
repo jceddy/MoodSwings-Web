@@ -7637,6 +7637,42 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNotNull($grid[6], 'row 2 is completely untouched by a row pick');
     }
 
+    public function testGridDraftDraftingStateExposesEachPlayersOwnDraftedCardsToTheOtherPlayer(): void
+    {
+        // Grid Draft's grid is dealt face-up and visible to both players the
+        // whole time, unlike Winston Draft's face-down piles -- so, unlike
+        // Winston/Quick Draft (where drafted_so_far is strictly the
+        // viewer's own picks), Grid Draft's getState() also hands the
+        // viewer their opponent's own accumulated picks.
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        $firstPickerDrafted = json_decode(
+            (string) $this->fetchDraftMatchPlayer($draftMatchId, $firstPickerUserId)['drafted_card_ids'],
+            true
+        );
+
+        $firstPickerState = $this->games->getState($gameId, $firstPickerUserId)['grid_draft']['drafting'];
+        self::assertSame($firstPickerDrafted, array_map(fn ($card) => $card['card_id'], $firstPickerState['drafted_so_far']));
+        self::assertSame([], $firstPickerState['opponent_drafted_so_far'], 'the opponent has not picked anything yet');
+
+        $secondPickerState = $this->games->getState($gameId, $secondPickerUserId)['grid_draft']['drafting'];
+        self::assertSame([], $secondPickerState['drafted_so_far'], 'the viewer has not picked anything yet');
+        self::assertSame(
+            $firstPickerDrafted,
+            array_map(fn ($card) => $card['card_id'], $secondPickerState['opponent_drafted_so_far']),
+            'the second picker can see the first picker\'s own drafted cards, since Grid Draft is open information'
+        );
+    }
+
     public function testGridDraftSecondPickCrossingTheFirstRowYieldsOnlyTwoCards(): void
     {
         $fixture = $this->buildGridDraftFixture();

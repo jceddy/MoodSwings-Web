@@ -575,10 +575,13 @@ too, proportional to the smaller card width.
     stays hidden until every player's own `deck_submitted` is true, since
     the server would just reject starting otherwise. Once a `custom_duel`
     game is actually in progress, each player's own row in the Players
-    list additionally shows `— deck: <name>` (or "Uploaded Deck") -- since
-    unlike every other deck_type, a `custom_duel` game has no single deck
-    the whole table shares, each player having submitted their own. The
-    board title itself shows the *viewer's own* submitted deck name for a
+    list additionally shows their deck name (or "Uploaded Deck") on its
+    own line underneath the username (`.player-deck-name`, a muted second
+    line inside the same `.player-name` block rather than appended inline
+    after the name) -- since unlike every other deck_type, a `custom_duel`
+    game has no single deck the whole table shares, each player having
+    submitted their own. The board title itself shows the *viewer's own*
+    submitted deck name for a
     `custom_duel` game (looked up from `state.players` by
     `state.you.game_player_id`, the same `custom_deck_name` field the
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
@@ -791,8 +794,17 @@ too, proportional to the smaller card width.
       `submitGridDraftAction(axis, index)` (`submitGridDraftPick()`, `POST
       /games/draft/grid-pick`). `drafting.remaining_deck_count` and a
       `#grid-draft-drafted-so-far` read-only list (your own accumulated
-      picks -- never your opponent's) round out the panel, the same as
-      Winston Draft's own.
+      picks) round out the panel. Unlike Winston Draft's own
+      drafted-so-far list (strictly your own picks, since its piles are
+      genuinely hidden from you until you take them), Grid Draft's grid is
+      face-up and visible to both players the whole time, so there's a
+      second `#grid-draft-opponent-drafted-so-far` read-only list right
+      underneath it showing your opponent's own accumulated picks too
+      (`drafting.opponent_drafted_so_far`) -- nothing there was ever hidden
+      information to begin with. Its heading (`#grid-draft-opponent-drafted-so-far-title`)
+      is set to the opponent's own username (the same `currentOpponentUsername`
+      the deck-building waiting-for-submission message already uses) rather
+      than a generic "Opponent", e.g. "alice's drafted so far".
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
@@ -1195,11 +1207,12 @@ too, proportional to the smaller card width.
     rendered in `--color-success` via `.player-flag--turn` to match this
     app's existing "your turn" bold/success-color convention — currently
     marks. Every row's icons line up at the same horizontal position
-    regardless of how long that row's own username is: `renderBoard()`
-    measures the widest `.player-name` span in the just-rendered list and
-    applies that as a shared `min-width` to all of them, rather than
-    hardcoding one width that would either clip a long username or leave a
-    short one with an oddly large gap before its icons start. All the
+    regardless of how long that row's own username (or, for `custom_duel`,
+    deck name) is: `renderBoard()` measures the widest `.player-name` block
+    in the just-rendered list and applies that as a shared `min-width` to
+    all of them, rather than hardcoding one width that would either clip a
+    long username or leave a short one with an oddly large gap before its
+    icons start. All the
     icons/flags/thumbnail for a row share one `.player-icons` wrapper (its
     own flex-wrap container) rather than wrapping directly as children of
     the row itself, and the row is `flex-wrap: nowrap` so the name and this

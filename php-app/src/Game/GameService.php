@@ -4786,7 +4786,7 @@ final class GameService
         ];
 
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $playersByUser);
+            $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $opponentUserId, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
@@ -4810,11 +4810,16 @@ final class GameService
      * pick has been made, then {axis, index} -- the frontend uses it to
      * highlight which line is no longer available to pick as a whole and
      * to grey out the exact-same-line choice for the second picker (see
-     * submitGridDraftPick()'s own "0 cards" rejection).
+     * submitGridDraftPick()'s own "0 cards" rejection). Grid Draft is
+     * open information end to end -- every card either player has ever
+     * drafted was visible to both of them the moment it was dealt into a
+     * face-up grid -- so, unlike Quick Draft's/Winston Draft's own
+     * drafted_so_far (each strictly the viewer's own picks, never the
+     * opponent's), this also exposes opponent_drafted_so_far.
      *
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      */
-    private function gridDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $playersByUser): array
+    private function gridDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, ?int $opponentUserId, array $playersByUser): array
     {
         $stateStmt = Connection::get()->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
         $stateStmt->execute(['id' => $draftMatchId]);
@@ -4826,8 +4831,8 @@ final class GameService
             $gridCardIds
         );
 
-        $draftedSoFarCardIds = ($playersByUser[$viewerUserId]['drafted_card_ids'] ?? null) !== null
-            ? array_map(intval(...), json_decode((string) $playersByUser[$viewerUserId]['drafted_card_ids'], true))
+        $draftedCardIdsFor = fn (int $userId): array => ($playersByUser[$userId]['drafted_card_ids'] ?? null) !== null
+            ? array_map(intval(...), json_decode((string) $playersByUser[$userId]['drafted_card_ids'], true))
             : [];
 
         return [
@@ -4840,7 +4845,10 @@ final class GameService
                 ? ['axis' => $gridState['first_pick_axis'], 'index' => (int) $gridState['first_pick_index']]
                 : null,
             'remaining_deck_count' => count(json_decode((string) $gridState['remaining_deck_card_ids'], true)),
-            'drafted_so_far' => $this->serializeCatalogCards($draftedSoFarCardIds),
+            'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
+            'opponent_drafted_so_far' => $opponentUserId !== null
+                ? $this->serializeCatalogCards($draftedCardIdsFor($opponentUserId))
+                : [],
         ];
     }
 
