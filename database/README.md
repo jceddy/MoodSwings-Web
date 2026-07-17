@@ -48,7 +48,12 @@ database,
 is meant for a database that already has migrations `0001` through `0026`
 applied — it folds Quick Draft (issue #88) and its follow-up fixes/polish
 into one script, ending with the same `schema_migrations` bookkeeping so
-`composer migrate` correctly resumes at `0032` onward afterward.
+`composer migrate` correctly resumes at `0032` onward afterward. Likewise,
+[`consolidated/0033-0036_consolidated.sql`](consolidated/0033-0036_consolidated.sql)
+targets a database already on `0001` through `0032` (`schema_version`
+`0.7.0`) and brings it up through `0036` (`0.11.0`) in one paste — game
+resignation, Grid Draft (issue #188), and Winston Draft's opponent-info
+follow-ups — resuming at `0037` onward afterward.
 
 **Reconciling `schema_migrations` when a migration's schema change was
 already applied by hand, but the table doesn't know it** (this can happen
