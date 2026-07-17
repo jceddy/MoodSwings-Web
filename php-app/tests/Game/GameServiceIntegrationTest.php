@@ -1997,6 +1997,70 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(5, $state->valueOf($dignityId));
     }
 
+    /**
+     * Hurt Feelings' own second base play must be described as
+     * attributable to Hurt Feelings, not render as an indistinguishable
+     * second "Your normal turn" -- see
+     * GameService::describePlayGrant()/sourceCardNameFor(). Using it
+     * (the second play of the turn) must also attribute the resulting
+     * event to Hurt Feelings, the same way any other granted extra play
+     * already does -- unlike consuming the ordinary base allowance,
+     * which stays silent (see BoardState::$pendingGrantUsed's docblock).
+     */
+    public function testHurtFeelingsExtraPlayIsDescribedAsSuchInPlayGrantsAndTheEventLog(): void
+    {
+        $u1 = $this->insertUser('hurtfeelings1');
+        $u2 = $this->insertUser('hurtfeelings2');
+        $u3 = $this->insertUser('hurtfeelings3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p3); // Apathy -- blank, no after-playing effect
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p3); // Complacency -- same
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p3, 2, hurtFeelingsPlayerId: $p3);
+
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE id = :id')
+            ->execute(['grants' => json_encode([null, ['sourceLabel' => 'Hurt Feelings']]), 'id' => $roundId]);
+
+        $playGrants = $this->games->getState($gameId, $u1)['round']['play_grants'];
+
+        self::assertCount(2, $playGrants);
+        self::assertSame('Your normal turn', $playGrants[0]['description']);
+        self::assertNull($playGrants[0]['source_card_id']);
+        self::assertSame('An extra play from Hurt Feelings', $playGrants[1]['description']);
+        self::assertNull($playGrants[1]['source_card_id']);
+
+        $this->games->playMood($gameId, $p3, $apathyId, []); // consumes the ordinary base allowance
+        // Consumes Hurt Feelings' own extra play -- also the last
+        // outstanding play this turn, so it scores (and completes) the
+        // round immediately afterward, same as any other last play would.
+        $this->games->playMood($gameId, $p3, $complacencyId, []);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        $mentioningHurtFeelingsUsage = array_values(array_filter(
+            $events,
+            fn (array $event) => str_contains($event['description'], 'using an extra play from Hurt Feelings'),
+        ));
+        self::assertCount(1, $mentioningHurtFeelingsUsage);
+        self::assertStringContainsString($complacencyName = $this->cardNameFor(5), $mentioningHurtFeelingsUsage[0]['description']);
+    }
+
+    private function cardNameFor(int $catalogCardId): string
+    {
+        $stmt = $this->pdo->prepare('SELECT name FROM cards WHERE id = :id');
+        $stmt->execute(['id' => $catalogCardId]);
+
+        return (string) $stmt->fetchColumn();
+    }
+
     public function testGetStateMarksOnlyTheCardARestrictedGrantCoversAsPlayable(): void
     {
         $u1 = $this->insertUser('restrictedgrant1');

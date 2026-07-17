@@ -1138,16 +1138,30 @@ Hopes (a duplicate printed card across a duel game's two separate decks,
 or an intentionally duplicate-including custom deck) each contribute their
 own perpetual grant every turn, the same way `MoodPlayService` already
 grants one same-turn bonus per Hope actually played regardless of how many
-copies get played in a single turn. The one grant this never
-applies to is `startTurn()`'s own base allowance (1, or 2 with Hurt
-Feelings) -- it's stored as a bare `null`, which `describePlayGrant()`
-reads as "Your normal turn" rather than a granted extra play from any
-specific card. `round.play_grants` itself
-always describes whoever's turn it currently is, not the viewer
-specifically -- the frontend's own "Plays left" indicator stays hidden
-entirely unless it's actually the viewer's turn (see `web-static/README.md`),
-rather than showing another player's own outstanding plays as if they were
-the viewer's.
+copies get played in a single turn. The one grant this never applies to is
+`startTurn()`'s own first, ordinary base play -- it's stored as a bare
+`null`, which `describePlayGrant()` reads as "Your normal turn" rather than
+a granted extra play from any specific card. Hurt Feelings' own *second*
+base play (see `startTurn()`'s `hasHurtFeelings` param / `computeFreshGrants()`'s
+`baseCount`) is deliberately **not** a second bare `null` -- that would
+render as an indistinguishable second "Your normal turn" entry in
+`round.play_grants`, reading as though the player simply had two ordinary
+turns rather than one turn plus a bonus. It's instead tagged `'sourceLabel'
+=> 'Hurt Feelings'`, a sibling to `'sourceCardId'` for grants that aren't
+attributable to any specific card -- `sourceCardNameFor()` checks it first,
+so `describePlayGrant()` renders it as "An extra play from Hurt Feelings"
+through the exact same `describeGrantDetails()` wording every card-sourced
+grant already uses. This also means using that specific play now populates
+`grant_used` on the resulting `mood_played` event (previously, consuming
+the bare-`null` base allowance never did, by design -- see
+`$pendingGrantUsed`'s own docblock), so the recent-plays log calls out
+"(using an extra play from Hurt Feelings)" on whichever card was actually
+played with it, instead of that play silently looking like an ordinary
+second play. `round.play_grants` itself always describes whoever's turn it
+currently is, not the viewer specifically -- the frontend's own "Plays
+left" indicator stays hidden entirely unless it's actually the viewer's
+turn (see `web-static/README.md`), rather than showing another player's
+own outstanding plays as if they were the viewer's.
 
 Hope's and Grace's own grants -- both the same-turn one
 (`MoodPlayService`, the moment either card enters play) and every future
@@ -1214,9 +1228,11 @@ lost outright if that Hope later leaves play before its bonus is used --
 see above -- so spending the more fragile grant first can matter).
 `BoardState::usableGrants(int $cardId, int $playerId)` returns every
 currently-usable grant for that card, deduplicated by `sourceCardId` (`??
-'base'`, since the base allowance's own bare `null`s -- there can be 2 with
-Hurt Feelings -- are indistinguishable to a player choosing between them
-and so collapse into a single entry). `GameService::serializeCard()`
+'base'` -- the ordinary base allowance and Hurt Feelings' own second base
+play both lack a `sourceCardId`, so they collapse into a single entry here
+too, since neither restricts what's playable and so they're functionally
+indistinguishable to a player choosing between them, even though their
+`round.play_grants` descriptions still differ). `GameService::serializeCard()`
 prepends a `grant_source_card_id` choice field (`type: 'grant_choice'`,
 `required: false`) whenever this returns 2+ entries, one option per grant,
 reusing `describePlayGrant()`'s own description text verbatim as each

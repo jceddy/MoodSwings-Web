@@ -609,10 +609,14 @@ final class BoardStateTest extends TestCase
 
     /**
      * Hurt Feelings grants a second, entirely unrestricted base-style play
-     * (see startTurn()'s hasHurtFeelings param) -- two bare-null entries in
-     * $playGrants that are indistinguishable to a player choosing between
-     * them, so usableGrants() must collapse them into a single entry
-     * rather than offering a nonsensical "which null do you want" choice.
+     * (see startTurn()'s hasHurtFeelings param) -- a bare null (the
+     * player's first, ordinary play) plus a 'sourceLabel'-tagged entry
+     * (see $playGrants' own docblock) that are functionally
+     * indistinguishable to a player choosing between them (neither
+     * restricts what's playable), so usableGrants() must collapse them
+     * into a single entry rather than offering a nonsensical "which one
+     * do you want" choice -- even though their own descriptions differ
+     * (see GameService::describePlayGrant()).
      */
     public function testUsableGrantsCollapsesMultipleBaseAllowances(): void
     {
@@ -620,6 +624,7 @@ final class BoardStateTest extends TestCase
         $state->startTurn(1, hasHurtFeelings: true);
 
         self::assertSame(2, $state->playsRemaining());
+        self::assertSame([null, ['sourceLabel' => 'Hurt Feelings']], $state->pendingPlayGrants());
         self::assertCount(1, $state->usableGrants(3, 1));
     }
 

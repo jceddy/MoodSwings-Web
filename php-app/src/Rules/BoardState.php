@@ -84,21 +84,25 @@ final class BoardState
     private array $pendingEffectState = [];
 
     /**
-     * @var array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int}> one entry per
+     * @var array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int, sourceLabel?: string}> one entry per
      * outstanding "play an additional mood" grant this turn. null means
-     * unconditional AND ungranted -- only ever startTurn()'s own base
-     * allowance (1, or 2 with Hurt Feelings), never a card's grant; every
-     * grantExtraPlay() call is instead a restriction array (even if
-     * $restriction itself was omitted) once 'sourceCardId' is folded in,
-     * since a granted extra play always has a card to attribute it to. A
-     * restriction array's absent 'type' means the grant only covers a card
-     * matching it (e.g. Benevolence's "if it doesn't share a color with
-     * any of your moods") -- see grantAllows(). The 'onUseEffectState' key
-     * (Gluttony/Insecurity) tags whichever specific card ends up consuming
-     * this grant with effectState to apply once it's played -- see
-     * useGrantFor() and MoodPlayService. 'sourceCardId' is purely a UI
-     * reminder-text concern (see GameService::describePlayGrant()) --
-     * grantAllows() itself never reads it.
+     * unconditional AND ungranted -- only ever startTurn()'s own first,
+     * ordinary base play, never a card's grant; every grantExtraPlay()
+     * call is instead a restriction array (even if $restriction itself
+     * was omitted) once 'sourceCardId' is folded in, since a granted
+     * extra play always has a card to attribute it to. Hurt Feelings'
+     * own second base play (see startTurn()'s hasHurtFeelings param) is
+     * also a restriction array rather than a second bare null, tagged
+     * 'sourceLabel' => 'Hurt Feelings' instead of 'sourceCardId' since
+     * it isn't attributable to any specific card -- both keys exist
+     * purely for GameService::describePlayGrant()'s own UI reminder
+     * text, and grantAllows() itself never reads either one. A
+     * restriction array's absent 'type' means the grant only covers a
+     * card matching it (e.g. Benevolence's "if it doesn't share a color
+     * with any of your moods") -- see grantAllows(). The
+     * 'onUseEffectState' key (Gluttony/Insecurity) tags whichever
+     * specific card ends up consuming this grant with effectState to
+     * apply once it's played -- see useGrantFor() and MoodPlayService.
      */
     private array $playGrants = [];
 
@@ -1092,7 +1096,12 @@ final class BoardState
     public function startTurn(int $playerId, bool $hasHurtFeelings = false): void
     {
         $this->currentPlayerId = $playerId;
-        $this->playGrants = array_fill(0, $hasHurtFeelings ? 2 : 1, null);
+        // The Hurt Feelings bonus play gets its own 'sourceLabel' (not a
+        // second bare null, which means "the ordinary unconditional turn"
+        // -- see $playGrants' own docblock) so GameService::describePlayGrant()
+        // can attribute it to Hurt Feelings by name instead of it reading
+        // as an indistinguishable second "your normal turn".
+        $this->playGrants = $hasHurtFeelings ? [null, ['sourceLabel' => 'Hurt Feelings']] : [null];
     }
 
     /**
@@ -1215,7 +1224,7 @@ final class BoardState
      * recomputation at the start of a future turn, since those bypass
      * this method entirely -- see GameService::computeFreshGrants().
      *
-     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string}>
      */
     public function consumeGrantsCreated(): array
     {
@@ -1308,15 +1317,19 @@ final class BoardState
     /**
      * Every currently-usable grant for playing $cardId (grantIsActive()
      * and grantAllows() both satisfied), deduplicated by 'sourceCardId' --
-     * the base allowance's own bare nulls (there can be more than one at
-     * once, with Hurt Feelings) collapse into a single entry, since
-     * they're indistinguishable to a player choosing between them. Order
-     * follows $playGrants' own order. Exposed so GameService can offer an
-     * explicit "which grant do you want to use" choice whenever 2+ come
-     * back -- see 'grant_source_card_id' in php-app/README.md -- instead
-     * of always silently consuming whichever happens to come first.
+     * the base allowance and Hurt Feelings' own second base play (see
+     * startTurn()) both lack a 'sourceCardId' and so collapse into a
+     * single entry here, since neither restricts what can be played and
+     * they're functionally indistinguishable to a player choosing
+     * between them (their descriptions still differ -- see
+     * describePlayGrant() -- just not in a way that changes which cards
+     * are playable). Order follows $playGrants' own order. Exposed so
+     * GameService can offer an explicit "which grant do you want to use"
+     * choice whenever 2+ come back -- see 'grant_source_card_id' in
+     * php-app/README.md -- instead of always silently consuming
+     * whichever happens to come first.
      *
-     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string}>
      */
     public function usableGrants(int $cardId, int $playerId): array
     {
@@ -1372,7 +1385,7 @@ final class BoardState
      * granted extra play worth announcing) either way, so both collapse to
      * the same "say nothing" outcome for its purposes.
      *
-     * @return ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}
+     * @return ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string}
      */
     public function consumeGrantUsed(): ?array
     {
