@@ -2,6 +2,16 @@
 
 A web-based simulator for the Mood Swings TCG.
 
+## Resources
+
+- [Rules](https://magic.wizards.com/en/news/feature/mood-swings-extended-rules)
+- [Formats](https://magic.wizards.com/en/news/feature/other-ways-to-play-mood-swings)
+- [Card Specific Rulings](https://magic.wizards.com/en/news/feature/mood-swings-card-notes)
+- [Card Gallery](https://magic.wizards.com/en/news/card-image-gallery/mood-swings)
+- [Moodfall (Mood Swings Card Repository)](https://moodswings.scryfall.com/)
+- [Discord](https://discord.gg/GgHFEBAd6C)
+- [Reddit](https://www.reddit.com/r/moodswingstcg/)
+
 ## Repository structure
 
 This repository is organized into three independent projects:
