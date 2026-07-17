@@ -1961,12 +1961,10 @@
     // their own 'drafting' sub-shapes differ -- see GameService's own
     // docblocks for quickDraftStateFor()/winstonDraftStateFor(). Only the
     // label shown differs, so this one function (and one shared DOM slot)
-    // covers both instead of duplicating the same rendering twice.
-    const DRAFT_MATCH_LABELS = {
-        quick_draft: 'Quick Draft',
-        winston_draft: 'Winston Draft',
-    };
-
+    // covers both instead of duplicating the same rendering twice. No
+    // format label (Quick Draft/Winston Draft) here -- that's already
+    // shown elsewhere on the board (the title), so this line stays purely
+    // about the match's own progress.
     function renderDraftMatchScoreline(state) {
         const el = document.getElementById('draft-match-scoreline');
         const nextGameButton = document.getElementById('draft-match-next-game-button');
@@ -1977,18 +1975,24 @@
             return;
         }
 
+        // Quick Draft/Winston Draft are always exactly 2 players (see
+        // GameService::createGame()'s format === 'draft' guard), so the
+        // "other" seated player is always the opponent.
+        const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
+        const opponentUsername = opponent ? opponent.username : 'opponent';
+
         // "<leader> n-m" convention: tied reads as "tied n-n" (no leader to
-        // name); otherwise whichever side is ahead is named first, with
-        // their own win count first -- "you lead 2-1", never "1-2".
+        // name); otherwise whichever side is ahead is named first -- "you"
+        // or the opponent's own username -- with their own win count
+        // first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
         const scoreText = draftState.your_wins === draftState.opponent_wins
             ? 'tied ' + draftState.your_wins + '-' + draftState.opponent_wins
             : draftState.your_wins > draftState.opponent_wins
-                ? 'you lead ' + draftState.your_wins + '-' + draftState.opponent_wins
-                : 'opponent leads ' + draftState.opponent_wins + '-' + draftState.your_wins;
+                ? 'you ' + draftState.your_wins + '-' + draftState.opponent_wins
+                : opponentUsername + ' ' + draftState.opponent_wins + '-' + draftState.your_wins;
 
         el.hidden = false;
-        el.textContent = (DRAFT_MATCH_LABELS[state.game.deck_type] || 'Draft') +
-            ' — best of ' + (draftState.games_to_win * 2 - 1) + ' match, game ' +
+        el.textContent = 'Best of ' + (draftState.games_to_win * 2 - 1) + ' match, game ' +
             (state.game.match_game_number || 1) + ', ' + scoreText;
 
         // next_game_id is only ever set once this game has completed and
