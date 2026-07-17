@@ -2131,6 +2131,60 @@ own board state happens to score. Resigning while a decision is pending
 is disallowed (mirrors `playMood()`/`pass()`'s own
 `assertNoPendingDecision()` gate) -- resolve the decision first.
 
+For the "continue without them" `standard` 3-4 player path specifically
+(the immediate-completion paths above just end the game outright, so
+there's no ongoing board for a resigned player to keep interacting with),
+`GameService`/`BoardState` also make sure a resigned player stops being a
+live participant in every other sense a card effect can reach:
+
+- **Their in-play moods all leave play.** `GameService::resignGame()`
+  calls `removeResignedPlayerMoodsFromPlay()` right before skipping their
+  turn, which snapshots every mood they own into a plain card-id list
+  (never iterating `moodsOwnedBy()` live while mutating -- the same
+  snapshot-then-loop idiom `WrathEffect`/`MaliceEffect`/
+  `DisillusionmentEffect` already use) and discards each one via
+  `moveInPlayToDiscard()`. Their hand is untouched -- only in-play moods
+  are a resigned player's own ongoing "presence" on the board.
+- **They can never be chosen as a card effect's target.** `BoardState`
+  gets a new `resignedPlayerIds` constructor param (`game_players.id` of
+  every resigned seat, threaded in by `BoardStateRepository::load()` from
+  `game_players.resigned_at`, empty and therefore a no-op for every game
+  with no resignations) and three new methods built on it: `isResigned()`,
+  `activePlayerOrder()` (`playerOrder()` minus resigned seats, relative
+  order preserved), and `activeNeighbor()` (below). Every `Effects/*.php`
+  class's own "is this a legal player target" check
+  (`in_array($id, $state->playerOrder(), true)`) now checks
+  `activePlayerOrder()` instead, and every "ask every player something"
+  loop (Disillusionment's color-choice queue, Avoidance/Confusion's
+  per-player give-a-card(/mood) decisions, Fury's per-player discard
+  choice, Pride's "players with more moods than you" candidate list) now
+  sources from `activePlayerOrder()` too, so a resigned player is neither
+  offered as a choice nor asked anything.
+- **A decision that would freeze the round waiting on them never gets
+  created.** This falls directly out of the previous point: every
+  `RequiresOpponentDecision` implementer that targets "a player" or "every
+  player" now excludes resigned seats from that same candidate set, so a
+  pending decision batch is never created naming a player who has no way
+  to ever answer it.
+- **"Pass to the next player" effects skip over them.** `Avoidance`
+  (moods), `Confusion` (hand cards), and `Rationalization`'s `rotate` mode
+  (whole hands) each used to compute their own left/right neighbor with
+  identical inline `%count` seat-index arithmetic against the raw
+  `playerOrder()`. That's now centralized in
+  `BoardState::activeNeighbor(int $playerId, string $direction): ?int`,
+  which walks `activePlayerOrder()` instead -- a resigned player's
+  "neighbor" is simply the next still-active seat in that direction, so a
+  pass that would have landed on them continues on to whoever's next
+  instead. Returns `null` if `$playerId` isn't currently active, or if
+  fewer than 2 players are still active (nowhere to pass to) -- both of
+  those effects treat `null` as "nothing to give this player," the same
+  as an ordinary empty hand/no-moods skip.
+- The frontend's own `fieldOptions()` (`case 'player'` in `game.js`)
+  additionally filters out any player already flagged `resigned` in
+  `getState()`'s response, so a resigned player never even appears as a
+  selectable option client-side -- purely a UI convenience layered on top
+  of the server-side enforcement above, which is what actually matters.
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

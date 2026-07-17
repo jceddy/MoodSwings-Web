@@ -19,6 +19,7 @@ final class BoardStateTest extends TestCase
         array $discard = [],
         bool $hasSeparateDecks = false,
         array $discardOwners = [],
+        array $resignedPlayerIds = [],
     ): BoardState {
         return new BoardState(
             $this->sampleCatalog(),
@@ -29,6 +30,7 @@ final class BoardStateTest extends TestCase
             $discard,
             $hasSeparateDecks,
             $discardOwners,
+            resignedPlayerIds: $resignedPlayerIds,
         );
     }
 
@@ -870,5 +872,63 @@ final class BoardStateTest extends TestCase
         self::assertNull($state->discardOwnerOf(1001));
         self::assertSame(2, $state->discardOwnerOf(1002));
         self::assertSame([1001], $state->deck());
+    }
+
+    public function testIsResignedIsAlwaysFalseWithoutAnyResignedPlayerIds(): void
+    {
+        $state = $this->boardState();
+
+        self::assertFalse($state->isResigned(1));
+        self::assertFalse($state->isResigned(2));
+        self::assertFalse($state->isResigned(3));
+    }
+
+    public function testIsResignedReflectsTheGivenResignedPlayerIds(): void
+    {
+        $state = $this->boardState(resignedPlayerIds: [2]);
+
+        self::assertFalse($state->isResigned(1));
+        self::assertTrue($state->isResigned(2));
+        self::assertFalse($state->isResigned(3));
+    }
+
+    public function testActivePlayerOrderEqualsPlayerOrderWithNoResignations(): void
+    {
+        $state = $this->boardState();
+
+        self::assertSame($state->playerOrder(), $state->activePlayerOrder());
+    }
+
+    public function testActivePlayerOrderExcludesResignedSeatsPreservingRelativeOrder(): void
+    {
+        $state = $this->boardState(resignedPlayerIds: [2]);
+
+        self::assertSame([1, 3], $state->activePlayerOrder());
+    }
+
+    public function testActiveNeighborSkipsOverAResignedSeat(): void
+    {
+        $state = $this->boardState(resignedPlayerIds: [2]);
+
+        // Seat order is [1, 2, 3]. With 2 resigned, 1's right-hand
+        // neighbor must be 3 (skipping over 2), not 2 itself.
+        self::assertSame(3, $state->activeNeighbor(1, 'right'));
+        self::assertSame(3, $state->activeNeighbor(1, 'left'));
+        self::assertSame(1, $state->activeNeighbor(3, 'right'));
+        self::assertSame(1, $state->activeNeighbor(3, 'left'));
+    }
+
+    public function testActiveNeighborReturnsNullWhenFewerThanTwoPlayersAreStillActive(): void
+    {
+        $state = $this->boardState(resignedPlayerIds: [2, 3]);
+
+        self::assertNull($state->activeNeighbor(1, 'right'));
+    }
+
+    public function testActiveNeighborReturnsNullForAResignedPlayerThemselves(): void
+    {
+        $state = $this->boardState(resignedPlayerIds: [2]);
+
+        self::assertNull($state->activeNeighbor(2, 'right'));
     }
 }

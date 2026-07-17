@@ -43,7 +43,7 @@ final class BoardStateRepository
         $hasSeparateDecks = in_array($formatStmt->fetchColumn(), ['duel', 'draft'], true);
 
         $playersStmt = $pdo->prepare(
-            'SELECT id, team_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+            'SELECT id, team_id, resigned_at FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
         );
         $playersStmt->execute(['game_id' => $gameId]);
         $playerRows = $playersStmt->fetchAll();
@@ -51,9 +51,15 @@ final class BoardStateRepository
 
         // Only Open Team Play ever sets team_id -- see BoardState::isTeammate().
         $teamIdByPlayer = [];
+        // See GameService::resignGame() / BoardState::isResigned() -- empty
+        // for every game with no resignations.
+        $resignedPlayerIds = [];
         foreach ($playerRows as $row) {
             if ($row['team_id'] !== null) {
                 $teamIdByPlayer[(int) $row['id']] = (int) $row['team_id'];
+            }
+            if ($row['resigned_at'] !== null) {
+                $resignedPlayerIds[] = (int) $row['id'];
             }
         }
 
@@ -111,7 +117,7 @@ final class BoardStateRepository
         }
         $deck = $hasSeparateDecks ? $deckByOwnerPosition : ($deckByOwnerPosition[BoardState::SHARED_DECK_KEY] ?? []);
 
-        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer);
+        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds);
 
         foreach ($inPlayRows as $row) {
             $state->restoreMoodInPlay(

@@ -37,7 +37,7 @@ final class ConfusionEffect extends AbstractMoodEffect implements RequiresOppone
         }
 
         $requests = [];
-        foreach ($state->playerOrder() as $giverId) {
+        foreach ($state->activePlayerOrder() as $giverId) {
             if ($state->hand($giverId) === []) {
                 continue;
             }
@@ -61,11 +61,9 @@ final class ConfusionEffect extends AbstractMoodEffect implements RequiresOppone
     public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         $direction = $choices->requireString('direction');
-        $order = $state->playerOrder();
-        $count = count($order);
 
         $transfers = [];
-        foreach ($order as $index => $giverId) {
+        foreach ($state->activePlayerOrder() as $giverId) {
             $key = self::KEY_PREFIX . $giverId;
             if (!isset($answers[$key])) {
                 continue;
@@ -76,8 +74,11 @@ final class ConfusionEffect extends AbstractMoodEffect implements RequiresOppone
                 throw new InvalidChoiceException("Card {$givenCardId} is not in player {$giverId}'s hand");
             }
 
-            $neighborIndex = $direction === 'right' ? ($index + 1) % $count : ($index - 1 + $count) % $count;
-            $transfers[] = [$giverId, $givenCardId, $order[$neighborIndex]];
+            $recipientId = $state->activeNeighbor($giverId, $direction);
+            if ($recipientId === null) {
+                continue;
+            }
+            $transfers[] = [$giverId, $givenCardId, $recipientId];
         }
 
         foreach ($transfers as [$giverId, $handCardId, $recipientId]) {

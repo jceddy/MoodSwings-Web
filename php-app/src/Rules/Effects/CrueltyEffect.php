@@ -28,6 +28,9 @@ final class CrueltyEffect extends AbstractMoodEffect
         $chosenPlayers = array_unique($choices->ints('opponent_player_ids'));
 
         foreach ($chosenPlayers as $opponentId) {
+            if (!in_array($opponentId, $state->activePlayerOrder(), true)) {
+                throw new InvalidChoiceException("Player {$opponentId} is not a valid player");
+            }
             if ($opponentId === $playerId || $state->isTeammate($playerId, $opponentId)) {
                 throw new InvalidChoiceException('Cruelty can only target opponents');
             }

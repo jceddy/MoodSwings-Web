@@ -2030,12 +2030,46 @@ final class GameService
                 return $this->completeGameByResignation($gameId, $game, $round, $gamePlayerId, $activeIds);
             }
 
+            // Only the "continue without them" path needs this -- the
+            // immediate-completion path above ends the game outright, so
+            // whatever's left in play just stands as the final board's
+            // own historical record, same as any other completed game.
+            $this->removeResignedPlayerMoodsFromPlay($gameId, $gamePlayerId);
+
             return $this->skipTurnForResignedPlayer($gameId, $round, $gamePlayerId);
         });
 
         $this->touchLastMoveAt($gameId);
 
         return $result;
+    }
+
+    /**
+     * "All of that resigning player's cards leave play" -- the 'standard'
+     * 3-4 player "continue without them" case is the only one where the
+     * board keeps being played on by everyone else, so their moods can't
+     * just sit there mid-game as if they were still in it (still
+     * scoring, still targetable, still whatever a while-in-play effect
+     * would otherwise do). Snapshotted into a plain card-id list first
+     * (rather than iterating moodsOwnedBy() directly), matching every
+     * other bulk-removal effect's own convention (see e.g. WrathEffect/
+     * MaliceEffect/DisillusionmentEffect) -- moveInPlayToDiscard() mutates
+     * $state's own moodsInPlay map as it goes, which a live iteration
+     * over that same map can't safely survive.
+     */
+    private function removeResignedPlayerMoodsFromPlay(int $gameId, int $gamePlayerId): void
+    {
+        $state = $this->boardStates->load($gameId);
+        $cardIds = array_keys($state->moodsOwnedBy($gamePlayerId));
+        if ($cardIds === []) {
+            return;
+        }
+
+        foreach ($cardIds as $cardId) {
+            $state->moveInPlayToDiscard($cardId);
+        }
+
+        $this->boardStates->save($gameId, $state);
     }
 
     /**

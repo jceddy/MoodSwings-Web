@@ -244,6 +244,11 @@ final class BoardState
      *     other player is an opponent" for those. See isTeammate()'s own
      *     docblock and php-app/README.md's "Open Team Play" section for
      *     which cards this actually changes.
+     * @param int[] $resignedPlayerIds game_players.id of every seat that
+     *     has resigned (see GameService::resignGame()) -- empty for every
+     *     game with no resignations (and every pre-resign test), in which
+     *     case isResigned() always returns false and activePlayerOrder()
+     *     exactly equals playerOrder(). See isResigned()'s own docblock.
      */
     public function __construct(
         private readonly array $catalog,
@@ -256,6 +261,7 @@ final class BoardState
         array $discardOwners = [],
         private readonly array $catalogCardIdFor = [],
         private readonly array $teamIdByPlayer = [],
+        private readonly array $resignedPlayerIds = [],
     ) {
         $this->hands = $hands;
         $this->decks = $hasSeparateDecks ? $deck : [self::SHARED_DECK_KEY => $deck];
@@ -309,6 +315,63 @@ final class BoardState
     public function playerOrder(): array
     {
         return $this->playerOrder;
+    }
+
+    /**
+     * Whether $playerId has resigned (see GameService::resignGame()) --
+     * always false for every pre-resign test/game, exactly like
+     * isTeammate() always returning false for a pre-team game. Once
+     * resigned, a player must never be offered/accepted as a card
+     * effect's target, never be asked to answer a pending decision (they
+     * can't -- see resignGame()'s own docblock), and never receive a
+     * card/mood passed to "the next player" -- see activePlayerOrder()/
+     * activeNeighbor() below, which every affected effect class should
+     * use instead of the raw playerOrder().
+     */
+    public function isResigned(int $playerId): bool
+    {
+        return in_array($playerId, $this->resignedPlayerIds, true);
+    }
+
+    /**
+     * playerOrder(), minus any resigned seats, relative order preserved
+     * -- the "who's actually still eligible to be targeted/asked/passed
+     * to" list every effect touching another player should consult
+     * instead of the raw playerOrder(). Identical to playerOrder() for
+     * every game with no resignations (including every pre-resign test).
+     *
+     * @return int[]
+     */
+    public function activePlayerOrder(): array
+    {
+        return array_values(array_filter($this->playerOrder, fn (int $id): bool => !$this->isResigned($id)));
+    }
+
+    /**
+     * The next ACTIVE (non-resigned) player from $playerId in $direction
+     * around the table, skipping over any resigned seat entirely --
+     * "pass to the player on your left/right" effects (Avoidance,
+     * Confusion, Rationalization) should call this instead of indexing
+     * playerOrder() directly, so a resigned player is skipped rather than
+     * receiving (or being treated as the source of) a pass. 'right' means
+     * the next seat forward in playerOrder() (index + 1); anything else
+     * means the previous seat (index - 1) -- matching this codebase's own
+     * existing left/right convention. Returns null if fewer than 2
+     * players are still active (nowhere to pass to) or if $playerId
+     * itself isn't currently active.
+     */
+    public function activeNeighbor(int $playerId, string $direction): ?int
+    {
+        $active = $this->activePlayerOrder();
+        $count = count($active);
+        $index = array_search($playerId, $active, true);
+        if ($count < 2 || $index === false) {
+            return null;
+        }
+
+        $offset = $direction === 'right' ? 1 : -1;
+
+        return $active[($index + $offset + $count) % $count];
     }
 
     // --- zones ---

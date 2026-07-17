@@ -51,7 +51,7 @@ final class BetrayalEffect extends AbstractMoodEffect implements RequiresOpponen
     public function pendingDecisionsFor(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): array
     {
         $recipientPlayerId = $choices->requireInt('recipient_player_id');
-        if (!in_array($recipientPlayerId, $state->playerOrder(), true)) {
+        if (!in_array($recipientPlayerId, $state->activePlayerOrder(), true)) {
             throw new InvalidChoiceException("Player {$recipientPlayerId} is not a valid player");
         }
         if ($recipientPlayerId === $playerId) {

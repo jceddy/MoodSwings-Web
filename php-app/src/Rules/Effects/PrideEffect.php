@@ -46,7 +46,7 @@ final class PrideEffect extends AbstractMoodEffect implements RequiresOpponentDe
     {
         $ownMoodCount = count($state->moodsOwnedBy($playerId));
         $candidatePlayerIds = array_values(array_filter(
-            $state->playerOrder(),
+            $state->activePlayerOrder(),
             fn (int $otherPlayerId) => $otherPlayerId !== $playerId
                 && count($state->moodsOwnedBy($otherPlayerId)) > $ownMoodCount,
         ));
@@ -82,7 +82,7 @@ final class PrideEffect extends AbstractMoodEffect implements RequiresOpponentDe
             return;
         }
 
-        if (!in_array($chosenPlayerId, $state->playerOrder(), true)) {
+        if (!in_array($chosenPlayerId, $state->activePlayerOrder(), true)) {
             throw new InvalidChoiceException("Player {$chosenPlayerId} is not a valid player");
         }
 

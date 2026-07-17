@@ -7432,6 +7432,34 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->pass($gameId, $p2);
     }
 
+    /**
+     * "All of that player's cards leave play" -- only the 3-4 player
+     * 'standard' "continue without them" path needs this, since that's the
+     * only resignation outcome where the board keeps being played on by
+     * everyone else. See GameService::removeResignedPlayerMoodsFromPlay().
+     */
+    public function testResigningDiscardsAllOfThatPlayersInPlayMoods(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildThreePlayerFixture();
+
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p2); // Courage
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
+        $otherPlayersMoodId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- untouched
+
+        $this->games->resignGame($gameId, $p2);
+
+        $zoneStmt = $this->pdo->prepare('SELECT id, zone, owner_game_player_id FROM game_cards WHERE id IN (:c1, :c2, :c3)');
+        $zoneStmt->execute(['c1' => $courageId, 'c2' => $charityId, 'c3' => $otherPlayersMoodId]);
+        $rows = [];
+        foreach ($zoneStmt->fetchAll() as $row) {
+            $rows[(int) $row['id']] = $row;
+        }
+
+        self::assertSame('discard', $rows[$courageId]['zone']);
+        self::assertSame('discard', $rows[$charityId]['zone']);
+        self::assertSame('in_play', $rows[$otherPlayersMoodId]['zone'], 'another player\'s mood must be untouched by an opponent\'s resignation');
+    }
+
     public function testResignedPlayerIsNeverCreditedARoundWinEvenWithTheHighestScore(): void
     {
         [
@@ -7510,6 +7538,26 @@ final class GameServiceIntegrationTest extends TestCase
         );
         $nextGameStmt->execute(['match_id' => $draftMatchId]);
         self::assertNotFalse($nextGameStmt->fetch(), 'a resign-induced win must still advance best-of-three match progression');
+    }
+
+    /**
+     * End-to-end version of BoardStateTest/MoodPlayServiceTest's own
+     * resigned-target coverage -- proves BoardStateRepository::load()
+     * actually threads game_players.resigned_at into the real BoardState
+     * a live playMood() call runs against, not just that BoardState's own
+     * constructor honors the flag when a test builds one directly.
+     */
+    public function testPlayingACardCannotTargetAResignedPlayerEndToEnd(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p3' => $p3] = $this->buildThreePlayerFixture();
+
+        $this->games->resignGame($gameId, $p3);
+
+        $honorId = $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->expectExceptionMessage('is not a valid player');
+        $this->games->playMood($gameId, $p1, $honorId, ['target_player_id' => $p3]);
     }
 
     public function testResignFailsWhenTheGameIsNotInProgress(): void
