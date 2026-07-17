@@ -172,5 +172,5 @@ apply any new migration to the dev database yourself when a PR merges into
 ## Credits
 
 - **Developer:** [jceddy](https://github.com/jceddy)
-- **Play testers:** DrPotato, Tori_Tumbleweed
+- **Play testers:** Dr Potato, Tori_Tumbleweed
 
