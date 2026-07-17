@@ -798,7 +798,10 @@ too, proportional to the smaller card width.
       second `#grid-draft-opponent-drafted-so-far` read-only list right
       underneath it showing your opponent's own accumulated picks too
       (`drafting.opponent_drafted_so_far`) -- nothing there was ever hidden
-      information to begin with.
+      information to begin with. Its heading (`#grid-draft-opponent-drafted-so-far-title`)
+      is set to the opponent's own username (the same `currentOpponentUsername`
+      the deck-building waiting-for-submission message already uses) rather
+      than a generic "Opponent", e.g. "alice's drafted so far".
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

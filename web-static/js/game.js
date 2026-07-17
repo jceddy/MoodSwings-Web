@@ -2336,6 +2336,8 @@
         // already visible to both of them the moment it was dealt into the
         // face-up grid, so there's nothing to hide here the way Winston
         // Draft's own current_pile_cards hides the opponent's active pile.
+        document.getElementById('grid-draft-opponent-drafted-so-far-title').textContent =
+            currentOpponentUsername + "'s drafted so far";
         renderList(document.getElementById('grid-draft-opponent-drafted-so-far'), { hidden: true }, drafting.opponent_drafted_so_far, (card) => {
             const li = document.createElement('li');
             li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
