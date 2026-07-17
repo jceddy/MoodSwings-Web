@@ -3104,12 +3104,14 @@ final class GameService
         // Hurt Feelings only exists in games of 3 or more (active) players.
         $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
 
-        // Honor overrides who goes first next round regardless of who
-        // won -- see BoardState::firstPlayerOverride(). Computed (and
+        // Honor (or Awe's own one-time version) overrides who goes first
+        // next round regardless of who won -- see
+        // BoardState::firstPlayerOverride(). Computed (and
         // computeFreshGrants() run) even if the game is about to
         // complete below and this ends up unused, so any banked grant
         // it consumes is captured by the same save() call either way.
-        $nextFirstPlayer = $state->firstPlayerOverride() ?? $winnerId;
+        $firstPlayerOverride = $state->firstPlayerOverride();
+        $nextFirstPlayer = $firstPlayerOverride ?? $winnerId;
         $nextRoundGrants = $this->computeFreshGrants($state, $nextFirstPlayer, $hurtFeelingsHolder === $nextFirstPlayer ? 2 : 1);
         $this->boardStates->save($gameId, $state);
 
@@ -3117,6 +3119,14 @@ final class GameService
             'scores' => $scores,
             'winner_game_player_id' => $winnerId,
             'hurt_feelings_game_player_id' => $hurtFeelingsHolder,
+            // Only worth calling out when it actually changes who goes
+            // first (an override naming the round's own winner is a no-op,
+            // same as no override at all) and there IS a next round to go
+            // first in -- $nextFirstPlayer above is computed either way,
+            // but goes unused once $gameCompleting ends the game outright.
+            'first_player_override_game_player_id' => (!$gameCompleting && $firstPlayerOverride !== null && $firstPlayerOverride !== $winnerId)
+                ? $firstPlayerOverride
+                : null,
         ], $state);
 
         if ($gameCompleting) {
@@ -3773,7 +3783,10 @@ final class GameService
 
             $this->boardStates->save($gameId, $state);
 
-            $this->logEvent($gameId, $roundId, null, 'round_scored', null, ['skipped' => true], $state);
+            $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
+                'skipped' => true,
+                'first_player_override_game_player_id' => $nextFirstPlayer,
+            ], $state);
 
             if ($isTeamFormat) {
                 // Awe's own player picked $nextFirstPlayer directly, but
@@ -4947,7 +4960,17 @@ final class GameService
     private function describeRoundScored(array $details, array $playerNames, array $teamMembersByTeamId = []): string
     {
         if ($details['skipped'] ?? false) {
-            return 'Round scored (nobody won)';
+            $description = 'Round scored (nobody won)';
+            // Awe's own one-time override is the only way this branch is
+            // ever reached (see skipScoringAndAdvance()), so unlike the
+            // normal scored branch below, this is always worth announcing
+            // -- there's no "round's winner" to already imply it.
+            $overrideId = $details['first_player_override_game_player_id'] ?? null;
+            if ($overrideId !== null) {
+                $description .= '; ' . ($playerNames[(int) $overrideId] ?? 'a player') . ' goes first next round';
+            }
+
+            return $description;
         }
 
         $scoreParts = [];
@@ -4987,6 +5010,16 @@ final class GameService
         $hurtFeelingsId = $details['hurt_feelings_game_player_id'] ?? null;
         if ($hurtFeelingsId !== null) {
             $description .= '; ' . ($playerNames[(int) $hurtFeelingsId] ?? 'a player') . ' has Hurt Feelings next round';
+        }
+
+        // Set only when an in-play override (Honor, or Awe's one-time
+        // version -- see BoardState::firstPlayerOverride()) actually hands
+        // the next round to someone other than this round's own winner --
+        // otherwise that'd be indistinguishable from the ordinary
+        // "winner goes first" rule and not worth a separate callout.
+        $overrideId = $details['first_player_override_game_player_id'] ?? null;
+        if ($overrideId !== null) {
+            $description .= '; ' . ($playerNames[(int) $overrideId] ?? 'a player') . ' goes first next round instead of the round\'s winner';
         }
 
         return $description;

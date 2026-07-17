@@ -3081,6 +3081,14 @@ final class GameServiceIntegrationTest extends TestCase
         $round2 = $this->fetchRound($gameId);
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p3, (int) $round2['first_game_player_id']); // Honor's override, not the winner (p1)
+
+        // The round_scored log entry itself calls out the override --
+        // otherwise it'd only be inferable once round 2 actually starts.
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString(
+            "honor3 goes first next round instead of the round's winner",
+            $events[0]['description'],
+        );
     }
 
     /**
@@ -3178,6 +3186,9 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p2, (int) $round2['first_game_player_id']);
         self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString('awe2 goes first next round', $events[0]['description']);
     }
 
     /**

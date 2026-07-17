@@ -1097,6 +1097,20 @@ otherwise the only way to learn who holds it was the players-list
 indicator (see "Hurt Feelings" above), which only ever shows the *current*
 round's holder, never who just received it.
 
+The same event also calls out Honor (or Awe's own one-time version)
+overriding who goes first next round -- normally that's simply whoever
+just won, so it's silent; `finishScoringAndAdvance()` folds
+`BoardState::firstPlayerOverride()`'s result into the same `details` as
+`first_player_override_game_player_id`, but only when it actually differs
+from the round's winner (and there IS a next round -- unused if the
+override coincides with the win that ends the game), and
+`describeRoundScored()` appends "; Charlie goes first next round instead
+of the round's winner" when it's set. Awe's own "skip scoring entirely"
+branch (`skipScoringAndAdvance()`, no winner to already imply anything)
+logs the same field unconditionally and gets its own shorter phrasing,
+"; Charlie goes first next round" -- see its own `if ($details['skipped']
+?? false)` branch in `describeRoundScored()`.
+
 `round.play_grants` is a similar reminder-text pass over
 `BoardState::pendingPlayGrants()` (already persisted as
 `game_rounds.pending_play_grants`, but never previously surfaced to the
