@@ -2241,6 +2241,18 @@
         document.getElementById('winston-draft-remaining-deck-count').textContent =
             drafting.remaining_deck_count + ' card' + (drafting.remaining_deck_count === 1 ? '' : 's') + ' left in the deck.';
 
+        // Neither of these reveals what's actually on any card -- a taken
+        // pile's own height and a rival's growing stack of face-down cards
+        // are both things a real opponent across the table would already
+        // see for themselves (see GameService::winstonDraftDraftingStateFor()'s
+        // own docblock).
+        const opponentInfo = document.getElementById('winston-draft-opponent-info');
+        opponentInfo.textContent = currentOpponentUsername + ' has drafted ' +
+            drafting.opponent_drafted_card_count + ' card' + (drafting.opponent_drafted_card_count === 1 ? '' : 's') +
+            ' so far' + (drafting.opponent_last_take_pile_number
+                ? ', last taking pile ' + drafting.opponent_last_take_pile_number + '.'
+                : '.');
+
         const takeButton = document.getElementById('winston-draft-take-button');
         const passButton = document.getElementById('winston-draft-pass-button');
         takeButton.hidden = !drafting.is_your_turn;

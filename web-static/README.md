@@ -769,7 +769,12 @@ too, proportional to the smaller card width.
       `action: 'take'`/`'pass'` -- no card selection needed, since taking a
       pile claims it whole. `drafting.remaining_deck_count` and a
       `#winston-draft-drafted-so-far` read-only list (your own accumulated
-      picks -- never your opponent's) round out the panel.
+      picks -- never your opponent's) round out the panel, along with a
+      `#winston-draft-opponent-info` line built from
+      `drafting.opponent_drafted_card_count` (how many cards the opponent
+      has drafted in total) and `drafting.opponent_last_take_pile_number`
+      (`null` until they've taken at least once; otherwise which pile
+      number -- never its contents -- they most recently claimed).
     - **Grid Draft's own drafting phase** (`#grid-draft-panel` >
       `#grid-draft-drafting`, `renderGridDraftDrafting()`, shown while
       `state.grid_draft.status` is `'drafting'`) -- like Winston Draft,

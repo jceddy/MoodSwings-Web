@@ -7247,6 +7247,68 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * opponent_last_take_pile_number/opponent_drafted_card_count never
+     * reveal card identities -- only which numbered pile the opponent most
+     * recently TOOK (never a pass) and how many cards they've drafted in
+     * total. Since turns strictly alternate and either player can pass any
+     * number of times before eventually taking, "the opponent's last take"
+     * has to be tracked per-user_id (draft_winston_state.
+     * last_take_pile_by_user_id) rather than a single shared "whoever took
+     * last" value -- this drives both players taking different piles on
+     * different turns and confirms each one's own view stays independently
+     * correct throughout.
+     */
+    public function testWinstonDraftExposesEachPlayersOwnLastTakenPileAndTotalDraftedCountToTheOpponent(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $secondPlayerUserId = $firstPlayerUserId === $u1 ? $u2 : $u1;
+
+        // Before anyone has taken anything, neither player has a last-take
+        // pile, and neither has drafted any cards yet.
+        $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
+        self::assertNull($firstPlayerState['opponent_last_take_pile_number']);
+        self::assertSame(0, $firstPlayerState['opponent_drafted_card_count']);
+
+        // Player 1 passes pile 1 (a non-take action) then takes pile 2 --
+        // taking always ends the turn regardless of which pile it's on.
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'take');
+
+        // From player 2's perspective, player 1's own last take (pile 2)
+        // is now visible, and their drafted count reflects that one pile.
+        $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
+        self::assertSame(2, $secondPlayerState['opponent_last_take_pile_number']);
+        self::assertSame(1, $secondPlayerState['opponent_drafted_card_count']);
+
+        // Player 1's own view of "the opponent" (player 2) is still
+        // untouched -- player 2 hasn't taken anything yet.
+        $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
+        self::assertNull($firstPlayerState['opponent_last_take_pile_number']);
+        self::assertSame(0, $firstPlayerState['opponent_drafted_card_count']);
+
+        // Player 2 takes pile 1 immediately (no pass) -- pile 1 now holds 2
+        // cards (its original 1 plus the 1 it grew by by from player 1's
+        // earlier pass), so player 2's own drafted count is 2, not 1.
+        $this->games->submitWinstonDraftPick($gameId, $secondPlayerUserId, 'take');
+
+        // Now player 1 sees player 2's own last take (pile 1) -- and
+        // player 2's own view of player 1 is unaffected by their own action.
+        $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
+        self::assertSame(1, $firstPlayerState['opponent_last_take_pile_number']);
+        self::assertSame(2, $firstPlayerState['opponent_drafted_card_count']);
+
+        $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
+        self::assertSame(2, $secondPlayerState['opponent_last_take_pile_number'], 'player 1\'s own last take is still pile 2 from before -- unaffected by player 2\'s own turn');
+        self::assertSame(1, $secondPlayerState['opponent_drafted_card_count']);
+    }
+
+    /**
      * Directly exercises the one specific edge case in submitWinstonDraftPick()'s
      * own docblock: declining pile 3 replenishes it FIRST (consuming
      * whatever's left of the deck), and only THEN attempts the mandatory

@@ -1815,6 +1815,7 @@ final class GameService
                 3 => array_map(intval(...), json_decode((string) $state['pile_3_card_ids'], true)),
             ];
             $currentPileNumber = (int) $state['current_pile_number'];
+            $lastTakePileByUserId = (array) json_decode((string) $state['last_take_pile_by_user_id'], true);
 
             $userIds = $this->draftMatchUserIds($draftMatchId);
             $opponentUserId = $userIds[0] === $userId ? $userIds[1] : $userIds[0];
@@ -1826,6 +1827,11 @@ final class GameService
                 $newlyDrafted = $piles[$currentPileNumber];
                 $piles[$currentPileNumber] = $deck !== [] ? [array_shift($deck)] : [];
                 $turnEnds = true;
+                // Keyed by user_id (not a fixed "player 1"/"player 2" slot)
+                // so each player's own most recent take can be looked up
+                // independently -- see winstonDraftDraftingStateFor()'s own
+                // opponent_last_take_pile_number.
+                $lastTakePileByUserId[(string) $userId] = $currentPileNumber;
             } else {
                 // 'pass' -- the active pile grows by 1 (if able) regardless of
                 // whether we then move to the next pile or, for pile 3,
@@ -1860,7 +1866,8 @@ final class GameService
             $pdo->prepare(
                 'UPDATE draft_winston_state
                  SET remaining_deck_card_ids = :deck, pile_1_card_ids = :pile1, pile_2_card_ids = :pile2, pile_3_card_ids = :pile3,
-                     current_player_user_id = :current_player, current_pile_number = :current_pile
+                     current_player_user_id = :current_player, current_pile_number = :current_pile,
+                     last_take_pile_by_user_id = :last_take
                  WHERE draft_match_id = :match_id'
             )->execute([
                 'deck' => json_encode(array_values($deck)),
@@ -1869,6 +1876,7 @@ final class GameService
                 'pile3' => json_encode(array_values($piles[3])),
                 'current_player' => $nextPlayerUserId,
                 'current_pile' => $nextPileNumber,
+                'last_take' => json_encode($lastTakePileByUserId),
                 'match_id' => $draftMatchId,
             ]);
 
@@ -4661,7 +4669,7 @@ final class GameService
         ];
 
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $playersByUser);
+            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $opponentUserId, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
@@ -4687,11 +4695,18 @@ final class GameService
      * pile being looked at, exactly matching quickDraftDraftingStateFor()'s
      * own "never expose the opponent's pack" contract. drafted_so_far is
      * always $viewerUserId's own accumulated picks to date, never the
-     * opponent's.
+     * opponent's. opponent_last_take_pile_number and
+     * opponent_drafted_card_count are similarly safe to expose without
+     * ever revealing card identities: which numbered pile the opponent
+     * last claimed, and how many cards they've drafted in total, are both
+     * things a real opponent watching across the table would already see
+     * for themselves (a taken pile's height and a rival's growing stack of
+     * face-down cards are physically visible), unlike what's actually
+     * printed on those cards.
      *
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      */
-    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $playersByUser): array
+    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, ?int $opponentUserId, array $playersByUser): array
     {
         $stateStmt = Connection::get()->prepare('SELECT * FROM draft_winston_state WHERE draft_match_id = :id');
         $stateStmt->execute(['id' => $draftMatchId]);
@@ -4715,9 +4730,11 @@ final class GameService
             $currentPileCards = $this->serializeCatalogCards($currentPileCardIds);
         }
 
-        $draftedSoFarCardIds = ($playersByUser[$viewerUserId]['drafted_card_ids'] ?? null) !== null
-            ? array_map(intval(...), json_decode((string) $playersByUser[$viewerUserId]['drafted_card_ids'], true))
+        $draftedCardIdsFor = fn (int $userId): array => ($playersByUser[$userId]['drafted_card_ids'] ?? null) !== null
+            ? array_map(intval(...), json_decode((string) $playersByUser[$userId]['drafted_card_ids'], true))
             : [];
+
+        $lastTakePileByUserId = (array) json_decode((string) $winstonState['last_take_pile_by_user_id'], true);
 
         return [
             'is_your_turn' => $isYourTurn,
@@ -4725,7 +4742,11 @@ final class GameService
             'pile_sizes' => $pileSizes,
             'remaining_deck_count' => count(json_decode((string) $winstonState['remaining_deck_card_ids'], true)),
             'current_pile_cards' => $currentPileCards,
-            'drafted_so_far' => $this->serializeCatalogCards($draftedSoFarCardIds),
+            'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
+            'opponent_last_take_pile_number' => $opponentUserId !== null
+                ? ($lastTakePileByUserId[(string) $opponentUserId] ?? null)
+                : null,
+            'opponent_drafted_card_count' => $opponentUserId !== null ? count($draftedCardIdsFor($opponentUserId)) : 0,
         ];
     }
 
