@@ -2299,19 +2299,27 @@
 
         const picksContainer = document.getElementById('grid-draft-picks');
         picksContainer.innerHTML = '';
+        // Row buttons and Column buttons each get their own row div (rather
+        // than one shared flex-wrap container) so Column always starts a
+        // new line below Row, regardless of how much horizontal space is
+        // available to wrap into.
         ['row', 'column'].forEach((axis) => {
+            const axisRow = document.createElement('div');
+            axisRow.className = 'grid-draft-picks-row';
             for (let index = 0; index < 3; index++) {
                 const cellsRemaining = gridDraftLineCells(axis, index)
                     .filter((cell) => drafting.grid_cards[cell] !== null).length;
 
                 const button = document.createElement('button');
                 button.type = 'button';
-                button.textContent = (axis === 'row' ? 'Row ' : 'Column ') + (index + 1) +
+                button.className = 'grid-draft-pick-button';
+                button.textContent = (axis === 'row' ? 'Row ' : 'Col ') + (index + 1) +
                     ' (' + cellsRemaining + ' card' + (cellsRemaining === 1 ? '' : 's') + ')';
                 button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
                 button.addEventListener('click', () => submitGridDraftAction(axis, index));
-                picksContainer.appendChild(button);
+                axisRow.appendChild(button);
             }
+            picksContainer.appendChild(axisRow);
         });
 
         document.getElementById('grid-draft-remaining-deck-count').textContent =

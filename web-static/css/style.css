@@ -280,7 +280,6 @@ body.game-page {
 #draft-deck-picker,
 .winston-draft-pile-cards,
 #winston-draft-drafted-so-far,
-#grid-draft-picks,
 #grid-draft-drafted-so-far {
     display: flex;
     flex-wrap: wrap;
@@ -299,28 +298,72 @@ body.game-page {
 
 /* Grid Draft's own 3x3 grid, laid out in the same row-major order
    (index = row * 3 + column) getState() reports grid_cards in, so no
-   client-side re-ordering is needed between the two. An empty cell (its
-   card already taken this round) gets a plain dashed placeholder instead
-   of a card thumbnail. */
+   client-side re-ordering is needed between the two. Columns are sized to
+   their content (not 1fr/minmax(0,1fr)) so the grid hugs its own 3
+   card-widths plus gaps rather than stretching to fill whatever width its
+   container happens to have -- otherwise each column would grow to fill
+   the extra space, spreading the cards apart instead of keeping them
+   snug. An empty cell (its card already taken this round) gets a plain
+   dashed placeholder instead of a card thumbnail. */
 #grid-draft-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(3, min-content);
     gap: 0.5rem;
-    max-width: 24rem;
+    /* A grid container's own width is otherwise "auto" -- it fills its
+       containing block just like an ordinary block element, regardless
+       of how its tracks are sized -- so min-content columns alone don't
+       stop the grid ITSELF from stretching wide and leaving each column
+       to center within extra leftover space. width: fit-content shrinks
+       the container down to what its 3 min-content columns plus gaps
+       actually need. */
+    width: fit-content;
 }
 
+/* min-height matches .card-thumb's own actual rendered height (5.5rem-wide
+   art plus its value/copy/recolor badges and gap -- roughly 7.8rem) so an
+   empty cell takes up about the same footprint a card thumbnail would,
+   rather than collapsing thin and making a partially-cleared row look
+   squashed next to a still-full one. */
 .grid-draft-cell {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 4rem;
+    min-height: 7.8rem;
 }
 
 .grid-draft-cell--empty {
     border: 1px dashed var(--border-color, #999);
     border-radius: 4px;
-    min-height: 4rem;
-    width: 100%;
+    width: 5.5rem;
+    height: 7.8rem;
+}
+
+/* Row buttons and Column buttons are each their own flex-wrap row
+   (.grid-draft-picks-row), stacked vertically inside #grid-draft-picks --
+   so Column always starts on its own line below Row, rather than the two
+   sets wrapping together based on available width. The margin-top on
+   #grid-draft-picks itself separates the button rows from the grid of
+   cards above them. */
+#grid-draft-picks {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* Fixed width (rather than each button sizing to its own text) so every
+   button in both rows lines up into a neat grid instead of jagged edges
+   from "Row 1 (3 cards)" vs. "Col 2 (0 cards)"'s differing lengths. Wide
+   enough for the longest label ("Row/Col N (N cards)") with a little
+   breathing room. */
+.grid-draft-pick-button {
+    width: 7.5rem;
+}
+
+.grid-draft-picks-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
 }
 
 /* A pixel or two of breathing room between a card pack/picker above and
