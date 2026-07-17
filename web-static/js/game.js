@@ -231,6 +231,7 @@
         custom_duel: 'Custom Decklists (Duel)',
         quick_draft: 'Quick Draft',
         winston_draft: 'Winston Draft',
+        grid_draft: 'Grid Draft',
         one_of_each: 'One of Each Card',
     };
 
@@ -251,6 +252,7 @@
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
         quick_draft: 'Both players draft their own 16-card deck live from a shared card pool, trim it to 12-16 cards, then play a best-of-three match -- sideboarding freely between games.',
         winston_draft: 'Both players draft their own deck from a shared 45-card pool by taking or passing on 3 growing face-down piles, then trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
+        grid_draft: 'Both players draft their own deck from a shared 54-card pool over 6 rounds: each round, 9 cards are dealt into a 3x3 grid, and each player in turn takes a whole row or column. Trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -278,6 +280,20 @@
         custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 45 if you provide more.',
     };
 
+    // Grid Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
+    // kept in sync with GameService::buildGridDraftPool()'s own 54-card
+    // target. No 'structure' option -- the Structure deck's 45 cards fall
+    // short of the 54 Grid Draft always requires, and unlike Quick Draft
+    // there's no mid-draft top-up mechanism to cover the gap, so
+    // buildGridDraftPool() rejects it outright rather than silently
+    // dealing a short final round.
+    const GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
+        random_48: '54 random cards, no duplicates.',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to 54 before the draft begins.",
+        one_of_each: 'The full 133-card pool, randomly narrowed down to 54 before the draft begins.',
+        custom: 'Paste or upload your own pool of 54+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 54 if you provide more.',
+    };
+
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
 
     // Plain-language summaries of DuelDeckRules::forPreset()'s own locked
@@ -298,6 +314,7 @@
         document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
         document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
         document.getElementById('new-game-winston-draft-fields').hidden = deckType !== 'winston_draft';
+        document.getElementById('new-game-grid-draft-fields').hidden = deckType !== 'grid_draft';
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
@@ -306,6 +323,9 @@
         }
         if (deckType === 'winston_draft') {
             updateWinstonDraftPoolSourceVisibility();
+        }
+        if (deckType === 'grid_draft') {
+            updateGridDraftPoolSourceVisibility();
         }
     }
 
@@ -327,6 +347,14 @@
         document.getElementById('new-game-winston-draft-custom-pool-fields').hidden = poolSource !== 'custom';
     }
 
+    // Grid Draft's own analog of updateQuickDraftPoolSourceVisibility().
+    function updateGridDraftPoolSourceVisibility() {
+        const poolSource = document.getElementById('new-game-grid-draft-pool-source').value;
+        document.getElementById('new-game-grid-draft-pool-source-description').textContent =
+            GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
+        document.getElementById('new-game-grid-draft-custom-pool-fields').hidden = poolSource !== 'custom';
+    }
+
     // Shows the locked-in summary for a built-in preset, or the editable
     // fields for User-Defined -- mutually exclusive, matching
     // updateDeckTypeDescription()'s own decklist-fields-vs-rules-fields
@@ -340,26 +368,29 @@
         document.getElementById('new-game-duel-rules-user-defined').hidden = preset !== 'user_defined';
     }
 
-    // The 'draft' format only supports the 'quick_draft'/'winston_draft'
-    // deck types (see GameService::createGame()'s own format<->deck_type
-    // validation, and database/migrations/0028_add_draft_format.sql for
-    // why 'draft' is a separate format rather than a duel deck_type) --
-    // checked first since it overrides every other rule below. Otherwise:
-    // 'custom' decklists aren't supported for duel games, 'custom_duel'
-    // (each player supplying their own decklist against rules the creator
-    // defines) only makes sense FOR a duel, and 'quick_draft'/'winston_draft'
-    // only make sense for 'draft'. Either team format similarly rules out
-    // 'power' -- its 15 cards fall short of the 45-card minimum both team
-    // formats share (see php-app/README.md).
+    // The 'draft' format only supports the
+    // 'quick_draft'/'winston_draft'/'grid_draft' deck types (see
+    // GameService::createGame()'s own format<->deck_type validation, and
+    // database/migrations/0028_add_draft_format.sql for why 'draft' is a
+    // separate format rather than a duel deck_type) -- checked first
+    // since it overrides every other rule below. Otherwise: 'custom'
+    // decklists aren't supported for duel games, 'custom_duel' (each
+    // player supplying their own decklist against rules the creator
+    // defines) only makes sense FOR a duel, and
+    // 'quick_draft'/'winston_draft'/'grid_draft' only make sense for
+    // 'draft'. Either team format similarly rules out 'power' -- its 15
+    // cards fall short of the 45-card minimum both team formats share
+    // (see php-app/README.md).
     function isDeckTypeAvailableForFormat(deckType, format) {
         if (format === 'draft') {
-            return deckType === 'quick_draft' || deckType === 'winston_draft';
+            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft';
         }
         switch (deckType) {
             case 'custom': return format !== 'duel';
             case 'custom_duel': return format === 'duel';
             case 'quick_draft': return false;
             case 'winston_draft': return false;
+            case 'grid_draft': return false;
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -696,6 +727,7 @@
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
+    document.getElementById('new-game-grid-draft-pool-source').addEventListener('change', updateGridDraftPoolSourceVisibility);
 
     document.getElementById('new-game-quick-draft-custom-pool-file').addEventListener('change', async (event) => {
         const file = event.target.files[0];
@@ -713,6 +745,15 @@
         }
 
         document.getElementById('new-game-winston-draft-custom-pool-text').value = await file.text();
+    });
+
+    document.getElementById('new-game-grid-draft-custom-pool-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-game-grid-draft-custom-pool-text').value = await file.text();
     });
 
     // Reading an uploaded decklist file into the textarea lets both input
@@ -833,6 +874,10 @@
         const winstonDraftCustomPoolText = deckType === 'winston_draft' && winstonDraftPoolSource === 'custom'
             ? document.getElementById('new-game-winston-draft-custom-pool-text').value
             : undefined;
+        const gridDraftPoolSource = deckType === 'grid_draft' ? document.getElementById('new-game-grid-draft-pool-source').value : undefined;
+        const gridDraftCustomPoolText = deckType === 'grid_draft' && gridDraftPoolSource === 'custom'
+            ? document.getElementById('new-game-grid-draft-custom-pool-text').value
+            : undefined;
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -845,6 +890,8 @@
             quickDraftCustomPoolText,
             winstonDraftPoolSource,
             winstonDraftCustomPoolText,
+            gridDraftPoolSource,
+            gridDraftCustomPoolText,
         );
 
         if (!ok) {
@@ -1590,12 +1637,15 @@
                 document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
+                document.getElementById('grid-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft') {
+            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
-                const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft : state.winston_draft;
+                const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
+                    : state.game.deck_type === 'winston_draft' ? state.winston_draft
+                        : state.grid_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
@@ -1609,6 +1659,7 @@
                 document.getElementById('duel-deck-submission').hidden = true;
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
+                document.getElementById('grid-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
                 autoStartGameIfReady(true);
             }
@@ -1619,6 +1670,7 @@
         document.getElementById('duel-deck-submission').hidden = true;
         document.getElementById('quick-draft-panel').hidden = true;
         document.getElementById('winston-draft-panel').hidden = true;
+        document.getElementById('grid-draft-panel').hidden = true;
         document.getElementById('draft-deck-building').hidden = true;
         inProgressArea.hidden = false;
 
@@ -1996,20 +2048,21 @@
     // so an in-progress selection survives an ordinary poll uneventfully.
 
     // Shared scoreline for every draft-based deck_type's own match --
-    // Quick Draft's and Winston Draft's own getState() fields
-    // (quick_draft/winston_draft) share an identical outer shape
-    // (your_wins/opponent_wins/games_to_win/next_game_id), even though
-    // their own 'drafting' sub-shapes differ -- see GameService's own
-    // docblocks for quickDraftStateFor()/winstonDraftStateFor(). Only the
-    // label shown differs, so this one function (and one shared DOM slot)
-    // covers both instead of duplicating the same rendering twice. No
-    // format label (Quick Draft/Winston Draft) here -- that's already
-    // shown elsewhere on the board (the title), so this line stays purely
-    // about the match's own progress.
+    // Quick Draft's, Winston Draft's, and Grid Draft's own getState()
+    // fields (quick_draft/winston_draft/grid_draft) share an identical
+    // outer shape (your_wins/opponent_wins/games_to_win/next_game_id),
+    // even though their own 'drafting' sub-shapes differ -- see
+    // GameService's own docblocks for
+    // quickDraftStateFor()/winstonDraftStateFor()/gridDraftStateFor().
+    // Only the label shown differs, so this one function (and one shared
+    // DOM slot) covers all three instead of duplicating the same
+    // rendering. No format label (Quick Draft/Winston Draft/Grid Draft)
+    // here -- that's already shown elsewhere on the board (the title), so
+    // this line stays purely about the match's own progress.
     function renderDraftMatchScoreline(state) {
         const el = document.getElementById('draft-match-scoreline');
         const nextGameButton = document.getElementById('draft-match-next-game-button');
-        const draftState = state.quick_draft || state.winston_draft;
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft;
         if (!draftState) {
             el.hidden = true;
             nextGameButton.hidden = true;
@@ -2204,6 +2257,85 @@
     document.getElementById('winston-draft-take-button').addEventListener('click', () => submitWinstonDraftAction('take'));
     document.getElementById('winston-draft-pass-button').addEventListener('click', () => submitWinstonDraftAction('pass'));
 
+    // Grid Draft's (issue #188) own drafting UI -- like Winston Draft,
+    // only one player acts at a time (see
+    // GameService::gridDraftDraftingStateFor()'s docblock), so there's no
+    // selection Set to manage: the active player picks a whole row or
+    // column, never individual cells. The grid itself (grid_cards, with a
+    // null entry for any cell already taken this round) is always fully
+    // visible to both players -- unlike Winston Draft's face-down piles,
+    // a dealt grid is face-up on the table. Each row/column button's own
+    // remaining card count is derived client-side by counting non-null
+    // cells along that line -- the same "count what's left" rule
+    // GameService::submitGridDraftPick() itself uses server-side -- so a
+    // line with 0 cards left (the second pick choosing the exact same
+    // line the first pick already fully cleared) is simply disabled
+    // rather than left to round-trip a rejected request.
+    function gridDraftLineCells(axis, index) {
+        return axis === 'row'
+            ? [index * 3, index * 3 + 1, index * 3 + 2]
+            : [index, index + 3, index + 6];
+    }
+
+    function renderGridDraftDrafting(drafting) {
+        document.getElementById('grid-draft-drafting-title').textContent =
+            'Grid Draft — round ' + drafting.current_round + ' of ' + drafting.total_rounds;
+        document.getElementById('grid-draft-drafting-status').textContent = drafting.is_your_turn
+            ? (drafting.first_pick ? 'Your turn -- choose a row or column of what\'s left.' : 'Your turn -- choose a row or column to take.')
+            : "Waiting for your opponent's turn.";
+
+        const gridContainer = document.getElementById('grid-draft-grid');
+        gridContainer.innerHTML = '';
+        drafting.grid_cards.forEach((card) => {
+            const cellEl = document.createElement('div');
+            cellEl.className = 'grid-draft-cell';
+            if (card) {
+                cellEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            } else {
+                cellEl.classList.add('grid-draft-cell--empty');
+            }
+            gridContainer.appendChild(cellEl);
+        });
+
+        const picksContainer = document.getElementById('grid-draft-picks');
+        picksContainer.innerHTML = '';
+        ['row', 'column'].forEach((axis) => {
+            for (let index = 0; index < 3; index++) {
+                const cellsRemaining = gridDraftLineCells(axis, index)
+                    .filter((cell) => drafting.grid_cards[cell] !== null).length;
+
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = (axis === 'row' ? 'Row ' : 'Column ') + (index + 1) +
+                    ' (' + cellsRemaining + ' card' + (cellsRemaining === 1 ? '' : 's') + ')';
+                button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
+                button.addEventListener('click', () => submitGridDraftAction(axis, index));
+                picksContainer.appendChild(button);
+            }
+        });
+
+        document.getElementById('grid-draft-remaining-deck-count').textContent =
+            drafting.remaining_deck_count + ' card' + (drafting.remaining_deck_count === 1 ? '' : 's') + ' left in the pool.';
+
+        renderList(document.getElementById('grid-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            return li;
+        });
+    }
+
+    async function submitGridDraftAction(axis, index) {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await submitGridDraftPick(currentGameId, axis, index);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit that pick.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
     // Converts a multiset of card_ids (e.g. deck_card_ids, which may
     // legally contain duplicates -- a jceddys_75 or custom pool can draft
     // more than one copy of the same card) into a Set of *indices* into
@@ -2385,6 +2517,7 @@
             const qd = state.quick_draft;
             document.getElementById('quick-draft-panel').hidden = false;
             document.getElementById('winston-draft-panel').hidden = true;
+            document.getElementById('grid-draft-panel').hidden = true;
             document.getElementById('quick-draft-drafting').hidden = qd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = qd.status !== 'deck_building';
 
@@ -2393,10 +2526,11 @@
             } else if (qd.status === 'deck_building') {
                 renderDraftDeckBuilding(qd.deck_building);
             }
-        } else {
+        } else if (state.game.deck_type === 'winston_draft') {
             const wd = state.winston_draft;
             document.getElementById('winston-draft-panel').hidden = false;
             document.getElementById('quick-draft-panel').hidden = true;
+            document.getElementById('grid-draft-panel').hidden = true;
             document.getElementById('winston-draft-drafting').hidden = wd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = wd.status !== 'deck_building';
 
@@ -2404,6 +2538,19 @@
                 renderWinstonDraftDrafting(wd.drafting);
             } else if (wd.status === 'deck_building') {
                 renderDraftDeckBuilding(wd.deck_building);
+            }
+        } else {
+            const gd = state.grid_draft;
+            document.getElementById('grid-draft-panel').hidden = false;
+            document.getElementById('quick-draft-panel').hidden = true;
+            document.getElementById('winston-draft-panel').hidden = true;
+            document.getElementById('grid-draft-drafting').hidden = gd.status !== 'drafting';
+            document.getElementById('draft-deck-building').hidden = gd.status !== 'deck_building';
+
+            if (gd.status === 'drafting') {
+                renderGridDraftDrafting(gd.drafting);
+            } else if (gd.status === 'deck_building') {
+                renderDraftDeckBuilding(gd.deck_building);
             }
         }
     }

@@ -264,3 +264,16 @@ half-migrated schema.
   resignation ends the game outright, so the round it happened during is
   taken out of `'in_progress'` without pretending it was actually scored.
   See "Resigning" in `php-app/README.md`.
+- **Grid Draft** (`0034`, issue #188): adds `deck_type = 'grid_draft'` and
+  a new table, `draft_grid_state` (one row per match: the not-yet-dealt
+  portion of the 54-card pool, the current round's 9-cell grid as an
+  ordered JSON array with a cell set to JSON `null` the instant either
+  player takes it, whose turn it is, and the first pick's own row/column
+  choice for the round). Reuses `draft_matches`/`draft_match_players` as-is
+  (same `pool_source` enum, same match-level win tracking), and like
+  Winston Draft has no simultaneity -- exactly one player acts at a time --
+  so the same plain-mutable-row-behind-a-lock approach applies. Unlike
+  Winston Draft, nothing ever gets reshuffled back into the pool -- 54
+  cards over 6 rounds of 9 divides evenly, so `remaining_deck_card_ids`
+  reaches exactly empty the moment the 6th round is dealt. See "Grid
+  Draft" in `php-app/README.md`.
