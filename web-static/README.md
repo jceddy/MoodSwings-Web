@@ -575,10 +575,13 @@ too, proportional to the smaller card width.
     stays hidden until every player's own `deck_submitted` is true, since
     the server would just reject starting otherwise. Once a `custom_duel`
     game is actually in progress, each player's own row in the Players
-    list additionally shows `— deck: <name>` (or "Uploaded Deck") -- since
-    unlike every other deck_type, a `custom_duel` game has no single deck
-    the whole table shares, each player having submitted their own. The
-    board title itself shows the *viewer's own* submitted deck name for a
+    list additionally shows their deck name (or "Uploaded Deck") on its
+    own line underneath the username (`.player-deck-name`, a muted second
+    line inside the same `.player-name` block rather than appended inline
+    after the name) -- since unlike every other deck_type, a `custom_duel`
+    game has no single deck the whole table shares, each player having
+    submitted their own. The board title itself shows the *viewer's own*
+    submitted deck name for a
     `custom_duel` game (looked up from `state.players` by
     `state.you.game_player_id`, the same `custom_deck_name` field the
     per-player row reads), rather than `deckTypeLabel()`'s generic "Custom
@@ -1204,11 +1207,12 @@ too, proportional to the smaller card width.
     rendered in `--color-success` via `.player-flag--turn` to match this
     app's existing "your turn" bold/success-color convention — currently
     marks. Every row's icons line up at the same horizontal position
-    regardless of how long that row's own username is: `renderBoard()`
-    measures the widest `.player-name` span in the just-rendered list and
-    applies that as a shared `min-width` to all of them, rather than
-    hardcoding one width that would either clip a long username or leave a
-    short one with an oddly large gap before its icons start. All the
+    regardless of how long that row's own username (or, for `custom_duel`,
+    deck name) is: `renderBoard()` measures the widest `.player-name` block
+    in the just-rendered list and applies that as a shared `min-width` to
+    all of them, rather than hardcoding one width that would either clip a
+    long username or leave a short one with an oddly large gap before its
+    icons start. All the
     icons/flags/thumbnail for a row share one `.player-icons` wrapper (its
     own flex-wrap container) rather than wrapping directly as children of
     the row itself, and the row is `flex-wrap: nowrap` so the name and this

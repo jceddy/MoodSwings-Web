@@ -1518,10 +1518,12 @@
                 // see the board title itself), so that label belongs on
                 // this per-player row instead once the game has actually
                 // started (in_play/hand card counts already differ per
-                // player here for the same reason).
-                const deckLabel = state.game.deck_type === 'custom_duel' && state.game.status !== 'waiting'
-                    ? ' — deck: ' + (player.custom_deck_name || 'Uploaded Deck')
-                    : '';
+                // player here for the same reason). Shown on its own line
+                // underneath the username (see nameBlock below) rather than
+                // inline, so it reads as a deck name, not part of the name.
+                const deckName = state.game.deck_type === 'custom_duel' && state.game.status !== 'waiting'
+                    ? (player.custom_deck_name || 'Uploaded Deck')
+                    : null;
                 // Open Team Play's own team_id (null in every other format)
                 // -- tags each row with which team it's on, and calls out
                 // the viewer's own teammate specifically since that's the
@@ -1535,7 +1537,6 @@
                 const isYou = state.you.game_player_id === player.game_player_id;
 
                 const nameEl = document.createElement('span');
-                nameEl.className = 'player-name';
                 nameEl.appendChild(document.createTextNode(player.username));
                 if (isYou) {
                     // Its own span/color rather than folded into the plain
@@ -1558,8 +1559,24 @@
                     resignedTag.textContent = ' (resigned)';
                     nameEl.appendChild(resignedTag);
                 }
-                nameEl.appendChild(document.createTextNode(deckLabel + teamLabel));
-                li.appendChild(nameEl);
+                nameEl.appendChild(document.createTextNode(teamLabel));
+
+                // Wraps the username line plus (for custom_duel) a second
+                // line naming that player's own deck -- .player-name (moved
+                // here from nameEl itself) is what the width-alignment pass
+                // below measures/pins, so the icons column still lines up
+                // at the same x even when a deck name is the wider of the
+                // two lines.
+                const nameBlock = document.createElement('div');
+                nameBlock.className = 'player-name';
+                nameBlock.appendChild(nameEl);
+                if (deckName !== null) {
+                    const deckNameEl = document.createElement('div');
+                    deckNameEl.className = 'player-deck-name';
+                    deckNameEl.textContent = deckName;
+                    nameBlock.appendChild(deckNameEl);
+                }
+                li.appendChild(nameBlock);
 
                 // All the icons/flags/thumbnail below share one wrapper (its
                 // own flex-wrap container) rather than wrapping directly as
