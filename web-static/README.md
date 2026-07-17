@@ -17,6 +17,19 @@ endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
 
+## Resources
+
+Every page has a `<a id="resources-link">Resources</a>` next to the theme
+select in its own `<footer>`, opening a static `<dialog id="resources-dialog">`
+(already present in each page's own HTML, wired up by `initResourcesDialog()`
+in `js/app.js` alongside the theme-select/version-indicator footer logic
+every page already shares) -- issue #148. Contains external links to the
+official rules, formats, card-specific rulings, and card gallery pages, the
+Moodfall card repository, the community Discord/Reddit, this GitHub
+repository, and a "Buy Me a Coffee" button -- the same set documented in the
+top-level README's own "Resources" section, just reachable in-app rather
+than only from the repo itself.
+
 ## Dark mode
 
 Three modes, chosen via a `<select id="theme-select">` in every page's own
