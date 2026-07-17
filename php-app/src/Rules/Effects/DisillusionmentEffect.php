@@ -16,14 +16,14 @@ use MoodSwings\Rules\RequiresOpponentDecision;
  * player in turn order, each player may choose a color. Put each other
  * mood that shares one of those colors into the discard pile." Each
  * player's own color pick is a genuine decision -- see
- * RequiresOpponentDecision. The queue starts with the next player after
- * the acting player and wraps around to end with the acting player
- * themselves, matching "starting with the next player in turn order"
- * while preserving the existing behavior of asking every player at the
- * table (the acting player included) -- this does not attempt to add a
- * "decline" option the original random implementation never modeled
- * either. "Each other mood" excludes only Disillusionment itself,
- * regardless of owner.
+ * RequiresOpponentDecision -- and, per the card's own "may", is optional
+ * (`required: false`): a player who declines contributes no color at all
+ * rather than being forced to pick one. The queue starts with the next
+ * player after the acting player and wraps around to end with the acting
+ * player themselves, matching "starting with the next player in turn
+ * order" while preserving the existing behavior of asking every player at
+ * the table (the acting player included). "Each other mood" excludes only
+ * Disillusionment itself, regardless of owner.
  */
 final class DisillusionmentEffect extends AbstractMoodEffect implements RequiresOpponentDecision
 {
@@ -43,7 +43,7 @@ final class DisillusionmentEffect extends AbstractMoodEffect implements Requires
                     'key' => $key,
                     'type' => 'mode',
                     'options' => self::COLORS,
-                    'required' => true,
+                    'required' => false,
                     'label' => 'Choose a color -- every other mood of that color is discarded',
                 ],
             );
@@ -57,11 +57,16 @@ final class DisillusionmentEffect extends AbstractMoodEffect implements Requires
         $chosenColors = [];
         foreach ($this->queueOrder($state, $playerId) as $chosenPlayerId) {
             $key = self::KEY_PREFIX . $chosenPlayerId;
-            if (!isset($answers[$key])) {
+            // collectAnswers() always populates one PlayerChoices entry per
+            // requested key, so isset($answers[$key]) alone can't detect a
+            // decline -- a player who chose not to pick a color still gets
+            // an entry here, just with a null value (see string()'s own
+            // has()-backed null-safety). Only a non-null string counts as
+            // an actual pick.
+            $color = ($answers[$key] ?? null)?->string($key);
+            if ($color === null) {
                 continue;
             }
-
-            $color = $answers[$key]->requireString($key);
             if (!in_array($color, self::COLORS, true)) {
                 throw new InvalidChoiceException("'{$color}' is not a valid color");
             }

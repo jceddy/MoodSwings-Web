@@ -4092,6 +4092,47 @@ final class MoodPlayServiceTest extends TestCase
         self::assertFalse($state->isInPlay(53)); // black
     }
 
+    public function testDisillusionmentAllowsAnyPlayerToDeclineChoosingAColor(): void
+    {
+        // The card's own wording is "each player MAY choose a color" --
+        // every field is required: false (see pendingDecisionsFor()), and
+        // a declining player's own decision row still resolves with a
+        // null answer rather than a real color (collectAnswers() always
+        // writes one PlayerChoices entry per requested key regardless of
+        // whether the player picked anything -- see resolveDecisions()'s
+        // own docblock).
+        $state = $this->boardState(hands: [1 => [10], 2 => [9, 28, 53]]);
+        $state->moveHandToInPlay(2, 9); // Discipline, white
+        $state->moveHandToInPlay(2, 28); // Anxiety, blue
+        $state->moveHandToInPlay(2, 53); // Ambition, black
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $result = $this->plays->playMood($state, 1, 10, $choices);
+        self::assertTrue($result->isPending);
+        foreach ($result->pendingDecisions as $decision) {
+            self::assertFalse($decision->field['required']);
+        }
+
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state, 10, 1, $choices, $choices, 0,
+            [
+                // Player 2 declines outright (null answer); player 3
+                // declines too; player 1 (the acting player themselves)
+                // actually picks a color.
+                'chosen_color_2' => new PlayerChoices(['chosen_color_2' => null]),
+                'chosen_color_3' => new PlayerChoices(['chosen_color_3' => null]),
+                'chosen_color_1' => new PlayerChoices(['chosen_color_1' => 'blue']),
+            ],
+        );
+
+        self::assertFalse($finalResult->isPending);
+        self::assertTrue($state->isInPlay(10));
+        self::assertTrue($state->isInPlay(9)); // white, not chosen -- survives
+        self::assertFalse($state->isInPlay(28)); // blue, chosen by player 1
+        self::assertTrue($state->isInPlay(53)); // black, not chosen -- survives
+    }
+
     public function testDuplicityGrantsAnExtraPlayWhenPlayed(): void
     {
         $state = $this->boardState(hands: [1 => [37, 5]]);

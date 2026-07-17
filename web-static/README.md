@@ -1025,7 +1025,11 @@ too, proportional to the smaller card width.
     banner, reusing the exact same field-rendering code as the regular
     choices panel (including multi-select validation for Malice's two
     moods and the `mode` dropdown for Disillusionment's color) — answered
-    via `POST /games/respond`. Betrayal uses this exact same pending-decision
+    via `POST /games/respond` — Disillusionment's own dropdown is optional
+    (its printed text is a "may"), so leaving it on its default "(none)"
+    option and responding anyway is a fully valid answer: the respond
+    button is never disabled for it the way it is for a `required` field
+    with nothing chosen. Betrayal uses this exact same pending-decision
     mechanism for a different reason than those seven: nobody else answers
     it (the panel appears immediately, in the same session, the moment
     Betrayal is played -- no "waiting on" banner ever shows for it, the
