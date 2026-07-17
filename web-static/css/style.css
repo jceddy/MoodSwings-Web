@@ -319,18 +319,23 @@ body.game-page {
     width: fit-content;
 }
 
+/* min-height matches .card-thumb's own actual rendered height (5.5rem-wide
+   art plus its value/copy/recolor badges and gap -- roughly 7.8rem) so an
+   empty cell takes up about the same footprint a card thumbnail would,
+   rather than collapsing thin and making a partially-cleared row look
+   squashed next to a still-full one. */
 .grid-draft-cell {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 4rem;
+    min-height: 7.8rem;
 }
 
 .grid-draft-cell--empty {
     border: 1px dashed var(--border-color, #999);
     border-radius: 4px;
-    min-height: 4rem;
     width: 5.5rem;
+    height: 7.8rem;
 }
 
 /* Row buttons and Column buttons are each their own flex-wrap row
