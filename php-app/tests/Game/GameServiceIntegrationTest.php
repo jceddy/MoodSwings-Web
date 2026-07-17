@@ -1111,6 +1111,53 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($summary['draft_match']);
     }
 
+    /**
+     * is_awaiting_your_response is a distinct flag from is_your_turn --
+     * Compulsion's target has a decision on them regardless of whose turn
+     * it nominally is (the whole round is frozen while it's outstanding,
+     * see the "round is frozen" assertion in
+     * testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond()).
+     */
+    public function testListGamesForUserFlagsAwaitingYourResponseForAPendingDecisionTargetingYou(): void
+    {
+        $u1 = $this->insertUser('lobby-comp1');
+        $u2 = $this->insertUser('lobby-comp2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $this->insertGameCard($gameId, 7, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $u1GamesBefore = $this->games->listGamesForUser($u1);
+        $u2GamesBefore = $this->games->listGamesForUser($u2);
+        self::assertFalse($u1GamesBefore[0]['is_awaiting_your_response']);
+        self::assertFalse($u2GamesBefore[0]['is_awaiting_your_response']);
+
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
+
+        // p1 played the card (it's still their own turn otherwise), but
+        // the decision is on p2 -- is_awaiting_your_response should track
+        // p2, not whoever's turn it is.
+        $u1Games = $this->games->listGamesForUser($u1);
+        $u2Games = $this->games->listGamesForUser($u2);
+        self::assertFalse($u1Games[0]['is_awaiting_your_response']);
+        self::assertTrue($u2Games[0]['is_awaiting_your_response']);
+
+        $this->games->respondToDecision($gameId, $p2, ['given_card_id' => $card3Id]);
+
+        $u2GamesAfter = $this->games->listGamesForUser($u2);
+        self::assertFalse($u2GamesAfter[0]['is_awaiting_your_response'], 'no longer awaiting a response once answered');
+    }
+
     public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void
     {
         $creator = $this->insertUser('sortorder-alice');
@@ -3081,6 +3128,14 @@ final class GameServiceIntegrationTest extends TestCase
         $round2 = $this->fetchRound($gameId);
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p3, (int) $round2['first_game_player_id']); // Honor's override, not the winner (p1)
+
+        // The round_scored log entry itself calls out the override --
+        // otherwise it'd only be inferable once round 2 actually starts.
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString(
+            "honor3 goes first next round instead of the round's winner",
+            $events[0]['description'],
+        );
     }
 
     /**
@@ -3178,6 +3233,9 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(2, (int) $round2['round_number']);
         self::assertSame($p2, (int) $round2['first_game_player_id']);
         self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertStringContainsString('awe2 goes first next round', $events[0]['description']);
     }
 
     /**

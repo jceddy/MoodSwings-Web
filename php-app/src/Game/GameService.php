@@ -3104,12 +3104,14 @@ final class GameService
         // Hurt Feelings only exists in games of 3 or more (active) players.
         $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
 
-        // Honor overrides who goes first next round regardless of who
-        // won -- see BoardState::firstPlayerOverride(). Computed (and
+        // Honor (or Awe's own one-time version) overrides who goes first
+        // next round regardless of who won -- see
+        // BoardState::firstPlayerOverride(). Computed (and
         // computeFreshGrants() run) even if the game is about to
         // complete below and this ends up unused, so any banked grant
         // it consumes is captured by the same save() call either way.
-        $nextFirstPlayer = $state->firstPlayerOverride() ?? $winnerId;
+        $firstPlayerOverride = $state->firstPlayerOverride();
+        $nextFirstPlayer = $firstPlayerOverride ?? $winnerId;
         $nextRoundGrants = $this->computeFreshGrants($state, $nextFirstPlayer, $hurtFeelingsHolder === $nextFirstPlayer ? 2 : 1);
         $this->boardStates->save($gameId, $state);
 
@@ -3117,6 +3119,14 @@ final class GameService
             'scores' => $scores,
             'winner_game_player_id' => $winnerId,
             'hurt_feelings_game_player_id' => $hurtFeelingsHolder,
+            // Only worth calling out when it actually changes who goes
+            // first (an override naming the round's own winner is a no-op,
+            // same as no override at all) and there IS a next round to go
+            // first in -- $nextFirstPlayer above is computed either way,
+            // but goes unused once $gameCompleting ends the game outright.
+            'first_player_override_game_player_id' => (!$gameCompleting && $firstPlayerOverride !== null && $firstPlayerOverride !== $winnerId)
+                ? $firstPlayerOverride
+                : null,
         ], $state);
 
         if ($gameCompleting) {
@@ -3773,7 +3783,10 @@ final class GameService
 
             $this->boardStates->save($gameId, $state);
 
-            $this->logEvent($gameId, $roundId, null, 'round_scored', null, ['skipped' => true], $state);
+            $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
+                'skipped' => true,
+                'first_player_override_game_player_id' => $nextFirstPlayer,
+            ], $state);
 
             if ($isTeamFormat) {
                 // Awe's own player picked $nextFirstPlayer directly, but
@@ -3830,7 +3843,7 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
@@ -3899,6 +3912,7 @@ final class GameService
             }
 
             $currentTurnGamePlayerId = null;
+            $awaitingYourResponse = false;
             if ($game['status'] === 'in_progress') {
                 $roundStmt = $pdo->prepare(
                     "SELECT current_turn_game_player_id FROM game_rounds
@@ -3908,6 +3922,10 @@ final class GameService
                 $roundStmt->execute(['game_id' => $gameId]);
                 $currentTurnGamePlayerId = $roundStmt->fetchColumn();
                 $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
+
+                if ($yourGamePlayerId !== null) {
+                    $awaitingYourResponse = $this->isAwaitingResponseFrom($gameId, $yourGamePlayerId, $game['format']);
+                }
             }
 
             $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
@@ -3925,6 +3943,15 @@ final class GameService
                 'completed_at' => $game['completed_at'],
                 'players' => $players,
                 'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
+                // True for a delayed choice that's on you specifically --
+                // distinct from is_your_turn, since none of these ever
+                // require it to actually be your own turn: a card another
+                // player played that targets you (Compulsion-style, see
+                // RequiresOpponentDecision), your own team's turn_order/
+                // draw_recipient decision needing your propose/confirm, or
+                // (closed_team only) your still-unsubmitted pregame blind
+                // card pass. See isAwaitingResponseFrom().
+                'is_awaiting_your_response' => $awaitingYourResponse,
                 'winner_usernames' => $winnerUsernames,
                 // Lets the lobby group any draft-based match's (Quick
                 // Draft or Winston Draft) up-to-3 games together (same
@@ -3943,6 +3970,74 @@ final class GameService
         }
 
         return $games;
+    }
+
+    /**
+     * listGamesForUser()'s own "is a delayed choice on you specifically"
+     * check -- unlike is_your_turn, none of these three require it to
+     * actually be your own turn, so they're checked independently of
+     * current_turn_game_player_id:
+     *
+     * 1. (closed_team only) your own pregame blind card pass hasn't been
+     *    submitted yet -- see submitInitialCardPass()/"Closed Team Play"
+     *    in php-app/README.md. Checked first and returns early since this
+     *    blocks everything else in the game.
+     * 2. (team/closed_team) your team has an open turn_order/draw_recipient
+     *    decision (activeTeamDecision()) and you're one of its candidates
+     *    -- either phase 'propose' (any candidate may act) or phase
+     *    'confirm' where you're specifically the non-proposing teammate
+     *    (see confirmTeamDecision()'s own "the OTHER teammate" rule).
+     * 3. Any format: the current round has an outstanding pending
+     *    decision (Compulsion-style, or an Enthusiasm/Passion scoring
+     *    decision -- see RequiresOpponentDecision) whose active step
+     *    targets you. Reuses activePendingBatch()/activePendingDecision()
+     *    rather than the fuller serializePendingDecision(), since this
+     *    only needs the yes/no, never the actual prompt shown to you.
+     */
+    private function isAwaitingResponseFrom(int $gameId, int $gamePlayerId, string $format): bool
+    {
+        if ($format === 'closed_team') {
+            $submittedStmt = Connection::get()->prepare(
+                'SELECT 1 FROM game_initial_card_passes WHERE game_id = :game_id AND game_player_id = :player_id'
+            );
+            $submittedStmt->execute(['game_id' => $gameId, 'player_id' => $gamePlayerId]);
+            if ($submittedStmt->fetchColumn() === false) {
+                return true;
+            }
+        }
+
+        if (self::isTeamFormat($format)) {
+            $decision = $this->activeTeamDecision($gameId);
+            if ($decision !== null) {
+                $candidateIds = array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true));
+                if (in_array($gamePlayerId, $candidateIds, true)) {
+                    if ($decision['phase'] === 'propose') {
+                        return true;
+                    }
+                    if ($decision['phase'] === 'confirm' && (int) $decision['proposer_game_player_id'] !== $gamePlayerId) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        $roundStmt = Connection::get()->prepare(
+            "SELECT id FROM game_rounds WHERE game_id = :game_id AND status = 'in_progress' ORDER BY round_number DESC LIMIT 1"
+        );
+        $roundStmt->execute(['game_id' => $gameId]);
+        $roundId = $roundStmt->fetchColumn();
+        if ($roundId === false) {
+            return false;
+        }
+
+        $batch = $this->activePendingBatch((int) $roundId);
+        if ($batch === null) {
+            return false;
+        }
+
+        $decisionRow = $this->activePendingDecision((int) $batch['id']);
+
+        return $decisionRow !== null && (int) $decisionRow['target_game_player_id'] === $gamePlayerId;
     }
 
     /**
@@ -4947,7 +5042,17 @@ final class GameService
     private function describeRoundScored(array $details, array $playerNames, array $teamMembersByTeamId = []): string
     {
         if ($details['skipped'] ?? false) {
-            return 'Round scored (nobody won)';
+            $description = 'Round scored (nobody won)';
+            // Awe's own one-time override is the only way this branch is
+            // ever reached (see skipScoringAndAdvance()), so unlike the
+            // normal scored branch below, this is always worth announcing
+            // -- there's no "round's winner" to already imply it.
+            $overrideId = $details['first_player_override_game_player_id'] ?? null;
+            if ($overrideId !== null) {
+                $description .= '; ' . ($playerNames[(int) $overrideId] ?? 'a player') . ' goes first next round';
+            }
+
+            return $description;
         }
 
         $scoreParts = [];
@@ -4987,6 +5092,16 @@ final class GameService
         $hurtFeelingsId = $details['hurt_feelings_game_player_id'] ?? null;
         if ($hurtFeelingsId !== null) {
             $description .= '; ' . ($playerNames[(int) $hurtFeelingsId] ?? 'a player') . ' has Hurt Feelings next round';
+        }
+
+        // Set only when an in-play override (Honor, or Awe's one-time
+        // version -- see BoardState::firstPlayerOverride()) actually hands
+        // the next round to someone other than this round's own winner --
+        // otherwise that'd be indistinguishable from the ordinary
+        // "winner goes first" rule and not worth a separate callout.
+        $overrideId = $details['first_player_override_game_player_id'] ?? null;
+        if ($overrideId !== null) {
+            $description .= '; ' . ($playerNames[(int) $overrideId] ?? 'a player') . ' goes first next round instead of the round\'s winner';
         }
 
         return $description;

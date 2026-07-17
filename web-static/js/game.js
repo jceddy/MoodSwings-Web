@@ -446,8 +446,16 @@
         // whole-row highlight on top of (not instead of) the bold
         // "(your turn)" text tag on its own status line below --
         // makes an actionable game stand out even before the text
-        // itself is read.
-        li.className = 'lobby-row' + (game.is_your_turn ? ' lobby-row--your-turn' : '');
+        // itself is read. is_awaiting_your_response gets its own
+        // distinctly-colored highlight the same way, and takes priority
+        // when both apply -- a pending decision freezes the round even on
+        // what's nominally your own turn, so it's the more urgent of the
+        // two (see the CSS rule's own comment).
+        li.className = 'lobby-row' + (
+            game.is_awaiting_your_response ? ' lobby-row--awaiting-response'
+                : game.is_your_turn ? ' lobby-row--your-turn'
+                    : ''
+        );
 
         // Wrapped in its own container (rather than appended straight
         // to the li) so the action button below can sit beside the
@@ -491,6 +499,18 @@
             yourTurnEl.className = 'lobby-your-turn';
             yourTurnEl.textContent = ' (your turn)';
             statusLineEl.appendChild(yourTurnEl);
+        }
+
+        // Independent of (and can show alongside) the your-turn tag above
+        // -- see GameService::isAwaitingResponseFrom() for the three
+        // things this covers (a pending card decision targeting you, your
+        // team's own turn_order/draw_recipient decision, or closed_team's
+        // still-unsubmitted pregame card pass).
+        if (game.is_awaiting_your_response) {
+            const awaitingResponseEl = document.createElement('span');
+            awaitingResponseEl.className = 'lobby-awaiting-response';
+            awaitingResponseEl.textContent = ' (waiting on you)';
+            statusLineEl.appendChild(awaitingResponseEl);
         }
 
         infoEl.appendChild(statusLineEl);
@@ -2248,6 +2268,7 @@
         const submitButton = document.getElementById('draft-deck-submit-button');
         const selectAllButton = document.getElementById('draft-deck-select-all-button');
         const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
+        const resetButton = document.getElementById('draft-deck-reset-button');
         const statusEl = document.getElementById('draft-deck-building-status');
 
         if (deckBuilding.you_submitted) {
@@ -2269,6 +2290,7 @@
             submitButton.hidden = true;
             selectAllButton.hidden = true;
             clearSelectionButton.hidden = true;
+            resetButton.hidden = true;
             return;
         }
 
@@ -2312,6 +2334,10 @@
         submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size;
         selectAllButton.hidden = false;
         clearSelectionButton.hidden = false;
+        // Only a sideboard (game 2+ of a match) has a previous deck to
+        // reset back to -- the very first game's own trim has nothing
+        // yet, so this stays hidden rather than resetting to nothing.
+        resetButton.hidden = !deckBuilding.previous_deck_card_ids;
     }
 
     document.getElementById('draft-deck-select-all-button').addEventListener('click', () => {
@@ -2321,6 +2347,11 @@
 
     document.getElementById('draft-deck-clear-selection-button').addEventListener('click', () => {
         draftDeckSelection = new Set();
+        renderDraftDeckBuilding(currentDeckBuilding);
+    });
+
+    document.getElementById('draft-deck-reset-button').addEventListener('click', () => {
+        draftDeckSelection = cardIdsToDraftedCardIndices(currentDeckBuilding.previous_deck_card_ids, currentDeckBuilding.drafted_cards);
         renderDraftDeckBuilding(currentDeckBuilding);
     });
 

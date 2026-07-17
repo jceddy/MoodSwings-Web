@@ -378,8 +378,19 @@ too, proportional to the smaller card width.
     (`.lobby-row--your-turn`, a new `--color-your-turn-bg` theme variable)
     so an actionable game stands out even before any of the row's text is
     read; `#lobby-view li`'s own horizontal padding (rather than 0) is what
-    keeps that background from touching the row's edges. Once a game is
-    `completed`,
+    keeps that background from touching the row's edges.
+    `is_awaiting_your_response` (a delayed choice is on you specifically
+    -- see `GameService::isAwaitingResponseFrom()`) gets the same
+    treatment with a distinct color: a bold `--color-pending` "(waiting on
+    you)" tag plus its own row background (`.lobby-row--awaiting-response`,
+    a new `--color-awaiting-response-bg` amber theme variable, distinct
+    from your-turn's green) -- deliberately a different color from
+    your-turn's, since the two mean different things and can both be true
+    at once (a pending decision freezes the round even on what's nominally
+    your own turn). `buildGameRow()` gives the row background priority to
+    awaiting-response over your-turn when both apply, since it's the more
+    urgent of the two, but still shows both text tags side by side either
+    way. Once a game is `completed`,
     `winner_usernames` (both teammates' for a team-format win, just the
     one player's otherwise -- see `php-app/README.md`) renders as an extra
     line below the players, e.g. "alice won" or "alice & bob won" --
@@ -688,6 +699,14 @@ too, proportional to the smaller card width.
       sideboarding starts from your existing deck instead of forcing a full
       retrim from scratch before every game. Only the very first game of a
       match (no previous deck yet) still defaults to every drafted card.
+      A `#draft-deck-reset-button` ("Reset to previous deck") sits next to
+      Select all/Clear selection -- it re-seeds the selection from
+      `deckBuilding.previous_deck_card_ids` on demand (via the same
+      `cardIdsToDraftedCardIndices()` helper the initial seeding uses),
+      undoing whatever sideboard changes have been made since without
+      forcing a full "Clear selection" + reselect. It's only shown when
+      `previous_deck_card_ids` is actually set -- i.e. never on the very
+      first game of a match, where there's no previous deck to reset to.
       A card currently excluded from the deck is dimmed with a dashed
       border -- `buildCardThumb()`'s existing `.not-playable` treatment for
       an unplayable in-game hand card, reused here via its `notPlayable`
