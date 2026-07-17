@@ -346,6 +346,15 @@ body.game-page {
     margin-top: 1rem;
 }
 
+/* Fixed width (rather than each button sizing to its own text) so every
+   button in both rows lines up into a neat grid instead of jagged edges
+   from "Row 1 (3 cards)" vs. "Col 2 (0 cards)"'s differing lengths. Wide
+   enough for the longest label ("Row/Col N (N cards)") with a little
+   breathing room. */
+.grid-draft-pick-button {
+    width: 7.5rem;
+}
+
 .grid-draft-picks-row {
     display: flex;
     flex-wrap: wrap;
