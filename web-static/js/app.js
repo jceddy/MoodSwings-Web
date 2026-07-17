@@ -100,7 +100,7 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -121,6 +121,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // "Winston Draft" in web-static/README.md.
             winston_draft_pool_source: winstonDraftPoolSource,
             winston_draft_custom_pool_text: winstonDraftCustomPoolText,
+            // Only meaningful for deck_type 'grid_draft' -- see "Grid
+            // Draft" in web-static/README.md.
+            grid_draft_pool_source: gridDraftPoolSource,
+            grid_draft_custom_pool_text: gridDraftCustomPoolText,
         }),
     });
 }
@@ -187,6 +191,17 @@ function submitWinstonDraftPick(gameId, action) {
     return apiRequest('/games/draft/winston-pick', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, action }),
+    });
+}
+
+// Grid Draft (issue #188) -- see "Grid Draft" in web-static/README.md.
+// axis is 'row' or 'column', index is 0-2 -- claims that whole row/column
+// of the current 3x3 grid (2 or 3 cards, depending on whether it
+// intersects the round's own first pick).
+function submitGridDraftPick(gameId, axis, index) {
+    return apiRequest('/games/draft/grid-pick', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, axis, index }),
     });
 }
 

@@ -44,6 +44,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE draft_round_picks');
         $pdo->exec('TRUNCATE TABLE draft_winston_state');
+        $pdo->exec('TRUNCATE TABLE draft_grid_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
@@ -6449,7 +6450,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -7392,6 +7393,432 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
 
         $this->submitFullWinstonDraftDeck($gameId, $u1);
+        $this->games->startGame($gameId);
+    }
+
+    // -- Grid Draft (issue #188) ---------------------------------------------
+
+    /** @return array{gameId:int, u1:int, u2:int} */
+    private function buildGridDraftFixture(
+        string $poolSource = 'random_48',
+        ?string $customPoolText = null,
+        int $winsNeeded = 1,
+    ): array {
+        $u1 = $this->insertUser('griddraft-' . uniqid('u1'));
+        $u2 = $this->insertUser('griddraft-' . uniqid('u2'));
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            winsNeeded: $winsNeeded,
+            deckType: 'grid_draft',
+            gridDraftPoolSource: $poolSource,
+            gridDraftCustomPoolText: $customPoolText,
+        );
+
+        return ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2];
+    }
+
+    private function fetchGridState(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * Drives a full 6-round Grid Draft to completion for both $u1/$u2 via a
+     * simple deterministic policy, exercised purely through the public API
+     * (submitGridDraftPick()/getState()), the same surface the real
+     * frontend uses: the round's first pick always takes row 0 (all 3
+     * cells, since nothing's been taken from a freshly-dealt grid yet);
+     * the second pick always takes column 0, which crosses row 0's own
+     * first cell and so always yields exactly 2 cards -- a deterministic
+     * exercise of the intersection-counting rule on every single round.
+     * Capped well above the exact 12 picks (6 rounds x 2 picks) a full
+     * draft actually needs, purely as a safety net against an
+     * infinite-loop regression.
+     */
+    private function driveGridDraftToDeckBuilding(int $gameId, int $u1, int $u2): void
+    {
+        for ($i = 0; $i < 50; $i++) {
+            $state = $this->games->getState($gameId, $u1);
+            $gridDraft = $state['grid_draft'];
+            if ($gridDraft['status'] !== 'drafting') {
+                return;
+            }
+
+            $drafting = $gridDraft['drafting'];
+            $currentUserId = $drafting['is_your_turn'] ? $u1 : $u2;
+            [$axis, $index] = $drafting['first_pick'] === null ? ['row', 0] : ['column', 0];
+
+            $this->games->submitGridDraftPick($gameId, $currentUserId, $axis, $index);
+        }
+
+        self::fail('Grid Draft did not complete within 50 picks -- possible infinite loop');
+    }
+
+    /** Submits all of $userId's own drafted cards as their deck (the max end of the open-ended range). */
+    private function submitFullGridDraftDeck(int $gameId, int $userId): void
+    {
+        $state = $this->games->getState($gameId, $userId);
+        $cardIds = array_column($state['grid_draft']['deck_building']['drafted_cards'], 'card_id');
+        self::assertGreaterThanOrEqual(12, count($cardIds));
+
+        $this->games->submitDraftDeck($gameId, $userId, $cardIds);
+    }
+
+    public function testCreateGameRejectsGridDraftForNonDraftFormat(): void
+    {
+        $creator = $this->insertUser('griddraft-nondraft-alice');
+        $bob = $this->insertUser('griddraft-nondraft-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('only supported for the "draft" format');
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'grid_draft', gridDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameGridDraftPoolIsTruncatedToFiftyFour(): void
+    {
+        $fixture = $this->buildGridDraftFixture('one_of_each');
+
+        $draftMatchId = (int) $this->fetchGame($fixture['gameId'])['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+
+        self::assertCount(54, json_decode((string) $match['pool_card_ids'], true), 'one_of_each\'s 133 cards are randomly narrowed down to 54 before the draft begins, same as Quick Draft\'s/Winston Draft\'s own pool caps');
+    }
+
+    public function testCreateGameGridDraftCustomPoolBelowMinimumIsRejected(): void
+    {
+        $creator = $this->insertUser('griddraft-undersized-alice');
+        $bob = $this->insertUser('griddraft-undersized-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 54 are required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'custom',
+            gridDraftCustomPoolText: "20 Charity\n",
+        );
+    }
+
+    public function testCreateGameGridDraftRejectsTheStructurePoolSourceAsUndersized(): void
+    {
+        $creator = $this->insertUser('griddraft-structure-alice');
+        $bob = $this->insertUser('griddraft-structure-bob');
+
+        // Unlike Quick Draft (which tops up a short pool mid-draft by
+        // reshuffling discards) or Winston Draft (whose own 45-card
+        // target matches the Structure deck's 45 cards exactly), Grid
+        // Draft has no top-up mechanism at all -- the Structure deck's 45
+        // cards fall short of the 54 Grid Draft always requires, so this
+        // pool source must be rejected outright rather than silently
+        // dealing a short final round.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('requires exactly 54');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'structure',
+        );
+    }
+
+    public function testGridDraftDealsNineCardGridAndRandomlyPicksFirstPicker(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $gridState = $this->fetchGridState($draftMatchId);
+
+        self::assertCount(9, json_decode((string) $gridState['grid_card_ids'], true));
+        self::assertCount(45, json_decode((string) $gridState['remaining_deck_card_ids'], true), '54-card pool minus the 9 cards dealt into round 1\'s grid');
+        self::assertSame(1, (int) $gridState['current_round']);
+        self::assertContains((int) $gridState['first_picker_user_id'], [$u1, $u2]);
+        self::assertSame((int) $gridState['first_picker_user_id'], (int) $gridState['current_turn_user_id']);
+        self::assertNull($gridState['first_pick_axis']);
+        self::assertNull($gridState['first_pick_index']);
+
+        $state = $this->games->getState($gameId, $u1);
+        self::assertSame('drafting', $state['grid_draft']['status']);
+        self::assertCount(9, $state['grid_draft']['drafting']['grid_cards']);
+        self::assertSame(1, $state['grid_draft']['drafting']['current_round']);
+        self::assertSame(6, $state['grid_draft']['drafting']['total_rounds']);
+        self::assertSame(45, $state['grid_draft']['drafting']['remaining_deck_count']);
+        self::assertNull($state['grid_draft']['drafting']['first_pick']);
+    }
+
+    public function testGridDraftRejectsAPickFromWhoeverIsNotTheCurrentTurn(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $otherUserId = $currentTurnUserId === $u1 ? $u2 : $u1;
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("It's not your turn");
+
+        $this->games->submitGridDraftPick($gameId, $otherUserId, 'row', 0);
+    }
+
+    public function testGridDraftRejectsAnInvalidAxis(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('axis must be "row" or "column"');
+
+        $this->games->submitGridDraftPick($gameId, $currentTurnUserId, 'diagonal', 0);
+    }
+
+    public function testGridDraftRejectsAnOutOfRangeIndex(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('index must be between 0 and 2');
+
+        $this->games->submitGridDraftPick($gameId, $currentTurnUserId, 'row', 3);
+    }
+
+    public function testGridDraftFirstPickTakesFullRowAndHandsTurnToOpponent(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $result = $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        self::assertCount(3, $result['cards_taken'], 'the round\'s first pick always yields a full 3 cards -- nothing has been taken from a freshly-dealt grid yet');
+        self::assertFalse($result['round_completed']);
+        self::assertTrue($result['turn_advanced']);
+        self::assertFalse($result['draft_completed']);
+
+        $drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $firstPickerUserId)['drafted_card_ids'], true);
+        self::assertCount(3, $drafted);
+
+        $gridState = $this->fetchGridState($draftMatchId);
+        self::assertSame($secondPickerUserId, (int) $gridState['current_turn_user_id']);
+        self::assertSame('row', $gridState['first_pick_axis']);
+        self::assertSame(0, (int) $gridState['first_pick_index']);
+
+        $grid = json_decode((string) $gridState['grid_card_ids'], true);
+        self::assertSame([null, null, null], [$grid[0], $grid[1], $grid[2]], 'row 0\'s own 3 cells are now empty');
+        self::assertNotNull($grid[3], 'row 1 is completely untouched by a row pick');
+        self::assertNotNull($grid[6], 'row 2 is completely untouched by a row pick');
+    }
+
+    public function testGridDraftSecondPickCrossingTheFirstRowYieldsOnlyTwoCards(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        // Column 0 crosses row 0 at cell 0 (already taken), leaving only
+        // cells 3 and 6 -- exactly 2 cards, derived purely by counting
+        // still-non-null cells, never by comparing axis/index explicitly.
+        $result = $this->games->submitGridDraftPick($gameId, $secondPickerUserId, 'column', 0);
+
+        self::assertCount(2, $result['cards_taken']);
+        self::assertTrue($result['round_completed']);
+        self::assertTrue($result['turn_advanced']);
+        self::assertFalse($result['draft_completed']);
+
+        $drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $secondPickerUserId)['drafted_card_ids'], true);
+        self::assertCount(2, $drafted);
+    }
+
+    public function testGridDraftSecondPickNotCrossingTheFirstRowYieldsThreeCards(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        // Row 1 is a completely different row from row 0 -- untouched, so
+        // it still yields all 3 of its own cards.
+        $result = $this->games->submitGridDraftPick($gameId, $secondPickerUserId, 'row', 1);
+
+        self::assertCount(3, $result['cards_taken']);
+        self::assertTrue($result['round_completed']);
+    }
+
+    public function testGridDraftRejectsASecondPickOfTheExactSameLineAlreadyFullyTaken(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('No cards remain in that row/column');
+
+        $this->games->submitGridDraftPick($gameId, $secondPickerUserId, 'row', 0);
+    }
+
+    public function testGridDraftAlternatesFirstPickerEachRoundAndDealsAFreshGrid(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $round1FirstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $round1SecondPickerUserId = $round1FirstPickerUserId === $u1 ? $u2 : $u1;
+
+        $this->games->submitGridDraftPick($gameId, $round1FirstPickerUserId, 'row', 0);
+        $this->games->submitGridDraftPick($gameId, $round1SecondPickerUserId, 'column', 0);
+
+        $gridState = $this->fetchGridState($draftMatchId);
+        self::assertSame(2, (int) $gridState['current_round']);
+        self::assertSame($round1SecondPickerUserId, (int) $gridState['first_picker_user_id'], 'whoever picked second in round 1 picks first in round 2');
+        self::assertSame($round1SecondPickerUserId, (int) $gridState['current_turn_user_id']);
+        self::assertNull($gridState['first_pick_axis']);
+        self::assertNull($gridState['first_pick_index']);
+        self::assertCount(9, json_decode((string) $gridState['grid_card_ids'], true), 'round 2 deals a completely fresh 9-card grid');
+        self::assertCount(36, json_decode((string) $gridState['remaining_deck_card_ids'], true), '54 - 9 (round 1) - 9 (round 2)');
+
+        foreach (json_decode((string) $gridState['grid_card_ids'], true) as $cell) {
+            self::assertNotNull($cell, 'a freshly-dealt round has nothing taken from it yet');
+        }
+    }
+
+    public function testGridDraftProceedsToDeckBuildingAfterSixRoundsConservingFiftyFourMinusDiscards(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status'], 'Grid Draft always yields at least 12 cards per player (min 15 with this deterministic policy), so there\'s no auto-loss path the way Winston Draft has');
+
+        $u1Cards = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true);
+        $u2Cards = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true);
+
+        // This deterministic policy (row 0 then column 0 every round)
+        // always takes 3 + 2 = 5 of each round's 9 dealt cards, discarding
+        // the other 4 -- 6 rounds x 5 kept = 30 total drafted, 6 x 4 = 24
+        // discarded, 30 + 24 = 54.
+        self::assertSame(30, count($u1Cards) + count($u2Cards));
+        self::assertGreaterThanOrEqual(12, count($u1Cards));
+        self::assertGreaterThanOrEqual(12, count($u2Cards));
+
+        self::assertSame([], array_values(array_intersect($u1Cards, $u2Cards)), 'no catalog card id was drafted by both players -- random_48\'s own pool has no duplicate catalog ids to begin with');
+    }
+
+    public function testGridDraftMatchProgressesGamesAndCompletesAtTwoWins(): void
+    {
+        $fixture = $this->buildGridDraftFixture(winsNeeded: 1);
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $this->submitFullGridDraftDeck($gameId, $u1);
+        $this->submitFullGridDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $matchWins = [$u1 => 0, $u2 => 0];
+        $currentGameId = $gameId;
+        for ($gamesPlayed = 0; $gamesPlayed < 3; $gamesPlayed++) {
+            $winnerUserId = $this->completeQuickDraftGameByPassing($currentGameId);
+            $matchWins[$winnerUserId]++;
+
+            if ($matchWins[$winnerUserId] >= 2) {
+                $finalMatch = $this->fetchDraftMatch($draftMatchId);
+                self::assertSame('completed', $finalMatch['status']);
+                self::assertSame($winnerUserId, (int) $finalMatch['winner_user_id']);
+
+                return;
+            }
+
+            $nextGameStmt = $this->pdo->prepare(
+                "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $nextGameId = (int) $nextGameStmt->fetchColumn();
+            self::assertSame($fixture['gameId'] !== $nextGameId, true);
+
+            $nextGameRow = $this->fetchGame($nextGameId);
+            self::assertSame('grid_draft', $nextGameRow['deck_type']);
+
+            $this->submitFullGridDraftDeck($nextGameId, $u1);
+            $this->submitFullGridDraftDeck($nextGameId, $u2);
+            $this->games->startGame($nextGameId);
+            $currentGameId = $nextGameId;
+        }
+
+        self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    public function testGridDraftStartGameRequiresBothDecksSubmitted(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
+
+        $this->submitFullGridDraftDeck($gameId, $u1);
         $this->games->startGame($gameId);
     }
 

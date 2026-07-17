@@ -182,6 +182,30 @@ final class GameService
     private const WINSTON_MIN_CUSTOM_POOL_SIZE = 45;
     private const WINSTON_MIN_DECK_SIZE = 12;
 
+    /**
+     * Grid Draft (issue #188, format 'draft' alongside 'quick_draft'/
+     * 'winston_draft'): a shared pool of exactly this many cards, dealt 9
+     * at a time into a 3x3 grid over GRID_DRAFT_ROUNDS rounds (54 / 9 = 6
+     * exactly, so the pool always runs out precisely when the last round
+     * is dealt -- see initializeGridDraft()/submitGridDraftPick()). Each
+     * round, whoever picks first takes an entire row or column (always 3
+     * cards); the other player then takes a row or column of what's left,
+     * getting only 2 cards if it crosses the first pick's own row/column,
+     * or a full 3 if it doesn't -- whatever's left in the grid afterward
+     * is simply discarded, never reshuffled back into the pool. Like
+     * Winston Draft, the number of cards each player ends up with varies
+     * (15-18 typically), so there's no max deck size, only
+     * GRID_DRAFT_MIN_DECK_SIZE. GRID_DRAFT_MIN_CUSTOM_POOL_SIZE equals the
+     * target size itself, for the same reason as Winston's own -- no
+     * reshuffle-top-up mechanic exists to fall back on for an undersized
+     * pool.
+     */
+    private const GRID_DRAFT_POOL_SIZE = 54;
+    private const GRID_DRAFT_MIN_CUSTOM_POOL_SIZE = 54;
+    private const GRID_DRAFT_ROUNDS = 6;
+    private const GRID_DRAFT_CARDS_PER_ROUND = 9;
+    private const GRID_DRAFT_MIN_DECK_SIZE = 12;
+
     /** Shared best-of-three threshold for every draft-based deck_type's own match. */
     private const DRAFT_GAMES_TO_WIN = 2;
 
@@ -225,6 +249,12 @@ final class GameService
      * @param ?string $winstonDraftCustomPoolText Winston Draft's own analog of
      *        $quickDraftCustomPoolText -- a decklist-line pool of 45+ cards, only
      *        meaningful when $winstonDraftPoolSource is 'custom'.
+     * @param ?string $gridDraftPoolSource Grid Draft's (issue #188) own analog of
+     *        $quickDraftPoolSource -- only meaningful (and required) when $deckType is
+     *        'grid_draft', same pool-source options, see buildGridDraftPool().
+     * @param ?string $gridDraftCustomPoolText Grid Draft's own analog of
+     *        $quickDraftCustomPoolText -- a decklist-line pool of 54+ cards, only
+     *        meaningful when $gridDraftPoolSource is 'custom'.
      */
     public function createGame(
         int $createdByUserId,
@@ -239,6 +269,8 @@ final class GameService
         ?string $quickDraftCustomPoolText = null,
         ?string $winstonDraftPoolSource = null,
         ?string $winstonDraftCustomPoolText = null,
+        ?string $gridDraftPoolSource = null,
+        ?string $gridDraftCustomPoolText = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -266,10 +298,10 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
-        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft'], true)) {
-            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft" deck types');
+        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true)) {
+            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
         }
-        if (in_array($deckType, ['quick_draft', 'winston_draft'], true) && $format !== 'draft') {
+        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true) && $format !== 'draft') {
             throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format");
         }
 
@@ -299,11 +331,13 @@ final class GameService
         $draftPoolSource = match ($deckType) {
             'quick_draft' => $quickDraftPoolSource,
             'winston_draft' => $winstonDraftPoolSource,
+            'grid_draft' => $gridDraftPoolSource,
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
             'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText),
             'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText),
+            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText),
             default => null,
         };
 
@@ -378,15 +412,16 @@ final class GameService
             }
 
             if ($draftMatchId !== null) {
-                // Winston Draft's own drafted_card_ids starts as an empty
-                // array, not NULL -- picks accumulate incrementally from
-                // the first turn (see initializeWinstonDraft()/
-                // submitWinstonDraftPick()), unlike Quick Draft's own
-                // NULL-until-finalizeQuickDraft() convention.
+                // Winston Draft's and Grid Draft's own drafted_card_ids both
+                // start as an empty array, not NULL -- picks accumulate
+                // incrementally from the first turn (see
+                // initializeWinstonDraft()/submitWinstonDraftPick() and
+                // initializeGridDraft()/submitGridDraftPick()), unlike Quick
+                // Draft's own NULL-until-finalizeQuickDraft() convention.
                 $insertMatchPlayer = $pdo->prepare(
                     'INSERT INTO draft_match_players (draft_match_id, user_id, drafted_card_ids) VALUES (:match_id, :user_id, :drafted_card_ids)'
                 );
-                $initialDraftedCardIds = $deckType === 'winston_draft' ? json_encode([]) : null;
+                $initialDraftedCardIds = in_array($deckType, ['winston_draft', 'grid_draft'], true) ? json_encode([]) : null;
                 foreach ($seatedUserIds as $userId) {
                     $insertMatchPlayer->execute([
                         'match_id' => $draftMatchId,
@@ -399,6 +434,8 @@ final class GameService
                     $this->dealQuickDraftRound($draftMatchId, 1, $draftPoolCardIds, array_values($seatedUserIds));
                 } elseif ($deckType === 'winston_draft') {
                     $this->initializeWinstonDraft($draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
+                } elseif ($deckType === 'grid_draft') {
+                    $this->initializeGridDraft($draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
                 }
             }
 
@@ -742,7 +779,7 @@ final class GameService
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
-        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft'], true)
+        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true)
             ? $this->requireDraftDecksSubmitted($gameId, $playerIds)
             : [];
 
@@ -769,7 +806,7 @@ final class GameService
                 foreach ($playerIds as $playerId) {
                     $playerCardIds = match ($game['deck_type']) {
                         'custom_duel' => $customDuelDeckCardIds[$playerId],
-                        'quick_draft', 'winston_draft' => $draftDeckCardIds[$playerId],
+                        'quick_draft', 'winston_draft', 'grid_draft' => $draftDeckCardIds[$playerId],
                         default => $this->deckCardIdsFor($game),
                     };
                     shuffle($playerCardIds);
@@ -924,6 +961,10 @@ final class GameService
             // Winston Draft's own per-player deck lives on
             // draft_match_players.deck_card_ids too.
             'winston_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "winston_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
+            // Same reasoning as 'quick_draft'/'winston_draft' immediately
+            // above -- Grid Draft's own per-player deck lives on
+            // draft_match_players.deck_card_ids too.
+            'grid_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "grid_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
             default => range(1, self::TOTAL_CARDS), // 'one_of_each'
         };
     }
@@ -1149,6 +1190,33 @@ final class GameService
     private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText): array
     {
         return $this->buildDraftPool($poolSource, $customPoolText, self::WINSTON_POOL_SIZE, self::WINSTON_MIN_CUSTOM_POOL_SIZE);
+    }
+
+    /**
+     * @return int[] Grid Draft's own GRID_DRAFT_POOL_SIZE-card pool -- see
+     *         buildDraftPool(). Unlike Quick Draft (which tops up a
+     *         short pool by reshuffling discards back in mid-draft) or
+     *         Winston Draft (whose own 45-card target already matches
+     *         the 'structure' pool exactly), Grid Draft has no mechanism
+     *         at all for handling a pool short of GRID_DRAFT_POOL_SIZE --
+     *         initializeGridDraft()/submitGridDraftPick() always deal
+     *         exactly 9 cards per round for exactly GRID_DRAFT_ROUNDS
+     *         rounds. The 'structure' pool source (45 cards) is short of
+     *         54, so it's rejected here rather than silently dealing a
+     *         final round or two short of 9 cards.
+     */
+    private function buildGridDraftPool(string $poolSource, ?string $customPoolText): array
+    {
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, self::GRID_DRAFT_POOL_SIZE, self::GRID_DRAFT_MIN_CUSTOM_POOL_SIZE);
+
+        if (count($cardIds) < self::GRID_DRAFT_POOL_SIZE) {
+            throw new GameStateException(
+                'The "' . $poolSource . '" pool source has only ' . count($cardIds)
+                . ' cards, but Grid Draft requires exactly ' . self::GRID_DRAFT_POOL_SIZE
+            );
+        }
+
+        return $cardIds;
     }
 
     /**
@@ -1506,29 +1574,33 @@ final class GameService
      * Submits (or resubmits, sideboarding between the match's up-to-3
      * games) a draft player's own current deck -- chosen from their fixed
      * drafted_card_ids (never expanded or replaced -- only which of those
-     * are IN the deck this game changes). Shared by Quick Draft and
-     * Winston Draft: Quick Draft's own deck size window is fixed
+     * are IN the deck this game changes). Shared by Quick Draft, Winston
+     * Draft, and Grid Draft: Quick Draft's own deck size window is fixed
      * (QUICK_DRAFT_MIN_DECK_SIZE-QUICK_DRAFT_MAX_DECK_SIZE, since every
-     * player always drafts exactly 16 cards); Winston Draft has only a
-     * floor (WINSTON_MIN_DECK_SIZE) and no fixed ceiling, since the total
-     * cards drafted varies by how the pile draft unfolds -- the max is
-     * simply however many cards that player actually drafted. The very
-     * first call (right after drafting finishes) and every later
-     * sideboard call are the same operation against the same
-     * 'deck_building' status -- there's no "first trim" vs. "a sideboard"
-     * distinction worth making, since both just overwrite deck_card_ids
-     * outright.
+     * player always drafts exactly 16 cards); Winston Draft and Grid Draft
+     * each have only a floor (WINSTON_MIN_DECK_SIZE / GRID_DRAFT_MIN_DECK_SIZE)
+     * and no fixed ceiling, since the total cards drafted varies by how
+     * the draft unfolds -- the max is simply however many cards that
+     * player actually drafted. The very first call (right after drafting
+     * finishes) and every later sideboard call are the same operation
+     * against the same 'deck_building' status -- there's no "first trim"
+     * vs. "a sideboard" distinction worth making, since both just
+     * overwrite deck_card_ids outright.
      *
      * @param int[] $deckCardIds
      */
     public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
     {
         $game = $this->fetchGame($gameId);
-        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft'], true) || $game['draft_match_id'] === null) {
+        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true) || $game['draft_match_id'] === null) {
             throw new GameStateException("Game {$gameId} is not a draft game");
         }
         $draftMatchId = (int) $game['draft_match_id'];
-        $minDeckSize = $game['deck_type'] === 'quick_draft' ? self::QUICK_DRAFT_MIN_DECK_SIZE : self::WINSTON_MIN_DECK_SIZE;
+        $minDeckSize = match ($game['deck_type']) {
+            'quick_draft' => self::QUICK_DRAFT_MIN_DECK_SIZE,
+            'winston_draft' => self::WINSTON_MIN_DECK_SIZE,
+            'grid_draft' => self::GRID_DRAFT_MIN_DECK_SIZE,
+        };
         $maxDeckSize = $game['deck_type'] === 'quick_draft' ? self::QUICK_DRAFT_MAX_DECK_SIZE : null;
 
         $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $deckCardIds, $minDeckSize, $maxDeckSize): void {
@@ -1666,8 +1738,8 @@ final class GameService
         ]);
     }
 
-    /** Appends $newCardIds to $userId's own drafted_card_ids for this match -- Winston Draft's picks accumulate incrementally, unlike Quick Draft's finalize-at-the-end. */
-    private function appendWinstonDraftedCardIds(int $draftMatchId, int $userId, array $newCardIds): void
+    /** Appends $newCardIds to $userId's own drafted_card_ids for this match -- Winston Draft's and Grid Draft's picks both accumulate incrementally, unlike Quick Draft's finalize-at-the-end. */
+    private function appendDraftedCardIds(int $draftMatchId, int $userId, array $newCardIds): void
     {
         if ($newCardIds === []) {
             return;
@@ -1771,7 +1843,7 @@ final class GameService
                 }
             }
 
-            $this->appendWinstonDraftedCardIds($draftMatchId, $userId, $newlyDrafted);
+            $this->appendDraftedCardIds($draftMatchId, $userId, $newlyDrafted);
 
             $draftCompleted = $deck === [] && $piles[1] === [] && $piles[2] === [] && $piles[3] === [];
 
@@ -1863,6 +1935,195 @@ final class GameService
         }
 
         $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+    }
+
+    // -- Grid Draft (issue #188) ----------------------------------------
+
+    /**
+     * Deals Grid Draft's own opening state for a freshly-created match:
+     * shuffles $poolCardIds, deals the first GRID_DRAFT_CARDS_PER_ROUND
+     * cards off the top into round 1's grid, and randomly picks who picks
+     * first this round (alternates every round thereafter -- see
+     * submitGridDraftPick()). Called once from createGame(), exactly
+     * where initializeWinstonDraft()/dealQuickDraftRound() are called for
+     * the other two draft deck_types.
+     *
+     * @param int[] $poolCardIds
+     * @param int[] $userIds exactly the match's 2 user ids
+     */
+    private function initializeGridDraft(int $draftMatchId, array $poolCardIds, array $userIds): void
+    {
+        $pool = $poolCardIds;
+        shuffle($pool);
+
+        $grid = array_splice($pool, 0, self::GRID_DRAFT_CARDS_PER_ROUND);
+        $firstPickerUserId = $userIds[array_rand($userIds)];
+
+        Connection::get()->prepare(
+            'INSERT INTO draft_grid_state
+                (draft_match_id, remaining_deck_card_ids, current_round, grid_card_ids, first_picker_user_id, current_turn_user_id)
+             VALUES (:match_id, :deck, 1, :grid, :first_picker, :first_picker)'
+        )->execute([
+            'match_id' => $draftMatchId,
+            'deck' => json_encode(array_values($pool)),
+            'grid' => json_encode($grid),
+            'first_picker' => $firstPickerUserId,
+        ]);
+    }
+
+    /**
+     * @return int[] the 3 cell indices (row-major, 0-8) making up $axis
+     *         ('row' or 'column') number $index (0-2) of a 3x3 grid.
+     */
+    private function gridDraftLineCells(string $axis, int $index): array
+    {
+        return $axis === 'row'
+            ? [$index * 3, $index * 3 + 1, $index * 3 + 2]
+            : [$index, $index + 3, $index + 6];
+    }
+
+    /**
+     * One player's row-or-column pick against Grid Draft's own current 3x3
+     * grid -- see php-app/README.md's "Grid Draft" section for the full
+     * mechanic. $axis is 'row' or 'column', $index is 0-2.
+     *
+     * The round's first pick always yields all 3 cells (nothing has been
+     * taken from a freshly-dealt grid yet); the second pick yields
+     * whichever of its own 3 cells are still non-null -- 2 if it crosses
+     * the first pick's own row/column, 3 if it doesn't -- derived purely
+     * by counting, never by comparing axes/indices explicitly. A pick
+     * that would take 0 cards (the second pick choosing the exact same
+     * line the first pick already fully cleared) is rejected outright.
+     * Completing a round's second pick either deals the next round's
+     * fresh grid (alternating who picks first) or, after round
+     * GRID_DRAFT_ROUNDS, ends the draft and moves the match to
+     * deck_building -- the pool always divides evenly (54 / 9 = 6), so
+     * there's never a short-final-round or reshuffle case to handle.
+     *
+     * @return array{axis:string, index:int, cards_taken:int[], round_completed:bool, turn_advanced:bool, draft_completed:bool}
+     */
+    public function submitGridDraftPick(int $gameId, int $userId, string $axis, int $index): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'grid_draft' || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a Grid Draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+
+        return $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $axis, $index): array {
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if ($match['status'] !== 'drafting') {
+                throw new GameStateException('This match is not currently drafting');
+            }
+            if (!in_array($axis, ['row', 'column'], true)) {
+                throw new GameStateException('axis must be "row" or "column"');
+            }
+            if ($index < 0 || $index > 2) {
+                throw new GameStateException('index must be between 0 and 2');
+            }
+
+            $pdo = Connection::get();
+            $stateStmt = $pdo->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
+            $stateStmt->execute(['id' => $draftMatchId]);
+            $state = $stateStmt->fetch();
+            if ($state === false) {
+                throw new GameStateException("No Grid Draft state for match {$draftMatchId}");
+            }
+            if ((int) $state['current_turn_user_id'] !== $userId) {
+                throw new GameStateException("It's not your turn to draft");
+            }
+
+            $grid = json_decode((string) $state['grid_card_ids'], true);
+            $isSecondPick = $state['first_pick_axis'] !== null;
+
+            $cells = $this->gridDraftLineCells($axis, $index);
+            $cardsTaken = [];
+            foreach ($cells as $cell) {
+                if ($grid[$cell] !== null) {
+                    $cardsTaken[] = (int) $grid[$cell];
+                    $grid[$cell] = null;
+                }
+            }
+
+            if ($cardsTaken === []) {
+                throw new GameStateException('No cards remain in that row/column');
+            }
+
+            $this->appendDraftedCardIds($draftMatchId, $userId, $cardsTaken);
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            $opponentUserId = $userIds[0] === $userId ? $userIds[1] : $userIds[0];
+
+            if (!$isSecondPick) {
+                // First pick of the round -- the round isn't over yet;
+                // just hand the turn to the other player for the second pick.
+                $pdo->prepare(
+                    'UPDATE draft_grid_state
+                     SET grid_card_ids = :grid, current_turn_user_id = :next_turn, first_pick_axis = :axis, first_pick_index = :index
+                     WHERE draft_match_id = :match_id'
+                )->execute([
+                    'grid' => json_encode($grid),
+                    'next_turn' => $opponentUserId,
+                    'axis' => $axis,
+                    'index' => $index,
+                    'match_id' => $draftMatchId,
+                ]);
+
+                return [
+                    'axis' => $axis,
+                    'index' => $index,
+                    'cards_taken' => $cardsTaken,
+                    'round_completed' => false,
+                    'turn_advanced' => true,
+                    'draft_completed' => false,
+                ];
+            }
+
+            // Second pick -- the round is over; whatever's left in $grid is
+            // simply discarded (never reshuffled back into the pool).
+            $currentRound = (int) $state['current_round'];
+
+            if ($currentRound >= self::GRID_DRAFT_ROUNDS) {
+                $pdo->prepare('DELETE FROM draft_grid_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
+                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+
+                return [
+                    'axis' => $axis,
+                    'index' => $index,
+                    'cards_taken' => $cardsTaken,
+                    'round_completed' => true,
+                    'turn_advanced' => false,
+                    'draft_completed' => true,
+                ];
+            }
+
+            $remainingDeck = array_map(intval(...), json_decode((string) $state['remaining_deck_card_ids'], true));
+            $nextGrid = array_splice($remainingDeck, 0, self::GRID_DRAFT_CARDS_PER_ROUND);
+            $nextFirstPickerUserId = (int) $state['first_picker_user_id'] === $userIds[0] ? $userIds[1] : $userIds[0];
+
+            $pdo->prepare(
+                'UPDATE draft_grid_state
+                 SET remaining_deck_card_ids = :deck, current_round = :round, grid_card_ids = :grid,
+                     first_picker_user_id = :first_picker, current_turn_user_id = :first_picker,
+                     first_pick_axis = NULL, first_pick_index = NULL
+                 WHERE draft_match_id = :match_id'
+            )->execute([
+                'deck' => json_encode(array_values($remainingDeck)),
+                'round' => $currentRound + 1,
+                'grid' => json_encode($nextGrid),
+                'first_picker' => $nextFirstPickerUserId,
+                'match_id' => $draftMatchId,
+            ]);
+
+            return [
+                'axis' => $axis,
+                'index' => $index,
+                'cards_taken' => $cardsTaken,
+                'round_completed' => true,
+                'turn_advanced' => true,
+                'draft_completed' => false,
+            ];
+        });
     }
 
     /**
@@ -4468,6 +4729,121 @@ final class GameService
         ];
     }
 
+    /**
+     * getState()'s own 'grid_draft' field builder -- structurally the same
+     * shape as winstonDraftStateFor() above (match-level scoreline plus
+     * drafting/deck_building sub-state, same next_game_id logic), reusing
+     * draftDeckBuildingStateFor() identically once the match reaches
+     * deck_building.
+     *
+     * @param array<string, mixed> $game
+     */
+    private function gridDraftStateFor(array $game, int $viewerUserId): array
+    {
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $playersStmt = Connection::get()->prepare(
+            'SELECT user_id, wins, drafted_card_ids, deck_card_ids, previous_deck_card_ids
+             FROM draft_match_players WHERE draft_match_id = :id'
+        );
+        $playersStmt->execute(['id' => $draftMatchId]);
+        $playersByUser = [];
+        foreach ($playersStmt->fetchAll() as $row) {
+            $playersByUser[(int) $row['user_id']] = $row;
+        }
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $match['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE draft_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        $state = [
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            'status' => $match['status'],
+            'games_to_win' => self::DRAFT_GAMES_TO_WIN,
+            'next_game_id' => $nextGameId,
+            'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
+            'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'drafting' => null,
+            'deck_building' => null,
+        ];
+
+        if ($match['status'] === 'drafting') {
+            $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $playersByUser);
+        } elseif ($match['status'] === 'deck_building') {
+            $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $playersByUser,
+                $viewerUserId,
+                $opponentUserId,
+                self::GRID_DRAFT_MIN_DECK_SIZE,
+                null,
+            );
+        }
+
+        return $state;
+    }
+
+    /**
+     * getState()'s own view of Grid Draft's current grid/turn state for
+     * $viewerUserId. The 3x3 grid's cards are always fully visible to both
+     * players (unlike Winston Draft's face-down piles, a dealt grid is
+     * face-up on the table) -- grid_cards is a 9-element array in row-major
+     * order (index = row * 3 + column), with a null entry for any cell
+     * already taken this round. first_pick is null until the round's first
+     * pick has been made, then {axis, index} -- the frontend uses it to
+     * highlight which line is no longer available to pick as a whole and
+     * to grey out the exact-same-line choice for the second picker (see
+     * submitGridDraftPick()'s own "0 cards" rejection).
+     *
+     * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
+     */
+    private function gridDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $playersByUser): array
+    {
+        $stateStmt = Connection::get()->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $gridState = $stateStmt->fetch();
+
+        $gridCardIds = json_decode((string) $gridState['grid_card_ids'], true);
+        $gridCards = array_map(
+            fn ($cardId) => $cardId !== null ? $this->serializeCatalogCards([(int) $cardId])[0] : null,
+            $gridCardIds
+        );
+
+        $draftedSoFarCardIds = ($playersByUser[$viewerUserId]['drafted_card_ids'] ?? null) !== null
+            ? array_map(intval(...), json_decode((string) $playersByUser[$viewerUserId]['drafted_card_ids'], true))
+            : [];
+
+        return [
+            'is_your_turn' => (int) $gridState['current_turn_user_id'] === $viewerUserId,
+            'current_round' => (int) $gridState['current_round'],
+            'total_rounds' => self::GRID_DRAFT_ROUNDS,
+            'first_picker_user_id' => (int) $gridState['first_picker_user_id'],
+            'grid_cards' => $gridCards,
+            'first_pick' => $gridState['first_pick_axis'] !== null
+                ? ['axis' => $gridState['first_pick_axis'], 'index' => (int) $gridState['first_pick_index']]
+                : null,
+            'remaining_deck_count' => count(json_decode((string) $gridState['remaining_deck_card_ids'], true)),
+            'drafted_so_far' => $this->serializeCatalogCards($draftedSoFarCardIds),
+        ];
+    }
+
     /** @return array<string, mixed> */
     public function getState(int $gameId, int $viewerUserId): array
     {
@@ -4616,12 +4992,17 @@ final class GameService
             // Winston Draft's own analog of 'quick_draft' immediately
             // above -- see winstonDraftStateFor().
             'winston_draft' => null,
+            // Grid Draft's (issue #188) own analog of 'quick_draft'
+            // immediately above -- see gridDraftStateFor().
+            'grid_draft' => null,
         ];
 
         if ($game['deck_type'] === 'quick_draft' && $game['draft_match_id'] !== null) {
             $response['quick_draft'] = $this->quickDraftStateFor($game, $viewerUserId);
         } elseif ($game['deck_type'] === 'winston_draft' && $game['draft_match_id'] !== null) {
             $response['winston_draft'] = $this->winstonDraftStateFor($game, $viewerUserId);
+        } elseif ($game['deck_type'] === 'grid_draft' && $game['draft_match_id'] !== null) {
+            $response['grid_draft'] = $this->gridDraftStateFor($game, $viewerUserId);
         }
 
         if ($game['status'] !== 'in_progress' && $game['status'] !== 'completed') {

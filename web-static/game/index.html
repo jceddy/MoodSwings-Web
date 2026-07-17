@@ -107,6 +107,18 @@
                 </div>
             </div>
 
+            <div id="grid-draft-panel" hidden>
+                <div id="grid-draft-drafting" hidden>
+                    <h3 id="grid-draft-drafting-title"></h3>
+                    <p id="grid-draft-drafting-status"></p>
+                    <div id="grid-draft-grid"></div>
+                    <div id="grid-draft-picks"></div>
+                    <p id="grid-draft-remaining-deck-count"></p>
+                    <h4>Drafted so far</h4>
+                    <ul id="grid-draft-drafted-so-far"></ul>
+                </div>
+            </div>
+
             <div id="draft-deck-building" hidden>
                 <h3 id="draft-deck-building-title"></h3>
                 <p id="draft-deck-building-status"></p>
@@ -252,6 +264,7 @@
                     <option value="custom_duel">Custom Decklists (Duel)</option>
                     <option value="quick_draft">Quick Draft</option>
                     <option value="winston_draft">Winston Draft</option>
+                    <option value="grid_draft">Grid Draft</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -358,6 +371,28 @@
                     </label>
                     <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards)
                         <textarea id="new-game-winston-draft-custom-pool-text" rows="10"></textarea>
+                    </label>
+                </div>
+            </div>
+
+            <div id="new-game-grid-draft-fields" hidden>
+                <p>Choose the shared pool to draft from:</p>
+                <label>Pool
+                    <select id="new-game-grid-draft-pool-source">
+                        <option value="random_48">54 random cards</option>
+                        <option value="jceddys_75">jceddy's 75 Card deck (75 cards)</option>
+                        <option value="one_of_each">One of Each Card (133 cards)</option>
+                        <option value="custom">Custom pool</option>
+                    </select>
+                </label>
+                <p id="new-game-grid-draft-pool-source-description"></p>
+
+                <div id="new-game-grid-draft-custom-pool-fields" hidden>
+                    <label>Upload a pool file
+                        <input type="file" id="new-game-grid-draft-custom-pool-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste the pool (one card per line, an optional leading count, at least 54 cards)
+                        <textarea id="new-game-grid-draft-custom-pool-text" rows="10"></textarea>
                     </label>
                 </div>
             </div>

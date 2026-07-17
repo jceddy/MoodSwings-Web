@@ -410,7 +410,8 @@ too, proportional to the smaller card width.
     to take) and "View" otherwise (`showBoard()` itself renders read-only
     once a game isn't `in_progress` regardless of the button's own label,
     so this is purely about setting the right expectation before
-    clicking, not a new access restriction). A `quick_draft`/`winston_draft`
+    clicking, not a new access restriction). A `quick_draft`/`winston_draft`/
+    `grid_draft`
     game's up-to-3
     `games` rows (sharing one `draft_match_id`) are grouped into a single
     `<li class="lobby-match-group">` instead of showing as unrelated rows --
@@ -465,8 +466,8 @@ too, proportional to the smaller card width.
     "Closed Team Play" in `php-app/README.md` for the formats themselves. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
-    Draft, Winston Draft, One of Each Card, in that order, matching
-    `deck_type`'s own eight values -- see "Deck types" in
+    Draft, Winston Draft, Grid Draft, One of Each Card, in that order,
+    matching `deck_type`'s own nine values -- see "Deck types" in
     `php-app/README.md`) has a plain-language
     description shown right below it (`#new-game-deck-type-description`,
     `updateDeckTypeDescription()`) that updates live as the selection
@@ -492,14 +493,14 @@ too, proportional to the smaller card width.
     selected (Power's 15 cards fall short of the 45-card minimum both team
     formats share -- see "Open Team Play"/"Closed Team Play" in
     `php-app/README.md`), and -- since the Draft format supports only Quick
-    Draft/Winston Draft -- every option *except* those two whenever Draft is
-    selected, and Quick Draft/Winston Draft themselves whenever Draft
-    *isn't* selected. If
+    Draft/Winston Draft/Grid Draft -- every option *except* those three
+    whenever Draft is selected, and Quick Draft/Winston Draft/Grid Draft
+    themselves whenever Draft *isn't* selected. If
     the previously-selected option becomes unavailable, the dropdown falls
     back to the first option that's still available in document order --
     Structure for most formats, but Quick Draft for Draft (the first of the
-    two options in document order), since neither is available anywhere
-    else. Selecting Custom Decklists (Duel) reveals
+    three options in document order), since none of the three is available
+    anywhere else. Selecting Custom Decklists (Duel) reveals
     `#new-game-duel-rules-fields` instead of the decklist fields -- no
     decklist is entered here at all, only the deck-building *rules* both
     players' own decklists (submitted later, see the Board bullet below)
@@ -532,14 +533,26 @@ too, proportional to the smaller card width.
     reflecting its own 45-card target rather than Quick Draft's 48, and the
     same Custom-pool file/textarea pair feeding
     `winston_draft_custom_pool_text`) -- `updateWinstonDraftPoolSourceVisibility()`
-    mirrors `updateQuickDraftPoolSourceVisibility()` exactly. Both Quick
-    Draft and Winston Draft are only ever offered under the Draft format
+    mirrors `updateQuickDraftPoolSourceVisibility()` exactly. Selecting
+    Grid Draft reveals `#new-game-grid-draft-fields` instead -- the same
+    shape again (`#new-game-grid-draft-pool-source`, its own
+    `GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
+    54-card target, and the same Custom-pool file/textarea pair feeding
+    `grid_draft_custom_pool_text`) -- `updateGridDraftPoolSourceVisibility()`
+    mirrors the other two exactly, except its own pool-source `<select>`
+    has only 4 options, not 5: Structure deck is deliberately absent, since
+    its 45 cards fall short of the 54 Grid Draft always requires and there's
+    no top-up mechanism to cover the gap (see "Grid Draft" in
+    `php-app/README.md`) -- offering it in the dropdown would just be a
+    guaranteed `400` waiting to happen. Quick Draft, Winston Draft, and
+    Grid Draft are all three only ever offered under the Draft format
     (`#new-game-format` has its own
     Draft option, functionally identical to Duel -- same 2-player,
     separate-per-player-deck engine, `updateOpponentSelectionLimit()` caps
     it at 1 opponent the same way Duel is -- but restricted to deck types
     that build a deck through some kind of live drafting process; Quick
-    Draft was the first, Winston Draft joined it later -- see "Draft
+    Draft was the first, Winston Draft joined it next, Grid Draft joined
+    after that -- see "Draft
     format" in
     `php-app/README.md`). Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
@@ -631,16 +644,19 @@ too, proportional to the smaller card width.
     See "Closed Team Play" in `php-app/README.md`.
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
-    whichever of `state.quick_draft`/`state.winston_draft` is non-null --
-    both share an identical outer shape, `your_wins`/`opponent_wins`/
+    whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
+    is non-null --
+    all three share an identical outer shape, `your_wins`/`opponent_wins`/
     `games_to_win`/`next_game_id`, even though their own `drafting`
     sub-shapes differ -- hidden for every other deck_type) sits just below
     the round-status line and is always shown once a `quick_draft`/
-    `winston_draft` game
+    `winston_draft`/`grid_draft` game
     exists, regardless of whether the game itself is `waiting`/
-    `in_progress`/`completed` -- "Quick Draft match — game N of up to 3 —
-    you X, opponent Y (first to 2 wins the match)" (or "Winston Draft
-    match" for that deck_type, via `DRAFT_MATCH_LABELS`). The same function also
+    `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
+    (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
+    ahead). No deck_type-specific label here (Quick Draft/Winston
+    Draft/Grid Draft) -- that's already shown elsewhere on the board (the
+    title), so this line stays purely about the match's own progress. The same function also
     owns `#draft-match-next-game-button`, right next to the scoreline:
     hidden unless `next_game_id` is set (only true once
     this specific game has completed but the match itself hasn't --
@@ -651,7 +667,8 @@ too, proportional to the smaller card width.
     A `renderDraftPanel(state)` dispatcher
     (mutually exclusive with `#duel-deck-submission`, occupying the same
     waiting-room slot while `state.game.status` is `'waiting'`) shows
-    either `#quick-draft-panel` or `#winston-draft-panel` depending on
+    whichever of `#quick-draft-panel`/`#winston-draft-panel`/
+    `#grid-draft-panel` matches
     `state.game.deck_type`, covering each
     format's own two pregame phases. Quick Draft's own two phases are read
     from `state.quick_draft`:
@@ -678,17 +695,19 @@ too, proportional to the smaller card width.
       draft so far (across all rounds, including whatever's already
       resolved this one), read-only.
     - **Deck building** (shared `#draft-deck-building` block, sitting
-      outside both `#quick-draft-panel` and `#winston-draft-panel` since
-      its shape is identical for both formats -- `renderDraftDeckBuilding()`,
-      shown while `state.quick_draft.status`/`state.winston_draft.status`
+      outside `#quick-draft-panel`/`#winston-draft-panel`/`#grid-draft-panel`
+      since its shape is identical for all three -- `renderDraftDeckBuilding()`,
+      shown while `state.quick_draft.status`/`state.winston_draft.status`/
+      `state.grid_draft.status`
       is `'deck_building'`) -- the exact same picker/endpoint
       (`submitDraftDeck()`, `POST /games/draft/deck`) serves both the
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
       the UI either. Its title/status text is built from
       `deckBuilding.min_deck_size`/`max_deck_size` (14/16 for Quick Draft,
-      12/however-many-you-drafted for Winston Draft), never hardcoded, so
-      one function serves both formats' own bounds correctly. All of your
+      12/however-many-you-drafted for Winston Draft and Grid Draft alike),
+      never hardcoded, so
+      one function serves all three formats' own bounds correctly. All of your
       own drafted cards
       (`deckBuilding.drafted_cards`) show as toggleable
       thumbnails (same picker pattern again, no 2-card cap this time — any
@@ -726,7 +745,8 @@ too, proportional to the smaller card width.
       exact same field names `buildCardThumb()`/`openCardDetail()` already
       read (`card_id`, `name`, `color`, `value`, `rules_text`, etc.), so
       neither function needed any change to render a card that hasn't been
-      dealt into a game yet. See "Quick Draft"/"Winston Draft" in
+      dealt into a game yet. See "Quick Draft"/"Winston Draft"/"Grid Draft"
+      in
       `php-app/README.md` for the formats themselves.
     - **Winston Draft's own drafting phase** (`#winston-draft-panel` >
       `#winston-draft-drafting`, `renderWinstonDraftDrafting()`, shown
@@ -747,6 +767,32 @@ too, proportional to the smaller card width.
       pile claims it whole. `drafting.remaining_deck_count` and a
       `#winston-draft-drafted-so-far` read-only list (your own accumulated
       picks -- never your opponent's) round out the panel.
+    - **Grid Draft's own drafting phase** (`#grid-draft-panel` >
+      `#grid-draft-drafting`, `renderGridDraftDrafting()`, shown while
+      `state.grid_draft.status` is `'drafting'`) -- like Winston Draft,
+      only one player acts at a time, so there's no card-selection `Set`
+      either: the active player picks a whole row or column, never
+      individual cells. `#grid-draft-grid` renders all 9 cells of
+      `drafting.grid_cards` (always fully visible to both players -- unlike
+      Winston Draft's face-down piles, a dealt grid is face-up on the
+      table) in the same row-major order `getState()` reports them in, via
+      a CSS grid (`#grid-draft-grid { grid-template-columns: repeat(3, ...) }`);
+      a cell that's already been taken this round (`null` in
+      `grid_cards`) renders as a plain dashed placeholder
+      (`.grid-draft-cell--empty`) instead of a card thumbnail.
+      `#grid-draft-picks` renders 6 buttons (Row 1-3, Column 1-3), each
+      labeled with however many cells are actually still non-null along
+      that line (`gridDraftLineCells()`, a client-side mirror of
+      `GameService::submitGridDraftPick()`'s own cell-counting logic) --
+      "Row 2 (3 cards)", "Column 1 (2 cards)", etc. A line with 0 cards
+      left (the second pick choosing the exact same line the first pick
+      already fully cleared) renders disabled rather than being sent to
+      the server only to be rejected. Clicking a button calls
+      `submitGridDraftAction(axis, index)` (`submitGridDraftPick()`, `POST
+      /games/draft/grid-pick`). `drafting.remaining_deck_count` and a
+      `#grid-draft-drafted-so-far` read-only list (your own accumulated
+      picks -- never your opponent's) round out the panel, the same as
+      Winston Draft's own.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
