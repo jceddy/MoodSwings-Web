@@ -280,7 +280,8 @@ body.game-page {
 #draft-deck-picker,
 .winston-draft-pile-cards,
 #winston-draft-drafted-so-far,
-#grid-draft-drafted-so-far {
+#grid-draft-drafted-so-far,
+#grid-draft-opponent-drafted-so-far {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -292,6 +293,7 @@ body.game-page {
 #quick-draft-kept-so-far li,
 #winston-draft-drafted-so-far li,
 #grid-draft-drafted-so-far li,
+#grid-draft-opponent-drafted-so-far li,
 .in-play-zone__list li {
     list-style: none;
 }

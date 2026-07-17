@@ -791,8 +791,14 @@ too, proportional to the smaller card width.
       `submitGridDraftAction(axis, index)` (`submitGridDraftPick()`, `POST
       /games/draft/grid-pick`). `drafting.remaining_deck_count` and a
       `#grid-draft-drafted-so-far` read-only list (your own accumulated
-      picks -- never your opponent's) round out the panel, the same as
-      Winston Draft's own.
+      picks) round out the panel. Unlike Winston Draft's own
+      drafted-so-far list (strictly your own picks, since its piles are
+      genuinely hidden from you until you take them), Grid Draft's grid is
+      face-up and visible to both players the whole time, so there's a
+      second `#grid-draft-opponent-drafted-so-far` read-only list right
+      underneath it showing your opponent's own accumulated picks too
+      (`drafting.opponent_drafted_so_far`) -- nothing there was ever hidden
+      information to begin with.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

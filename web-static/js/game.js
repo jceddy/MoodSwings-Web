@@ -2330,6 +2330,17 @@
             li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
             return li;
         });
+
+        // Unlike Quick Draft/Winston Draft, Grid Draft is open information
+        // end to end -- every card either player has ever drafted was
+        // already visible to both of them the moment it was dealt into the
+        // face-up grid, so there's nothing to hide here the way Winston
+        // Draft's own current_pile_cards hides the opponent's active pile.
+        renderList(document.getElementById('grid-draft-opponent-drafted-so-far'), { hidden: true }, drafting.opponent_drafted_so_far, (card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            return li;
+        });
     }
 
     async function submitGridDraftAction(axis, index) {
