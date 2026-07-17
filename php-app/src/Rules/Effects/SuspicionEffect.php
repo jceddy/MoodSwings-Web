@@ -30,6 +30,9 @@ final class SuspicionEffect extends AbstractMoodEffect implements RequiresOppone
         $chosenPlayers = array_unique($choices->ints('player_ids'));
 
         foreach ($chosenPlayers as $chosenPlayerId) {
+            if (!in_array($chosenPlayerId, $state->activePlayerOrder(), true)) {
+                throw new InvalidChoiceException("Player {$chosenPlayerId} is not a valid player");
+            }
             if ($state->hand($chosenPlayerId) === []) {
                 throw new InvalidChoiceException("Player {$chosenPlayerId} has no cards in hand");
             }

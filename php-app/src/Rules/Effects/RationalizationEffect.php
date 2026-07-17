@@ -55,17 +55,18 @@ final class RationalizationEffect extends AbstractMoodEffect
             throw new InvalidChoiceException("Rationalization's direction must be 'left' or 'right'");
         }
 
-        $order = $state->playerOrder();
-        $count = count($order);
+        $order = $state->activePlayerOrder();
 
         $hands = [];
         foreach ($order as $giverId) {
             $hands[$giverId] = $state->hand($giverId);
         }
 
-        foreach ($order as $index => $giverId) {
-            $neighborIndex = $direction === 'right' ? ($index + 1) % $count : ($index - 1 + $count) % $count;
-            $recipientId = $order[$neighborIndex];
+        foreach ($order as $giverId) {
+            $recipientId = $state->activeNeighbor($giverId, $direction);
+            if ($recipientId === null) {
+                continue;
+            }
             foreach ($hands[$giverId] as $handCardId) {
                 $state->giveHandCardToPlayer($giverId, $recipientId, $handCardId);
             }

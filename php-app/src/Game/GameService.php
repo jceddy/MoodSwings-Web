@@ -2030,12 +2030,57 @@ final class GameService
                 return $this->completeGameByResignation($gameId, $game, $round, $gamePlayerId, $activeIds);
             }
 
+            // Only the "continue without them" path needs this -- the
+            // immediate-completion path above ends the game outright, so
+            // whatever's left in play just stands as the final board's
+            // own historical record, same as any other completed game.
+            $this->removeResignedPlayerCardsFromBoard($gameId, $gamePlayerId);
+
             return $this->skipTurnForResignedPlayer($gameId, $round, $gamePlayerId);
         });
 
         $this->touchLastMoveAt($gameId);
 
         return $result;
+    }
+
+    /**
+     * "All of that resigning player's cards leave play" -- the 'standard'
+     * 3-4 player "continue without them" case is the only one where the
+     * board keeps being played on by everyone else, so their moods can't
+     * just sit there mid-game as if they were still in it (still
+     * scoring, still targetable, still whatever a while-in-play effect
+     * would otherwise do), and their hand can't stay sitting there either
+     * (still visible to Confusion-style "reveal a card" effects that skip
+     * them as a *giver* -- see activePlayerOrder() -- but would otherwise
+     * still find their hand non-empty for a "does an opponent have cards"
+     * check). Both go to the bottom of the resigning player's own deck
+     * rather than the discard pile -- a resignation isn't a scoring event
+     * for any of those cards, so it shouldn't feed the discard-pile-driven
+     * effects (Altruism, Corruption, etc.) the way an ordinary discard
+     * would. `moodsOwnedBy()`/`hand()` both already return a snapshot copy
+     * (PHP array value semantics), so iterating either one is safe even
+     * though `moveInPlayToBottomOfDeck()`/`moveHandToBottomOfDeck()`
+     * mutate $state's own underlying maps as they go.
+     */
+    private function removeResignedPlayerCardsFromBoard(int $gameId, int $gamePlayerId): void
+    {
+        $state = $this->boardStates->load($gameId);
+
+        $moodCardIds = array_keys($state->moodsOwnedBy($gamePlayerId));
+        $handCardIds = $state->hand($gamePlayerId);
+        if ($moodCardIds === [] && $handCardIds === []) {
+            return;
+        }
+
+        foreach ($moodCardIds as $cardId) {
+            $state->moveInPlayToBottomOfDeck($cardId);
+        }
+        foreach ($handCardIds as $cardId) {
+            $state->moveHandToBottomOfDeck($gamePlayerId, $cardId);
+        }
+
+        $this->boardStates->save($gameId, $state);
     }
 
     /**
@@ -3636,7 +3681,10 @@ final class GameService
      * serializeCard() already shows that Creativity as "Hope" everywhere
      * else) so describePlayGrant() can name the actual source instead of
      * folding it into the base allowance's own "Your normal turn" -- a
-     * bare null grant is reserved *only* for $baseCount's own entries.
+     * bare null grant is reserved *only* for the player's first,
+     * ordinary play. $baseCount's own second entry (Hurt Feelings, when
+     * $baseCount is 2) carries 'sourceLabel' => 'Hurt Feelings' instead,
+     * for the same reason -- see $playGrants' own docblock.
      * Hope/Grace/Stubbornness each contribute one grant *per* qualifying
      * mood, not just one overall -- two independent Hopes (a duplicate
      * printed card across two decks in a duel game, or an intentionally
@@ -3655,11 +3703,15 @@ final class GameService
      * once granted, it persists for that turn regardless of what happens
      * to Stubbornness afterward.
      *
-     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, requiresSourceInPlay?: bool}>
+     * @return array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string, requiresSourceInPlay?: bool}>
      */
     private function computeFreshGrants(BoardState $state, int $playerId, int $baseCount): array
     {
-        $grants = array_fill(0, $baseCount, null);
+        // $baseCount is always 1, or 2 when $playerId holds Hurt Feelings
+        // this round -- see BoardState::startTurn()'s identical shape for
+        // why the second entry is tagged 'sourceLabel' rather than left a
+        // second bare null.
+        $grants = $baseCount > 1 ? [null, ['sourceLabel' => 'Hurt Feelings']] : [null];
 
         foreach ($this->effectiveSourceCardIds($state, $playerId, 'hope') as $hopeSourceCardId) {
             $grants[] = ['sourceCardId' => $hopeSourceCardId, 'requiresSourceInPlay' => true];
@@ -5204,16 +5256,17 @@ final class GameService
     }
 
     /**
-     * @param ?array{type?: string, values?: int[], source?: string, sourceCardId?: int} $restriction
+     * @param ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string} $restriction
      * @param array<int, string> $cardNames
      * @return array{description:string, source_card_id:?int, source_card_name:?string}
      */
     private function describePlayGrant(?array $restriction, array $cardNames): array
     {
         if ($restriction === null) {
-            // Only ever startTurn()'s own base allowance (1, or 2 with Hurt
-            // Feelings) -- every actual grantExtraPlay() call always folds
-            // in 'sourceCardId', so this is never a granted extra play.
+            // Only ever startTurn()'s own first, ordinary base play --
+            // every actual grantExtraPlay() call always folds in
+            // 'sourceCardId' (or, for Hurt Feelings' own second base play,
+            // 'sourceLabel'), so this is never a granted extra play.
             return ['description' => 'Your normal turn', 'source_card_id' => null, 'source_card_name' => null];
         }
 
@@ -5224,9 +5277,20 @@ final class GameService
         ];
     }
 
-    /** @param array<int, string> $cardNames */
+    /**
+     * @param array{sourceCardId?: int, sourceLabel?: string} $restriction
+     * @param array<int, string> $cardNames
+     */
     private function sourceCardNameFor(array $restriction, array $cardNames): ?string
     {
+        // 'sourceLabel' -- currently only Hurt Feelings' own second base
+        // play (see BoardState::startTurn()) -- names a grant that isn't
+        // attributable to any specific card, so it takes priority over a
+        // 'sourceCardId' lookup that would never be present alongside it.
+        if (isset($restriction['sourceLabel'])) {
+            return $restriction['sourceLabel'];
+        }
+
         $sourceCardId = $restriction['sourceCardId'] ?? null;
 
         return $sourceCardId !== null ? ($cardNames[$sourceCardId] ?? 'a card') : null;
@@ -5245,7 +5309,7 @@ final class GameService
      * same-turn bonus, per MoodPlayService::playMood(), rather than null,
      * so the "Your normal turn" case never gets here by accident).
      *
-     * @param array{type?: string, values?: int[], source?: string, sourceCardId?: int} $restriction
+     * @param array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string} $restriction
      * @param array<int, string> $cardNames
      */
     private function describeGrantDetails(array $restriction, array $cardNames): string

@@ -31,7 +31,7 @@ final class IntimidationEffect extends AbstractMoodEffect implements RequiresOpp
         }
 
         $targetPlayerId = $choices->requireInt('target_player_id');
-        if (!in_array($targetPlayerId, $state->playerOrder(), true)) {
+        if (!in_array($targetPlayerId, $state->activePlayerOrder(), true)) {
             throw new InvalidChoiceException("Player {$targetPlayerId} is not a valid player");
         }
         if ($targetPlayerId === $playerId) {

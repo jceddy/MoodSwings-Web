@@ -82,7 +82,7 @@ final class DisillusionmentEffect extends AbstractMoodEffect implements Requires
     /** @return int[] every player at the table, starting after $playerId and wrapping to end with $playerId */
     private function queueOrder(BoardState $state, int $playerId): array
     {
-        $order = $state->playerOrder();
+        $order = $state->activePlayerOrder();
         $index = array_search($playerId, $order, true);
 
         return array_merge(array_slice($order, $index + 1), array_slice($order, 0, $index + 1));

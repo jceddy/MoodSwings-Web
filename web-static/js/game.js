@@ -2663,6 +2663,7 @@
                         .map((p) => ({ value: p.game_player_id, label: p.username }));
                 }
                 return currentState.players
+                    .filter((p) => !p.resigned)
                     .filter((p) => field.scope !== 'other' || p.game_player_id !== currentState.you.game_player_id)
                     // excludes_teammate (see CardChoiceSchema.php's own
                     // docblock): a handful of cards say "opponent," not

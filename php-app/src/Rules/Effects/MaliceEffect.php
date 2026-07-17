@@ -34,6 +34,9 @@ final class MaliceEffect extends AbstractMoodEffect implements RequiresOpponentD
         if ($targetPlayerId === null) {
             return [];
         }
+        if (!in_array($targetPlayerId, $state->activePlayerOrder(), true)) {
+            throw new InvalidChoiceException("Player {$targetPlayerId} is not a valid player");
+        }
 
         $moods = $state->moodsOwnedBy($targetPlayerId);
         if (count($moods) < self::MINIMUM_MOODS) {

@@ -1138,16 +1138,30 @@ Hopes (a duplicate printed card across a duel game's two separate decks,
 or an intentionally duplicate-including custom deck) each contribute their
 own perpetual grant every turn, the same way `MoodPlayService` already
 grants one same-turn bonus per Hope actually played regardless of how many
-copies get played in a single turn. The one grant this never
-applies to is `startTurn()`'s own base allowance (1, or 2 with Hurt
-Feelings) -- it's stored as a bare `null`, which `describePlayGrant()`
-reads as "Your normal turn" rather than a granted extra play from any
-specific card. `round.play_grants` itself
-always describes whoever's turn it currently is, not the viewer
-specifically -- the frontend's own "Plays left" indicator stays hidden
-entirely unless it's actually the viewer's turn (see `web-static/README.md`),
-rather than showing another player's own outstanding plays as if they were
-the viewer's.
+copies get played in a single turn. The one grant this never applies to is
+`startTurn()`'s own first, ordinary base play -- it's stored as a bare
+`null`, which `describePlayGrant()` reads as "Your normal turn" rather than
+a granted extra play from any specific card. Hurt Feelings' own *second*
+base play (see `startTurn()`'s `hasHurtFeelings` param / `computeFreshGrants()`'s
+`baseCount`) is deliberately **not** a second bare `null` -- that would
+render as an indistinguishable second "Your normal turn" entry in
+`round.play_grants`, reading as though the player simply had two ordinary
+turns rather than one turn plus a bonus. It's instead tagged `'sourceLabel'
+=> 'Hurt Feelings'`, a sibling to `'sourceCardId'` for grants that aren't
+attributable to any specific card -- `sourceCardNameFor()` checks it first,
+so `describePlayGrant()` renders it as "An extra play from Hurt Feelings"
+through the exact same `describeGrantDetails()` wording every card-sourced
+grant already uses. This also means using that specific play now populates
+`grant_used` on the resulting `mood_played` event (previously, consuming
+the bare-`null` base allowance never did, by design -- see
+`$pendingGrantUsed`'s own docblock), so the recent-plays log calls out
+"(using an extra play from Hurt Feelings)" on whichever card was actually
+played with it, instead of that play silently looking like an ordinary
+second play. `round.play_grants` itself always describes whoever's turn it
+currently is, not the viewer specifically -- the frontend's own "Plays
+left" indicator stays hidden entirely unless it's actually the viewer's
+turn (see `web-static/README.md`), rather than showing another player's
+own outstanding plays as if they were the viewer's.
 
 Hope's and Grace's own grants -- both the same-turn one
 (`MoodPlayService`, the moment either card enters play) and every future
@@ -1214,9 +1228,11 @@ lost outright if that Hope later leaves play before its bonus is used --
 see above -- so spending the more fragile grant first can matter).
 `BoardState::usableGrants(int $cardId, int $playerId)` returns every
 currently-usable grant for that card, deduplicated by `sourceCardId` (`??
-'base'`, since the base allowance's own bare `null`s -- there can be 2 with
-Hurt Feelings -- are indistinguishable to a player choosing between them
-and so collapse into a single entry). `GameService::serializeCard()`
+'base'` -- the ordinary base allowance and Hurt Feelings' own second base
+play both lack a `sourceCardId`, so they collapse into a single entry here
+too, since neither restricts what's playable and so they're functionally
+indistinguishable to a player choosing between them, even though their
+`round.play_grants` descriptions still differ). `GameService::serializeCard()`
 prepends a `grant_source_card_id` choice field (`type: 'grant_choice'`,
 `required: false`) whenever this returns 2+ entries, one option per grant,
 reusing `describePlayGrant()`'s own description text verbatim as each
@@ -2130,6 +2146,63 @@ the same way so they can never be picked as either, no matter how their
 own board state happens to score. Resigning while a decision is pending
 is disallowed (mirrors `playMood()`/`pass()`'s own
 `assertNoPendingDecision()` gate) -- resolve the decision first.
+
+For the "continue without them" `standard` 3-4 player path specifically
+(the immediate-completion paths above just end the game outright, so
+there's no ongoing board for a resigned player to keep interacting with),
+`GameService`/`BoardState` also make sure a resigned player stops being a
+live participant in every other sense a card effect can reach:
+
+- **Their in-play moods and hand both go to the bottom of their own
+  deck.** `GameService::resignGame()` calls
+  `removeResignedPlayerCardsFromBoard()` right before skipping their turn,
+  which moves every mood they own via `moveInPlayToBottomOfDeck()` and
+  every card in their hand via `moveHandToBottomOfDeck()` -- not the
+  discard pile, since a resignation isn't a scoring event and shouldn't
+  feed discard-pile-driven effects (Altruism, Corruption, etc.) the way an
+  ordinary discard would. `moodsOwnedBy()`/`hand()` both already return a
+  snapshot copy (PHP array value semantics), so looping over either one
+  stays safe even though the two move methods mutate $state's own
+  underlying maps as they go.
+- **They can never be chosen as a card effect's target.** `BoardState`
+  gets a new `resignedPlayerIds` constructor param (`game_players.id` of
+  every resigned seat, threaded in by `BoardStateRepository::load()` from
+  `game_players.resigned_at`, empty and therefore a no-op for every game
+  with no resignations) and three new methods built on it: `isResigned()`,
+  `activePlayerOrder()` (`playerOrder()` minus resigned seats, relative
+  order preserved), and `activeNeighbor()` (below). Every `Effects/*.php`
+  class's own "is this a legal player target" check
+  (`in_array($id, $state->playerOrder(), true)`) now checks
+  `activePlayerOrder()` instead, and every "ask every player something"
+  loop (Disillusionment's color-choice queue, Avoidance/Confusion's
+  per-player give-a-card(/mood) decisions, Fury's per-player discard
+  choice, Pride's "players with more moods than you" candidate list) now
+  sources from `activePlayerOrder()` too, so a resigned player is neither
+  offered as a choice nor asked anything.
+- **A decision that would freeze the round waiting on them never gets
+  created.** This falls directly out of the previous point: every
+  `RequiresOpponentDecision` implementer that targets "a player" or "every
+  player" now excludes resigned seats from that same candidate set, so a
+  pending decision batch is never created naming a player who has no way
+  to ever answer it.
+- **"Pass to the next player" effects skip over them.** `Avoidance`
+  (moods), `Confusion` (hand cards), and `Rationalization`'s `rotate` mode
+  (whole hands) each used to compute their own left/right neighbor with
+  identical inline `%count` seat-index arithmetic against the raw
+  `playerOrder()`. That's now centralized in
+  `BoardState::activeNeighbor(int $playerId, string $direction): ?int`,
+  which walks `activePlayerOrder()` instead -- a resigned player's
+  "neighbor" is simply the next still-active seat in that direction, so a
+  pass that would have landed on them continues on to whoever's next
+  instead. Returns `null` if `$playerId` isn't currently active, or if
+  fewer than 2 players are still active (nowhere to pass to) -- both of
+  those effects treat `null` as "nothing to give this player," the same
+  as an ordinary empty hand/no-moods skip.
+- The frontend's own `fieldOptions()` (`case 'player'` in `game.js`)
+  additionally filters out any player already flagged `resigned` in
+  `getState()`'s response, so a resigned player never even appears as a
+  selectable option client-side -- purely a UI convenience layered on top
+  of the server-side enforcement above, which is what actually matters.
 
 ### Duel: separate per-player decks
 
