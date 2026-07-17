@@ -772,9 +772,12 @@ too, proportional to the smaller card width.
       picks -- never your opponent's) round out the panel, along with a
       `#winston-draft-opponent-info` line built from
       `drafting.opponent_drafted_card_count` (how many cards the opponent
-      has drafted in total) and `drafting.opponent_last_take_pile_number`
-      (`null` until they've taken at least once; otherwise which pile
-      number -- never its contents -- they most recently claimed).
+      has drafted in total) and either `drafting.opponent_last_take_pile_number`
+      (which pile number -- never its contents -- they most recently
+      claimed) or `drafting.opponent_last_drew_from_deck` (`true` if they
+      instead most recently declined all 3 piles and took the mandatory
+      top-of-deck draw); neither is shown until the opponent has completed
+      at least one turn.
     - **Grid Draft's own drafting phase** (`#grid-draft-panel` >
       `#grid-draft-drafting`, `renderGridDraftDrafting()`, shown while
       `state.grid_draft.status` is `'drafting'`) -- like Winston Draft,

@@ -1847,29 +1847,35 @@ live) but with genuinely different `drafting` contents
 `remaining_deck_count`, `current_pile_cards` (populated only when it's
 your turn -- `[]` otherwise, never leaking the pile you can't currently
 see), `drafted_so_far` (always your own accumulated picks, never your
-opponent's), `opponent_last_take_pile_number` (`null` until the opponent
-has taken at least once; otherwise the pile number -- 1, 2, or 3 -- of
-their own most recent *take*, never a pass), and
+opponent's), `opponent_last_take_pile_number` (`null` unless the
+opponent's own most recent turn-ending action was a *take*; otherwise the
+pile number -- 1, 2, or 3 -- they took), `opponent_last_drew_from_deck`
+(`true` if the opponent's own most recent turn-ending action was instead
+declining all 3 piles and taking the mandatory top-of-deck draw), and
 `opponent_drafted_card_count` (how many cards the opponent has drafted in
-total so far). The latter two are safe to expose without ever revealing
-what's actually on any card: which numbered pile the opponent last
-claimed and how many cards they've accumulated are both things a real
-opponent watching across the table would already see for themselves (a
-taken pile's height and a rival's growing stack of face-down cards are
-physically visible, unlike what's printed on them). Tracked on
-`draft_winston_state.last_take_pile_by_user_id` (a JSON map, `user_id =>
-pile_number`, migration `0035`) rather than a single "the last take,
-whoever it was" column -- turns strictly alternate and either player can
-pass any number of times before eventually taking, so from either
-player's own perspective "the opponent's last take" can be several turns
-back, and only a per-user_id lookup answers that correctly.
-`submitWinstonDraftPick()` updates this map only on a `'take'` action,
-leaving it untouched on a `'pass'`. `deck_building` is the exact same
-shared shape Quick Draft uses (`draftDeckBuildingStateFor()`), just called
-with `WINSTON_MIN_DECK_SIZE` (12) and no fixed max -- `max_deck_size`
-resolves to however many cards that specific player actually drafted,
-since the total varies by how the pile draft unfolds (unlike Quick
-Draft's guaranteed 16 per player).
+total so far). All three are safe to expose without ever revealing what's
+actually on any card: which numbered pile the opponent last claimed (or
+that they declined everything and drew from the deck instead), and how
+many cards they've accumulated, are all things a real opponent watching
+across the table would already see for themselves (a taken pile's height
+and a rival's growing stack of face-down cards are physically visible,
+unlike what's printed on them). Tracked on
+`draft_winston_state.last_draft_action_by_user_id` (a JSON map, `user_id
+=> pile_number | "deck"`, migration `0035`, widened by `0036`) rather
+than a single "the last action, whoever it was" column -- turns strictly
+alternate and either player can pass any number of times before
+eventually ending their turn, so from either player's own perspective
+"the opponent's last action" can be several turns back, and only a
+per-user_id lookup answers that correctly. `submitWinstonDraftPick()`
+updates this map on both turn-ending outcomes: a `'take'` records the
+pile number, and a `'pass'` on pile 3 (which always ends the turn, take
+or no take from the auto-draw) records the string `"deck"` -- a plain
+`'pass'` on pile 1 or 2 leaves it untouched, since that doesn't end the
+turn. `deck_building` is the exact same shared shape Quick Draft uses
+(`draftDeckBuildingStateFor()`), just called with `WINSTON_MIN_DECK_SIZE`
+(12) and no fixed max -- `max_deck_size` resolves to however many cards
+that specific player actually drafted, since the total varies by how the
+pile draft unfolds (unlike Quick Draft's guaranteed 16 per player).
 
 ### Grid Draft
 

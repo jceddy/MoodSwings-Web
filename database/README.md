@@ -277,11 +277,14 @@ half-migrated schema.
   cards over 6 rounds of 9 divides evenly, so `remaining_deck_card_ids`
   reaches exactly empty the moment the 6th round is dealt. See "Grid
   Draft" in `php-app/README.md`.
-- **Winston Draft opponent info** (`0035`): adds
-  `draft_winston_state.last_take_pile_by_user_id` (nullable JSON map,
-  `user_id => pile_number`), so each player's own most recent *take* (not
-  pass) can be looked up independently -- a single "the last take,
-  whoever it was" column isn't enough, since turns strictly alternate and
-  either player can pass any number of times before eventually taking, so
-  "the opponent's last take" can be several turns back from the viewer's
-  own perspective. See "Winston Draft" in `php-app/README.md`.
+- **Winston Draft opponent info** (`0035`, widened by `0036`): adds
+  `draft_winston_state.last_draft_action_by_user_id` (nullable JSON map,
+  `user_id => pile_number | "deck"`), so each player's own most recent
+  turn-ending action can be looked up independently -- a single "the last
+  action, whoever it was" column isn't enough, since turns strictly
+  alternate and either player can pass any number of times before
+  eventually taking, so "the opponent's last action" can be several turns
+  back from the viewer's own perspective. The value is either the pile
+  number they took, or the string `"deck"` if they instead declined all 3
+  piles and took the mandatory top-of-deck draw. See "Winston Draft" in
+  `php-app/README.md`.
