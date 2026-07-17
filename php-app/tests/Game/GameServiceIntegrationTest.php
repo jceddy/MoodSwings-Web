@@ -4414,6 +4414,59 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Disillusionment's own "may" -- respondToDecision() is called with an
+     * empty choices array (no 'chosen_color_*' key at all), the same shape
+     * a real blank/"(none)" widget submission produces (see
+     * buildChoicesFromFields() in game.js, which omits the key entirely
+     * rather than sending an empty string), for every player in the queue
+     * except one. Declining must resolve cleanly (no InvalidChoiceException)
+     * and contribute no color at all.
+     */
+    public function testDisillusionmentAllowsEveryPlayerToDeclineThroughTheRealHttpServiceLayer(): void
+    {
+        $u1 = $this->insertUser('disildec1');
+        $u2 = $this->insertUser('disildec2');
+        $u3 = $this->insertUser('disildec3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $disillusionmentId = $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white
+        $ambitionId = $this->insertGameCard($gameId, 53, 'in_play', $p2); // Ambition, black
+        $anxietyId = $this->insertGameCard($gameId, 28, 'in_play', $p3); // Anxiety, blue
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $disillusionmentId, []);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        // p2 and p3 both decline outright; only p1 (the acting player
+        // themselves) actually picks a color.
+        $result1 = $this->games->respondToDecision($gameId, $p2, []);
+        self::assertTrue($result1['pending_decision'] ?? false);
+
+        $result2 = $this->games->respondToDecision($gameId, $p3, []);
+        self::assertTrue($result2['pending_decision'] ?? false);
+
+        $result3 = $this->games->respondToDecision($gameId, $p1, ['chosen_color_' . $p1 => 'blue']);
+        self::assertArrayNotHasKey('pending_decision', $result3);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInPlay($disillusionmentId));
+        self::assertTrue($state->isInPlay($disciplineId)); // white, not chosen -- survives
+        self::assertTrue($state->isInPlay($ambitionId)); // black, not chosen -- survives
+        self::assertFalse($state->isInPlay($anxietyId)); // blue, chosen by p1
+    }
+
+    /**
      * Malice's answer is a pair of mood ids, not a single value -- this
      * exercises the multi-select answer shape through the real HTTP-
      * service-layer respondToDecision() round trip.

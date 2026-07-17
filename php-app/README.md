@@ -396,6 +396,16 @@ translated by `writePendingBatch()`'s own catch into the same
 `GameStateException` the non-racing check throws, rather than silently
 creating a second, simultaneously-open batch.
 
+Disillusionment's own printed text is a "may" ("each player MAY choose a
+color"), so every queued `chosen_color_*` field is `required: false` --
+declining contributes no color at all rather than forcing a pick.
+`collectAnswers()` always writes one `PlayerChoices` entry per requested
+key regardless of whether that player answered or declined (a decline's
+own row still resolves, just with a `null` value) -- `resolveDecisions()`
+reads each one via the nullable `->string($key)` and treats `null` as "no
+color chosen", not via checking whether the key is merely present (every
+key always is).
+
 `BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer (of
 twelve, now that `PrideEffect` is a twelfth -- see below), for
 a different reason than the other ten: nothing about Betrayal's own printed
