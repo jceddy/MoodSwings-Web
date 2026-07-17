@@ -7247,16 +7247,18 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * opponent_last_take_pile_number/opponent_drafted_card_count never
-     * reveal card identities -- only which numbered pile the opponent most
-     * recently TOOK (never a pass) and how many cards they've drafted in
-     * total. Since turns strictly alternate and either player can pass any
-     * number of times before eventually taking, "the opponent's last take"
-     * has to be tracked per-user_id (draft_winston_state.
-     * last_take_pile_by_user_id) rather than a single shared "whoever took
-     * last" value -- this drives both players taking different piles on
-     * different turns and confirms each one's own view stays independently
-     * correct throughout.
+     * opponent_last_take_pile_number/opponent_last_drew_from_deck/
+     * opponent_drafted_card_count never reveal card identities -- only
+     * which numbered pile the opponent most recently TOOK (never a pass),
+     * or that they instead declined all 3 piles and drew from the deck,
+     * and how many cards they've drafted in total. Since turns strictly
+     * alternate and either player can pass any number of times before
+     * eventually ending their turn, "the opponent's last action" has to be
+     * tracked per-user_id (draft_winston_state.
+     * last_draft_action_by_user_id) rather than a single shared "whoever
+     * acted last" value -- this drives both players taking different
+     * piles on different turns and confirms each one's own view stays
+     * independently correct throughout.
      */
     public function testWinstonDraftExposesEachPlayersOwnLastTakenPileAndTotalDraftedCountToTheOpponent(): void
     {
@@ -7273,6 +7275,7 @@ final class GameServiceIntegrationTest extends TestCase
         // pile, and neither has drafted any cards yet.
         $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
         self::assertNull($firstPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($firstPlayerState['opponent_last_drew_from_deck']);
         self::assertSame(0, $firstPlayerState['opponent_drafted_card_count']);
 
         // Player 1 passes pile 1 (a non-take action) then takes pile 2 --
@@ -7284,12 +7287,14 @@ final class GameServiceIntegrationTest extends TestCase
         // is now visible, and their drafted count reflects that one pile.
         $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
         self::assertSame(2, $secondPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($secondPlayerState['opponent_last_drew_from_deck']);
         self::assertSame(1, $secondPlayerState['opponent_drafted_card_count']);
 
         // Player 1's own view of "the opponent" (player 2) is still
         // untouched -- player 2 hasn't taken anything yet.
         $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
         self::assertNull($firstPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($firstPlayerState['opponent_last_drew_from_deck']);
         self::assertSame(0, $firstPlayerState['opponent_drafted_card_count']);
 
         // Player 2 takes pile 1 immediately (no pass) -- pile 1 now holds 2
@@ -7301,11 +7306,25 @@ final class GameServiceIntegrationTest extends TestCase
         // player 2's own view of player 1 is unaffected by their own action.
         $firstPlayerState = $this->games->getState($gameId, $firstPlayerUserId)['winston_draft']['drafting'];
         self::assertSame(1, $firstPlayerState['opponent_last_take_pile_number']);
+        self::assertFalse($firstPlayerState['opponent_last_drew_from_deck']);
         self::assertSame(2, $firstPlayerState['opponent_drafted_card_count']);
 
         $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
         self::assertSame(2, $secondPlayerState['opponent_last_take_pile_number'], 'player 1\'s own last take is still pile 2 from before -- unaffected by player 2\'s own turn');
+        self::assertFalse($secondPlayerState['opponent_last_drew_from_deck']);
         self::assertSame(1, $secondPlayerState['opponent_drafted_card_count']);
+
+        // Player 1 now declines all 3 piles in a row, triggering the
+        // mandatory top-of-deck auto-draw -- this also ends their turn,
+        // just like a take, but should read as "drew from the deck"
+        // rather than showing a stale pile number from their earlier take.
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $firstPlayerUserId, 'pass');
+
+        $secondPlayerState = $this->games->getState($gameId, $secondPlayerUserId)['winston_draft']['drafting'];
+        self::assertNull($secondPlayerState['opponent_last_take_pile_number'], 'player 1\'s last action was a deck draw, not a take, so no pile number is reported');
+        self::assertTrue($secondPlayerState['opponent_last_drew_from_deck']);
     }
 
     /**
