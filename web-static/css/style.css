@@ -19,6 +19,7 @@
     --color-pending: #7a5b00;
     --color-info: #0b5db3;
     --color-your-turn-bg: #e8f7ec;
+    --color-awaiting-response-bg: #fdf1da;
     --color-brown: #8b5a2b;
     --color-gold: #b8860b;
 }
@@ -38,6 +39,7 @@
         --color-pending: #d4a94a;
         --color-info: #6ab0f3;
         --color-your-turn-bg: #1f3d2a;
+        --color-awaiting-response-bg: #3d2f10;
         --color-brown: #c58b52;
         --color-gold: #e0b93a;
     }
@@ -57,6 +59,7 @@
     --color-pending: #d4a94a;
     --color-info: #6ab0f3;
     --color-your-turn-bg: #1f3d2a;
+    --color-awaiting-response-bg: #3d2f10;
     --color-brown: #c58b52;
     --color-gold: #e0b93a;
 }
@@ -858,6 +861,19 @@ dialog#art-preview-dialog {
     background-color: var(--color-your-turn-bg);
 }
 
+/* is_awaiting_your_response's own row highlight -- a distinct amber tint
+   (matching --color-pending, already used for "waiting"/pending-decision
+   text elsewhere) rather than the your-turn green, since the two mean
+   different things: your-turn just means it's your turn whenever you get
+   to it, awaiting-response means something is actively blocked on a
+   choice from you. Takes priority over lobby-row--your-turn when both
+   apply (see buildGameRow()) -- a pending decision freezes the round
+   even on what's nominally your own turn, so it's the more urgent of the
+   two. */
+.lobby-row--awaiting-response {
+    background-color: var(--color-awaiting-response-bg);
+}
+
 .lobby-info {
     min-width: 0;
 }
@@ -898,6 +914,11 @@ dialog#art-preview-dialog {
 .lobby-your-turn {
     font-weight: bold;
     color: var(--color-success);
+}
+
+.lobby-awaiting-response {
+    font-weight: bold;
+    color: var(--color-pending);
 }
 
 .lobby-winner {
