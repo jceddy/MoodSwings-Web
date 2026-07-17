@@ -246,6 +246,11 @@ body.game-page {
     font-weight: bold;
 }
 
+.player-resigned-tag {
+    color: var(--color-error);
+    font-style: italic;
+}
+
 /* Takes whatever width is left after the name (flex: 1 1 auto, with
    min-width: 0 overriding a flex item's default auto min-width so it's
    actually allowed to shrink below its content's natural size) and wraps

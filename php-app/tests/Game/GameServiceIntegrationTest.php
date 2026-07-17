@@ -7272,4 +7272,238 @@ final class GameServiceIntegrationTest extends TestCase
         $this->submitFullWinstonDraftDeck($gameId, $u1);
         $this->games->startGame($gameId);
     }
+
+    // -- Resigning (GameService::resignGame()) ------------------------------
+
+    private function fetchRoundByNumber(int $gameId, int $roundNumber): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_rounds WHERE game_id = :game_id AND round_number = :round_number');
+        $stmt->execute(['game_id' => $gameId, 'round_number' => $roundNumber]);
+
+        return $stmt->fetch();
+    }
+
+    private function fetchGamePlayer(int $gamePlayerId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+
+        return $stmt->fetch();
+    }
+
+    public function testResignInDuelFormatImmediatelyCompletesGameForTheOpponent(): void
+    {
+        $u1 = $this->insertUser('resign-duel-p1');
+        $u2 = $this->insertUser('resign-duel-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertFalse($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p2, $result['winner_game_player_id']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame($p2, (int) $game['winner_game_player_id']);
+        self::assertNotNull($game['completed_at']);
+
+        $round = $this->fetchRoundByNumber($gameId, 1);
+        self::assertSame('abandoned', $round['status']);
+        self::assertNull($round['current_turn_game_player_id']);
+
+        self::assertNotNull($this->fetchGamePlayer($p1)['resigned_at']);
+
+        // currentRound() -- the one thing playMood()/pass() gate on --
+        // can no longer find an 'in_progress' round for this game, so
+        // nothing can be played against it anymore.
+        $this->expectException(GameStateException::class);
+        $this->games->pass($gameId, $p2);
+    }
+
+    public function testResignInTeamFormatCreditsTheOpposingTeam(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p3' => $p3] = $this->buildTeamFixture();
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p3, $result['winner_game_player_id']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame(1, (int) $game['winner_team_id']);
+        // p3 is the lower-seat_order member of the winning team (team 1),
+        // matching finishTeamScoringAndAdvance()'s own representative
+        // convention -- see resignGame()'s docblock.
+        self::assertSame($p3, (int) $game['winner_game_player_id']);
+    }
+
+    public function testResigningOnYourOwnTurnSkipsToTheNextActivePlayerInStandardFormat(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, $apathyId, []);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+
+        $result = $this->games->resignGame($gameId, $p2);
+
+        self::assertFalse($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id'], 'p2\'s own turn should be skipped straight to p3');
+
+        self::assertNotNull($this->fetchGamePlayer($p2)['resigned_at']);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status'], 'a 3-player standard game must not end just because one player resigned');
+
+        // p2 no longer has a turn to pass on -- the round has already
+        // moved on to p3.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("not player {$p2}'s turn");
+        $this->games->pass($gameId, $p2);
+    }
+
+    public function testResignedPlayerIsNeverCreditedARoundWinEvenWithTheHighestScore(): void
+    {
+        [
+            'gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3,
+            'apathyId' => $apathyId, 'complacencyId' => $complacencyId,
+        ] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, $apathyId, []); // p1 scores 4
+        $this->games->playMood($gameId, $p2, $complacencyId, []); // p2 also scores 4 -- tied with p1
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id']);
+
+        // p2 resigns after already playing (not their turn, so this
+        // doesn't touch turn state) -- 2 active players remain (p1, p3),
+        // so the game keeps going rather than completing.
+        $this->games->resignGame($gameId, $p2);
+
+        $final = $this->games->pass($gameId, $p3); // p3 scores 0, ending round 1
+
+        self::assertTrue($final['round_scored']);
+        self::assertFalse($final['game_completed']); // wins_needed is 2 for buildThreePlayerFixture()
+
+        $round1 = $this->fetchRoundByNumber($gameId, 1);
+        self::assertSame('scored', $round1['status']);
+        self::assertSame($p1, (int) $round1['winner_game_player_id'], 'p2 must never win despite tying the actual high score');
+        self::assertSame($p1, (int) $round1['winner_game_player_id']);
+    }
+
+    public function testResignationCascadesToGameCompletionWhenOnlyOneActivePlayerRemains(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3] = $this->buildThreePlayerFixture();
+
+        $first = $this->games->resignGame($gameId, $p2);
+        self::assertFalse($first['game_completed'], 'still 2 active players (p1, p3) -- the game must keep going');
+
+        $second = $this->games->resignGame($gameId, $p3);
+        self::assertTrue($second['game_completed'], 'down to 1 active player -- the game must complete the same way a 2-player resign always has');
+        self::assertSame($p1, $second['winner_game_player_id']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame($p1, (int) $game['winner_game_player_id']);
+
+        $round1 = $this->fetchRoundByNumber($gameId, 1);
+        self::assertSame('abandoned', $round1['status']);
+    }
+
+    public function testResignInDraftFormatAdvancesTheMatchLikeAnyOtherGameWin(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $p2 = $this->games->gamePlayerIdFor($gameId, $u2);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p2, $result['winner_game_player_id']);
+
+        // Best-of-three needs 2 match wins -- a single resign-induced game
+        // win only credits ONE, so the match itself isn't over yet, but
+        // advanceDraftMatch() must still have run: the winner's match-win
+        // count went up and a game 2 was created for the match to continue.
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status']);
+        self::assertSame(1, (int) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['wins']);
+
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND match_game_number = 2"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        self::assertNotFalse($nextGameStmt->fetch(), 'a resign-induced win must still advance best-of-three match progression');
+    }
+
+    public function testResignFailsWhenTheGameIsNotInProgress(): void
+    {
+        $u1 = $this->insertUser('resign-notstarted-p1');
+        $u2 = $this->insertUser('resign-notstarted-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'waiting', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not in progress');
+        $this->games->resignGame($gameId, $p1);
+    }
+
+    public function testResignFailsForAPlayerNotSeatedInTheGame(): void
+    {
+        ['gameId' => $gameId] = $this->buildThreePlayerFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not seated');
+        $this->games->resignGame($gameId, 999999);
+    }
+
+    public function testResignFailsIfThePlayerHasAlreadyResigned(): void
+    {
+        ['gameId' => $gameId, 'p2' => $p2] = $this->buildThreePlayerFixture();
+
+        $this->games->resignGame($gameId, $p2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('already resigned');
+        $this->games->resignGame($gameId, $p2);
+    }
+
+    public function testResignFailsWhileADecisionIsPending(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $round = $this->fetchRound($gameId);
+        $this->pdo->prepare(
+            'INSERT INTO game_pending_decision_batches (game_id, game_round_id, played_card_id, initiating_game_player_id, top_level_choices, invocation_choices)
+             VALUES (:game_id, :round_id, :card_id, :initiator, \'{}\', \'{}\')'
+        )->execute(['game_id' => $gameId, 'round_id' => (int) $round['id'], 'card_id' => $apathyId, 'initiator' => $p1]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('decision still pending');
+        $this->games->resignGame($gameId, $p2);
+    }
 }

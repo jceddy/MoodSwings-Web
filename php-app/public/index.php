@@ -547,6 +547,21 @@ if ($path === '/games/pass' && $method === 'POST') {
     }
 }
 
+if ($path === '/games/resign' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->resignGame($gameId, $gamePlayerId);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException | IllegalPlayException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/games/respond' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

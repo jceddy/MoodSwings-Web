@@ -258,3 +258,9 @@ half-migrated schema.
   exactly one player acts at a time — so a plain mutable row, protected by
   the same per-game lock every draft mutation already uses, is both
   simpler and just as safe. See "Winston Draft" in `php-app/README.md`.
+- **Resigning** (`0033`): adds `game_players.resigned_at` (nullable
+  timestamp, marks a seat as having given up) and widens
+  `game_rounds.status`'s enum to add `'abandoned'` -- used when a
+  resignation ends the game outright, so the round it happened during is
+  taken out of `'in_progress'` without pretending it was actually scored.
+  See "Resigning" in `php-app/README.md`.

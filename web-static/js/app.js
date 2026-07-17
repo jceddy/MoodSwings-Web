@@ -215,6 +215,13 @@ function passTurn(gameId) {
     });
 }
 
+function resignGame(gameId) {
+    return apiRequest('/games/resign', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
 function respondToDecision(gameId, choices) {
     return apiRequest('/games/respond', {
         method: 'POST',

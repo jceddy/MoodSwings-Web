@@ -1177,6 +1177,22 @@ too, proportional to the smaller card width.
     overwrite it with stale data (e.g. showing this indicator again after
     the game started with an opponent going first, until the page was
     reloaded).
+  - A "Resign game" button (`#resign-button`) sits right after Pass --
+    unlike Pass, it isn't turn-gated (you can resign any time it's
+    `in_progress`, not just on your own turn), so it's only ever hidden
+    once the game's over or the viewer has already resigned, and disabled
+    while a decision is pending (mirrors the backend's own
+    `assertNoPendingDecision()` gate -- resolve it first). Clicking it
+    shows a `window.confirm()` prompt first, since resigning can't be
+    undone, then calls `POST /games/resign` (`resignGame()` in `app.js`)
+    and runs the exact same success path Pass does
+    (`announceOutcome()`/`refreshBoard()`). For 2-player and team-format
+    games this ends the game immediately (`announceOutcome()` shows "Game
+    complete!" the same as any other game-ending action); for a 3-4
+    player `standard` game it doesn't -- the resigning player instead
+    gets a small `(resigned)` tag next to their name in the players list
+    (`.player-resigned-tag`) and the game carries on without them. See
+    "Resigning" in `php-app/README.md`.
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
