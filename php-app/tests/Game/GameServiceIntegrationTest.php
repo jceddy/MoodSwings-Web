@@ -7436,27 +7436,35 @@ final class GameServiceIntegrationTest extends TestCase
      * "All of that player's cards leave play" -- only the 3-4 player
      * 'standard' "continue without them" path needs this, since that's the
      * only resignation outcome where the board keeps being played on by
-     * everyone else. See GameService::removeResignedPlayerMoodsFromPlay().
+     * everyone else. Moods and hand cards both go to the bottom of the
+     * deck, not the discard pile -- a resignation isn't a scoring event,
+     * so it shouldn't feed discard-pile-driven effects (Altruism,
+     * Corruption, etc.). See GameService::removeResignedPlayerCardsFromBoard().
      */
-    public function testResigningDiscardsAllOfThatPlayersInPlayMoods(): void
+    public function testResigningMovesAllOfThatPlayersInPlayMoodsAndHandToTheBottomOfTheDeck(): void
     {
         ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildThreePlayerFixture();
 
         $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p2); // Courage
         $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity
         $otherPlayersMoodId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- untouched
+        $p2HandCardId = $this->insertGameCard($gameId, 20, 'hand', $p2); // Pacifism -- p2's hand
 
         $this->games->resignGame($gameId, $p2);
 
-        $zoneStmt = $this->pdo->prepare('SELECT id, zone, owner_game_player_id FROM game_cards WHERE id IN (:c1, :c2, :c3)');
-        $zoneStmt->execute(['c1' => $courageId, 'c2' => $charityId, 'c3' => $otherPlayersMoodId]);
+        $stmt = $this->pdo->prepare(
+            'SELECT id, zone, owner_game_player_id FROM game_cards WHERE id IN (:c1, :c2, :c3, :c4)'
+        );
+        $stmt->execute(['c1' => $courageId, 'c2' => $charityId, 'c3' => $otherPlayersMoodId, 'c4' => $p2HandCardId]);
         $rows = [];
-        foreach ($zoneStmt->fetchAll() as $row) {
+        foreach ($stmt->fetchAll() as $row) {
             $rows[(int) $row['id']] = $row;
         }
 
-        self::assertSame('discard', $rows[$courageId]['zone']);
-        self::assertSame('discard', $rows[$charityId]['zone']);
+        self::assertSame('deck', $rows[$courageId]['zone']);
+        self::assertNull($rows[$courageId]['owner_game_player_id'], 'standard format uses one shared deck, not a per-player one');
+        self::assertSame('deck', $rows[$charityId]['zone']);
+        self::assertSame('deck', $rows[$p2HandCardId]['zone'], "a resigned player's hand must also go to the bottom of the deck");
         self::assertSame('in_play', $rows[$otherPlayersMoodId]['zone'], 'another player\'s mood must be untouched by an opponent\'s resignation');
     }
 

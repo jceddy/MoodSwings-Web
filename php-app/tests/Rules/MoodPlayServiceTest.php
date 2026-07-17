@@ -2729,11 +2729,11 @@ final class MoodPlayServiceTest extends TestCase
 
     /**
      * Same exclusion as Avoidance's own resigned-player test, but for
-     * Confusion's hand-card version -- resignGame() never touches a
-     * resigning player's hand (only their in-play moods, see
-     * GameService::removeResignedPlayerMoodsFromPlay()), so without this
-     * exclusion Confusion would still happily ask a resigned player to
-     * give away a card.
+     * Confusion's hand-card version -- this exercises the effect layer's
+     * own exclusion directly (a resigned player with a non-empty hand,
+     * regardless of whatever GameService itself did or didn't clear),
+     * so without it Confusion would still happily ask a resigned player
+     * to give away a card.
      */
     public function testConfusionSkipsAResignedPlayerBothAsGiverAndAsRecipient(): void
     {

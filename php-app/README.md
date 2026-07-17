@@ -2137,14 +2137,17 @@ there's no ongoing board for a resigned player to keep interacting with),
 `GameService`/`BoardState` also make sure a resigned player stops being a
 live participant in every other sense a card effect can reach:
 
-- **Their in-play moods all leave play.** `GameService::resignGame()`
-  calls `removeResignedPlayerMoodsFromPlay()` right before skipping their
-  turn, which snapshots every mood they own into a plain card-id list
-  (never iterating `moodsOwnedBy()` live while mutating -- the same
-  snapshot-then-loop idiom `WrathEffect`/`MaliceEffect`/
-  `DisillusionmentEffect` already use) and discards each one via
-  `moveInPlayToDiscard()`. Their hand is untouched -- only in-play moods
-  are a resigned player's own ongoing "presence" on the board.
+- **Their in-play moods and hand both go to the bottom of their own
+  deck.** `GameService::resignGame()` calls
+  `removeResignedPlayerCardsFromBoard()` right before skipping their turn,
+  which moves every mood they own via `moveInPlayToBottomOfDeck()` and
+  every card in their hand via `moveHandToBottomOfDeck()` -- not the
+  discard pile, since a resignation isn't a scoring event and shouldn't
+  feed discard-pile-driven effects (Altruism, Corruption, etc.) the way an
+  ordinary discard would. `moodsOwnedBy()`/`hand()` both already return a
+  snapshot copy (PHP array value semantics), so looping over either one
+  stays safe even though the two move methods mutate $state's own
+  underlying maps as they go.
 - **They can never be chosen as a card effect's target.** `BoardState`
   gets a new `resignedPlayerIds` constructor param (`game_players.id` of
   every resigned seat, threaded in by `BoardStateRepository::load()` from

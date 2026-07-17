@@ -2034,7 +2034,7 @@ final class GameService
             // immediate-completion path above ends the game outright, so
             // whatever's left in play just stands as the final board's
             // own historical record, same as any other completed game.
-            $this->removeResignedPlayerMoodsFromPlay($gameId, $gamePlayerId);
+            $this->removeResignedPlayerCardsFromBoard($gameId, $gamePlayerId);
 
             return $this->skipTurnForResignedPlayer($gameId, $round, $gamePlayerId);
         });
@@ -2050,23 +2050,34 @@ final class GameService
      * board keeps being played on by everyone else, so their moods can't
      * just sit there mid-game as if they were still in it (still
      * scoring, still targetable, still whatever a while-in-play effect
-     * would otherwise do). Snapshotted into a plain card-id list first
-     * (rather than iterating moodsOwnedBy() directly), matching every
-     * other bulk-removal effect's own convention (see e.g. WrathEffect/
-     * MaliceEffect/DisillusionmentEffect) -- moveInPlayToDiscard() mutates
-     * $state's own moodsInPlay map as it goes, which a live iteration
-     * over that same map can't safely survive.
+     * would otherwise do), and their hand can't stay sitting there either
+     * (still visible to Confusion-style "reveal a card" effects that skip
+     * them as a *giver* -- see activePlayerOrder() -- but would otherwise
+     * still find their hand non-empty for a "does an opponent have cards"
+     * check). Both go to the bottom of the resigning player's own deck
+     * rather than the discard pile -- a resignation isn't a scoring event
+     * for any of those cards, so it shouldn't feed the discard-pile-driven
+     * effects (Altruism, Corruption, etc.) the way an ordinary discard
+     * would. `moodsOwnedBy()`/`hand()` both already return a snapshot copy
+     * (PHP array value semantics), so iterating either one is safe even
+     * though `moveInPlayToBottomOfDeck()`/`moveHandToBottomOfDeck()`
+     * mutate $state's own underlying maps as they go.
      */
-    private function removeResignedPlayerMoodsFromPlay(int $gameId, int $gamePlayerId): void
+    private function removeResignedPlayerCardsFromBoard(int $gameId, int $gamePlayerId): void
     {
         $state = $this->boardStates->load($gameId);
-        $cardIds = array_keys($state->moodsOwnedBy($gamePlayerId));
-        if ($cardIds === []) {
+
+        $moodCardIds = array_keys($state->moodsOwnedBy($gamePlayerId));
+        $handCardIds = $state->hand($gamePlayerId);
+        if ($moodCardIds === [] && $handCardIds === []) {
             return;
         }
 
-        foreach ($cardIds as $cardId) {
-            $state->moveInPlayToDiscard($cardId);
+        foreach ($moodCardIds as $cardId) {
+            $state->moveInPlayToBottomOfDeck($cardId);
+        }
+        foreach ($handCardIds as $cardId) {
+            $state->moveHandToBottomOfDeck($gamePlayerId, $cardId);
         }
 
         $this->boardStates->save($gameId, $state);
