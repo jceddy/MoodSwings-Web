@@ -611,7 +611,15 @@ repeat — is implemented as a genuine mid-play pause, reusing the exact
 same `PendingDecisionRequest`/`game_pending_decision_batches` machinery
 built for the nine `RequiresOpponentDecision` cards above, except the
 `PendingDecisionRequest`'s `targetPlayerId` is the *acting* player
-themselves rather than an opponent. `MoodPlayService::continueAfterPlayingChain()`
+themselves rather than an opponent. Each `afterPlaying()` invocation gets
+its own independent choices, but for a "while in play" effect that stores
+what it was told into its own `effectState` (rather than a one-time
+action like a discard), that per-invocation choice has to *accumulate*
+across invocations rather than the later one clobbering the earlier —
+ruled for `WonderEffect`, whose repeated color choice must ADD to (not
+replace) the original one, so it stores every chosen color in a list
+('colors') and counts a match against any of them, instead of overwriting
+a single scalar. `MoodPlayService::continueAfterPlayingChain()`
 offers the repeat whenever `$invocationSeq` is still below the number of
 the acting player's own in-play moods currently Duplicity-effective
 (`BoardState::countMoodsInPlayWithEffectiveKey($playerId, 'duplicity')` —
