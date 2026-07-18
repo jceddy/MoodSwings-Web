@@ -79,8 +79,53 @@ footer {
     color: var(--color-muted);
 }
 
-#theme-select-label {
+#theme-select-label,
+#resources-link {
     margin-left: 1rem;
+}
+
+dialog#resources-dialog {
+    position: relative;
+    box-sizing: border-box;
+    max-width: 30rem;
+    width: 90%;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+}
+
+dialog#resources-dialog ul {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1rem;
+}
+
+dialog#resources-dialog li {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* An "X" in the corner rather than a Close button at the bottom, so it
+   doesn't sit flush against whatever the Buy Me a Coffee widget (see
+   the <script data-name="bmc-button"> above) ends up rendering right
+   before it -- that widget's own injected markup isn't something this
+   codebase controls, so the margin trick a plain bottom Close button
+   would need to avoid crowding it turned out not to be reliable. */
+dialog#resources-dialog #resources-close-button {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    line-height: 1;
+    font-size: 1.25rem;
+    background: none;
+    border: none;
+    color: var(--color-muted);
+    cursor: pointer;
 }
 
 /* #friends-button/#logout-button sit directly above whichever of
@@ -721,6 +766,12 @@ body.game-page {
     position: relative;
     display: inline-flex;
     color: var(--color-muted);
+    /* A no-op inside .player-icons (a flex container -- flex items ignore
+       vertical-align), but keeps these icons lined up with the text
+       baseline when reused inline in ordinary text flow instead, e.g. the
+       lobby's own per-player play-arrow/waiting-hourglass icons in
+       buildGameRow(). */
+    vertical-align: middle;
 }
 
 .player-stat {
@@ -785,6 +836,15 @@ body.game-page {
 
 .player-flag--wentFirst {
     color: var(--color-error);
+}
+
+/* Matches --color-pending, this app's established color for "something is
+   waiting on a response" (see the lobby's own awaiting-response styling)
+   -- a delayed choice response (Compulsion, Arrogance, Duplicity's repeat
+   offer, a scoring-time Enthusiasm/Passion decision, etc.) genuinely
+   blocks play until answered, the same way those lobby rows do. */
+.player-flag--pendingDecision {
+    color: var(--color-pending);
 }
 
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
@@ -932,10 +992,9 @@ dialog#art-preview-dialog {
     gap: 0.75rem;
 }
 
-/* Makes a game whose is_your_turn is true stand out at a glance, on top
-   of (not instead of) the bold "(your turn)" text tag below -- #lobby-view
-   li's own horizontal padding (rather than 0) is what keeps this
-   background from touching the row's left/right edges. */
+/* Makes a game whose is_your_turn is true stand out at a glance --
+   #lobby-view li's own horizontal padding (rather than 0) is what keeps
+   this background from touching the row's left/right edges. */
 .lobby-row--your-turn {
     background-color: var(--color-your-turn-bg);
 }
@@ -988,16 +1047,6 @@ dialog#art-preview-dialog {
 
 .lobby-status--abandoned {
     color: var(--color-error);
-}
-
-.lobby-your-turn {
-    font-weight: bold;
-    color: var(--color-success);
-}
-
-.lobby-awaiting-response {
-    font-weight: bold;
-    color: var(--color-pending);
 }
 
 .lobby-winner {

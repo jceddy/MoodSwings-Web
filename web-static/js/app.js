@@ -320,6 +320,28 @@ const THEME_STORAGE_KEY = 'themePreference';
     });
 })();
 
+// Resources link/dialog (issue #148) in every page's own footer, next to
+// the theme select -- a static <dialog> already present in each page's own
+// HTML (no per-page JS needed, so this lives here alongside the other
+// footer wiring every page already shares).
+(function initResourcesDialog() {
+    const link = document.getElementById('resources-link');
+    const dialog = document.getElementById('resources-dialog');
+    const closeButton = document.getElementById('resources-close-button');
+    if (!link || !dialog || !closeButton) {
+        return;
+    }
+
+    link.addEventListener('click', (event) => {
+        event.preventDefault();
+        dialog.showModal();
+    });
+
+    closeButton.addEventListener('click', () => {
+        dialog.close();
+    });
+})();
+
 // Detects a new deploy landing while a session is already open (e.g. a
 // player leaves the game page open across a deploy) and force-reloads so
 // the page picks up the new JS/CSS/HTML instead of continuing to run

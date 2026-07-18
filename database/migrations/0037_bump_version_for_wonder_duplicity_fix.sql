@@ -1,0 +1,14 @@
+-- No schema change here -- this migration exists purely to keep
+-- schema_version in sync with a VERSION bump for a backend bug fix that
+-- didn't touch the schema at all: Wonder's Duplicity-repeated color
+-- choice overwrote its original one instead of adding to it, so Wonder
+-- only ever benefited from whichever color was chosen last (see
+-- WonderEffect::afterPlaying()/computeValue(), which now accumulate
+-- every chosen color in a list instead of a single overwritten scalar).
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request (see migration 0021's own docblock), so a VERSION
+-- bump with no corresponding schema_version update would show
+-- maintenance mode after deploy even though nothing about the schema
+-- actually changed -- this keeps that invariant intact the same way
+-- 0024/0025/0026 already did for their own schema-less bug fixes.
+UPDATE schema_version SET version = '0.11.1' WHERE id = 1;

@@ -45,7 +45,24 @@
 
         <p id="login-register-link" hidden>Don't have an account? <a href="register.html">Register</a></p>
     </main>
-    <footer><span id="app-version"></span><label id="theme-select-label">Theme
+
+    <dialog id="resources-dialog">
+        <button id="resources-close-button" type="button" aria-label="Close">&times;</button>
+        <h2>Resources</h2>
+        <ul id="resources-list">
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-extended-rules" target="_blank" rel="noopener noreferrer">Rules</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/other-ways-to-play-mood-swings" target="_blank" rel="noopener noreferrer">Formats</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-card-notes" target="_blank" rel="noopener noreferrer">Card Specific Rulings</a></li>
+            <li><a href="https://magic.wizards.com/en/news/card-image-gallery/mood-swings" target="_blank" rel="noopener noreferrer">Card Gallery</a></li>
+            <li><a href="https://moodswings.scryfall.com/" target="_blank" rel="noopener noreferrer">Moodfall (Mood Swings Card Repository)</a></li>
+            <li><a href="https://discord.gg/GgHFEBAd6C" target="_blank" rel="noopener noreferrer">Discord</a></li>
+            <li><a href="https://www.reddit.com/r/moodswingstcg/" target="_blank" rel="noopener noreferrer">Reddit</a></li>
+            <li><a href="https://github.com/jceddy/MoodSwings-Web" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+        </ul>
+        <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="jceddy" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
+    </dialog>
+
+    <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Theme
         <select id="theme-select">
             <option value="system">System</option>
             <option value="light">Light</option>

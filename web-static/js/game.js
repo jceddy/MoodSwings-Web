@@ -474,14 +474,16 @@
     function buildGameRow(game, opts = {}) {
         const li = document.createElement('li');
         // The your-turn background (".lobby-row--your-turn") is a
-        // whole-row highlight on top of (not instead of) the bold
-        // "(your turn)" text tag on its own status line below --
-        // makes an actionable game stand out even before the text
-        // itself is read. is_awaiting_your_response gets its own
-        // distinctly-colored highlight the same way, and takes priority
-        // when both apply -- a pending decision freezes the round even on
-        // what's nominally your own turn, so it's the more urgent of the
-        // two (see the CSS rule's own comment).
+        // whole-row highlight that makes an actionable game stand out at a
+        // glance. is_awaiting_your_response gets its own distinctly-colored
+        // highlight the same way, and takes priority when both apply -- a
+        // pending decision freezes the round even on what's nominally your
+        // own turn, so it's the more urgent of the two (see the CSS rule's
+        // own comment). Deliberately scoped to just these two viewer-centric
+        // conditions -- who's actually on turn/being waited on (possibly
+        // someone else entirely) is shown per-player via the play-arrow/
+        // waiting-hourglass icons below instead, so the row highlight only
+        // ever answers "is there something for ME to do here."
         li.className = 'lobby-row' + (
             game.is_awaiting_your_response ? ' lobby-row--awaiting-response'
                 : game.is_your_turn ? ' lobby-row--your-turn'
@@ -525,30 +527,32 @@
         statusEl.textContent = (opts.compact ? 'Game ' + game.match_game_number + ' — ' : '') + humanizeStatus(game.status);
         statusLineEl.appendChild(statusEl);
 
-        if (game.is_your_turn) {
-            const yourTurnEl = document.createElement('span');
-            yourTurnEl.className = 'lobby-your-turn';
-            yourTurnEl.textContent = ' (your turn)';
-            statusLineEl.appendChild(yourTurnEl);
-        }
-
-        // Independent of (and can show alongside) the your-turn tag above
-        // -- see GameService::isAwaitingResponseFrom() for the three
-        // things this covers (a pending card decision targeting you, your
-        // team's own turn_order/draw_recipient decision, or closed_team's
-        // still-unsubmitted pregame card pass).
-        if (game.is_awaiting_your_response) {
-            const awaitingResponseEl = document.createElement('span');
-            awaitingResponseEl.className = 'lobby-awaiting-response';
-            awaitingResponseEl.textContent = ' (waiting on you)';
-            statusLineEl.appendChild(awaitingResponseEl);
-        }
-
         infoEl.appendChild(statusLineEl);
 
+        // Each player's own name gets a play-arrow icon (reusing the same
+        // green player-flag--turn shape the board's own players list uses
+        // for "on turn" -- see buildPlayerFlag()) if current_turn_username
+        // names them, and/or a gold waiting-hourglass icon (player-flag--
+        // pendingDecision) if awaiting_response_usernames includes them --
+        // in place of the old "(your turn)"/"(waiting on ...)" text tags,
+        // which only ever named the viewer even though a whole game could
+        // be waiting on someone else entirely. A player can carry both at
+        // once in principle (e.g. a self-targeting decision resolving
+        // without ever handing the turn to anyone else), so the two checks
+        // are independent, not mutually exclusive.
         if (!opts.compact) {
-            const opponents = game.players.map((p) => p.username).join(', ');
-            infoEl.append(opponents);
+            game.players.forEach((player, index) => {
+                if (index > 0) {
+                    infoEl.append(', ');
+                }
+                infoEl.append(player.username);
+                if (game.current_turn_username === player.username) {
+                    infoEl.appendChild(buildPlayerFlag('onTurn', player.username + "'s turn", 'player-flag--turn'));
+                }
+                if (game.awaiting_response_usernames.includes(player.username)) {
+                    infoEl.appendChild(buildPlayerFlag('pendingDecision', 'Waiting on ' + player.username, 'player-flag--pendingDecision'));
+                }
+            });
         }
 
         // winner_usernames is only ever non-empty once the game is
@@ -1394,6 +1398,8 @@
         wentFirst: '<rect x="5" y="3" width="2" height="18"/><polygon points="7,4 19,7 7,10"/>',
         // Whose turn it currently is: a play/active triangle.
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
+        // A delayed decision response awaiting this player: an hourglass.
+        pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
     };
 
     // <template> parses its own innerHTML through the HTML parser's SVG
@@ -1513,6 +1519,15 @@
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
                 const wentFirst = state.round && state.round.went_first_game_player_id === player.game_player_id;
                 const hasHurtFeelings = state.round && state.round.hurt_feelings_game_player_id === player.game_player_id;
+                // A delayed choice response (Compulsion/Arrogance/Intimidation/
+                // Instability/Suspicion/Disillusionment/Malice, a Duplicity
+                // repeat offer, or a scoring-time Enthusiasm/Passion decision --
+                // see round.pending_decision in GameService::getState()) currently
+                // awaiting this specific player, regardless of who's viewing --
+                // target_game_player_id is always visible to every player, only
+                // the actual prompt (pendingDecision.field) is target-only.
+                const pendingDecision = state.round && state.round.pending_decision;
+                const hasPendingDecision = pendingDecision && pendingDecision.target_game_player_id === player.game_player_id;
                 // Each custom_duel player has their OWN deck (unlike every
                 // other deck_type, where one label covers the whole game --
                 // see the board title itself), so that label belongs on
@@ -1607,6 +1622,11 @@
                 if (isTurn) {
                     iconsEl.appendChild(buildPlayerFlag('onTurn', 'On turn', 'player-flag--turn'));
                 }
+                if (hasPendingDecision) {
+                    const label = player.username + ' has a delayed decision response pending' +
+                        (pendingDecision.played_card_name ? ' (' + pendingDecision.played_card_name + ')' : '') + '.';
+                    iconsEl.appendChild(buildPlayerFlag('pendingDecision', label, 'player-flag--pendingDecision'));
+                }
 
                 // A small Hurt Feelings art thumbnail replaces the old plain
                 // text tag -- Hurt Feelings is a round-level marker/token,
@@ -1649,6 +1669,17 @@
 
         if (state.game.status === 'waiting') {
             inProgressArea.hidden = true;
+            // #pending-decision-banner and #scoring-preview both live
+            // outside #in-progress-area (a pending decision/scoring
+            // preview belongs to whichever game most recently showed one,
+            // not necessarily this one), so hiding inProgressArea alone
+            // doesn't clear them -- without this, switching from an
+            // in-progress game that had either visible straight to a
+            // still-drafting/deck-building game would leave that OTHER
+            // game's stale text sitting on screen, since neither one is
+            // otherwise touched anywhere in this 'waiting' branch.
+            renderPendingDecision(null);
+            renderScoringPreview(null);
 
             if (state.game.deck_type === 'custom_duel') {
                 document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';

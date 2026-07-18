@@ -17,6 +17,32 @@ endpoints -- and renders it as e.g. "v0.2.0". Fetched with `cache:
 stale, browser-cached version string. See "Versioning" in the top-level
 README for what the version itself means and where it's bumped.
 
+## Resources
+
+Every page has a `<a id="resources-link">Resources</a>` next to the theme
+select in its own `<footer>`, opening a static `<dialog id="resources-dialog">`
+(already present in each page's own HTML, wired up by `initResourcesDialog()`
+in `js/app.js` alongside the theme-select/version-indicator footer logic
+every page already shares) -- issue #148. Contains external links to the
+official rules, formats, card-specific rulings, and card gallery pages, the
+Moodfall card repository, and the community Discord/Reddit -- the same set
+documented in the top-level README's own "Resources" section, just
+reachable in-app rather than only from the repo itself -- plus a link to
+this GitHub repository. The dialog also embeds Buy Me a Coffee's own
+official `<script data-name="bmc-button">` widget (`cdnjs.buymeacoffee.com`),
+which inserts its own button element into the dialog once it loads.
+
+Unlike every other dialog in this app (`#card-detail-dialog`,
+`#friends-dialog`, etc.), which close via a plain button at the bottom,
+`#resources-dialog` closes via an "X" (`&times;`) absolutely positioned
+in its own top-right corner. This is specific to this one dialog: a
+bottom Close button here would sit directly against whatever the BMC
+widget's own injected markup renders right above it -- markup this
+codebase doesn't control the shape of, so a CSS margin targeting it
+(tried initially) wasn't reliable. Moving Close to the corner sidesteps
+that entirely, since it opens the door for the BMC button to render
+however it wants without ever crowding another control.
+
 ## Dark mode
 
 Three modes, chosen via a `<select id="theme-select">` in every page's own
@@ -373,24 +399,47 @@ too, proportional to the smaller card width.
     see "Dark mode" below), `completed` in `--color-muted`, and the rarer
     `abandoned` in `--color-error` -- distinguishing what needs attention
     at a glance rather than requiring every row's text to be read in full.
-    `is_your_turn` gets its own bold `--color-success` "(your turn)" tag
-    on that same status line, plus a whole-row background
+    `is_your_turn` gets its own whole-row background
     (`.lobby-row--your-turn`, a new `--color-your-turn-bg` theme variable)
     so an actionable game stands out even before any of the row's text is
     read; `#lobby-view li`'s own horizontal padding (rather than 0) is what
     keeps that background from touching the row's edges.
     `is_awaiting_your_response` (a delayed choice is on you specifically
     -- see `GameService::isAwaitingResponseFrom()`) gets the same
-    treatment with a distinct color: a bold `--color-pending` "(waiting on
-    you)" tag plus its own row background (`.lobby-row--awaiting-response`,
-    a new `--color-awaiting-response-bg` amber theme variable, distinct
-    from your-turn's green) -- deliberately a different color from
-    your-turn's, since the two mean different things and can both be true
-    at once (a pending decision freezes the round even on what's nominally
-    your own turn). `buildGameRow()` gives the row background priority to
-    awaiting-response over your-turn when both apply, since it's the more
-    urgent of the two, but still shows both text tags side by side either
-    way. Once a game is `completed`,
+    treatment with a distinct color: its own row background
+    (`.lobby-row--awaiting-response`, a new `--color-awaiting-response-bg`
+    amber theme variable, distinct from your-turn's green) -- deliberately
+    a different color from your-turn's, since the two mean different
+    things and can both be true at once (a pending decision freezes the
+    round even on what's nominally your own turn). `buildGameRow()` gives
+    the row background priority to awaiting-response over your-turn when
+    both apply, since it's the more urgent of the two. Both of these row
+    highlights stay strictly viewer-centric -- they only ever answer "is
+    there something for ME to do here" -- even though *who* the game is
+    actually on turn/waiting on can be a different player entirely (see
+    the per-player icons below); a row is never highlighted purely because
+    it's some OTHER player's turn or they're the one being waited on.
+
+    Rather than the old "(your turn)"/"(waiting on &lt;username&gt;)" text
+    tags (which could only ever name the viewer, even when a pending
+    decision was actually paused on a different player), each opponent's
+    own name in the row now gets an inline icon instead, reusing the exact
+    same shapes/colors the board's own players list already established
+    for issue #143: `current_turn_username` (whichever seated player
+    `current_turn_game_player_id` actually belongs to) gets the green
+    play-arrow icon (`buildPlayerFlag('onTurn', ..., 'player-flag--turn')`)
+    right after their name, and every name in
+    `awaiting_response_usernames` (the all-players generalization of
+    `is_awaiting_your_response` -- see `GameService::listGamesForUser()`)
+    gets the gold waiting-hourglass icon
+    (`buildPlayerFlag('pendingDecision', ..., 'player-flag--pendingDecision')`)
+    -- so e.g. a game where you played Compulsion targeting an opponent
+    shows the hourglass next to *their* name, not yours, even though it's
+    still nominally your own turn. `.player-flag`/`.player-stat` pick up a
+    `vertical-align: middle` rule (a no-op inside their usual flex
+    `.player-icons` wrapper on the board, but needed here since these are
+    now also reused inline in ordinary text flow) so they line up cleanly
+    with the surrounding username text. Once a game is `completed`,
     `winner_usernames` (both teammates' for a team-format win, just the
     one player's otherwise -- see `php-app/README.md`) renders as an extra
     line below the players, e.g. "alice won" or "alice & bob won" --
@@ -1185,6 +1234,22 @@ too, proportional to the smaller card width.
     *other* game's board opened, including a freshly created one that had
     never even started yet.
 
+    `#pending-decision-banner` and `#scoring-preview` are two more elements
+    with this exact same failure shape, caught later: both live outside
+    `#in-progress-area` (a pending decision/scoring preview belongs to
+    whichever game most recently had one, not necessarily the one on
+    screen now), and both are only ever updated by `renderPendingDecision()`/
+    `renderScoringPreview()` calls that sit *after* `renderBoard()`'s early
+    `return` for a game whose `status` is still `'waiting'` (drafting/
+    deck-building) -- so switching straight from an in-progress game that
+    had either visible to a still-drafting game left that OTHER game's
+    stale text sitting on screen, since `inProgressArea.hidden = true`
+    alone doesn't touch either of them. Fixed the same way as the
+    `#board-message` case above: the `'waiting'` branch now explicitly
+    calls `renderPendingDecision(null)`/`renderScoringPreview(null)` up
+    front, rather than only relying on being reached during a normal
+    in-progress render.
+
     The "Players" list near the top of the board tags the viewer's own row
     with a "(you)" suffix right after their username
     (`state.you.game_player_id === player.game_player_id`), so it's
@@ -1254,7 +1319,20 @@ too, proportional to the smaller card width.
     view of that art, since Hurt Feelings is a round-level marker/token,
     not a `cards` row (see migration `0003`'s own header comment), so it
     has no `catalog_card_id`/`rules_text` to build a card-detail-dialog-style
-    view from.
+    view from. Whoever a delayed choice response is currently pending on
+    (Compulsion, Arrogance/Intimidation/Instability/Suspicion/
+    Disillusionment/Malice, a Duplicity repeat offer, or a scoring-time
+    Enthusiasm/Passion decision — see `round.pending_decision` in
+    `php-app/README.md`'s `/games/state` entry) gets its own small hourglass flag icon
+    (`state.round.pending_decision.target_game_player_id`, compared against
+    each row's own `game_player_id`) in `--color-pending`, this app's
+    existing color for "something is actively blocking on a response" (the
+    lobby's own awaiting-response styling already uses it). `target_game_player_id`
+    is always visible to every player in the game, unlike the actual prompt
+    (`pending_decision.field`), which stays targeted-player-only — the same
+    "a real opponent across the table would see someone visibly puzzling
+    over a card, just not what it says" principle other open-information
+    fields on this page already follow.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits

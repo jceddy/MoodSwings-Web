@@ -4171,7 +4171,7 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
@@ -4241,6 +4241,8 @@ final class GameService
 
             $currentTurnGamePlayerId = null;
             $awaitingYourResponse = false;
+            $currentTurnUsername = null;
+            $awaitingResponseUsernames = [];
             if ($game['status'] === 'in_progress') {
                 $roundStmt = $pdo->prepare(
                     "SELECT current_turn_game_player_id FROM game_rounds
@@ -4251,8 +4253,26 @@ final class GameService
                 $currentTurnGamePlayerId = $roundStmt->fetchColumn();
                 $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
 
-                if ($yourGamePlayerId !== null) {
-                    $awaitingYourResponse = $this->isAwaitingResponseFrom($gameId, $yourGamePlayerId, $game['format']);
+                // One isAwaitingResponseFrom() check per seated player (not
+                // just the viewer) -- lets the lobby flag every player the
+                // game is currently blocked on, not only the viewer
+                // themselves, so a game where your own play opened a
+                // decision targeting someone ELSE (still "your turn" by
+                // current_turn_game_player_id, but not actually actionable)
+                // shows correctly on whichever player's name it's really
+                // waiting on.
+                foreach ($playerRows as $row) {
+                    $rowGamePlayerId = (int) $row['id'];
+                    if ($rowGamePlayerId === $currentTurnGamePlayerId) {
+                        $currentTurnUsername = $row['username'];
+                    }
+                    $rowAwaitingResponse = $this->isAwaitingResponseFrom($gameId, $rowGamePlayerId, $game['format']);
+                    if ($rowAwaitingResponse) {
+                        $awaitingResponseUsernames[] = $row['username'];
+                    }
+                    if ($yourGamePlayerId !== null && $rowGamePlayerId === $yourGamePlayerId) {
+                        $awaitingYourResponse = $rowAwaitingResponse;
+                    }
                 }
             }
 
@@ -4280,6 +4300,22 @@ final class GameService
                 // (closed_team only) your still-unsubmitted pregame blind
                 // card pass. See isAwaitingResponseFrom().
                 'is_awaiting_your_response' => $awaitingYourResponse,
+                // Whichever seated player current_turn_game_player_id
+                // actually belongs to, by username -- lets the lobby show a
+                // play-arrow icon next to that specific player's name (see
+                // buildGameRow()) rather than a row-wide "(your turn)" tag
+                // that only ever named the viewer. Null whenever the game
+                // isn't 'in_progress' or the round is between turns (e.g.
+                // an open team turn_order decision -- see
+                // applyTurnOrderDecision()'s own docblock).
+                'current_turn_username' => $currentTurnUsername,
+                // Every seated player isAwaitingResponseFrom() currently
+                // returns true for -- the generalized, all-players version
+                // of is_awaiting_your_response, so the lobby can show a
+                // waiting-hourglass icon next to each one specifically
+                // (there can be more than one at once, e.g. closed_team's
+                // pregame card pass before every player has submitted).
+                'awaiting_response_usernames' => $awaitingResponseUsernames,
                 'winner_usernames' => $winnerUsernames,
                 // Lets the lobby group any draft-based match's (Quick
                 // Draft or Winston Draft) up-to-3 games together (same

@@ -700,6 +700,40 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 133, new PlayerChoices(['color' => 'purple']));
     }
 
+    /**
+     * Ruled: Wonder repeated by Duplicity benefits from EVERY color chosen
+     * across all of its afterPlaying() invocations, not just the latest
+     * one -- the second (Duplicity-repeated) color choice must ADD to the
+     * first, not replace it.
+     */
+    public function testWonderAccumulatesBoostFromEachDuplicityRepeatedColorChoice(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 133], 2 => [8]], discard: [54]); // Duplicity, Wonder; Dignity (white); Angst (black) already discarded
+        $state->moveHandToInPlay(2, 8); // Dignity, white, in play
+        $state->startTurn(1);
+        $state->grantExtraPlay(1);
+
+        $this->plays->playMood($state, 1, 37, new PlayerChoices([])); // Duplicity
+
+        $choices = new PlayerChoices(['color' => 'white']);
+        $result = $this->plays->playMood($state, 1, 133, $choices); // Wonder, choose white
+
+        self::assertTrue($result->isPending); // Duplicity offers to repeat Wonder's afterPlaying()
+        self::assertSame(2, $state->valueOf(133)); // base 0 + 2 * (1 white mood in play)
+
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state, 133, 1, $choices, $choices, 0,
+            ['duplicity_repeat' => new PlayerChoices([
+                'duplicity_repeat' => ['repeat' => true, 'choices' => ['color' => 'black']],
+            ])],
+        );
+
+        self::assertFalse($finalResult->isPending);
+        // base 0 + 2 * (1 white mood in play + 1 black card discarded) = 4 --
+        // both the original white choice AND the repeat's black choice count.
+        self::assertSame(4, $state->valueOf(133));
+    }
+
     public function testAngerDiscardsQualifyingMoodsWithinTheTotalValueLimit(): void
     {
         $state = $this->boardState(hands: [1 => [80], 2 => [3], 3 => [7]]);
