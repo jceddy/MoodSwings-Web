@@ -832,6 +832,15 @@ body.game-page {
     color: var(--color-error);
 }
 
+/* Matches --color-pending, this app's established color for "something is
+   waiting on a response" (see the lobby's own awaiting-response styling)
+   -- a delayed choice response (Compulsion, Arrogance, Duplicity's repeat
+   offer, a scoring-time Enthusiasm/Passion decision, etc.) genuinely
+   blocks play until answered, the same way those lobby rows do. */
+.player-flag--pendingDecision {
+    color: var(--color-pending);
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {

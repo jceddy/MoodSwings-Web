@@ -1394,6 +1394,8 @@
         wentFirst: '<rect x="5" y="3" width="2" height="18"/><polygon points="7,4 19,7 7,10"/>',
         // Whose turn it currently is: a play/active triangle.
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
+        // A delayed decision response awaiting this player: an hourglass.
+        pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
     };
 
     // <template> parses its own innerHTML through the HTML parser's SVG
@@ -1513,6 +1515,15 @@
                 const isTurn = state.round && state.round.current_turn_game_player_id === player.game_player_id;
                 const wentFirst = state.round && state.round.went_first_game_player_id === player.game_player_id;
                 const hasHurtFeelings = state.round && state.round.hurt_feelings_game_player_id === player.game_player_id;
+                // A delayed choice response (Compulsion/Arrogance/Intimidation/
+                // Instability/Suspicion/Disillusionment/Malice, a Duplicity
+                // repeat offer, or a scoring-time Enthusiasm/Passion decision --
+                // see round.pending_decision in GameService::getState()) currently
+                // awaiting this specific player, regardless of who's viewing --
+                // target_game_player_id is always visible to every player, only
+                // the actual prompt (pendingDecision.field) is target-only.
+                const pendingDecision = state.round && state.round.pending_decision;
+                const hasPendingDecision = pendingDecision && pendingDecision.target_game_player_id === player.game_player_id;
                 // Each custom_duel player has their OWN deck (unlike every
                 // other deck_type, where one label covers the whole game --
                 // see the board title itself), so that label belongs on
@@ -1606,6 +1617,11 @@
                 }
                 if (isTurn) {
                     iconsEl.appendChild(buildPlayerFlag('onTurn', 'On turn', 'player-flag--turn'));
+                }
+                if (hasPendingDecision) {
+                    const label = player.username + ' has a delayed decision response pending' +
+                        (pendingDecision.played_card_name ? ' (' + pendingDecision.played_card_name + ')' : '') + '.';
+                    iconsEl.appendChild(buildPlayerFlag('pendingDecision', label, 'player-flag--pendingDecision'));
                 }
 
                 // A small Hurt Feelings art thumbnail replaces the old plain
