@@ -30,8 +30,18 @@ documented in the top-level README's own "Resources" section, just
 reachable in-app rather than only from the repo itself -- plus a link to
 this GitHub repository. The dialog also embeds Buy Me a Coffee's own
 official `<script data-name="bmc-button">` widget (`cdnjs.buymeacoffee.com`),
-which renders its own floating support button independently of the
-dialog's open/closed state, rather than a plain in-dialog link/image.
+which inserts its own button element into the dialog once it loads.
+
+Unlike every other dialog in this app (`#card-detail-dialog`,
+`#friends-dialog`, etc.), which close via a plain button at the bottom,
+`#resources-dialog` closes via an "X" (`&times;`) absolutely positioned
+in its own top-right corner. This is specific to this one dialog: a
+bottom Close button here would sit directly against whatever the BMC
+widget's own injected markup renders right above it -- markup this
+codebase doesn't control the shape of, so a CSS margin targeting it
+(tried initially) wasn't reliable. Moving Close to the corner sidesteps
+that entirely, since it opens the door for the BMC button to render
+however it wants without ever crowding another control.
 
 ## Dark mode
 
