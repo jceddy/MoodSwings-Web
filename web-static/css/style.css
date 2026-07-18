@@ -766,6 +766,12 @@ body.game-page {
     position: relative;
     display: inline-flex;
     color: var(--color-muted);
+    /* A no-op inside .player-icons (a flex container -- flex items ignore
+       vertical-align), but keeps these icons lined up with the text
+       baseline when reused inline in ordinary text flow instead, e.g. the
+       lobby's own per-player play-arrow/waiting-hourglass icons in
+       buildGameRow(). */
+    vertical-align: middle;
 }
 
 .player-stat {
@@ -986,10 +992,9 @@ dialog#art-preview-dialog {
     gap: 0.75rem;
 }
 
-/* Makes a game whose is_your_turn is true stand out at a glance, on top
-   of (not instead of) the bold "(your turn)" text tag below -- #lobby-view
-   li's own horizontal padding (rather than 0) is what keeps this
-   background from touching the row's left/right edges. */
+/* Makes a game whose is_your_turn is true stand out at a glance --
+   #lobby-view li's own horizontal padding (rather than 0) is what keeps
+   this background from touching the row's left/right edges. */
 .lobby-row--your-turn {
     background-color: var(--color-your-turn-bg);
 }
@@ -1004,17 +1009,6 @@ dialog#art-preview-dialog {
    even on what's nominally your own turn, so it's the more urgent of the
    two. */
 .lobby-row--awaiting-response {
-    background-color: var(--color-awaiting-response-bg);
-}
-
-/* waiting_on_username's own row highlight -- is_your_turn is true, but a
-   decision your own play opened is paused on a DIFFERENT player, so
-   there's nothing actionable here either. Reuses the same amber tint as
-   lobby-row--awaiting-response (both mean "something's pending"), just
-   from the opposite direction (blocked on someone else, not blocked on
-   you) -- takes priority over lobby-row--your-turn for the same reason
-   (see buildGameRow()). */
-.lobby-row--waiting-on-other {
     background-color: var(--color-awaiting-response-bg);
 }
 
@@ -1053,21 +1047,6 @@ dialog#art-preview-dialog {
 
 .lobby-status--abandoned {
     color: var(--color-error);
-}
-
-.lobby-your-turn {
-    font-weight: bold;
-    color: var(--color-success);
-}
-
-.lobby-awaiting-response {
-    font-weight: bold;
-    color: var(--color-pending);
-}
-
-.lobby-waiting-on-other {
-    font-weight: bold;
-    color: var(--color-pending);
 }
 
 .lobby-winner {
