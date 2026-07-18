@@ -1685,6 +1685,17 @@
 
         if (state.game.status === 'waiting') {
             inProgressArea.hidden = true;
+            // #pending-decision-banner and #scoring-preview both live
+            // outside #in-progress-area (a pending decision/scoring
+            // preview belongs to whichever game most recently showed one,
+            // not necessarily this one), so hiding inProgressArea alone
+            // doesn't clear them -- without this, switching from an
+            // in-progress game that had either visible straight to a
+            // still-drafting/deck-building game would leave that OTHER
+            // game's stale text sitting on screen, since neither one is
+            // otherwise touched anywhere in this 'waiting' branch.
+            renderPendingDecision(null);
+            renderScoringPreview(null);
 
             if (state.game.deck_type === 'custom_duel') {
                 document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';

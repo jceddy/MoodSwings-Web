@@ -1224,6 +1224,22 @@ too, proportional to the smaller card width.
     *other* game's board opened, including a freshly created one that had
     never even started yet.
 
+    `#pending-decision-banner` and `#scoring-preview` are two more elements
+    with this exact same failure shape, caught later: both live outside
+    `#in-progress-area` (a pending decision/scoring preview belongs to
+    whichever game most recently had one, not necessarily the one on
+    screen now), and both are only ever updated by `renderPendingDecision()`/
+    `renderScoringPreview()` calls that sit *after* `renderBoard()`'s early
+    `return` for a game whose `status` is still `'waiting'` (drafting/
+    deck-building) -- so switching straight from an in-progress game that
+    had either visible to a still-drafting game left that OTHER game's
+    stale text sitting on screen, since `inProgressArea.hidden = true`
+    alone doesn't touch either of them. Fixed the same way as the
+    `#board-message` case above: the `'waiting'` branch now explicitly
+    calls `renderPendingDecision(null)`/`renderScoringPreview(null)` up
+    front, rather than only relying on being reached during a normal
+    in-progress render.
+
     The "Players" list near the top of the board tags the viewer's own row
     with a "(you)" suffix right after their username
     (`state.you.game_player_id === player.game_player_id`), so it's
