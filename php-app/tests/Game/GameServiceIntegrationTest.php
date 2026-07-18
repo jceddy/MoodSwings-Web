@@ -2862,6 +2862,158 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    // -- Full event log (issue #98) ------------------------------------------
+
+    /**
+     * fullEventLog() is chronological oldest-first (the opposite order
+     * from recentEvents()'s own newest-first slice), and -- unlike
+     * recentEvents()'s hardcoded 15-row limit -- returns every event with
+     * no cap at all, so a game with more than 15 events still gets every
+     * one of them back.
+     */
+    public function testFullEventLogReturnsEveryEventChronologicallyUnlikeRecentEventsFifteenRowLimit(): void
+    {
+        $u1 = $this->insertUser('fulllogorder1');
+        $u2 = $this->insertUser('fulllogorder2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 99)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // 18 alternating pass()es -- comfortably more than recentEvents()'s
+        // own 15-row limit. Each pass() logs its own 'turn_passed' event,
+        // but with only 2 players every 2nd pass also completes and
+        // scores the round (wins_needed: 99 above only keeps the GAME
+        // itself from ever actually completing, not the individual
+        // rounds within it) -- so this isn't purely 18 'turn_passed' rows,
+        // it's however many game_events rows actually accumulate, fetched
+        // straight from the database below rather than assumed.
+        $currentPlayerId = $p1;
+        for ($i = 0; $i < 18; $i++) {
+            $this->games->pass($gameId, $currentPlayerId);
+            $currentPlayerId = $currentPlayerId === $p1 ? $p2 : $p1;
+        }
+
+        $recentEvents = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertCount(15, $recentEvents, "recentEvents()'s own hardcoded limit");
+
+        $countStmt = $this->pdo->prepare('SELECT COUNT(*) FROM game_events WHERE game_id = :game_id');
+        $countStmt->execute(['game_id' => $gameId]);
+        $actualEventCount = (int) $countStmt->fetchColumn();
+        self::assertGreaterThan(15, $actualEventCount, 'sanity check that this scenario really does exceed the 15-row limit');
+
+        $fullLog = $this->games->fullEventLog($gameId);
+        self::assertCount($actualEventCount, $fullLog, 'fullEventLog() has no cap at all');
+
+        $ids = array_column($fullLog, 'id');
+        $sortedIds = $ids;
+        sort($sortedIds);
+        self::assertSame($sortedIds, $ids, 'oldest first -- ascending id order');
+    }
+
+    /**
+     * Each entry carries the raw fields the frontend's "download data"
+     * button (see "Game log" in web-static/README.md) turns into a JSON
+     * export, alongside the same describeEvent()-rendered description
+     * recentEvents() itself uses -- both views can never drift out of
+     * phrasing sync since they share that one rendering method.
+     */
+    public function testFullEventLogEntriesCarryRawFieldsAlongsideTheRenderedDescription(): void
+    {
+        $u1 = $this->insertUser('fulllograw1');
+        $u2 = $this->insertUser('fulllograw2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $encouragementId = $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- the mood targeted
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $encouragementId, ['target_mood_id' => $dignityId]);
+
+        $fullLog = $this->games->fullEventLog($gameId);
+        self::assertCount(1, $fullLog);
+        $entry = $fullLog[0];
+
+        self::assertSame('mood_played', $entry['event_type']);
+        self::assertSame(1, $entry['round_number']);
+        self::assertSame($p1, $entry['acting_game_player_id']);
+        self::assertSame('fulllograw1', $entry['acting_username']);
+        self::assertSame($encouragementId, $entry['card_id']);
+        self::assertSame('Encouragement', $entry['card_name']);
+        self::assertSame($dignityId, $entry['details']['target_mood_id']);
+        self::assertStringContainsString('fulllograw1 played Encouragement', $entry['description']);
+        self::assertStringContainsString('target mood: Dignity', $entry['description']);
+    }
+
+    /**
+     * Every seated player sees the exact same full log, the same way
+     * recentEvents() itself already applies no per-viewer filtering --
+     * confirmed here against a Malice cascade specifically (see
+     * testRecentEventsDescribeEveryMoodMaliceDiscardsIncludingTheColorCascade())
+     * since that event's own description is exactly the kind of
+     * multi-segment, semicolon-joined text the frontend's "bulleted list
+     * headed by the first item" rendering (buildLogEntryContent() in
+     * game.js) exists for.
+     */
+    public function testFullEventLogIsIdenticalRegardlessOfViewerAndIncludesMultiSegmentDescriptions(): void
+    {
+        $u1 = $this->insertUser('fulllogmalice1');
+        $u2 = $this->insertUser('fulllogmalice2');
+        $u3 = $this->insertUser('fulllogmalice3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $maliceId = $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white -- chosen
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- chosen
+        $this->insertGameCard($gameId, 8, 'in_play', $p3); // Dignity, white -- cascade, never chosen
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $maliceId, ['target_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [$disciplineId, $charityId]]);
+
+        // fullEventLog() itself takes no viewer argument at all -- unlike
+        // getState()'s own per-viewer 'recent_events' field -- so there's
+        // nothing to vary per user here; this just documents that fact by
+        // calling it once and using the one result to cover both checks.
+        $fullLog = $this->games->fullEventLog($gameId);
+
+        $resolvedEntry = null;
+        foreach ($fullLog as $entry) {
+            if ($entry['event_type'] === 'pending_decision_resolved') {
+                $resolvedEntry = $entry;
+                break;
+            }
+        }
+        self::assertNotNull($resolvedEntry, 'no pending_decision_resolved event found');
+        self::assertStringContainsString('; ', $resolvedEntry['description'], 'a multi-part, semicolon-joined description');
+        self::assertStringContainsString('Discipline moved from play to the discard pile', $resolvedEntry['description']);
+        self::assertStringContainsString('Charity moved from play to the discard pile', $resolvedEntry['description']);
+        self::assertStringContainsString('Dignity moved from play to the discard pile', $resolvedEntry['description']);
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {

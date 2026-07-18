@@ -5446,6 +5446,85 @@ final class GameService
     }
 
     /**
+     * The entire game_events log for $gameId, oldest first (issue #98) --
+     * unlike recentEvents() below, this is deliberately unbounded and
+     * unpaginated: a typical game's event count (rarely more than a few
+     * hundred rows even for a long multiplayer game) is small enough that
+     * returning the whole thing in one response is simpler than adding
+     * pagination for a case that doesn't actually need it. Reuses the same
+     * describeEvent() rendering recentEvents() does (so the two views can
+     * never drift out of phrasing sync), but each entry additionally
+     * carries the raw event_type/round_number/acting_game_player_id/
+     * card_id/details alongside the resolved acting_username/card_name --
+     * recentEvents()'s own {id, created_at, description} shape only ever
+     * needs to be displayed, but this is also the one response the
+     * frontend's "download data" button (see "Game log" in
+     * web-static/README.md) turns directly into a JSON export, so it's
+     * worth including enough raw data for that export to be genuinely
+     * useful offline, not just a repeat of the human-readable text the
+     * "download text"/"copy text" buttons already cover. No per-viewer
+     * filtering, same as recentEvents() -- every event is already visible
+     * to every seated player regardless of who originally triggered it
+     * (see recentEvents()'s own docblock re: Paranoia/Curiosity reveals),
+     * so this only needs requireGamePlayer()'s seated-player check, not
+     * anything further.
+     *
+     * @return array<int, array{id:int, created_at:string, round_number:?int, event_type:string, acting_game_player_id:?int, acting_username:?string, card_id:?int, card_name:?string, details:array<string,mixed>, description:string}>
+     */
+    public function fullEventLog(int $gameId): array
+    {
+        $pdo = Connection::get();
+
+        $playersStmt = $pdo->prepare(
+            'SELECT gp.id, gp.team_id, u.username FROM game_players gp
+             JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id'
+        );
+        $playersStmt->execute(['game_id' => $gameId]);
+        $playerRows = $playersStmt->fetchAll();
+
+        $playerNames = array_column($playerRows, 'username', 'id');
+        $cardNames = $this->cardNamesFor($gameId);
+
+        // Only populated for format 'team' -- see recentEvents()'s own
+        // identical construction below.
+        $teamMembersByTeamId = [];
+        foreach ($playerRows as $row) {
+            if ($row['team_id'] !== null) {
+                $teamMembersByTeamId[(int) $row['team_id']][] = $row['username'];
+            }
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
+             FROM game_events e
+             LEFT JOIN game_rounds r ON r.id = e.game_round_id
+             WHERE e.game_id = :game_id ORDER BY e.id ASC'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(
+            function (array $row) use ($playerNames, $cardNames, $teamMembersByTeamId): array {
+                $actingId = $row['acting_game_player_id'] !== null ? (int) $row['acting_game_player_id'] : null;
+                $cardId = $row['card_id'] !== null ? (int) $row['card_id'] : null;
+
+                return [
+                    'id' => (int) $row['id'],
+                    'created_at' => $row['created_at'],
+                    'round_number' => $row['round_number'] !== null ? (int) $row['round_number'] : null,
+                    'event_type' => $row['event_type'],
+                    'acting_game_player_id' => $actingId,
+                    'acting_username' => $actingId !== null ? ($playerNames[$actingId] ?? null) : null,
+                    'card_id' => $cardId,
+                    'card_name' => $cardId !== null ? ($cardNames[$cardId] ?? null) : null,
+                    'details' => $row['details'] !== null ? json_decode((string) $row['details'], true) : [],
+                    'description' => $this->describeEvent($row, $playerNames, $cardNames, $teamMembersByTeamId),
+                ];
+            },
+            $stmt->fetchAll(),
+        );
+    }
+
+    /**
      * The last few plays/passes/rounds-scored for this game, newest first,
      * as ready-to-display strings -- a "smallish panel" alternative to
      * building out a full game-history view, specifically so a player who

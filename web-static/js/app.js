@@ -209,6 +209,11 @@ function getGameState(gameId) {
     return apiRequest('/games/state?game_id=' + encodeURIComponent(gameId));
 }
 
+// The entire game log (issue #98) -- see GameService::fullEventLog().
+function getGameLog(gameId) {
+    return apiRequest('/games/log?game_id=' + encodeURIComponent(gameId));
+}
+
 function startGame(gameId) {
     return apiRequest('/games/start', {
         method: 'POST',

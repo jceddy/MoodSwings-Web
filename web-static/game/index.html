@@ -226,6 +226,7 @@
                 <button id="resign-button" type="button" hidden>Resign game</button>
 
                 <h3>Recent plays</h3>
+                <button id="view-log-button" type="button">View log</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
             </div>
@@ -426,6 +427,21 @@
     <dialog id="art-preview-dialog">
         <img id="art-preview-image" class="art-preview-image">
         <button id="art-preview-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- The entire game log (issue #98) -- see openGameLog() in game.js
+         and "Game log" in web-static/README.md. -->
+    <dialog id="game-log-dialog">
+        <h2>Game log</h2>
+        <div id="game-log-actions">
+            <button id="game-log-copy-button" type="button">Copy text</button>
+            <button id="game-log-download-text-button" type="button">Download text</button>
+            <button id="game-log-download-data-button" type="button">Download data</button>
+        </div>
+        <p id="game-log-copy-success" class="success" hidden>Copied to clipboard.</p>
+        <ul id="game-log-list"></ul>
+        <p id="game-log-empty" hidden>Nothing has happened yet.</p>
+        <button id="game-log-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="friends-dialog">
