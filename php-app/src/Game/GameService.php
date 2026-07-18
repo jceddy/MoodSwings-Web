@@ -4171,7 +4171,7 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,waiting_on_username:?string,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
+    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
@@ -4241,7 +4241,8 @@ final class GameService
 
             $currentTurnGamePlayerId = null;
             $awaitingYourResponse = false;
-            $waitingOnUsername = null;
+            $currentTurnUsername = null;
+            $awaitingResponseUsernames = [];
             if ($game['status'] === 'in_progress') {
                 $roundStmt = $pdo->prepare(
                     "SELECT current_turn_game_player_id FROM game_rounds
@@ -4252,11 +4253,25 @@ final class GameService
                 $currentTurnGamePlayerId = $roundStmt->fetchColumn();
                 $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
 
-                if ($yourGamePlayerId !== null) {
-                    $awaitingYourResponse = $this->isAwaitingResponseFrom($gameId, $yourGamePlayerId, $game['format']);
-
-                    if ($yourGamePlayerId === $currentTurnGamePlayerId) {
-                        $waitingOnUsername = $this->pendingDecisionWaitingOnUsername($gameId, $yourGamePlayerId, $playerRows);
+                // One isAwaitingResponseFrom() check per seated player (not
+                // just the viewer) -- lets the lobby flag every player the
+                // game is currently blocked on, not only the viewer
+                // themselves, so a game where your own play opened a
+                // decision targeting someone ELSE (still "your turn" by
+                // current_turn_game_player_id, but not actually actionable)
+                // shows correctly on whichever player's name it's really
+                // waiting on.
+                foreach ($playerRows as $row) {
+                    $rowGamePlayerId = (int) $row['id'];
+                    if ($rowGamePlayerId === $currentTurnGamePlayerId) {
+                        $currentTurnUsername = $row['username'];
+                    }
+                    $rowAwaitingResponse = $this->isAwaitingResponseFrom($gameId, $rowGamePlayerId, $game['format']);
+                    if ($rowAwaitingResponse) {
+                        $awaitingResponseUsernames[] = $row['username'];
+                    }
+                    if ($yourGamePlayerId !== null && $rowGamePlayerId === $yourGamePlayerId) {
+                        $awaitingYourResponse = $rowAwaitingResponse;
                     }
                 }
             }
@@ -4285,18 +4300,22 @@ final class GameService
                 // (closed_team only) your still-unsubmitted pregame blind
                 // card pass. See isAwaitingResponseFrom().
                 'is_awaiting_your_response' => $awaitingYourResponse,
-                // Only ever set when is_your_turn is also true -- flags the
-                // specific case where turn order alone is misleading: you
-                // played a card (Compulsion-style, a Duplicity repeat, a
-                // scoring-time Enthusiasm/Passion decision, etc.) that opened
-                // a pending decision targeting a DIFFERENT player, so
-                // current_turn_game_player_id hasn't moved off you yet, but
-                // POST /games/play and /games/pass both 409 while any
-                // decision is pending regardless of whose turn it nominally
-                // is (see php-app/README.md's `/games/play` entry) -- so
-                // "your turn" alone doesn't mean there's anything for you to
-                // do right now. See pendingDecisionWaitingOnUsername().
-                'waiting_on_username' => $waitingOnUsername,
+                // Whichever seated player current_turn_game_player_id
+                // actually belongs to, by username -- lets the lobby show a
+                // play-arrow icon next to that specific player's name (see
+                // buildGameRow()) rather than a row-wide "(your turn)" tag
+                // that only ever named the viewer. Null whenever the game
+                // isn't 'in_progress' or the round is between turns (e.g.
+                // an open team turn_order decision -- see
+                // applyTurnOrderDecision()'s own docblock).
+                'current_turn_username' => $currentTurnUsername,
+                // Every seated player isAwaitingResponseFrom() currently
+                // returns true for -- the generalized, all-players version
+                // of is_awaiting_your_response, so the lobby can show a
+                // waiting-hourglass icon next to each one specifically
+                // (there can be more than one at once, e.g. closed_team's
+                // pregame card pass before every player has submitted).
+                'awaiting_response_usernames' => $awaitingResponseUsernames,
                 'winner_usernames' => $winnerUsernames,
                 // Lets the lobby group any draft-based match's (Quick
                 // Draft or Winston Draft) up-to-3 games together (same
@@ -4383,57 +4402,6 @@ final class GameService
         $decisionRow = $this->activePendingDecision((int) $batch['id']);
 
         return $decisionRow !== null && (int) $decisionRow['target_game_player_id'] === $gamePlayerId;
-    }
-
-    /**
-     * listGamesForUser()'s complement to isAwaitingResponseFrom(): only
-     * ever called once it's already established that it's YOUR turn
-     * (current_turn_game_player_id === $gamePlayerId), to catch the one
-     * case where that alone is still misleading -- your own play (an
-     * Arrogance/Compulsion-style card, a Duplicity repeat, a scoring-time
-     * Enthusiasm/Passion decision, etc.) opened a pending decision whose
-     * active step targets a DIFFERENT player, so the turn hasn't moved off
-     * you yet, but nothing else can happen in this game until they answer
-     * (POST /games/play and /games/pass both 409 while any decision is
-     * pending, regardless of whose turn it nominally is). Returns that
-     * other player's username, or null if there's no such decision (i.e.
-     * you can actually act).
-     *
-     * @param array<int, array{id:int|string, username:string}> $playerRows
-     */
-    private function pendingDecisionWaitingOnUsername(int $gameId, int $gamePlayerId, array $playerRows): ?string
-    {
-        $roundStmt = Connection::get()->prepare(
-            "SELECT id FROM game_rounds WHERE game_id = :game_id AND status = 'in_progress' ORDER BY round_number DESC LIMIT 1"
-        );
-        $roundStmt->execute(['game_id' => $gameId]);
-        $roundId = $roundStmt->fetchColumn();
-        if ($roundId === false) {
-            return null;
-        }
-
-        $batch = $this->activePendingBatch((int) $roundId);
-        if ($batch === null) {
-            return null;
-        }
-
-        $decisionRow = $this->activePendingDecision((int) $batch['id']);
-        if ($decisionRow === null) {
-            return null;
-        }
-
-        $targetGamePlayerId = (int) $decisionRow['target_game_player_id'];
-        if ($targetGamePlayerId === $gamePlayerId) {
-            return null;
-        }
-
-        foreach ($playerRows as $row) {
-            if ((int) $row['id'] === $targetGamePlayerId) {
-                return $row['username'];
-            }
-        }
-
-        return null;
     }
 
     /**

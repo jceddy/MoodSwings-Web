@@ -1160,16 +1160,17 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * waiting_on_username is is_your_turn's own complement to
-     * is_awaiting_your_response above: p1 played Compulsion, so
-     * current_turn_game_player_id is still p1 (is_your_turn stays true for
-     * them), but the round is frozen on p2's own answer -- POST /games/play
-     * would 409 for p1 too, so "your turn" alone is misleading. Only ever
-     * populated for the player whose own turn it currently is; p2 isn't on
-     * turn at all here, so their row leaves it null even though the
-     * decision targets them (that's what is_awaiting_your_response is for).
+     * current_turn_username/awaiting_response_usernames are the
+     * all-players generalization of is_your_turn/is_awaiting_your_response
+     * -- the lobby uses them to put a play-arrow icon next to whichever
+     * player's own name current_turn_game_player_id belongs to, and a
+     * waiting-hourglass icon next to every name isAwaitingResponseFrom()
+     * returns true for. p1 played Compulsion, so current_turn_username
+     * stays p1 (turn hasn't moved off them) even though the round is
+     * actually frozen on p2's own answer -- p2's name is the one that
+     * shows up in awaiting_response_usernames, not p1's.
      */
-    public function testListGamesForUserFlagsWaitingOnUsernameWhenYourOwnPlayOpenedADecisionTargetingSomeoneElse(): void
+    public function testListGamesForUserExposesCurrentTurnAndAwaitingResponseUsernamesForEveryPlayer(): void
     {
         $u1 = $this->insertUser('lobby-wait1');
         $u2 = $this->insertUser('lobby-wait2');
@@ -1189,21 +1190,23 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $u1GamesBefore = $this->games->listGamesForUser($u1);
-        self::assertNull($u1GamesBefore[0]['waiting_on_username'], 'nothing pending yet');
+        self::assertSame('lobby-wait1', $u1GamesBefore[0]['current_turn_username']);
+        self::assertSame([], $u1GamesBefore[0]['awaiting_response_usernames'], 'nothing pending yet');
 
         $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
 
         $u1Games = $this->games->listGamesForUser($u1);
         $u2Games = $this->games->listGamesForUser($u2);
         self::assertTrue($u1Games[0]['is_your_turn'], 'the turn has not moved off p1 yet');
-        self::assertSame('lobby-wait2', $u1Games[0]['waiting_on_username']);
-        self::assertFalse($u2Games[0]['is_your_turn'], 'only ever set for the player whose own turn it is');
-        self::assertNull($u2Games[0]['waiting_on_username']);
+        self::assertSame('lobby-wait1', $u1Games[0]['current_turn_username']);
+        self::assertSame(['lobby-wait2'], $u1Games[0]['awaiting_response_usernames']);
+        self::assertSame($u1Games[0]['awaiting_response_usernames'], $u2Games[0]['awaiting_response_usernames'], 'identical regardless of viewer');
+        self::assertTrue($u2Games[0]['is_awaiting_your_response'], 'p2 is the one Compulsion actually targets');
 
         $this->games->respondToDecision($gameId, $p2, ['given_card_id' => $card3Id]);
 
         $u1GamesAfter = $this->games->listGamesForUser($u1);
-        self::assertNull($u1GamesAfter[0]['waiting_on_username'], 'no longer waiting on anyone once answered');
+        self::assertSame([], $u1GamesAfter[0]['awaiting_response_usernames'], 'no longer waiting on anyone once answered');
     }
 
     public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void

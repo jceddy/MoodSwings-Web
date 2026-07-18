@@ -15,6 +15,13 @@ use MoodSwings\Rules\PlayerChoices;
  * card in the discard pile of the chosen color." Unlike Imagination's
  * color choice, the chosen color here is per-mood state on Wonder itself
  * (see MoodInPlay::$effectState), not a board-wide override.
+ *
+ * Duplicity can repeat this afterPlaying() a second (or later) time, each
+ * repeat with its own fresh color choice -- ruled that Wonder then
+ * benefits from EVERY color chosen across all of those invocations, not
+ * just the latest one, so the chosen colors accumulate in a list
+ * ('colors', not a single overwritten 'color') rather than the last
+ * invocation clobbering the earlier choice(s).
  */
 final class WonderEffect extends AbstractMoodEffect
 {
@@ -28,21 +35,23 @@ final class WonderEffect extends AbstractMoodEffect
             throw new InvalidChoiceException("'{$color}' is not a valid color");
         }
 
-        $state->setEffectState($cardId, 'color', $color);
+        $colors = $state->effectState($cardId, 'colors') ?? [];
+        $colors[] = $color;
+        $state->setEffectState($cardId, 'colors', $colors);
     }
 
     public function computeValue(BoardState $state, int $cardId): int
     {
-        $color = $state->effectState($cardId, 'color');
+        $colors = $state->effectState($cardId, 'colors') ?? [];
 
         $count = 0;
         foreach ($state->moodsInPlay() as $mood) {
-            if ($state->colorOf($mood->cardId) === $color) {
+            if (in_array($state->colorOf($mood->cardId), $colors, true)) {
                 $count++;
             }
         }
         foreach ($state->discardPile() as $discardedCardId) {
-            if ($state->colorOf($discardedCardId) === $color) {
+            if (in_array($state->colorOf($discardedCardId), $colors, true)) {
                 $count++;
             }
         }

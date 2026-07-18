@@ -293,3 +293,9 @@ half-migrated schema.
   number they took, or the string `"deck"` if they instead declined all 3
   piles and took the mandatory top-of-deck draw. See "Winston Draft" in
   `php-app/README.md`.
+- **Wonder/Duplicity stacking fix** (`0037`): another schema-less
+  `UPDATE schema_version`, same rationale as `0024`/`0025`/`0026` — Wonder's
+  own repeated color choice, when Duplicity repeats its `afterPlaying()`,
+  overwrote the original choice instead of adding to it, so it only ever
+  benefited from one of the two chosen colors (see `WonderEffect` in
+  `php-app/README.md`).
