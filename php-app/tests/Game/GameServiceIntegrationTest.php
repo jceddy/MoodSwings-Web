@@ -1159,6 +1159,53 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertFalse($u2GamesAfter[0]['is_awaiting_your_response'], 'no longer awaiting a response once answered');
     }
 
+    /**
+     * waiting_on_username is is_your_turn's own complement to
+     * is_awaiting_your_response above: p1 played Compulsion, so
+     * current_turn_game_player_id is still p1 (is_your_turn stays true for
+     * them), but the round is frozen on p2's own answer -- POST /games/play
+     * would 409 for p1 too, so "your turn" alone is misleading. Only ever
+     * populated for the player whose own turn it currently is; p2 isn't on
+     * turn at all here, so their row leaves it null even though the
+     * decision targets them (that's what is_awaiting_your_response is for).
+     */
+    public function testListGamesForUserFlagsWaitingOnUsernameWhenYourOwnPlayOpenedADecisionTargetingSomeoneElse(): void
+    {
+        $u1 = $this->insertUser('lobby-wait1');
+        $u2 = $this->insertUser('lobby-wait2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $this->insertGameCard($gameId, 7, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $u1GamesBefore = $this->games->listGamesForUser($u1);
+        self::assertNull($u1GamesBefore[0]['waiting_on_username'], 'nothing pending yet');
+
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
+
+        $u1Games = $this->games->listGamesForUser($u1);
+        $u2Games = $this->games->listGamesForUser($u2);
+        self::assertTrue($u1Games[0]['is_your_turn'], 'the turn has not moved off p1 yet');
+        self::assertSame('lobby-wait2', $u1Games[0]['waiting_on_username']);
+        self::assertFalse($u2Games[0]['is_your_turn'], 'only ever set for the player whose own turn it is');
+        self::assertNull($u2Games[0]['waiting_on_username']);
+
+        $this->games->respondToDecision($gameId, $p2, ['given_card_id' => $card3Id]);
+
+        $u1GamesAfter = $this->games->listGamesForUser($u1);
+        self::assertNull($u1GamesAfter[0]['waiting_on_username'], 'no longer waiting on anyone once answered');
+    }
+
     public function testListGamesForUserSortsWaitingAndInProgressAboveCompletedRegardlessOfRecency(): void
     {
         $creator = $this->insertUser('sortorder-alice');
