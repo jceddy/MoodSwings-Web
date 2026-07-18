@@ -908,8 +908,15 @@ dialog#art-preview-dialog {
 
 /* The game log (issue #98) can run to hundreds of events for a long
    game -- max-height + overflow-y keeps the dialog itself from growing
-   taller than the viewport, scrolling the list internally instead. */
-dialog#game-log-dialog {
+   taller than the viewport, scrolling the list internally instead.
+   Scoped to [open]: an unqualified `dialog#game-log-dialog { display:
+   flex }` rule would override the browser's own default `dialog:not(
+   [open]) { display: none }` (an author rule always wins over the user
+   agent stylesheet regardless of specificity), permanently rendering
+   the dialog inline in the page -- visible on every page load before
+   it's ever opened, and still visible after close() since removing the
+   [open] attribute wouldn't `display: none` it either. */
+dialog#game-log-dialog[open] {
     box-sizing: border-box;
     max-width: 36rem;
     width: 90%;
