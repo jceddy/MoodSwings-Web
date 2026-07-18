@@ -1007,6 +1007,17 @@ dialog#art-preview-dialog {
     background-color: var(--color-awaiting-response-bg);
 }
 
+/* waiting_on_username's own row highlight -- is_your_turn is true, but a
+   decision your own play opened is paused on a DIFFERENT player, so
+   there's nothing actionable here either. Reuses the same amber tint as
+   lobby-row--awaiting-response (both mean "something's pending"), just
+   from the opposite direction (blocked on someone else, not blocked on
+   you) -- takes priority over lobby-row--your-turn for the same reason
+   (see buildGameRow()). */
+.lobby-row--waiting-on-other {
+    background-color: var(--color-awaiting-response-bg);
+}
+
 .lobby-info {
     min-width: 0;
 }
@@ -1050,6 +1061,11 @@ dialog#art-preview-dialog {
 }
 
 .lobby-awaiting-response {
+    font-weight: bold;
+    color: var(--color-pending);
+}
+
+.lobby-waiting-on-other {
     font-weight: bold;
     color: var(--color-pending);
 }

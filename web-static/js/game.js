@@ -481,11 +481,18 @@
         // distinctly-colored highlight the same way, and takes priority
         // when both apply -- a pending decision freezes the round even on
         // what's nominally your own turn, so it's the more urgent of the
-        // two (see the CSS rule's own comment).
+        // two (see the CSS rule's own comment). waiting_on_username is the
+        // complementary case -- is_your_turn is true, but a decision your
+        // own play opened is paused on someone ELSE, so there's nothing
+        // you can actually do here yet either -- reuses the same amber
+        // "something's pending" treatment as awaiting-response rather than
+        // the green your-turn one, since it's equally not actionable by
+        // you right now.
         li.className = 'lobby-row' + (
             game.is_awaiting_your_response ? ' lobby-row--awaiting-response'
-                : game.is_your_turn ? ' lobby-row--your-turn'
-                    : ''
+                : game.waiting_on_username ? ' lobby-row--waiting-on-other'
+                    : game.is_your_turn ? ' lobby-row--your-turn'
+                        : ''
         );
 
         // Wrapped in its own container (rather than appended straight
@@ -530,6 +537,19 @@
             yourTurnEl.className = 'lobby-your-turn';
             yourTurnEl.textContent = ' (your turn)';
             statusLineEl.appendChild(yourTurnEl);
+        }
+
+        // Clarifies the "(your turn)" tag above when it's technically true
+        // (current_turn_game_player_id is still you) but practically
+        // useless -- your own play already opened a pending decision
+        // that's paused on someone else's answer, so there's nothing for
+        // you to do here yet either. See
+        // GameService::pendingDecisionWaitingOnUsername().
+        if (game.waiting_on_username) {
+            const waitingOnOtherEl = document.createElement('span');
+            waitingOnOtherEl.className = 'lobby-waiting-on-other';
+            waitingOnOtherEl.textContent = ' (waiting on ' + game.waiting_on_username + ')';
+            statusLineEl.appendChild(waitingOnOtherEl);
         }
 
         // Independent of (and can show alongside) the your-turn tag above

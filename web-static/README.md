@@ -416,7 +416,20 @@ too, proportional to the smaller card width.
     your own turn). `buildGameRow()` gives the row background priority to
     awaiting-response over your-turn when both apply, since it's the more
     urgent of the two, but still shows both text tags side by side either
-    way. Once a game is `completed`,
+    way. `waiting_on_username` (only ever set alongside `is_your_turn` --
+    see `GameService::pendingDecisionWaitingOnUsername()`) covers the
+    remaining misleading case: your own play opened a pending decision
+    that's paused on a DIFFERENT player's answer, so the turn hasn't
+    nominally moved off you, but there's nothing for you to actually do
+    here either. It appends its own bold `--color-pending` "(waiting on
+    &lt;username&gt;)" tag right after the "(your turn)" one (both shown
+    together, rather than one replacing the other, since "your turn" is
+    still technically true), and gives the row the same amber
+    `--color-awaiting-response-bg` background as `.lobby-row--awaiting-response`
+    (`.lobby-row--waiting-on-other`, taking priority over the green
+    your-turn background for the same "not actually actionable by you"
+    reason) rather than a third color, since both cases mean the same
+    thing from the opposite direction. Once a game is `completed`,
     `winner_usernames` (both teammates' for a team-format win, just the
     one player's otherwise -- see `php-app/README.md`) renders as an extra
     line below the players, e.g. "alice won" or "alice & bob won" --
