@@ -906,6 +906,52 @@ dialog#art-preview-dialog {
     text-align: center;
 }
 
+/* The game log (issue #98) can run to hundreds of events for a long
+   game -- max-height + overflow-y keeps the dialog itself from growing
+   taller than the viewport, scrolling the list internally instead. */
+dialog#game-log-dialog {
+    box-sizing: border-box;
+    max-width: 36rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+#game-log-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+#game-log-list {
+    overflow-y: auto;
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1rem;
+}
+
+#game-log-list > li {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* The bulleted sub-list a multi-segment description renders as (see
+   buildLogEntryContent() in game.js) -- indented and using an actual
+   disc bullet so it reads as a breakdown of its own parent entry, rather
+   than a run of same-level list items. */
+#game-log-list > li ul {
+    list-style: disc;
+    margin: 0.3rem 0 0;
+    padding-left: 1.25rem;
+}
+
 .card-detail-art {
     display: block;
     width: 100%;
@@ -1016,12 +1062,23 @@ dialog#art-preview-dialog {
     min-width: 0;
 }
 
-/* Fixed width (rather than shrinking to fit "Play" vs the wider "View")
-   so every row's button lines up in a column regardless of which label
-   its own game's status picked. */
-.lobby-row button {
-    width: 4rem;
+/* Play/View and View log (issue #98) stack vertically in their own
+   column -- the row's second flex child alongside .lobby-info -- rather
+   than sitting side by side, so "View log" reads as a secondary action
+   underneath the primary Play/View button instead of competing with it
+   for the row's own right edge. */
+.lobby-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
     flex-shrink: 0;
+}
+
+/* Fixed width (wide enough for "View log", the longest of the three
+   possible labels) so every row's buttons line up in a column regardless
+   of which label its own game's status/action picked. */
+.lobby-actions button {
+    width: 5.5rem;
 }
 
 .lobby-format {

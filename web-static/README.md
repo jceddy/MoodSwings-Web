@@ -1252,6 +1252,42 @@ too, proportional to the smaller card width.
     *other* game's board opened, including a freshly created one that had
     never even started yet.
 
+    **Game log (issue #98).** The "Recent plays" list above is capped at
+    15 entries and shows only the current game's board -- a "View log"
+    button next to its own `<h3>Recent plays</h3>` heading, and a second
+    one under every lobby row's own Play/View button (so a *completed*
+    game's log is reachable without reopening its board at all), each
+    open the same `#game-log-dialog` (`openGameLog()`), fetching the
+    game's ENTIRE history via `GET /games/log`
+    (`GameService::fullEventLog()`, chronological oldest-first, no cap --
+    see `php-app/README.md`). Reusing recentEvents' own `describeEvent()`
+    rendering keeps the two views' phrasing identical; the only
+    presentation difference is how a description with more than one
+    semicolon-joined segment (e.g. Malice's own color cascade, or a
+    play that also logs a draw/grant) renders: instead of one run-on
+    sentence, `buildLogEntryContent()` splits it into a bulleted `<ul>`
+    headed by its first segment, one `<li>` per segment, so a multi-part
+    event reads as a scannable breakdown rather than a single dense line.
+    The dialog's three buttons all operate on the SAME already-fetched
+    `currentGameLogEvents` array, so none of them re-request the log:
+    **Copy text** (`navigator.clipboard.writeText()`) and **Download
+    text** (`downloadFile()`, a throwaway `<a download>` + object URL,
+    since there's no server-side file to link to) both render every
+    event through `formatLogEntryAsText()` -- the same "bulleted list
+    headed by the first item" treatment as on-screen, just `'- '`-prefixed
+    lines instead of an actual `<ul>`, joined with a blank line between
+    events -- while **Download data** hands the browser
+    `JSON.stringify(currentGameLogEvents, null, 2)` verbatim, a genuine
+    raw export (every event's own `event_type`/`round_number`/
+    `acting_game_player_id`/`card_id`/`details` alongside the resolved
+    `acting_username`/`card_name`/`description`) rather than a repeat of
+    the human-readable text the other two buttons produce. Both
+    "View log" buttons -- and both new lobby-row buttons more generally
+    -- sit in their own `.lobby-actions` column now (Play/View above,
+    View log below), rather than as flex siblings of `.lobby-row`
+    directly, so the secondary action reads as subordinate to the
+    primary one instead of competing with it for the row's right edge.
+
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
     `#in-progress-area` (a pending decision/scoring preview belongs to

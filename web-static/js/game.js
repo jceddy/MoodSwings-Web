@@ -591,6 +591,13 @@
 
         li.appendChild(infoEl);
 
+        // Play/View and View log sit stacked in their own column (rather
+        // than as two flex siblings of .lobby-row directly) so "View log"
+        // renders BELOW the primary action button instead of beside it --
+        // see .lobby-actions in style.css.
+        const actionsEl = document.createElement('div');
+        actionsEl.className = 'lobby-actions';
+
         // A 'waiting'/'in_progress' game is still something to actually
         // play; anything else (completed, or the rarer abandoned) is
         // read-only from here on, so the button reads "View" instead --
@@ -598,7 +605,9 @@
         // renders a read-only board once the game itself isn't
         // in_progress, see GameService::getState()'s own round: null).
         const canPlay = game.status === 'waiting' || game.status === 'in_progress';
-        li.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
+        actionsEl.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
+        actionsEl.appendChild(actionButton('View log', () => openGameLog(game.id)));
+        li.appendChild(actionsEl);
         return li;
     }
 
@@ -1391,6 +1400,134 @@
 
     document.getElementById('art-preview-close-button').addEventListener('click', () => {
         artPreviewDialog.close();
+    });
+
+    // -- Game log (issue #98) -----------------------------------------------
+    //
+    // A full, chronological (oldest-first) view of a game's entire
+    // game_events history -- GET /games/log (GameService::fullEventLog())
+    // -- opened from either the board's own "View log" button (next to
+    // "Recent plays", which only ever shows the last 15) or each lobby
+    // row's own "View log" button, so the log is reachable for a
+    // completed game too without first having to reopen its board.
+
+    const gameLogDialog = document.getElementById('game-log-dialog');
+
+    // The raw events from the most recently opened log -- kept around
+    // (rather than re-fetched) so the copy/download buttons below can
+    // build their own text/JSON straight from what's already on screen.
+    let currentGameLogEvents = [];
+
+    // Splits a describeEvent()-rendered description on its own '; '
+    // segment separator (see GameService::describeEvent()'s own
+    // docblock -- every additional card move/ownership change/draw/grant
+    // it records gets appended that way) into a bulleted list headed by
+    // the first segment, e.g. Malice's own cascade reads as:
+    //   • Alice played Malice (targeting Bob)
+    //   • Charity moved from Bob's hand to Alice's hand
+    // A single-segment description (the common case -- most events are
+    // just "{actor} played {card}" with nothing else worth listing)
+    // renders as plain text instead, since a one-item bulleted list would
+    // just be visual noise.
+    function buildLogEntryContent(description) {
+        const parts = description.split('; ');
+        if (parts.length <= 1) {
+            return document.createTextNode(description);
+        }
+        const ul = document.createElement('ul');
+        parts.forEach((part) => {
+            const li = document.createElement('li');
+            li.textContent = part;
+            ul.appendChild(li);
+        });
+        return ul;
+    }
+
+    // Plain-text rendering of one event for the copy/download-text
+    // buttons below -- the same "bulleted list headed by the first item"
+    // treatment buildLogEntryContent() gives a multi-segment description
+    // on screen, just as '- '-prefixed lines instead of an actual <ul>.
+    function formatLogEntryAsText(event) {
+        const parts = event.description.split('; ');
+        return parts.length <= 1 ? parts[0] : parts.map((part) => '- ' + part).join('\n');
+    }
+
+    function gameLogAsText() {
+        return currentGameLogEvents.map(formatLogEntryAsText).join('\n\n');
+    }
+
+    // Builds a throwaway <a download> to trigger a browser file save --
+    // there's no server-side file to link to (the content is assembled
+    // entirely client-side from currentGameLogEvents), so an
+    // object URL is the standard way to hand the browser in-memory
+    // content to save as though it were a real download.
+    function downloadFile(filename, content, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    async function openGameLog(gameId) {
+        const listEl = document.getElementById('game-log-list');
+        const emptyEl = document.getElementById('game-log-empty');
+        document.getElementById('game-log-copy-success').hidden = true;
+        currentGameLogEvents = [];
+        // Cleared up front rather than left showing whatever the
+        // previously opened game's own log last rendered, but emptyEl
+        // stays hidden here too -- "Nothing has happened yet" would be
+        // misleading while the fetch below is still in flight.
+        listEl.innerHTML = '';
+        emptyEl.hidden = true;
+        // The download/copy buttons need to know which game's log this is
+        // for their own filenames -- stashed on the dialog itself rather
+        // than a separate module-level variable, since nothing else about
+        // this dialog's state needs to survive past it closing.
+        gameLogDialog.dataset.gameId = gameId;
+        gameLogDialog.showModal();
+
+        const { ok, body } = await getGameLog(gameId);
+        currentGameLogEvents = ok ? body.events : [];
+
+        renderList(listEl, emptyEl, currentGameLogEvents, (event) => {
+            const li = document.createElement('li');
+            li.appendChild(buildLogEntryContent(event.description));
+            return li;
+        });
+    }
+
+    document.getElementById('view-log-button').addEventListener('click', () => openGameLog(currentGameId));
+
+    document.getElementById('game-log-close-button').addEventListener('click', () => {
+        gameLogDialog.close();
+    });
+
+    document.getElementById('game-log-copy-button').addEventListener('click', async () => {
+        const successEl = document.getElementById('game-log-copy-success');
+        try {
+            await navigator.clipboard.writeText(gameLogAsText());
+            successEl.hidden = false;
+        } catch (e) {
+            successEl.hidden = true;
+            window.alert('Could not copy the game log to your clipboard.');
+        }
+    });
+
+    document.getElementById('game-log-download-text-button').addEventListener('click', () => {
+        downloadFile('game-' + gameLogDialog.dataset.gameId + '-log.txt', gameLogAsText(), 'text/plain');
+    });
+
+    document.getElementById('game-log-download-data-button').addEventListener('click', () => {
+        downloadFile(
+            'game-' + gameLogDialog.dataset.gameId + '-log.json',
+            JSON.stringify(currentGameLogEvents, null, 2),
+            'application/json',
+        );
     });
 
     // Small inline pictograms (issue #143) replacing the players list's own

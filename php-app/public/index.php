@@ -501,6 +501,18 @@ if ($path === '/games/state' && $method === 'GET') {
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
+// The entire game log (issue #98) -- unlike GET /games/state, no
+// per-viewer customization at all (see GameService::fullEventLog()'s own
+// docblock), so this doesn't need $currentUser beyond requireGamePlayer()'s
+// seated-player check.
+if ($path === '/games/log' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
+}
+
 if ($path === '/games/start' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
