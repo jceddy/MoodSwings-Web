@@ -1280,7 +1280,20 @@ too, proportional to the smaller card width.
     view of that art, since Hurt Feelings is a round-level marker/token,
     not a `cards` row (see migration `0003`'s own header comment), so it
     has no `catalog_card_id`/`rules_text` to build a card-detail-dialog-style
-    view from.
+    view from. Whoever a delayed choice response is currently pending on
+    (Compulsion, Arrogance/Intimidation/Instability/Suspicion/
+    Disillusionment/Malice, a Duplicity repeat offer, or a scoring-time
+    Enthusiasm/Passion decision — see `round.pending_decision` in
+    `php-app/README.md`'s `/games/state` entry) gets its own small hourglass flag icon
+    (`state.round.pending_decision.target_game_player_id`, compared against
+    each row's own `game_player_id`) in `--color-pending`, this app's
+    existing color for "something is actively blocking on a response" (the
+    lobby's own awaiting-response styling already uses it). `target_game_player_id`
+    is always visible to every player in the game, unlike the actual prompt
+    (`pending_decision.field`), which stays targeted-player-only — the same
+    "a real opponent across the table would see someone visibly puzzling
+    over a card, just not what it says" principle other open-information
+    fields on this page already follow.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
