@@ -85,6 +85,7 @@ footer {
 }
 
 dialog#resources-dialog {
+    position: relative;
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
@@ -106,15 +107,25 @@ dialog#resources-dialog li {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
-/* The Buy Me a Coffee button (data-name="bmc-button", see the <script>
-   right before #resources-close-button below) inserts its own button
-   element as the next sibling of that <script> tag once it loads --
-   the "+ *" here is deliberately tag-agnostic since that injected
-   element isn't something this codebase controls the markup of. Gives
-   it the same breathing room from the Close button below it that the
-   link list already has above it. */
-dialog#resources-dialog script[data-name="bmc-button"] + * {
-    margin-bottom: 1rem;
+/* An "X" in the corner rather than a Close button at the bottom, so it
+   doesn't sit flush against whatever the Buy Me a Coffee widget (see
+   the <script data-name="bmc-button"> above) ends up rendering right
+   before it -- that widget's own injected markup isn't something this
+   codebase controls, so the margin trick a plain bottom Close button
+   would need to avoid crowding it turned out not to be reliable. */
+dialog#resources-dialog #resources-close-button {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    line-height: 1;
+    font-size: 1.25rem;
+    background: none;
+    border: none;
+    color: var(--color-muted);
+    cursor: pointer;
 }
 
 /* #friends-button/#logout-button sit directly above whichever of
