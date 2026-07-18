@@ -7103,6 +7103,96 @@ final class GameServiceIntegrationTest extends TestCase
         self::fail('a best-of-three match can never need a 4th game');
     }
 
+    /**
+     * The pre-game analog of the isAwaitingResponseFrom()-driven lobby
+     * icons for an already-'in_progress' game (see
+     * testListGamesForUserExposesCurrentTurnAndAwaitingResponseUsernamesForEveryPlayer())
+     * -- while a quick_draft game is still 'waiting', awaiting_response_usernames
+     * instead names whoever draftAwaitingResponseUsernames() finds still
+     * owes an action for the CURRENT stage of the current round: both
+     * players until their own draw-stage pick is submitted, then just
+     * whoever's outstanding, then both again once the received stage
+     * opens up (only possible once BOTH have submitted the draw stage),
+     * then back down to whoever's outstanding there too. current_turn_username
+     * stays null throughout -- a still-'waiting' draft game has no board
+     * "turn" concept yet.
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernamesDuringQuickDraftDrafting(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $summary = $summaryFor($u1);
+        self::assertNull($summary['current_turn_username']);
+        self::assertSame([$u1Username, $u2Username], $summary['awaiting_response_usernames'], 'nobody has submitted a draw-stage pick yet -- both owe one');
+        self::assertTrue($summaryFor($u1)['is_awaiting_your_response']);
+        self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
+
+        $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'u1 already submitted this round\'s draw stage -- only u2 is still owed');
+        self::assertFalse($summaryFor($u1)['is_awaiting_your_response']);
+        self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
+
+        $pack = $this->games->getState($gameId, $u2)['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u2, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'both have their draw-stage picks in -- the received stage is now open and owed by both');
+
+        $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'received', [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'u1 finished round 1 -- only u2 is still owed the received stage');
+    }
+
+    /**
+     * Once quick_draft's own 4 rounds finish, the match moves to
+     * 'deck_building' but the game itself stays 'waiting' until both
+     * players submit a deck (see requireDraftDecksSubmitted()) --
+     * awaiting_response_usernames tracks that instead during this phase,
+     * reading draft_match_players.deck_card_ids directly rather than any
+     * round-pick data.
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernamesDuringQuickDraftDeckBuilding(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'neither has submitted a deck yet');
+
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+
+        self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames']);
+        self::assertFalse($summaryFor($u1)['is_awaiting_your_response']);
+        self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
+
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+
+        self::assertSame([], $summaryFor($u1)['awaiting_response_usernames'], 'both have submitted -- the game is ready for startGame(), nobody left to wait on');
+    }
+
     // -- Winston Draft (issue #89) -------------------------------------------
 
     /** @return array{gameId:int, u1:int, u2:int} */
@@ -7558,6 +7648,57 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    /**
+     * Unlike quick_draft's own simultaneous-blind picks, winston_draft is
+     * strictly single-active-player -- draftAwaitingResponseUsernames()
+     * names exactly whoever draft_winston_state.current_player_user_id
+     * currently is, never both at once. current_turn_username stays
+     * null throughout -- a still-'waiting' draft game has no board
+     * "turn" concept yet, only the pre-game equivalent exposed here.
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernameForWinstonDraftCurrentPlayer(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildWinstonDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $expectedUsername = $currentPlayerUserId === $u1 ? $u1Username : $u2Username;
+
+        $summary = $summaryFor($u1);
+        self::assertNull($summary['current_turn_username']);
+        self::assertSame([$expectedUsername], $summary['awaiting_response_usernames']);
+        self::assertSame($currentPlayerUserId === $u1, $summaryFor($u1)['is_awaiting_your_response']);
+        self::assertSame($currentPlayerUserId === $u2, $summaryFor($u2)['is_awaiting_your_response']);
+
+        // Passing the (empty, freshly-dealt) pile 1 hands the turn to
+        // pile 2 rather than the opponent -- current_player_user_id only
+        // changes once a full turn (take, or decline all 3 piles) ends,
+        // so this alone doesn't move who's awaited yet.
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+        self::assertSame([$expectedUsername], $summaryFor($u1)['awaiting_response_usernames'], 'still the same player\'s turn -- only the current pile advanced');
+
+        // Passing piles 2 and 3 too ends the turn (mandatory auto-draw),
+        // handing it to the other player.
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+
+        $otherUserId = $currentPlayerUserId === $u1 ? $u2 : $u1;
+        $otherUsername = $otherUserId === $u1 ? $u1Username : $u2Username;
+        self::assertSame($otherUserId, (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id']);
+        self::assertSame([$otherUsername], $summaryFor($u1)['awaiting_response_usernames']);
     }
 
     public function testWinstonDraftStartGameRequiresBothDecksSubmitted(): void
@@ -8024,6 +8165,46 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    /**
+     * Same single-active-player shape as Winston Draft's own equivalent
+     * test above -- draftAwaitingResponseUsernames() names exactly
+     * whoever draft_grid_state.current_turn_user_id currently is
+     * (Grid Draft alternates first-pick/second-pick within a round, and
+     * a first pick immediately hands the turn to the OTHER player for
+     * the second pick -- unlike Winston Draft, this can move the
+     * awaited player mid-round, not just at a round boundary).
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernameForGridDraftCurrentTurn(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildGridDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $firstPickerUsername = $firstPickerUserId === $u1 ? $u1Username : $u2Username;
+
+        $summary = $summaryFor($u1);
+        self::assertNull($summary['current_turn_username']);
+        self::assertSame([$firstPickerUsername], $summary['awaiting_response_usernames']);
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+        $secondPickerUsername = $secondPickerUserId === $u1 ? $u1Username : $u2Username;
+        self::assertSame($secondPickerUserId, (int) $this->fetchGridState($draftMatchId)['current_turn_user_id']);
+        self::assertSame([$secondPickerUsername], $summaryFor($u1)['awaiting_response_usernames'], 'the first pick immediately hands the turn to the other player');
     }
 
     public function testGridDraftStartGameRequiresBothDecksSubmitted(): void

@@ -4239,6 +4239,8 @@ final class GameService
                 }
             }
 
+            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+
             $currentTurnGamePlayerId = null;
             $awaitingYourResponse = false;
             $currentTurnUsername = null;
@@ -4274,9 +4276,22 @@ final class GameService
                         $awaitingYourResponse = $rowAwaitingResponse;
                     }
                 }
+            } elseif ($game['status'] === 'waiting' && $draftMatchId !== null) {
+                // No current_turn_username here -- a still-'waiting' draft
+                // game has no board "turn" concept yet, only who the draft
+                // itself is blocked on (see draftAwaitingResponseUsernames()).
+                $awaitingResponseUsernames = $this->draftAwaitingResponseUsernames($draftMatchId, $game['deck_type'], $playerRows);
+                if ($yourGamePlayerId !== null) {
+                    $yourUsername = null;
+                    foreach ($playerRows as $row) {
+                        if ((int) $row['id'] === $yourGamePlayerId) {
+                            $yourUsername = $row['username'];
+                            break;
+                        }
+                    }
+                    $awaitingYourResponse = $yourUsername !== null && in_array($yourUsername, $awaitingResponseUsernames, true);
+                }
             }
-
-            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
 
             $games[] = [
                 'id' => $gameId,
@@ -4298,7 +4313,11 @@ final class GameService
                 // RequiresOpponentDecision), your own team's turn_order/
                 // draw_recipient decision needing your propose/confirm, or
                 // (closed_team only) your still-unsubmitted pregame blind
-                // card pass. See isAwaitingResponseFrom().
+                // card pass. See isAwaitingResponseFrom(). Also true while
+                // the game is still 'waiting' on a draft-based deck_type
+                // (quick_draft/winston_draft/grid_draft) if the draft or
+                // deck-building step itself is specifically blocked on you
+                // -- see draftAwaitingResponseUsernames().
                 'is_awaiting_your_response' => $awaitingYourResponse,
                 // Whichever seated player current_turn_game_player_id
                 // actually belongs to, by username -- lets the lobby show a
@@ -4307,7 +4326,10 @@ final class GameService
                 // that only ever named the viewer. Null whenever the game
                 // isn't 'in_progress' or the round is between turns (e.g.
                 // an open team turn_order decision -- see
-                // applyTurnOrderDecision()'s own docblock).
+                // applyTurnOrderDecision()'s own docblock) -- also null for
+                // a still-'waiting' draft game, which has no board "turn"
+                // concept yet (see awaiting_response_usernames below for
+                // who a drafting/deck-building game is blocked on instead).
                 'current_turn_username' => $currentTurnUsername,
                 // Every seated player isAwaitingResponseFrom() currently
                 // returns true for -- the generalized, all-players version
@@ -4315,6 +4337,11 @@ final class GameService
                 // waiting-hourglass icon next to each one specifically
                 // (there can be more than one at once, e.g. closed_team's
                 // pregame card pass before every player has submitted).
+                // For a still-'waiting' draft-based game, this is instead
+                // draftAwaitingResponseUsernames()'s own view of who the
+                // draft/deck-building step is blocked on -- same field,
+                // same icon, just a pre-game source instead of an
+                // in-progress one.
                 'awaiting_response_usernames' => $awaitingResponseUsernames,
                 'winner_usernames' => $winnerUsernames,
                 // Lets the lobby group any draft-based match's (Quick
@@ -4402,6 +4429,119 @@ final class GameService
         $decisionRow = $this->activePendingDecision((int) $batch['id']);
 
         return $decisionRow !== null && (int) $decisionRow['target_game_player_id'] === $gamePlayerId;
+    }
+
+    /**
+     * listGamesForUser()'s own "who is a still-'waiting' draft game
+     * currently blocked on" -- the pre-game analog of
+     * isAwaitingResponseFrom(), which only ever applies once a game
+     * reaches 'in_progress'. During 'deck_building' this is whichever
+     * player(s) haven't yet submitted THIS game's own deck
+     * (draft_match_players.deck_card_ids still null -- see
+     * submitDraftDeck()). During 'drafting' it's deck-type-specific:
+     * quick_draft's per-player draw/received pick stage (delegated to
+     * quickDraftAwaitingResponseUsernames(), mirroring
+     * quickDraftDraftingStateFor()'s own 'stage' derivation), or
+     * winston_draft's/grid_draft's single active turn player
+     * (draft_winston_state.current_player_user_id /
+     * draft_grid_state.current_turn_user_id -- there's never more than
+     * one at once for either, since both are strictly alternating
+     * single-active-player formats). Empty once the match itself has
+     * completed (nothing left to wait on).
+     *
+     * @param array<int, array<string, mixed>> $playerRows game_players rows joined to users, this game's own seats
+     * @return string[]
+     */
+    private function draftAwaitingResponseUsernames(int $draftMatchId, string $deckType, array $playerRows): array
+    {
+        $match = $this->fetchDraftMatch($draftMatchId);
+
+        $usernamesByUserId = [];
+        foreach ($playerRows as $row) {
+            $usernamesByUserId[(int) $row['user_id']] = $row['username'];
+        }
+
+        if ($match['status'] === 'deck_building') {
+            $stmt = Connection::get()->prepare(
+                'SELECT user_id FROM draft_match_players WHERE draft_match_id = :id AND deck_card_ids IS NULL'
+            );
+            $stmt->execute(['id' => $draftMatchId]);
+
+            $usernames = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $userId) {
+                if (isset($usernamesByUserId[(int) $userId])) {
+                    $usernames[] = $usernamesByUserId[(int) $userId];
+                }
+            }
+
+            return $usernames;
+        }
+
+        if ($match['status'] !== 'drafting') {
+            return [];
+        }
+
+        if ($deckType === 'quick_draft') {
+            return $this->quickDraftAwaitingResponseUsernames($draftMatchId, (int) $match['current_round'], $usernamesByUserId);
+        }
+
+        $turnStmt = match ($deckType) {
+            'winston_draft' => Connection::get()->prepare(
+                'SELECT current_player_user_id FROM draft_winston_state WHERE draft_match_id = :id'
+            ),
+            'grid_draft' => Connection::get()->prepare(
+                'SELECT current_turn_user_id FROM draft_grid_state WHERE draft_match_id = :id'
+            ),
+            default => null,
+        };
+        if ($turnStmt === null) {
+            return [];
+        }
+
+        $turnStmt->execute(['id' => $draftMatchId]);
+        $currentTurnUserId = $turnStmt->fetchColumn();
+        if ($currentTurnUserId === false || !isset($usernamesByUserId[(int) $currentTurnUserId])) {
+            return [];
+        }
+
+        return [$usernamesByUserId[(int) $currentTurnUserId]];
+    }
+
+    /**
+     * draftAwaitingResponseUsernames()'s own quick_draft piece --
+     * mirrors quickDraftDraftingStateFor()'s per-viewer 'stage'
+     * derivation (draw / awaiting_opponent_draw / received /
+     * awaiting_opponent_received), generalized to every seated player
+     * at once: a player is "awaited" if their own next action (this
+     * round's draw-stage keep, or its received-stage keep once BOTH
+     * players' draw-stage picks exist so the received pack is actually
+     * determined) hasn't been submitted yet.
+     *
+     * @param array<int, string> $usernamesByUserId
+     * @return string[]
+     */
+    private function quickDraftAwaitingResponseUsernames(int $draftMatchId, int $currentRound, array $usernamesByUserId): array
+    {
+        $picksThisRound = $this->loadDraftRoundPicks($draftMatchId)[$currentRound] ?? [];
+
+        $bothSubmittedDraw = true;
+        foreach ($usernamesByUserId as $userId => $username) {
+            if (($picksThisRound[$userId]['kept_from_draw'] ?? null) === null) {
+                $bothSubmittedDraw = false;
+                break;
+            }
+        }
+
+        $usernames = [];
+        foreach ($usernamesByUserId as $userId => $username) {
+            $keptFromDraw = $picksThisRound[$userId]['kept_from_draw'] ?? null;
+            $keptFromReceived = $picksThisRound[$userId]['kept_from_received'] ?? null;
+            if ($keptFromDraw === null || ($keptFromReceived === null && $bothSubmittedDraw)) {
+                $usernames[] = $username;
+            }
+        }
+
+        return $usernames;
     }
 
     /**

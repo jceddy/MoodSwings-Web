@@ -435,7 +435,25 @@ too, proportional to the smaller card width.
     (`buildPlayerFlag('pendingDecision', ..., 'player-flag--pendingDecision')`)
     -- so e.g. a game where you played Compulsion targeting an opponent
     shows the hourglass next to *their* name, not yours, even though it's
-    still nominally your own turn. `.player-flag`/`.player-stat` pick up a
+    still nominally your own turn. A still-`waiting` `quick_draft`/
+    `winston_draft`/`grid_draft` game reuses the exact same
+    `awaiting_response_usernames` field (see
+    `GameService::draftAwaitingResponseUsernames()`) for the same
+    hourglass icon, now naming whoever the draft/deck-building step
+    itself is blocked on instead: both players at once for quick_draft's
+    own simultaneous-blind draw/received stages until each has
+    submitted, or exactly one at a time for winston_draft's/grid_draft's
+    single active turn player; `current_turn_username` stays `null` the
+    whole time a game is still `waiting`, since there's no board "turn"
+    concept yet to name. This also required extracting the icon-rendering
+    logic into a shared `appendPlayersWithFlags()` helper, reused by both
+    `buildGameRow()`'s own (non-compact) opponents line and
+    `buildMatchGroupRow()`'s header -- a draft-based match's games are
+    always grouped (`draft_match_id` is set from game 1 onward), so
+    without that shared header call the icons would never render at all
+    for a draft game, since its own row only ever appears as a match
+    group's compact sub-row (which skips the opponents line entirely, see
+    `opts.compact` above). `.player-flag`/`.player-stat` pick up a
     `vertical-align: middle` rule (a no-op inside their usual flex
     `.player-icons` wrapper on the board, but needed here since these are
     now also reused inline in ordinary text flow) so they line up cleanly

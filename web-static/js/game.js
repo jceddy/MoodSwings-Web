@@ -465,6 +465,41 @@
         }
     }
 
+    // Appends game.players' usernames (comma-separated) to container,
+    // each with a play-arrow icon (reusing the same green
+    // player-flag--turn shape the board's own players list uses for "on
+    // turn" -- see buildPlayerFlag()) if current_turn_username names
+    // them, and/or a gold waiting-hourglass icon (player-flag--
+    // pendingDecision) if awaiting_response_usernames includes them --
+    // in place of the old "(your turn)"/"(waiting on ...)" text tags,
+    // which only ever named the viewer even though a whole game (or,
+    // pre-game, a draft/deck-building step -- see
+    // GameService::draftAwaitingResponseUsernames()) could be waiting on
+    // someone else entirely. A player can carry both at once in
+    // principle (e.g. a self-targeting decision resolving without ever
+    // handing the turn to anyone else), so the two checks are
+    // independent, not mutually exclusive. Shared by buildGameRow()'s
+    // own (non-compact) opponents line and buildMatchGroupRow()'s
+    // header, since a draft-based match's games are always grouped
+    // (draft_match_id is set from game 1 onward) -- without this shared
+    // helper, a still-'waiting'/drafting game's own icons would never
+    // render at all, since its row only ever appears as a match group's
+    // compact sub-row.
+    function appendPlayersWithFlags(container, game) {
+        game.players.forEach((player, index) => {
+            if (index > 0) {
+                container.append(', ');
+            }
+            container.append(player.username);
+            if (game.current_turn_username === player.username) {
+                container.appendChild(buildPlayerFlag('onTurn', player.username + "'s turn", 'player-flag--turn'));
+            }
+            if (game.awaiting_response_usernames.includes(player.username)) {
+                container.appendChild(buildPlayerFlag('pendingDecision', 'Waiting on ' + player.username, 'player-flag--pendingDecision'));
+            }
+        });
+    }
+
     // Builds one game's own lobby row. $opts.compact drops the
     // format/deck-type line and the opponents line (shown once already at
     // the Quick Draft match group's own header -- see buildMatchGroupRow())
@@ -529,30 +564,12 @@
 
         infoEl.appendChild(statusLineEl);
 
-        // Each player's own name gets a play-arrow icon (reusing the same
-        // green player-flag--turn shape the board's own players list uses
-        // for "on turn" -- see buildPlayerFlag()) if current_turn_username
-        // names them, and/or a gold waiting-hourglass icon (player-flag--
-        // pendingDecision) if awaiting_response_usernames includes them --
-        // in place of the old "(your turn)"/"(waiting on ...)" text tags,
-        // which only ever named the viewer even though a whole game could
-        // be waiting on someone else entirely. A player can carry both at
-        // once in principle (e.g. a self-targeting decision resolving
-        // without ever handing the turn to anyone else), so the two checks
-        // are independent, not mutually exclusive.
+        // Not shown on a match's own compact per-game sub-rows -- those
+        // already inherit the header's own appendPlayersWithFlags() call
+        // (see buildMatchGroupRow()), and repeating it per sub-row would
+        // just be noise for games that already completed.
         if (!opts.compact) {
-            game.players.forEach((player, index) => {
-                if (index > 0) {
-                    infoEl.append(', ');
-                }
-                infoEl.append(player.username);
-                if (game.current_turn_username === player.username) {
-                    infoEl.appendChild(buildPlayerFlag('onTurn', player.username + "'s turn", 'player-flag--turn'));
-                }
-                if (game.awaiting_response_usernames.includes(player.username)) {
-                    infoEl.appendChild(buildPlayerFlag('pendingDecision', 'Waiting on ' + player.username, 'player-flag--pendingDecision'));
-                }
-            });
+            appendPlayersWithFlags(infoEl, game);
         }
 
         // winner_usernames is only ever non-empty once the game is
@@ -631,8 +648,13 @@
             headerEl.appendChild(resultEl);
         }
 
-        const opponents = firstGame.players.map((p) => p.username).join(', ');
-        headerEl.append(opponents);
+        // Reuses buildGameRow()'s own icon logic (see
+        // appendPlayersWithFlags()) against firstGame -- the match's most
+        // recent (and only ever actionable) game -- since a draft-based
+        // match's games are always grouped here rather than rendered as
+        // buildGameRow()'s own top-level, non-compact row, which would
+        // otherwise never show these icons at all for a draft game.
+        appendPlayersWithFlags(headerEl, firstGame);
 
         li.appendChild(headerEl);
 
