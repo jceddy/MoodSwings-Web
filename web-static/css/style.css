@@ -106,6 +106,17 @@ dialog#resources-dialog li {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
+/* The Buy Me a Coffee button (data-name="bmc-button", see the <script>
+   right before #resources-close-button below) inserts its own button
+   element as the next sibling of that <script> tag once it loads --
+   the "+ *" here is deliberately tag-agnostic since that injected
+   element isn't something this codebase controls the markup of. Gives
+   it the same breathing room from the Close button below it that the
+   link list already has above it. */
+dialog#resources-dialog script[data-name="bmc-button"] + * {
+    margin-bottom: 1rem;
+}
+
 /* #friends-button/#logout-button sit directly above whichever of
    #lobby-view/#board-view is currently visible -- without this they'd
    touch it with no gap, most noticeably #board-view's own
