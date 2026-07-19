@@ -1576,15 +1576,20 @@ too, proportional to the smaller card width.
     (the `<svg>`'s `fill="currentColor"` means setting the button's own
     `color` is enough, no separate `fill` override needed) -- the same
     error-red already used for validation messages, distinguishing the
-    one irreversible action by color as well as by position. "Friends' decks"
-    (`#decks-friends-list`) rows are simpler: `.decks-row-actions` holds
-    just a lone `view` icon button (View-only, see below), with no grid
-    needed for a single button. A
+    one irreversible action by color as well as by position. "Friends'
+    decks" (`#decks-friends-list`) rows are simpler: `.decks-row-actions`
+    holds `view`, `duplicate`, and `download` icon buttons in a plain flex
+    row (no grid needed for three buttons) -- no Edit or Delete, since
+    those change/remove a deck someone else owns, but Duplicate and
+    Download both work exactly as they do on an owner's own row, since
+    both are just `viewDecklist(id)` under the hood and the backend's
+    `UserDecklistService::view()`/`authorizeViewer()` already authorizes
+    any accepted friend to view a `visibility='friends'` deck (the very
+    check that lets the row render in "Friends' decks" at all -- see
+    "Saved decklists" in `php-app/README.md`). A
     friend with no friends-visible decks is omitted entirely from
     "Friends' decks," not shown with an empty section, and each of that
-    section's rows is labeled with that friend's own username and stays
-    View-only -- a friend's saved deck can be looked at and used, never
-    edited or deleted by anyone but its owner. "Edit" (`startEditingDeck()`)
+    section's rows is labeled with that friend's own username. "Edit" (`startEditingDeck()`)
     populates the form from that deck's own contents, including
     `#decks-form-text` itself -- `buildDecklistText()` reconstructs the
     deck's decklist text in the exact `About`/`Name`/blank-line/card-lines/
