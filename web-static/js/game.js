@@ -435,9 +435,18 @@
                 const li = document.createElement('li');
                 li.appendChild(buildDeckRowInfo(deck, false));
 
+                // Duplicate/Download both just call viewDecklist(id) under
+                // the hood, and the backend authorizes any accepted friend
+                // to view a friends-visible deck (the same check that lets
+                // this row render at all) -- so both work here exactly as
+                // they do on an owner's own row. No Edit/Delete though:
+                // those stay owner-only, changing/removing a deck someone
+                // else owns.
                 const actions = document.createElement('div');
                 actions.className = 'decks-row-actions';
                 actions.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                actions.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
+                actions.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
                 li.appendChild(actions);
 
                 ul.appendChild(li);
