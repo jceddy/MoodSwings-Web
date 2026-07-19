@@ -38,6 +38,43 @@
         return button;
     }
 
+    // Icon set for the Decks dialog's per-row View/Edit/Delete buttons
+    // (issue #92 follow-up) -- separate from PLAYER_STAT_ICON_PATHS below
+    // since these live inside an actual <button> rather than the players
+    // list's own icon+badge convention, and don't need a badge overlay.
+    // Standard Material Design glyphs (Apache-2.0), reused verbatim since
+    // "an eye"/"a pencil"/"a trash can" are about as generic as icons get.
+    const ACTION_ICON_PATHS = {
+        view: '<path fill-rule="evenodd" d="M12,4.5C7,4.5,2.73,7.61,1,12c1.73,4.39,6,7.5,11,7.5s9.27-3.11,11-7.5' +
+            'C21.27,7.61,17,4.5,12,4.5z M12,17c-2.76,0-5-2.24-5-5s2.24-5,5-5s5,2.24,5,5S14.76,17,12,17z ' +
+            'M12,9c-1.66,0-3,1.34-3,3s1.34,3,3,3s3-1.34,3-3S13.66,9,12,9z"/>',
+        edit: '<path d="M3,17.25V21h3.75L17.81,9.94l-3.75-3.75L3,17.25z M20.71,7.04c0.39-0.39,0.39-1.02,0-1.41' +
+            'l-2.34-2.34c-0.39-0.39-1.02-0.39-1.41,0l-1.83,1.83l3.75,3.75L20.71,7.04z"/>',
+        delete: '<path d="M6,7h12l-1.06,13.19C16.85,21.19,16,22,15,22H9c-1,0-1.85-0.81-1.94-1.81L6,7z ' +
+            'M9.5,4h5l1,2h4v2H4V6h4L9.5,4z"/>',
+    };
+
+    function buildActionIcon(kind) {
+        const template = document.createElement('template');
+        template.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + ACTION_ICON_PATHS[kind] + '</svg>';
+        return template.content.firstChild;
+    }
+
+    // Same icon+tooltip/aria-label treatment as buildPlayerFlag() (title
+    // AND aria-label both carry the full word, so a screen reader or a
+    // sighted user hovering the button still gets "View"/"Edit"/"Delete"
+    // even though the button's own visible label is now just an icon).
+    function iconActionButton(kind, label, onClick) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'icon-action-button icon-action-button--' + kind;
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.appendChild(buildActionIcon(kind));
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
     // Populates a "use a saved deck" <select> (issue #92) with an
     // <optgroup> for "My decks" and one per friend who has 1+
     // friends-visible decks -- shared by the New Game dialog's own select
@@ -253,9 +290,9 @@
                     li.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
                     li.append(' ');
                 }
-                li.appendChild(actionButton('View', () => openDeckView(deck.id)));
-                li.appendChild(actionButton('Edit', () => startEditingDeck(deck.id)));
-                li.appendChild(actionButton('Delete', () => deleteDeckAndRefresh(deck.id)));
+                li.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                li.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
+                li.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
                 return li;
             }
         );
@@ -274,7 +311,7 @@
                 li.append(deck.name + ' ');
                 li.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
                 li.append(' ');
-                li.appendChild(actionButton('View', () => openDeckView(deck.id)));
+                li.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
                 ul.appendChild(li);
             }
             friendsListEl.appendChild(ul);

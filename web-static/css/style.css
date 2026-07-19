@@ -262,6 +262,27 @@ dialog#decks-dialog li button + button {
     margin-left: 0.25rem;
 }
 
+/* View/Edit/Delete on the Decks dialog's own rows (issue #92 follow-up)
+   -- a fixed square button just large enough for its icon, rather than
+   the width a text label like "Delete" would otherwise need, so three
+   of them in a row take up noticeably less horizontal space next to a
+   deck name that might already be wrapping onto 2 lines. */
+.icon-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.icon-action-button svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: currentColor;
+}
+
 dialog#decks-dialog #decks-form label,
 dialog#decks-dialog #decks-form textarea {
     display: block;

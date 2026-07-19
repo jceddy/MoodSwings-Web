@@ -1491,9 +1491,22 @@ too, proportional to the smaller card width.
     `#decks-form-text`) the New Game dialog's Custom Decklist fields and
     the `custom_duel` waiting room already use. `refreshDecksData()`
     (`GET /decklists`) renders two lists: "Your decks"
-    (`#decks-own-list`), each row with View/Edit/Delete actions, and
-    "Friends' decks" (`#decks-friends-list`), grouped into one section per
-    friend who actually has at least one friends-visible deck. Every row's
+    (`#decks-own-list`), each row with View/Edit/Delete actions rendered
+    as small square icon-only buttons (`iconActionButton('view'/'edit'/
+    'delete', label, onClick)`, an eye/pencil/trash-can, standard
+    Material Design glyphs reused verbatim in a new `ACTION_ICON_PATHS`
+    map alongside the existing `PLAYER_STAT_ICON_PATHS` -- separate from
+    it since these live inside an actual `.icon-action-button` rather
+    than the players list's own icon+badge convention, and don't need a
+    badge overlay) instead of three separate text buttons, so they take
+    up noticeably less horizontal room next to a name that might already
+    be wrapping onto 2 lines -- same `title`/`aria-label` treatment as
+    every other icon on this page, so "View"/"Edit"/"Delete" are still
+    the button's accessible name for a screen reader (and Playwright's
+    own `getByRole('button', {name: 'View'})`-style lookups) even though
+    nothing on screen literally spells the word out anymore. "Friends'
+    decks" (`#decks-friends-list`) uses the same `view` icon button on
+    its own rows (View-only, see below). Every row's
     name is followed by a card-count icon+badge
     (`buildPlayerStat('hand', deck.card_count, ...)`) rather than a plain
     "(N cards)" text clause -- reusing the exact same `.player-stat--hand`
