@@ -1543,14 +1543,22 @@ too, proportional to the smaller card width.
     section's rows is labeled with that friend's own username and stays
     View-only -- a friend's saved deck can be looked at and used, never
     edited or deleted by anyone but its owner. "Edit" (`startEditingDeck()`)
-    populates the form from that deck's own summary and stashes its full
-    card ids/sideboard card ids client-side so a pure rename or
-    visibility toggle doesn't require re-uploading the decklist text --
-    the form's submit handler only re-parses `#decks-form-text` when it's
-    non-empty, otherwise reusing the stashed ids, and a hidden
-    `#decks-form-id` field is what decides whether submitting calls
-    `POST /decklists` (create) or `POST /decklists/update` (edit) in the
-    first place. "View" (`openDeckView()`) opens a separate small
+    populates the form from that deck's own contents, including
+    `#decks-form-text` itself -- `buildDecklistText()` reconstructs the
+    deck's decklist text in the exact `About`/`Name`/blank-line/card-lines/
+    optional-`Sideboard` format `DecklistParser` accepts (one counted line
+    per distinct card, e.g. `"1 Bliss (MSW) 108"`, collapsing repeat
+    copies of the same card rather than one line per copy), so editing a
+    deck's cards reads and works the same way creating one does instead of
+    leaving the field blank behind a silent stashed-ids fallback. That
+    fallback still exists (`editingDeckCardIds`/`editingDeckSideboardCardIds`,
+    stashed alongside) purely for the edge case of a user clearing the
+    (now pre-filled) field entirely and submitting anyway, meaning "keep
+    the cards, I only touched the name/visibility" -- the form's submit
+    handler only re-parses `#decks-form-text` when it's non-empty,
+    otherwise reusing the stashed ids. A hidden `#decks-form-id` field is
+    what decides whether submitting calls `POST /decklists` (create) or
+    `POST /decklists/update` (edit) in the first place. "View" (`openDeckView()`) opens a separate small
     `#deck-view-dialog` showing the deck's name, the same card-count
     icon+badge and (when applicable) friends-shared icon its own row in
     the list carries, and its full contents as two card-thumb grids

@@ -88,6 +88,16 @@ final class UserDecklistIntegrationTest extends TestCase
         self::assertCount(2, $view['cards']);
     }
 
+    public function testViewIncludesSetCodeOnEachCard(): void
+    {
+        $userId = $this->insertUser('alice');
+
+        $id = $this->decklists->create($userId, 'My Deck', "1 Charity", null, null, 'private');
+
+        $view = $this->decklists->view($userId, $id);
+        self::assertSame('MSW', $view['cards'][0]['set_code']);
+    }
+
     public function testCreateFromCardIdsStoresDirectly(): void
     {
         $userId = $this->insertUser('alice');

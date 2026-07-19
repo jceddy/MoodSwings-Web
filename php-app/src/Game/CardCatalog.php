@@ -39,7 +39,16 @@ final class CardCatalog
     /**
      * Catalog-only card view (no BoardState/game_cards row involved) shaped
      * to exactly the fields buildCardThumb()/openCardDetail() already read
-     * on the frontend -- every in-play-only flag is false/null.
+     * on the frontend -- every in-play-only flag is false/null. Also
+     * includes set_code (a card's own Set -- see migration 0015 -- picked
+     * by lowest sets.id if a card ever belongs to more than one, though
+     * every card belongs to exactly one, "MSW", today), which
+     * buildCardThumb()/openCardDetail() don't read but the Decks dialog's
+     * "Edit" flow does, to reconstruct a saved deck's own decklist text
+     * in DecklistParser's "1 Name (SET) NUMBER" format (issue #92
+     * follow-up) -- NUMBER there is always just the card's own catalog id,
+     * since this app has no separate collector-number concept distinct
+     * from cards.id.
      *
      * @param int[] $cardIds
      * @return array<int, array<string, mixed>>
@@ -56,7 +65,13 @@ final class CardCatalog
         // many times it appears in the caller's list.
         $distinctCardIds = array_values(array_unique($cardIds));
         $placeholders = implode(',', array_fill(0, count($distinctCardIds), '?'));
-        $stmt = Connection::get()->prepare("SELECT * FROM cards WHERE id IN ({$placeholders})");
+        $stmt = Connection::get()->prepare(
+            "SELECT c.*, (
+                SELECT s.code FROM card_sets cs JOIN sets s ON s.id = cs.set_id
+                WHERE cs.card_id = c.id ORDER BY s.id LIMIT 1
+             ) AS set_code
+             FROM cards c WHERE c.id IN ({$placeholders})"
+        );
         $stmt->execute($distinctCardIds);
 
         $rowsById = [];
@@ -70,6 +85,7 @@ final class CardCatalog
             return [
                 'card_id' => $cardId,
                 'catalog_card_id' => $cardId,
+                'set_code' => $row['set_code'],
                 'name' => $row['name'],
                 'color' => $row['color'],
                 'base_color' => $row['color'],

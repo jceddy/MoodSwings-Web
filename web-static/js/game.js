@@ -189,12 +189,12 @@
 
     // -- Decks dialog (issue #92) -------------------------------------------
     //
-    // Stashed by startEditingDeck() so a pure rename/visibility change
-    // during an edit doesn't require re-uploading/re-pasting the same
-    // content -- the form's own text field is left blank for an edit (the
-    // full decklist text isn't reconstructed from stored card ids), and an
-    // empty text field on submit falls back to these previously-fetched
-    // ids instead.
+    // Stashed by startEditingDeck() as a fallback for the rare case where
+    // the user clears the (now pre-populated, see buildDecklistText()
+    // below) text field entirely and submits anyway, intending a pure
+    // rename/visibility change without retyping the cards -- an empty
+    // text field on submit falls back to these previously-fetched ids
+    // instead of failing with "no cards in it."
     let editingDeckCardIds = null;
     let editingDeckSideboardCardIds = null;
 
@@ -213,6 +213,41 @@
         editingDeckSideboardCardIds = null;
     }
 
+    // One line per distinct card in DecklistParser's own accepted format
+    // ("1 Name (SET) NUMBER", see php-app/README.md "Saved decklists") --
+    // NUMBER is always just the card's own catalog id (card_id), the
+    // closest thing this app has to a collector number, since CardCatalog
+    // ::serialize() ties set_code to that same id rather than a separate
+    // per-printing field. Copies of the same card_id are collapsed into
+    // one counted line, in first-seen order, rather than one line per
+    // copy -- reads the same way a hand-typed decklist would.
+    function formatDecklistCardLines(cards) {
+        const groups = [];
+        const indexByCardId = new Map();
+        for (const card of cards) {
+            if (indexByCardId.has(card.card_id)) {
+                groups[indexByCardId.get(card.card_id)].count++;
+            } else {
+                indexByCardId.set(card.card_id, groups.length);
+                groups.push({ card, count: 1 });
+            }
+        }
+        return groups.map(({ card, count }) => `${count} ${card.name} (${card.set_code}) ${card.card_id}`);
+    }
+
+    // Reconstructs a saved deck's own decklist text in the exact format
+    // startEditingDeck() below populates #decks-form-text with -- so
+    // editing a deck's cards works the same way creating one does (type/
+    // paste something readable) instead of leaving the field blank and
+    // silently reusing whatever ids were last saved.
+    function buildDecklistText(deck) {
+        const lines = ['About', 'Name ' + deck.name, '', ...formatDecklistCardLines(deck.cards)];
+        if (deck.sideboard_cards.length > 0) {
+            lines.push('', 'Sideboard', ...formatDecklistCardLines(deck.sideboard_cards));
+        }
+        return lines.join('\n');
+    }
+
     async function startEditingDeck(id) {
         const { ok, body } = await viewDecklist(id);
         if (!ok) {
@@ -224,7 +259,7 @@
         document.getElementById('decks-form-id').value = deck.id;
         document.getElementById('decks-form-name').value = deck.name;
         document.getElementById('decks-form-file').value = '';
-        document.getElementById('decks-form-text').value = '';
+        document.getElementById('decks-form-text').value = buildDecklistText(deck);
         document.getElementById('decks-form-friends-visible').checked = deck.visibility === 'friends';
         document.getElementById('decks-form-submit-button').textContent = 'Update deck';
         document.getElementById('decks-form-cancel-edit-button').hidden = false;
