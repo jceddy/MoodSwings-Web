@@ -64,6 +64,21 @@
     --color-gold: #e0b93a;
 }
 
+/* Opts out of mobile Chrome's "font boosting" text autosizer, which
+   independently scales each block of text (list items, in particular)
+   to stay legible based on how its content happens to wrap -- harmless
+   for plain text, but it also inflates whatever's sized in rem sitting
+   inline in that text (e.g. the card-count icon+badge next to a saved
+   deck's name, see buildPlayerStat() in game.js), making two otherwise
+   identically-styled rows render their icon at visibly different sizes
+   purely because their names wrap differently. Already have a correct
+   `<meta name="viewport">` on every page, which isn't enough on its own
+   to suppress this. */
+html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
 body {
     font-family: system-ui, sans-serif;
     max-width: 40rem;
@@ -781,6 +796,21 @@ body.game-page {
     position: relative;
     display: inline-flex;
     color: var(--color-muted);
+    /* Without this, a non-wrapping flex-container ancestor (e.g.
+       `dialog#decks-dialog li`'s own `display: flex`, no `flex-wrap`)
+       squeezes this icon below its specified width/height rather than
+       wrapping the row -- these icons have no natural min-content size
+       of their own to resist that shrink, and how much room is left
+       over for them varies with the row's own text length (a longer
+       deck/friend name leaves less room, so its icon shrinks more),
+       which is how two otherwise-identical icons ended up rendering at
+       visibly different sizes on two different rows. `.player-icons`
+       (the board's own players list) sidesteps this the other way,
+       via `flex-wrap: wrap` instead -- fine there since overflow
+       wrapping to a second line reads naturally among several
+       same-sized icons, but not appropriate for a single icon sitting
+       inline with a row's own name text. */
+    flex-shrink: 0;
     /* A no-op inside .player-icons (a flex container -- flex items ignore
        vertical-align), but keeps these icons lined up with the text
        baseline when reused inline in ordinary text flow instead, e.g. the

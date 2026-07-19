@@ -155,6 +155,18 @@ for anything else -- an error page's HTML served with a stray `200`, or a
 truncated/empty body from a mid-write read, so neither the footer nor the
 watcher can ever mistake garbage content for a genuine version change.
 
+## Mobile text sizing
+
+`html { text-size-adjust: 100%; -webkit-text-size-adjust: 100%; }` in
+`style.css` opts every page out of mobile Chrome's "font boosting" text
+autosizer, which otherwise independently scales blocks of text to stay
+legible on a narrow screen. A correct `<meta name="viewport"
+content="width=device-width, initial-scale=1.0">` (already present on
+every page) doesn't by itself suppress this, and a page that renders
+correctly on desktop/emulated-viewport testing can still look subtly
+different on a real phone without it -- general defensive hygiene, not
+tied to any one page or feature.
+
 ## Assets
 
 - `img/` -- Game-level art not tied to any specific printed card, e.g.
@@ -1488,7 +1500,18 @@ too, proportional to the smaller card width.
     icon (two overlapping card portraits) the board's own players list
     already uses for hand size, since a saved deck and an in-hand card
     count are conceptually the same thing: a pile of cards with a size
-    worth badging rather than spelling out in words. A friends-visible
+    worth badging rather than spelling out in words. `.player-stat`/
+    `.player-flag`'s shared rule carries `flex-shrink: 0` -- without it,
+    the icon (which has no natural min-content size of its own to resist
+    shrinking) gets squeezed below its specified `1.5rem` by
+    `dialog#decks-dialog li`'s own plain `display: flex` (no
+    `flex-wrap`, unlike `.player-icons` on the board, which wraps
+    overflow to a second line instead of shrinking it) whenever a row's
+    name text and buttons don't leave quite enough room -- and since how
+    much room is left over depends on the name's own length, two
+    otherwise-identical icons on two different rows would end up
+    rendering at visibly different sizes purely because their deck names
+    differ. A friends-visible
     own deck's row also gets a small two-person icon right after that
     badge (`buildPlayerFlag('friendsShared', 'Shared with friends', ...)`,
     `.player-flag--friendsShared`, colored via the same `--color-info`
