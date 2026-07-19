@@ -207,7 +207,7 @@
         document.getElementById('deck-view-title').textContent = deck.name;
         const metaEl = document.getElementById('deck-view-meta');
         metaEl.innerHTML = '';
-        metaEl.append(deck.cards.length + ' card(s)');
+        metaEl.appendChild(buildPlayerStat('hand', deck.cards.length, deck.cards.length + ' card(s) in this deck'));
         if (deck.visibility === 'friends') {
             metaEl.append(' ');
             metaEl.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
@@ -246,7 +246,9 @@
             own,
             (deck) => {
                 const li = document.createElement('li');
-                li.append(deck.name + ' (' + deck.card_count + ' cards) ');
+                li.append(deck.name + ' ');
+                li.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
+                li.append(' ');
                 if (deck.visibility === 'friends') {
                     li.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
                     li.append(' ');
@@ -269,7 +271,9 @@
             const ul = document.createElement('ul');
             for (const deck of friend.decklists) {
                 const li = document.createElement('li');
-                li.append(deck.name + ' (' + deck.card_count + ' cards) ');
+                li.append(deck.name + ' ');
+                li.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
+                li.append(' ');
                 li.appendChild(actionButton('View', () => openDeckView(deck.id)));
                 ul.appendChild(li);
             }
