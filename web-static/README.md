@@ -562,6 +562,17 @@ too, proportional to the smaller card width.
     reads its text into the textarea via `FileReader`, so the server only
     ever sees one input shape regardless of which the player used) -- see
     "Custom decklists" in `php-app/README.md` for the format itself. The
+    textarea itself (like every other "Or paste your decklist" field in the
+    app -- the `custom_duel` waiting room's own submission form and the
+    Decks dialog's create/edit form, see below) carries a shared
+    `.decklist-textarea` class giving it an explicit `17.0625rem` width, 150%
+    of the ~`11.375rem` a bare `<textarea rows="10">` renders at with no
+    width set of its own -- a decklist can run to 60+ lines and the
+    default width was cramped for reading it back while pasting or editing.
+    Deliberately not applied to the draft formats' "Or paste the pool"
+    textareas (`#new-game-quick-draft-custom-pool-text` and its
+    Winston/Grid Draft counterparts) -- a different field for a different
+    purpose, left at the plain default width. The
     dropdown is populated (`populateSavedDecklistSelect()`, shared with the
     `custom_duel` waiting room below and the draft "Save deck" dialog's own
     friends-visible mirror) from `GET /decklists`, grouped into a "My
