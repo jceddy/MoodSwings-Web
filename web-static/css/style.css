@@ -862,6 +862,15 @@ body.game-page {
     color: var(--color-pending);
 }
 
+/* Reuses --color-info (already established for "in progress"/informational
+   status elsewhere on this page) for the Decks dialog's friends-shared
+   icon -- see buildPlayerFlag('friendsShared', ...) in game.js, which
+   replaced a plain "shared with friends" text clause next to a deck's
+   name/card count. */
+.player-flag--friendsShared {
+    color: var(--color-info);
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {
@@ -906,6 +915,14 @@ dialog#card-detail-dialog {
    flowing side by side -- margin-top gives them a little breathing room
    instead of touching. */
 #new-game-close-button {
+    margin-top: 0.5rem;
+}
+
+/* Same reasoning as #new-game-close-button above -- without this, the
+   Close button sits flush against the card grid (or the sideboard grid,
+   or the hidden sideboard heading, whichever ends up last) directly
+   above it. */
+#deck-view-close-button {
     margin-top: 0.5rem;
 }
 

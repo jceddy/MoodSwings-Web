@@ -1481,11 +1481,24 @@ too, proportional to the smaller card width.
     (`GET /decklists`) renders two lists: "Your decks"
     (`#decks-own-list`), each row with View/Edit/Delete actions, and
     "Friends' decks" (`#decks-friends-list`), grouped into one section per
-    friend who actually has at least one friends-visible deck (a friend
-    with none is omitted entirely, not shown with an empty section) and
-    labeled with that friend's own username, each row View-only -- a
-    friend's saved deck can be looked at and used, never edited or
-    deleted by anyone but its owner. "Edit" (`startEditingDeck()`)
+    friend who actually has at least one friends-visible deck. A
+    friends-visible own deck's row gets a small two-person icon
+    (`buildPlayerFlag('friendsShared', 'Shared with friends', ...)`,
+    `.player-flag--friendsShared`, colored via the same `--color-info`
+    blue already established for the lobby's own "in progress" status)
+    right after its card count, reusing the exact icon/tooltip/`aria-label`
+    convention the board's own players list established for issue #143
+    (`title`/`role="img"`/`aria-label` together mean a mouse-hover tooltip
+    and a screen reader both still get the full "Shared with friends"
+    text even though nothing on screen literally spells it out anymore) --
+    this replaced what used to be a plain "(shared with friends)" text
+    clause, since every own-deck row already carries an action button per
+    column and the extra text made rows harder to scan at a glance. A
+    friend with no friends-visible decks is omitted entirely from
+    "Friends' decks," not shown with an empty section, and each of that
+    section's rows is labeled with that friend's own username and stays
+    View-only -- a friend's saved deck can be looked at and used, never
+    edited or deleted by anyone but its owner. "Edit" (`startEditingDeck()`)
     populates the form from that deck's own summary and stashes its full
     card ids/sideboard card ids client-side so a pure rename or
     visibility toggle doesn't require re-uploading the decklist text --
@@ -1494,12 +1507,18 @@ too, proportional to the smaller card width.
     `#decks-form-id` field is what decides whether submitting calls
     `POST /decklists` (create) or `POST /decklists/update` (edit) in the
     first place. "View" (`openDeckView()`) opens a separate small
-    `#deck-view-dialog` showing the deck's name/visibility and its full
-    contents as two card-thumb grids (main deck, and a sideboard grid
-    only shown when the deck actually has one) -- reusing
+    `#deck-view-dialog` showing the deck's name/card count (plus the
+    same friends-shared icon next to the count when applicable) and its
+    full contents as two card-thumb grids (main deck, and a sideboard
+    grid only shown when the deck actually has one) -- reusing
     `buildCardThumb()`/`openCardDetail()`, the same helpers every other
     card grid in this app already uses, so a saved deck's cards are just
     as clickable-for-detail as an in-game hand or draft pool.
+    `#deck-view-close-button` carries its own small `margin-top`
+    (`#deck-view-close-button` in `style.css`, the same reasoning as
+    `#new-game-close-button` above) so it doesn't sit flush against
+    whichever grid ends up last -- the card grid when there's no
+    sideboard, the sideboard grid otherwise.
   - That same button gets a small red notification dot
     (`.has-friend-request`, applied/removed by
     `setFriendRequestNotification()`) whenever `/friends/invites` returns

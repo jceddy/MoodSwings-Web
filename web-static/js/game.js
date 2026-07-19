@@ -205,8 +205,13 @@
         const deck = body.decklist;
 
         document.getElementById('deck-view-title').textContent = deck.name;
-        document.getElementById('deck-view-meta').textContent =
-            deck.cards.length + ' card(s)' + (deck.visibility === 'friends' ? ' — shared with friends' : ' — private');
+        const metaEl = document.getElementById('deck-view-meta');
+        metaEl.innerHTML = '';
+        metaEl.append(deck.cards.length + ' card(s)');
+        if (deck.visibility === 'friends') {
+            metaEl.append(' ');
+            metaEl.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
+        }
 
         const cardsEl = document.getElementById('deck-view-cards');
         cardsEl.innerHTML = '';
@@ -241,8 +246,11 @@
             own,
             (deck) => {
                 const li = document.createElement('li');
-                li.append(deck.name + ' (' + deck.card_count + ' cards' +
-                    (deck.visibility === 'friends' ? ', shared with friends' : '') + ') ');
+                li.append(deck.name + ' (' + deck.card_count + ' cards) ');
+                if (deck.visibility === 'friends') {
+                    li.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
+                    li.append(' ');
+                }
                 li.appendChild(actionButton('View', () => openDeckView(deck.id)));
                 li.appendChild(actionButton('Edit', () => startEditingDeck(deck.id)));
                 li.appendChild(actionButton('Delete', () => deleteDeckAndRefresh(deck.id)));
@@ -1736,6 +1744,11 @@
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
         // A delayed decision response awaiting this player: an hourglass.
         pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
+        // Shared with friends (issue #92 follow-up): two overlapping people,
+        // replacing what used to be a plain "shared with friends" text
+        // clause next to a saved deck's name.
+        friendsShared: '<circle cx="8" cy="8" r="3"/><rect x="3" y="13" width="10" height="8" rx="3"/>'
+            + '<circle cx="16" cy="7" r="3.5"/><rect x="10" y="12" width="12" height="9" rx="3.5"/>',
     };
 
     // <template> parses its own innerHTML through the HTML parser's SVG
