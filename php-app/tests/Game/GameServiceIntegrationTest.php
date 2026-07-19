@@ -4409,6 +4409,63 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->playMood($gameId, $p1, $complacencyId, []);
     }
 
+    /**
+     * Regression test: the 'pending_decision_resolved' event's own
+     * acting_game_player_id is the RESPONDER (p2, who reveals a card) --
+     * describeEvent()'s grants_created segment used to attribute the
+     * resulting grant to that same $actor, incorrectly crediting p2 with
+     * an extra play that's actually p1's own (p1 played Intimidation and
+     * is still mid-turn; p2 never gets a turn out of responding). See
+     * describeEvent()'s own 'initiating_game_player_id' handling.
+     */
+    public function testIntimidationsGrantIsAttributedToWhoeverPlayedItNotTheRespondingTarget(): void
+    {
+        $u1 = $this->insertUser('intimgrantevt1');
+        $u2 = $this->insertUser('intimgrantevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $intimidationId = $this->insertGameCard($gameId, 67, 'hand', $p1); // Intimidation
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2); // p2's only card -- guaranteed to be the one revealed
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $intimidationId, ['target_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p2, ['revealed_card_id' => $card3Id]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        $resolvedEvent = null;
+        foreach ($events as $event) {
+            if (str_contains($event['description'], 'was granted')) {
+                $resolvedEvent = $event;
+                break;
+            }
+        }
+        self::assertNotNull($resolvedEvent, 'no "was granted" event found');
+        self::assertStringContainsString('intimgrantevt1 was granted', $resolvedEvent['description'], 'p1 played Intimidation and is still mid-turn -- the grant is theirs, not the responding target\'s');
+        self::assertStringNotContainsString('intimgrantevt2 was granted', $resolvedEvent['description']);
+        // 'initiating_game_player_id' rides along in $details purely for
+        // this attribution fix -- it must never leak into the choice
+        // summary as an ordinary-looking "initiating game player: ..." clause.
+        self::assertStringNotContainsString('initiating', $resolvedEvent['description']);
+
+        $fullLogEntry = null;
+        foreach ($this->games->fullEventLog($gameId) as $entry) {
+            if ($entry['event_type'] === 'pending_decision_resolved') {
+                $fullLogEntry = $entry;
+                break;
+            }
+        }
+        self::assertNotNull($fullLogEntry);
+        self::assertSame($p1, $fullLogEntry['details']['initiating_game_player_id']);
+    }
+
     public function testInstabilityPausesForP2sOwnChoiceThenP1sOwnChoiceAndOnlyCompletesAfterBothRespond(): void
     {
         $u1 = $this->insertUser('instab1');
