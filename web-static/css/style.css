@@ -193,15 +193,13 @@ dialog#resources-dialog #resources-close-button {
     box-sizing: border-box;
 }
 
-/* Shared by every "Or paste your decklist" textarea in the app (the New
-   Game dialog's Custom Decklist fields, the in-game custom_duel waiting
-   room's submission form, and the Decks dialog's create/edit form) --
-   without this they all fall back to the browser's intrinsic default
+/* Shared by every "Or paste your decklist"/"Or paste the pool" textarea
+   in the app (the New Game dialog's Custom Decklist fields, the in-game
+   custom_duel waiting room's submission form, the Decks dialog's
+   create/edit form, and the Quick/Winston/Grid Draft custom-pool fields)
+   -- without this they all fall back to the browser's intrinsic default
    textarea width (~11.375rem/182px measured live), which is cramped for
-   a multi-line decklist. 17.0625rem is 150% of that default. Deliberately
-   not applied to the draft formats' "paste the pool" textareas
-   (new-game-*-custom-pool-text) -- a different field for a different
-   purpose, left at its own default width. */
+   a multi-line decklist or pool. 17.0625rem is 150% of that default. */
 .decklist-textarea {
     width: 17.0625rem;
     box-sizing: border-box;
