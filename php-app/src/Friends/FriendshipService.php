@@ -87,6 +87,17 @@ final class FriendshipService
         return $this->friendships->listAcceptedForUser($userId);
     }
 
+    /**
+     * Used by UserDecklistService (issue #92) to authorize viewing a
+     * friends-visible saved decklist.
+     */
+    public function areFriends(int $userIdA, int $userIdB): bool
+    {
+        $friendship = $this->friendships->findByPair($userIdA, $userIdB);
+
+        return $friendship !== null && $friendship['status'] === 'accepted';
+    }
+
     public function listIncomingInvites(int $userId): array
     {
         return $this->friendships->listIncomingPendingForUser($userId);

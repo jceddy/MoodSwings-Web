@@ -365,10 +365,11 @@ too, proportional to the smaller card width.
   redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
-  "Friends" button (see below), and the game lobby/board itself. The
-  "Friends"/"Log out" buttons carry their own `margin-bottom` so they don't
-  touch whichever of the lobby or board view is showing directly beneath
-  them (most noticeably the board view's own "Back to your games" button).
+  "Friends" button (see below), a "Decks" button (see below), and the game
+  lobby/board itself. The "Friends"/"Decks"/"Log out" buttons carry their
+  own `margin-bottom` so they don't touch whichever of the lobby or board
+  view is showing directly beneath them (most noticeably the board view's
+  own "Back to your games" button).
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via
@@ -543,11 +544,24 @@ too, proportional to the smaller card width.
     so the description shown always matches what's actually selected,
     never a stale one left over from the last time the dialog was open.
     Selecting Custom Decklist also reveals `#new-game-decklist-fields` -- a
+    saved-deck dropdown (`#new-game-saved-decklist`, issue #92) above a
     file input and a textarea, both ultimately feeding the same
     `decklist_text` string sent to `POST /games` (uploading a file just
     reads its text into the textarea via `FileReader`, so the server only
     ever sees one input shape regardless of which the player used) -- see
-    "Custom decklists" in `php-app/README.md` for the format itself.
+    "Custom decklists" in `php-app/README.md` for the format itself. The
+    dropdown is populated (`populateSavedDecklistSelect()`, shared with the
+    `custom_duel` waiting room below and the draft "Save deck" dialog's own
+    friends-visible mirror) from `GET /decklists`, grouped into a "My
+    decks" `<optgroup>` and one further `<optgroup>` per friend who has at
+    least one friends-visible deck, labeled "`{friend}`'s decks" -- the same
+    grouping/omission rules `#decks-friends-list` uses. Its default option
+    reads "Paste/upload a decklist instead" and selecting anything else
+    hides `#new-game-decklist-paste-fields` (the file/textarea pair,
+    `updateDeckTypeDescription()`), since the two inputs are mutually
+    exclusive -- submitting sends `saved_decklist_id` instead of
+    `decklist_text` once a saved deck is picked, and the paste fields are
+    simply not read.
     `updateDeckTypeAvailability()` **hides** (`option.hidden`, not merely
     `option.disabled`) whichever deck-type options don't make sense for
     the currently-selected format -- so the dropdown only ever *lists*
@@ -636,9 +650,18 @@ too, proportional to the smaller card width.
     player's submission status (`state.players[].deck_submitted` --
     never the decklist contents themselves, so neither player can see the
     other's decklist before the game starts), and, if the viewer hasn't
-    submitted yet, the same file-upload/paste form the Traditional
-    `custom` deck_type uses in the New Game dialog, wired to
-    `POST /games/decklist` instead of `POST /games`. "Start game" itself
+    submitted yet, the same saved-deck dropdown/file-upload/paste form the
+    Traditional `custom` deck_type uses in the New Game dialog --
+    `#duel-deck-submit-saved-decklist` (populated the first time this
+    section renders for the current game, via the same
+    `populateSavedDecklistSelect()` helper, guarded by a
+    `duelSavedDecklistSelectPopulated` flag so it's only fetched once per
+    game view rather than on every 4-second board poll) hides
+    `#duel-deck-submit-paste-fields` once a saved deck is picked, the same
+    way the New Game dialog's own dropdown does -- wired to
+    `POST /games/decklist` instead of `POST /games`, sending
+    `saved_decklist_id` instead of `decklist_text` when a saved deck was
+    selected. "Start game" itself
     stays hidden until every player's own `deck_submitted` is true, since
     the server would just reject starting otherwise. Once a `custom_duel`
     game is actually in progress, each player's own row in the Players
@@ -809,7 +832,22 @@ too, proportional to the smaller card width.
       favor of a status line ("waiting for your opponent's deck" or "both
       decks are in"). "Start game" itself stays hidden until
       `deckBuilding.you_submitted` AND
-      `.opponent_submitted` are both true. Pool/pack/drafted cards are all
+      `.opponent_submitted` are both true. A `#draft-deck-save-button`
+      ("Save deck…", issue #92) sits right before the Submit button,
+      sharing its own min/max-size disabled check
+      (`renderDraftDeckBuilding()` mirrors the two buttons' `disabled`
+      state) -- it opens a small `#draft-deck-save-dialog` (name input, a
+      "Share with friends" checkbox) that, unlike Submit, never touches
+      `GameService`/match state at all: the frontend already knows the
+      current selection's resolved card ids client-side, so its submit
+      handler derives `deckCardIds` from the same `draftDeckSelection`
+      Set the picker itself uses and `sideboardCardIds` as its complement
+      -- every drafted card that *isn't* in the current selection --
+      and posts both straight to `POST /decklists` (`createDecklist()`),
+      saving a personal copy of the in-progress build under its own name
+      without submitting it, ending the deck-building step, or being
+      visible to the opponent. See "Saved decklists" in
+      `php-app/README.md`. Pool/pack/drafted cards are all
       served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
       rather than the usual in-play `serializeCard()` result, but with the
       exact same field names `buildCardThumb()`/`openCardDetail()` already
@@ -1429,6 +1467,39 @@ too, proportional to the smaller card width.
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
     talks to the `/friends/*` endpoints.
+  - A "Decks" button (`#decks-button`, issue #92) opens `#decks-dialog` for
+    managing saved decklists -- letting a player build up a personal
+    library of decks instead of re-pasting/re-uploading the same text
+    every time they start a `custom`/`custom_duel` game. A create/edit
+    form (`#decks-form`) takes a name, a "Share with friends" checkbox
+    (`#decks-form-friends-visible` -- the only visibility choice; there's
+    no third all-users-public tier, see "Saved decklists" in
+    `php-app/README.md`), and the deck's own cards via the exact same
+    file-upload-into-textarea pattern (`#decks-form-file`/
+    `#decks-form-text`) the New Game dialog's Custom Decklist fields and
+    the `custom_duel` waiting room already use. `refreshDecksData()`
+    (`GET /decklists`) renders two lists: "Your decks"
+    (`#decks-own-list`), each row with View/Edit/Delete actions, and
+    "Friends' decks" (`#decks-friends-list`), grouped into one section per
+    friend who actually has at least one friends-visible deck (a friend
+    with none is omitted entirely, not shown with an empty section) and
+    labeled with that friend's own username, each row View-only -- a
+    friend's saved deck can be looked at and used, never edited or
+    deleted by anyone but its owner. "Edit" (`startEditingDeck()`)
+    populates the form from that deck's own summary and stashes its full
+    card ids/sideboard card ids client-side so a pure rename or
+    visibility toggle doesn't require re-uploading the decklist text --
+    the form's submit handler only re-parses `#decks-form-text` when it's
+    non-empty, otherwise reusing the stashed ids, and a hidden
+    `#decks-form-id` field is what decides whether submitting calls
+    `POST /decklists` (create) or `POST /decklists/update` (edit) in the
+    first place. "View" (`openDeckView()`) opens a separate small
+    `#deck-view-dialog` showing the deck's name/visibility and its full
+    contents as two card-thumb grids (main deck, and a sideboard grid
+    only shown when the deck actually has one) -- reusing
+    `buildCardThumb()`/`openCardDetail()`, the same helpers every other
+    card grid in this app already uses, so a saved deck's cards are just
+    as clickable-for-detail as an in-game hand or draft pool.
   - That same button gets a small red notification dot
     (`.has-friend-request`, applied/removed by
     `setFriendRequestNotification()`) whenever `/friends/invites` returns

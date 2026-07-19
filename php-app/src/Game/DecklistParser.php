@@ -26,8 +26,8 @@ use MoodSwings\Game\Exceptions\GameStateException;
  *                                 leading count means one copy
  *                             <- blank line ends the main deck
  *   Sideboard                 <- optional header line, itself not a card
- *   1 Discipline               <- sideboard lines are parsed no further,
- *                                 just discarded (a future feature)
+ *   1 Discipline               <- sideboard lines, captured separately
+ *                                 into sideboardCardIds (issue #92)
  */
 final class DecklistParser
 {
@@ -37,7 +37,7 @@ final class DecklistParser
     }
 
     /**
-     * @return array{name: ?string, cardIds: int[]}
+     * @return array{name: ?string, cardIds: int[], sideboardCardIds: int[]}
      */
     public function parse(string $text): array
     {
@@ -66,15 +66,40 @@ final class DecklistParser
             $index++;
         }
 
+        $cardIds = $this->parseCardLines($mainLines, 'decklist');
+        if ($cardIds === []) {
+            throw new GameStateException('The decklist has no cards in it.');
+        }
+
+        // Everything after the main deck's own trailing blank line: an
+        // optional literal 'Sideboard' header (itself not a card), then
+        // more card lines in the exact same format as the main deck.
+        if ($index < $count && trim($lines[$index]) === '') {
+            $index++;
+        }
+        if ($index < $count && strcasecmp(trim($lines[$index]), 'Sideboard') === 0) {
+            $index++;
+        }
+        $sideboardCardIds = $this->parseCardLines(array_slice($lines, $index), 'sideboard');
+
+        return ['name' => $name, 'cardIds' => $cardIds, 'sideboardCardIds' => $sideboardCardIds];
+    }
+
+    /**
+     * @param string[] $lines
+     * @return int[]
+     */
+    private function parseCardLines(array $lines, string $sectionLabel): array
+    {
         $cardIds = [];
-        foreach ($mainLines as $lineNumber => $line) {
+        foreach ($lines as $lineNumber => $line) {
             $trimmed = trim($line);
             if ($trimmed === '' || strcasecmp($trimmed, 'Sideboard') === 0) {
                 continue;
             }
 
             if (!preg_match('/^(?:(\d+)\s+)?(.+?)(?:\s+\(([^)]+)\))?(?:\s+(\d+))?$/', $trimmed, $matches)) {
-                throw new GameStateException("Couldn't understand decklist line " . ($lineNumber + 1) . ": \"{$trimmed}\"");
+                throw new GameStateException("Couldn't understand {$sectionLabel} line " . ($lineNumber + 1) . ": \"{$trimmed}\"");
             }
 
             $copies = $matches[1] !== '' ? (int) $matches[1] : 1;
@@ -82,7 +107,7 @@ final class DecklistParser
             $catalogId = $this->catalogIdsByName[mb_strtolower($cardName)] ?? null;
 
             if ($catalogId === null) {
-                throw new GameStateException("Unrecognized card \"{$cardName}\" on decklist line " . ($lineNumber + 1) . '.');
+                throw new GameStateException("Unrecognized card \"{$cardName}\" on {$sectionLabel} line " . ($lineNumber + 1) . '.');
             }
 
             for ($i = 0; $i < $copies; $i++) {
@@ -90,10 +115,6 @@ final class DecklistParser
             }
         }
 
-        if ($cardIds === []) {
-            throw new GameStateException('The decklist has no cards in it.');
-        }
-
-        return ['name' => $name, 'cardIds' => $cardIds];
+        return $cardIds;
     }
 }

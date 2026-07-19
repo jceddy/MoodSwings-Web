@@ -12,6 +12,10 @@ use MoodSwings\Auth\InvalidCredentialsException;
 use MoodSwings\Auth\InvalidVerificationTokenException;
 use MoodSwings\Config;
 use MoodSwings\Database\Connection;
+use MoodSwings\Deck\DecklistNotFoundException;
+use MoodSwings\Deck\DecklistValidationException;
+use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
+use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Friends\CannotFriendSelfException;
 use MoodSwings\Friends\FriendshipAlreadyExistsException;
 use MoodSwings\Friends\FriendshipNotFoundException;
@@ -26,6 +30,7 @@ use MoodSwings\Maintenance\MaintenanceGate;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\SessionRepository;
+use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\EffectNotImplementedException;
@@ -398,8 +403,85 @@ if ($path === '/friends/remove' && $method === 'POST') {
     }
 }
 
+$userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships);
+
+if ($path === '/decklists' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', ...$userDecklists->listForViewer((int) $currentUser['id'])]);
+}
+
+if ($path === '/decklists/view' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $id = (int) ($_GET['id'] ?? 0);
+
+    try {
+        respond(200, ['status' => 'ok', 'decklist' => $userDecklists->view((int) $currentUser['id'], $id)]);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/decklists' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $id = $userDecklists->create(
+            (int) $currentUser['id'],
+            (string) ($body['name'] ?? ''),
+            isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
+            isset($body['card_ids']) ? array_map(intval(...), (array) $body['card_ids']) : null,
+            isset($body['sideboard_card_ids']) ? array_map(intval(...), (array) $body['sideboard_card_ids']) : null,
+            (string) ($body['visibility'] ?? 'private'),
+        );
+        respond(201, ['status' => 'ok', 'decklist_id' => $id]);
+    } catch (DecklistValidationException | \InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/decklists/update' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $userDecklists->update(
+            (int) $currentUser['id'],
+            (int) ($body['id'] ?? 0),
+            (string) ($body['name'] ?? ''),
+            isset($body['decklist_text']) ? (string) $body['decklist_text'] : null,
+            isset($body['card_ids']) ? array_map(intval(...), (array) $body['card_ids']) : null,
+            isset($body['sideboard_card_ids']) ? array_map(intval(...), (array) $body['sideboard_card_ids']) : null,
+            (string) ($body['visibility'] ?? 'private'),
+        );
+        respond(200, ['status' => 'ok']);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (DecklistValidationException | \InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/decklists/delete' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    try {
+        $userDecklists->delete((int) $currentUser['id'], (int) ($body['id'] ?? 0));
+        respond(200, ['status' => 'ok', 'message' => 'Deck deleted.']);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 $gameRegistry = DefaultEffectRegistry::build();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer());
+$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists);
 
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
@@ -446,6 +528,10 @@ if ($path === '/games' && $method === 'POST') {
     // Only meaningful for deck_type 'grid_draft' -- see createGame()'s own docblock.
     $gridDraftPoolSource = isset($body['grid_draft_pool_source']) ? (string) $body['grid_draft_pool_source'] : null;
     $gridDraftCustomPoolText = isset($body['grid_draft_custom_pool_text']) ? (string) $body['grid_draft_custom_pool_text'] : null;
+    // Only meaningful for deck_type 'custom' -- an alternative to
+    // decklist_text, loading a previously-saved decklist (issue #92)
+    // instead of parsing freshly-pasted/uploaded text.
+    $savedDecklistId = isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null;
 
     try {
         $gameId = $games->createGame(
@@ -463,10 +549,15 @@ if ($path === '/games' && $method === 'POST') {
             $winstonDraftCustomPoolText,
             $gridDraftPoolSource,
             $gridDraftCustomPoolText,
+            $savedDecklistId,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (\PDOException $e) {
         respond(400, ['status' => 'error', 'message' => 'One or more opponents could not be found.']);
     }
@@ -476,15 +567,22 @@ if ($path === '/games/decklist' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
     $gameId = (int) ($body['game_id'] ?? 0);
-    $decklistText = (string) ($body['decklist_text'] ?? '');
+    $decklistText = isset($body['decklist_text']) ? (string) $body['decklist_text'] : null;
+    // An alternative to decklist_text, loading a previously-saved decklist
+    // (issue #92) instead of parsing freshly-pasted/uploaded text.
+    $savedDecklistId = isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null;
 
     $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
 
     try {
-        $games->submitCustomDuelDeck($gameId, $gamePlayerId, $decklistText);
+        $games->submitCustomDuelDeck($gameId, $gamePlayerId, $decklistText, $savedDecklistId);
         respond(200, ['status' => 'ok']);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (DecklistNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (NotAuthorizedToAccessDecklistException $e) {
+        respond(403, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 

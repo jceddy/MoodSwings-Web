@@ -4,9 +4,15 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests\Game;
 
+use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
+use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
+use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\UserDecklistRepository;
+use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
@@ -56,6 +62,8 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE game_rounds');
         $pdo->exec('TRUNCATE TABLE game_players');
         $pdo->exec('TRUNCATE TABLE games');
+        $pdo->exec('TRUNCATE TABLE user_decklists');
+        $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -68,10 +76,15 @@ final class GameServiceIntegrationTest extends TestCase
         $this->pdo = $pdo;
 
         $registry = DefaultEffectRegistry::build();
+        $userDecklists = new UserDecklistService(
+            new UserDecklistRepository(),
+            new FriendshipService(new UserRepository(), new FriendshipRepository()),
+        );
         $this->games = new GameService(
             new BoardStateRepository($registry),
             new MoodPlayService($registry),
             new RoundScorer(),
+            $userDecklists,
         );
     }
 
@@ -92,6 +105,22 @@ final class GameServiceIntegrationTest extends TestCase
         $stmt->execute(['id' => $userId]);
 
         return (string) $stmt->fetchColumn();
+    }
+
+    /** @param int[] $cardIds */
+    private function insertSavedDecklist(int $userId, string $name, array $cardIds, string $visibility = 'private'): int
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO user_decklists (user_id, name, card_ids, visibility) VALUES (:user_id, :name, :card_ids, :visibility)'
+        );
+        $stmt->execute([
+            'user_id' => $userId,
+            'name' => $name,
+            'card_ids' => json_encode($cardIds),
+            'visibility' => $visibility,
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
     }
 
     /** @return int game_players.id */
@@ -445,6 +474,46 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->createGame($creator, [$creator, $bob], deckType: 'custom');
     }
 
+    public function testCreateGameWithSavedDecklistIdUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('saved-deck-alice');
+        $bob = $this->insertUser('saved-deck-bob');
+        $decklistId = $this->insertSavedDecklist($creator, 'My Saved Deck', range(1, 15));
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', savedDecklistId: $decklistId);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('custom', $game['deck_type']);
+        self::assertSame('My Saved Deck', $game['custom_deck_name']);
+        self::assertSame(range(1, 15), array_map(intval(...), json_decode($game['custom_deck_card_ids'], true)));
+    }
+
+    public function testCreateGameWithSavedDecklistEnforcesMinimumCardCount(): void
+    {
+        $creator = $this->insertUser('saved-deck-few-alice');
+        $bob = $this->insertUser('saved-deck-few-bob');
+        $carol = $this->insertUser('saved-deck-few-carol');
+        // 3 players need at least 30 cards -- this saved deck only has 15.
+        $decklistId = $this->insertSavedDecklist($creator, 'Too Small', range(1, 15));
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 30 are required for 3 players');
+
+        $this->games->createGame($creator, [$creator, $bob, $carol], deckType: 'custom', savedDecklistId: $decklistId);
+    }
+
+    public function testCreateGameRejectsSavedDecklistNotOwnedOrShared(): void
+    {
+        $owner = $this->insertUser('saved-deck-owner');
+        $creator = $this->insertUser('saved-deck-stranger');
+        $bob = $this->insertUser('saved-deck-stranger-bob');
+        $decklistId = $this->insertSavedDecklist($owner, 'Not Yours', range(1, 15));
+
+        $this->expectException(NotAuthorizedToAccessDecklistException::class);
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', savedDecklistId: $decklistId);
+    }
+
     public function testGetStateExposesTheCustomDeckName(): void
     {
         $creator = $this->insertUser('custom-state-alice');
@@ -667,6 +736,32 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectExceptionMessage('is not seated');
 
         $this->games->submitCustomDuelDeck($gameId, $outsider, '1 Charity');
+    }
+
+    public function testSubmitCustomDuelDeckWithSavedDecklistId(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1] = $this->buildCustomDuelFixture(minCards: 7);
+        $decklistId = $this->insertSavedDecklist($u1, 'My Duel Deck', [3, 4, 5, 6, 7, 8, 9]);
+
+        $this->games->submitCustomDuelDeck($gameId, $p1, null, savedDecklistId: $decklistId);
+
+        $p1Row = $this->pdo->prepare('SELECT custom_deck_name, custom_deck_card_ids FROM game_players WHERE id = :id');
+        $p1Row->execute(['id' => $p1]);
+        $row = $p1Row->fetch();
+        self::assertSame('My Duel Deck', $row['custom_deck_name']);
+        self::assertSame([3, 4, 5, 6, 7, 8, 9], array_map(intval(...), json_decode($row['custom_deck_card_ids'], true)));
+    }
+
+    public function testSubmitCustomDuelDeckWithSavedDecklistStillValidatesAgainstDuelRules(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1] = $this->buildCustomDuelFixture(minCards: 10);
+        // Only 2 cards -- below this game's own 10-card minimum.
+        $decklistId = $this->insertSavedDecklist($u1, 'Too Small', [3, 4]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('has only 2 card(s), but at least 10 are required');
+
+        $this->games->submitCustomDuelDeck($gameId, $p1, null, savedDecklistId: $decklistId);
     }
 
     public function testStartGameRejectsACustomDuelGameUntilBothPlayersHaveSubmittedADeck(): void
@@ -5758,6 +5853,10 @@ final class GameServiceIntegrationTest extends TestCase
             new BoardStateRepository($registry),
             new MoodPlayService($registry),
             new RoundScorer(),
+            new UserDecklistService(
+                new UserDecklistRepository(),
+                new FriendshipService(new UserRepository(), new FriendshipRepository()),
+            ),
             1, // seconds -- short so this test doesn't wait out the real 10s default
         );
 
