@@ -1421,35 +1421,43 @@
     // Splits a describeEvent()-rendered description on its own '; '
     // segment separator (see GameService::describeEvent()'s own
     // docblock -- every additional card move/ownership change/draw/grant
-    // it records gets appended that way) into a bulleted list headed by
-    // the first segment, e.g. Malice's own cascade reads as:
-    //   • Alice played Malice (targeting Bob)
-    //   • Charity moved from Bob's hand to Alice's hand
+    // it records gets appended that way) into one line per segment, e.g.
+    // Malice's own cascade reads as two separate lines:
+    //   Alice played Malice (targeting Bob)
+    //   Charity moved from Bob's hand to Alice's hand
     // A single-segment description (the common case -- most events are
-    // just "{actor} played {card}" with nothing else worth listing)
-    // renders as plain text instead, since a one-item bulleted list would
-    // just be visual noise.
+    // just "{actor} played {card}" with nothing else worth listing) is
+    // just that one line, with no grouping box around it. A multi-segment
+    // description gets wrapped in its own dotted-border box (see
+    // .game-log-entry-group in style.css) instead of a bulleted list --
+    // bullets read as a flat, unordered set, which is misleading here
+    // since these lines are really just several consequences of the SAME
+    // one play, in the order they happened, not a set of unrelated items.
     function buildLogEntryContent(description) {
         const parts = description.split('; ');
         if (parts.length <= 1) {
-            return document.createTextNode(description);
+            const line = document.createElement('div');
+            line.textContent = description;
+            return line;
         }
-        const ul = document.createElement('ul');
+        const group = document.createElement('div');
+        group.className = 'game-log-entry-group';
         parts.forEach((part) => {
-            const li = document.createElement('li');
-            li.textContent = part;
-            ul.appendChild(li);
+            const line = document.createElement('div');
+            line.textContent = part;
+            group.appendChild(line);
         });
-        return ul;
+        return group;
     }
 
     // Plain-text rendering of one event for the copy/download-text
-    // buttons below -- the same "bulleted list headed by the first item"
-    // treatment buildLogEntryContent() gives a multi-segment description
-    // on screen, just as '- '-prefixed lines instead of an actual <ul>.
+    // buttons below -- the same segments buildLogEntryContent() renders
+    // as separate lines on screen, joined the same way here: one line per
+    // segment, no bullet marker. Consecutive events are already separated
+    // by a blank line (see gameLogAsText() below), which is the "insert a
+    // newline between groups" grouping cue for the plain-text output.
     function formatLogEntryAsText(event) {
-        const parts = event.description.split('; ');
-        return parts.length <= 1 ? parts[0] : parts.map((part) => '- ' + part).join('\n');
+        return event.description.split('; ').join('\n');
     }
 
     function gameLogAsText() {

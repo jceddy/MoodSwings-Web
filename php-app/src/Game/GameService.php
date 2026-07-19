@@ -2553,7 +2553,27 @@ final class GameService
                 // this used to, right after the UPDATE above) would always
                 // log an empty move list, since none of these moves have
                 // happened yet at that point.
-                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices, $state);
+                //
+                // 'initiating_game_player_id' rides along in $details
+                // purely so describeEvent()'s own grants_created/grants_lost
+                // segments can attribute a grant to the right player --
+                // this event's own acting_game_player_id is $gamePlayerId,
+                // the RESPONDER (e.g. Intimidation's target, who just
+                // revealed a card), but any grant a card like Intimidation
+                // creates here always belongs to whoever's turn is actually
+                // active (the player who played the card in the first
+                // place), which is $initiatingPlayerId, not the responder --
+                // see describeEvent()'s own docblock for why $actor alone
+                // isn't a safe default for this one event type.
+                $this->logEvent(
+                    $gameId,
+                    $roundId,
+                    $gamePlayerId,
+                    'pending_decision_resolved',
+                    $playedCardId,
+                    [...$choices, 'initiating_game_player_id' => $initiatingPlayerId],
+                    $state,
+                );
 
                 if ($result->isPending) {
                     // Resolving the last decision uncovered another one --
@@ -5701,14 +5721,26 @@ final class GameService
         // this event -- source/restriction/zone, via the same
         // describeGrantDetails() wording a just-used grant gets above and
         // an outstanding one gets in round.play_grants (see
-        // describePlayGrant()). Attributed to $actor: grantExtraPlay()
-        // always grants to whoever's turn is currently active, which is
-        // always the same player this event's own acting_game_player_id
-        // already names (see $pendingGrantsCreated's own docblock).
+        // describePlayGrant()). Attributed to $grantRecipient rather than
+        // $actor: grantExtraPlay() always grants to whoever's turn is
+        // currently active, which for most event types IS the same player
+        // acting_game_player_id already names -- EXCEPT
+        // 'pending_decision_resolved', whose own acting_game_player_id is
+        // the RESPONDER (e.g. Intimidation's target, who reveals a card),
+        // not the player whose turn it actually is. respondToDecision()
+        // threads the real turn-owner through as
+        // $details['initiating_game_player_id'] specifically so this stays
+        // correct for that one event type -- see its own call site's
+        // docblock. Falls back to $actor for every other event type, where
+        // that key is never set and $actor is already right.
+        $grantRecipient = isset($details['initiating_game_player_id'])
+            ? ($playerNames[(int) $details['initiating_game_player_id']] ?? 'A player')
+            : $actor;
+
         $grantsCreated = $details['grants_created'] ?? [];
         if ($grantsCreated !== []) {
             $grantParts = array_map(
-                fn (?array $restriction) => "{$actor} was granted " . $this->describeGrantDetails($restriction ?? [], $cardNames),
+                fn (?array $restriction) => "{$grantRecipient} was granted " . $this->describeGrantDetails($restriction ?? [], $cardNames),
                 $grantsCreated,
             );
             $description .= '; ' . implode('; ', $grantParts);
@@ -5717,18 +5749,15 @@ final class GameService
         // Every 'requiresSourceInPlay' grant BoardState::consumeGrantsLost()
         // recorded as orphaned by this event -- Hope's/Grace's own bonus,
         // never used, because the specific card that created it just left
-        // play (see grantIsActive()'s own docblock). Attributed to $actor
-        // for the same reason $grantsCreated above is: $playGrants only
-        // ever holds whoever's turn is currently active, so the player
-        // whose own move triggered the card leaving play is always the
-        // same one the lost grant belonged to. Surfaced explicitly here
-        // (rather than leaving players to infer it from plays_remaining
-        // quietly dropping by one) so there's no confusion later about
-        // where an expected extra play went.
+        // play (see grantIsActive()'s own docblock). Attributed to
+        // $grantRecipient for the same reason $grantsCreated above is.
+        // Surfaced explicitly here (rather than leaving players to infer
+        // it from plays_remaining quietly dropping by one) so there's no
+        // confusion later about where an expected extra play went.
         $grantsLost = $details['grants_lost'] ?? [];
         if ($grantsLost !== []) {
             $lostParts = array_map(
-                fn (array $restriction) => "{$actor} lost " . $this->describeGrantDetails($restriction, $cardNames) . ' -- its source left play before it was used',
+                fn (array $restriction) => "{$grantRecipient} lost " . $this->describeGrantDetails($restriction, $cardNames) . ' -- its source left play before it was used',
                 $grantsLost,
             );
             $description .= '; ' . implode('; ', $lostParts);
@@ -5853,7 +5882,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger', 'initiating_game_player_id'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 

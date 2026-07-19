@@ -949,14 +949,20 @@ dialog#game-log-dialog[open] {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
-/* The bulleted sub-list a multi-segment description renders as (see
-   buildLogEntryContent() in game.js) -- indented and using an actual
-   disc bullet so it reads as a breakdown of its own parent entry, rather
-   than a run of same-level list items. */
-#game-log-list > li ul {
-    list-style: disc;
-    margin: 0.3rem 0 0;
-    padding-left: 1.25rem;
+/* The grouping box a multi-segment description renders as (see
+   buildLogEntryContent() in game.js) -- every line inside it is a
+   consequence of the SAME one play, in the order it happened, so a
+   dotted border around the whole group reads as "these lines belong
+   together" without implying they're an unordered set the way a
+   bulleted list would. */
+#game-log-list > li .game-log-entry-group {
+    border: 1px dotted var(--color-border);
+    border-radius: 0.25rem;
+    padding: 0.35rem 0.5rem;
+}
+
+#game-log-list > li .game-log-entry-group > div + div {
+    margin-top: 0.25rem;
 }
 
 .card-detail-art {
