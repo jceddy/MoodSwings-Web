@@ -38,6 +38,49 @@
         return button;
     }
 
+    // Icon set for the Decks dialog's per-row View/Edit/Duplicate/
+    // Download/Delete buttons (issue #92 follow-ups) -- separate from
+    // PLAYER_STAT_ICON_PATHS below since these live inside an actual
+    // <button> rather than the players list's own icon+badge convention,
+    // and don't need a badge overlay. Standard Material Design glyphs
+    // (Apache-2.0), reused verbatim since "an eye"/"a pencil"/"two
+    // overlapping sheets"/"a tray with a down arrow"/"a trash can" are
+    // about as generic as icons get.
+    const ACTION_ICON_PATHS = {
+        view: '<path fill-rule="evenodd" d="M12,4.5C7,4.5,2.73,7.61,1,12c1.73,4.39,6,7.5,11,7.5s9.27-3.11,11-7.5' +
+            'C21.27,7.61,17,4.5,12,4.5z M12,17c-2.76,0-5-2.24-5-5s2.24-5,5-5s5,2.24,5,5S14.76,17,12,17z ' +
+            'M12,9c-1.66,0-3,1.34-3,3s1.34,3,3,3s3-1.34,3-3S13.66,9,12,9z"/>',
+        edit: '<path d="M3,17.25V21h3.75L17.81,9.94l-3.75-3.75L3,17.25z M20.71,7.04c0.39-0.39,0.39-1.02,0-1.41' +
+            'l-2.34-2.34c-0.39-0.39-1.02-0.39-1.41,0l-1.83,1.83l3.75,3.75L20.71,7.04z"/>',
+        duplicate: '<path fill-rule="evenodd" d="M16,1H4C2.9,1,2,1.9,2,3v14h2V3h12V1z ' +
+            'M19,5H8C6.9,5,6,5.9,6,7v14c0,1.1,0.9,2,2,2h11c1.1,0,2-0.9,2-2V7C21,5.9,20.1,5,19,5z ' +
+            'M19,21H8V7h11V21z"/>',
+        download: '<path d="M19,9h-4V3H9v6H5l7,7L19,9z M5,18v2h14v-2H5z"/>',
+        delete: '<path d="M6,7h12l-1.06,13.19C16.85,21.19,16,22,15,22H9c-1,0-1.85-0.81-1.94-1.81L6,7z ' +
+            'M9.5,4h5l1,2h4v2H4V6h4L9.5,4z"/>',
+    };
+
+    function buildActionIcon(kind) {
+        const template = document.createElement('template');
+        template.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + ACTION_ICON_PATHS[kind] + '</svg>';
+        return template.content.firstChild;
+    }
+
+    // Same icon+tooltip/aria-label treatment as buildPlayerFlag() (title
+    // AND aria-label both carry the full word, so a screen reader or a
+    // sighted user hovering the button still gets "View"/"Edit"/"Delete"
+    // even though the button's own visible label is now just an icon).
+    function iconActionButton(kind, label, onClick) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'icon-action-button icon-action-button--' + kind;
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.appendChild(buildActionIcon(kind));
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
     // Populates a "use a saved deck" <select> (issue #92) with an
     // <optgroup> for "My decks" and one per friend who has 1+
     // friends-visible decks -- shared by the New Game dialog's own select
@@ -152,12 +195,12 @@
 
     // -- Decks dialog (issue #92) -------------------------------------------
     //
-    // Stashed by startEditingDeck() so a pure rename/visibility change
-    // during an edit doesn't require re-uploading/re-pasting the same
-    // content -- the form's own text field is left blank for an edit (the
-    // full decklist text isn't reconstructed from stored card ids), and an
-    // empty text field on submit falls back to these previously-fetched
-    // ids instead.
+    // Stashed by startEditingDeck() as a fallback for the rare case where
+    // the user clears the (now pre-populated, see buildDecklistText()
+    // below) text field entirely and submits anyway, intending a pure
+    // rename/visibility change without retyping the cards -- an empty
+    // text field on submit falls back to these previously-fetched ids
+    // instead of failing with "no cards in it."
     let editingDeckCardIds = null;
     let editingDeckSideboardCardIds = null;
 
@@ -176,6 +219,49 @@
         editingDeckSideboardCardIds = null;
     }
 
+    // One line per distinct card in DecklistParser's own accepted format
+    // ("1 Name (SET) NUMBER", see php-app/README.md "Saved decklists") --
+    // NUMBER is card.collector_number, a real per-printing field (see
+    // migration 0039), not just the card's own catalog id like before.
+    // Copies of the same card_id are collapsed into one counted line, in
+    // first-seen order, rather than one line per copy -- reads the same
+    // way a hand-typed decklist would.
+    function formatDecklistCardLines(cards) {
+        const groups = [];
+        const indexByCardId = new Map();
+        for (const card of cards) {
+            if (indexByCardId.has(card.card_id)) {
+                groups[indexByCardId.get(card.card_id)].count++;
+            } else {
+                indexByCardId.set(card.card_id, groups.length);
+                groups.push({ card, count: 1 });
+            }
+        }
+        return groups.map(({ card, count }) => `${count} ${card.name} (${card.set_code}) ${card.collector_number}`);
+    }
+
+    // Just the card lines (main deck, optional Sideboard section) with no
+    // About/Name header -- shared by buildDecklistText() below and
+    // duplicateDeck(), which deliberately omits the header (see there for
+    // why).
+    function buildDecklistCardsText(deck) {
+        const lines = [...formatDecklistCardLines(deck.cards)];
+        if (deck.sideboard_cards.length > 0) {
+            lines.push('', 'Sideboard', ...formatDecklistCardLines(deck.sideboard_cards));
+        }
+        return lines.join('\n');
+    }
+
+    // Reconstructs a saved deck's own decklist text in the exact format
+    // startEditingDeck() below populates #decks-form-text with (and
+    // downloadDeck() saves to a .txt file in) -- so editing a deck's
+    // cards works the same way creating one does (type/paste something
+    // readable) instead of leaving the field blank and silently reusing
+    // whatever ids were last saved.
+    function buildDecklistText(deck) {
+        return 'About\nName ' + deck.name + '\n\n' + buildDecklistCardsText(deck);
+    }
+
     async function startEditingDeck(id) {
         const { ok, body } = await viewDecklist(id);
         if (!ok) {
@@ -187,7 +273,7 @@
         document.getElementById('decks-form-id').value = deck.id;
         document.getElementById('decks-form-name').value = deck.name;
         document.getElementById('decks-form-file').value = '';
-        document.getElementById('decks-form-text').value = '';
+        document.getElementById('decks-form-text').value = buildDecklistText(deck);
         document.getElementById('decks-form-friends-visible').checked = deck.visibility === 'friends';
         document.getElementById('decks-form-submit-button').textContent = 'Update deck';
         document.getElementById('decks-form-cancel-edit-button').hidden = false;
@@ -195,6 +281,44 @@
         document.getElementById('decks-form-success').hidden = true;
         editingDeckCardIds = deck.cards.map((card) => card.card_id);
         editingDeckSideboardCardIds = deck.sideboard_cards.map((card) => card.card_id);
+    }
+
+    // Pre-fills the create form with an existing deck's cards under a
+    // blank name, ready to save as a brand new deck -- resetDecksForm()
+    // gets the id/title/submit-button-label/visibility-checkbox back to
+    // "new deck" state first, then the text field is overwritten with
+    // just the card lines (buildDecklistCardsText(), not the full
+    // buildDecklistText() startEditingDeck() uses above) -- omitting the
+    // About/Name header here on purpose, since showing "Name <old deck's
+    // name>" in the pasted text while the visible Name field sits blank
+    // would read as a mismatch/bug rather than "type a new name."
+    async function duplicateDeck(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        resetDecksForm();
+        document.getElementById('decks-form-text').value = buildDecklistCardsText(deck);
+    }
+
+    // Saves a deck's decklist text (the exact same format/content
+    // startEditingDeck() above populates #decks-form-text with) to a
+    // local .txt file named after the deck -- reuses the generic
+    // downloadFile() helper (see below) the game log's own download
+    // button already established. Slashes are swapped for a dash since
+    // they're the one character a deck name could contain that would
+    // otherwise be misread as a path separator by the browser/filesystem
+    // rather than literal text.
+    async function downloadDeck(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        downloadFile(deck.name.replace(/[\\/]/g, '-') + '.txt', buildDecklistText(deck), 'text/plain');
     }
 
     async function openDeckView(id) {
@@ -253,9 +377,11 @@
                     li.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
                     li.append(' ');
                 }
-                li.appendChild(actionButton('View', () => openDeckView(deck.id)));
-                li.appendChild(actionButton('Edit', () => startEditingDeck(deck.id)));
-                li.appendChild(actionButton('Delete', () => deleteDeckAndRefresh(deck.id)));
+                li.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                li.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
+                li.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
+                li.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
+                li.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
                 return li;
             }
         );
@@ -274,7 +400,7 @@
                 li.append(deck.name + ' ');
                 li.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
                 li.append(' ');
-                li.appendChild(actionButton('View', () => openDeckView(deck.id)));
+                li.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
                 ul.appendChild(li);
             }
             friendsListEl.appendChild(ul);

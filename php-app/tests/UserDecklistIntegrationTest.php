@@ -88,6 +88,21 @@ final class UserDecklistIntegrationTest extends TestCase
         self::assertCount(2, $view['cards']);
     }
 
+    public function testViewIncludesSetCodeAndCollectorNumberOnEachCard(): void
+    {
+        $userId = $this->insertUser('alice');
+        $charityId = (int) $this->pdo->query("SELECT id FROM cards WHERE name = 'Charity'")->fetchColumn();
+
+        $id = $this->decklists->create($userId, 'My Deck', "1 Charity", null, null, 'private');
+
+        $view = $this->decklists->view($userId, $id);
+        self::assertSame('MSW', $view['cards'][0]['set_code']);
+        // Migration 0039 populates collector_number = card_id for the
+        // MSW printing (this custom game's own id order IS the
+        // collector-number order -- see that migration's own comment).
+        self::assertSame($charityId, $view['cards'][0]['collector_number']);
+    }
+
     public function testCreateFromCardIdsStoresDirectly(): void
     {
         $userId = $this->insertUser('alice');

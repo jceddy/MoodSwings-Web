@@ -119,7 +119,18 @@ half-migrated schema.
   column directly on `cards`, since a card is expected to eventually
   reappear in a later set (a reprint, a crossover product, etc.) even
   though every card belongs to exactly one Set today. Seeded once by the
-  migration itself, linking all 133 existing cards to `MSW`.
+  migration itself, linking all 133 existing cards to `MSW`. `0039` adds
+  `card_sets.collector_number` (a card's numbered position within one
+  specific printing — belongs on `card_sets` rather than `cards` for the
+  same reprint-safety reason the join table itself exists) — a saved
+  decklist's own decklist-text format (`"1 Name (SET) NUMBER"`, see
+  "Saved decklists" in `php-app/README.md`) reads NUMBER from here now,
+  rather than reusing a card's own `id` as a stand-in. Populated 1–133 in
+  `cards.id` order for the existing `MSW` printing, since this
+  from-scratch custom card game has no external canonical numbering to
+  defer to — `cards.id` order (already the art-file-naming authority, see
+  "Assets" in `web-static/README.md`) is simply promoted to also be the
+  collector-number order.
 - **Games** (`0004`): `games`, `game_players`, `game_rounds`,
   `game_round_scores`, `game_cards`, `game_events` — a played match, its
   seated players, its rounds and their scores, where every physical card
