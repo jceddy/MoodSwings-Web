@@ -252,21 +252,65 @@ dialog#decks-dialog li {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
-dialog#friends-dialog li button,
-dialog#decks-dialog li button {
+dialog#friends-dialog li button {
     margin-left: auto;
 }
 
-dialog#friends-dialog li button + button,
-dialog#decks-dialog li button + button {
+dialog#friends-dialog li button + button {
     margin-left: 0.25rem;
 }
 
-/* View/Edit/Delete on the Decks dialog's own rows (issue #92 follow-up)
-   -- a fixed square button just large enough for its icon, rather than
-   the width a text label like "Delete" would otherwise need, so three
-   of them in a row take up noticeably less horizontal space next to a
-   deck name that might already be wrapping onto 2 lines. */
+/* A Decks dialog row (issue #92 follow-up) is exactly two direct
+   children -- .decks-row-info (name + meta, grows to fill the leftover
+   space) and .decks-row-actions (right-justified against the row's own
+   right edge purely by .decks-row-info's flex-grow leaving it no other
+   place to sit -- unlike dialog#friends-dialog li above, no
+   margin-left: auto needed here). */
+.decks-row-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.decks-row-name {
+    font-weight: bold;
+}
+
+/* Card-count icon+badge (and, on the owner's own rows, the
+   friends-shared icon) on their own line under the name, rather than
+   crowding the same line -- left-justified, matching the name above
+   it, via flex's own default start-alignment. */
+.decks-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.decks-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+/* View/Edit stacked over Duplicate/Download (issue #92 follow-up) --
+   Delete itself lives outside this grid, as .decks-row-actions' own
+   second child, so it stands physically apart from the other four
+   rather than being a fifth grid cell a stray click could land on by
+   mistake reaching for one of them. */
+.decks-row-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    gap: 0.25rem;
+}
+
+/* A fixed square button just large enough for its icon, rather than the
+   width a text label like "Delete" would otherwise need, so the Decks
+   dialog's own action grid takes up noticeably less room than five
+   separate text buttons would next to a deck name that might already be
+   wrapping onto 2 lines. */
 .icon-action-button {
     display: inline-flex;
     align-items: center;
@@ -281,6 +325,10 @@ dialog#decks-dialog li button + button {
     width: 1.1rem;
     height: 1.1rem;
     fill: currentColor;
+}
+
+.icon-action-button--delete {
+    color: var(--color-error);
 }
 
 dialog#decks-dialog #decks-form label,

@@ -1491,43 +1491,23 @@ too, proportional to the smaller card width.
     `#decks-form-text`) the New Game dialog's Custom Decklist fields and
     the `custom_duel` waiting room already use. `refreshDecksData()`
     (`GET /decklists`) renders two lists: "Your decks"
-    (`#decks-own-list`), each row with View/Edit/Duplicate/Download/Delete
-    actions rendered as small square icon-only buttons
-    (`iconActionButton('view'/'edit'/'duplicate'/'download'/'delete',
-    label, onClick)`, an eye/pencil/two-overlapping-sheets/download-tray/
-    trash-can, standard Material Design glyphs reused verbatim in a new
-    `ACTION_ICON_PATHS` map alongside the existing
-    `PLAYER_STAT_ICON_PATHS` -- separate from it since these live inside
-    an actual `.icon-action-button` rather than the players list's own
-    icon+badge convention, and don't need a badge overlay) instead of
-    five separate text buttons, so they take up noticeably less
-    horizontal room next to a name that might already be wrapping onto 2
-    lines -- same `title`/`aria-label` treatment as every other icon on
-    this page, so "View"/"Edit"/"Duplicate"/"Download"/"Delete" are still
-    the button's accessible name for a screen reader (and Playwright's
-    own `getByRole('button', {name: 'View'})`-style lookups) even though
-    nothing on screen literally spells the word out anymore. "Friends'
-    decks" (`#decks-friends-list`) uses the same `view` icon button on
-    its own rows (View-only, see below). Every row's
-    name is followed by a card-count icon+badge
+    (`#decks-own-list`) and "Friends' decks" (`#decks-friends-list`).
+    Each `<li>` row is split into two flex children: a left,
+    flex-growing `.decks-row-info` (built by
+    `buildDeckRowInfo(deck, includeFriendsIcon)`, shared by both lists)
+    and a right, `flex-shrink: 0` `.decks-row-actions` holding that row's
+    buttons -- so the info column is free to wrap onto its own width
+    while the actions column stays put flush against the dialog's right
+    edge. `.decks-row-info` itself stacks two lines: `.decks-row-name`
+    (the deck's name, bold) above `.decks-row-meta`, a left-justified
+    row containing a card-count icon+badge
     (`buildPlayerStat('hand', deck.card_count, ...)`) rather than a plain
     "(N cards)" text clause -- reusing the exact same `.player-stat--hand`
     icon (two overlapping card portraits) the board's own players list
     already uses for hand size, since a saved deck and an in-hand card
     count are conceptually the same thing: a pile of cards with a size
-    worth badging rather than spelling out in words. `.player-stat`/
-    `.player-flag`'s shared rule carries `flex-shrink: 0` -- without it,
-    the icon (which has no natural min-content size of its own to resist
-    shrinking) gets squeezed below its specified `1.5rem` by
-    `dialog#decks-dialog li`'s own plain `display: flex` (no
-    `flex-wrap`, unlike `.player-icons` on the board, which wraps
-    overflow to a second line instead of shrinking it) whenever a row's
-    name text and buttons don't leave quite enough room -- and since how
-    much room is left over depends on the name's own length, two
-    otherwise-identical icons on two different rows would end up
-    rendering at visibly different sizes purely because their deck names
-    differ. A friends-visible
-    own deck's row also gets a small two-person icon right after that
+    worth badging rather than spelling out in words -- and, for a
+    friends-visible own deck, a small two-person icon right after that
     badge (`buildPlayerFlag('friendsShared', 'Shared with friends', ...)`,
     `.player-flag--friendsShared`, colored via the same `--color-info`
     blue already established for the lobby's own "in progress" status),
@@ -1535,11 +1515,62 @@ too, proportional to the smaller card width.
     own players list established for issue #143
     (`title`/`role="img"`/`aria-label` together mean a mouse-hover tooltip
     and a screen reader both still get the full "Shared with friends"
-    text even though nothing on screen literally spells it out anymore) --
-    this, and the card-count badge, replaced what used to be a plain
+    text even though nothing on screen literally spells it out anymore).
+    `buildDeckRowInfo()`'s `includeFriendsIcon` flag is `true` for
+    "Your decks" rows and `false` for "Friends' decks" rows, since every
+    deck shown there is already friends-visible by definition -- the icon
+    would be redundant. Putting the card-count/friends-shared icons on
+    their own line under the name (rather than trailing after it, or
+    after the action buttons) replaced what used to be a plain
     "(N cards, shared with friends)" text clause, since every own-deck row
     already carries an action button per column and the extra text made
-    rows harder to scan at a glance. A
+    rows harder to scan at a glance. `.player-stat`/`.player-flag`'s
+    shared rule carries `flex-shrink: 0` -- without it, the icon (which
+    has no natural min-content size of its own to resist shrinking) gets
+    squeezed below its specified `1.5rem` by `.decks-row-meta`'s own
+    plain `display: flex` (no `flex-wrap`, unlike `.player-icons` on the
+    board, which wraps overflow to a second line instead of shrinking
+    it) whenever a row's name text and buttons don't leave quite enough
+    room -- and since how much room is left over depends on the name's
+    own length, two otherwise-identical icons on two different rows
+    would end up rendering at visibly different sizes purely because
+    their deck names differ.
+
+    A "Your decks" row's `.decks-row-actions` holds
+    View/Edit/Duplicate/Download/Delete, all rendered as small square
+    icon-only buttons (`iconActionButton('view'/'edit'/'duplicate'/
+    'download'/'delete', label, onClick)`, an eye/pencil/
+    two-overlapping-sheets/download-tray/trash-can, standard Material
+    Design glyphs reused verbatim in a new `ACTION_ICON_PATHS` map
+    alongside the existing `PLAYER_STAT_ICON_PATHS` -- separate from it
+    since these live inside an actual `.icon-action-button` rather than
+    the players list's own icon+badge convention, and don't need a badge
+    overlay) instead of five separate text buttons, so they take up
+    noticeably less horizontal room next to a name that might already be
+    wrapping onto 2 lines -- same `title`/`aria-label` treatment as every
+    other icon on this page, so "View"/"Edit"/"Duplicate"/"Download"/
+    "Delete" are still the button's accessible name for a screen reader
+    (and Playwright's own `getByRole('button', {name: 'View'})`-style
+    lookups) even though nothing on screen literally spells the word out
+    anymore. The four non-destructive actions sit in a
+    `.decks-row-actions-grid` (a 2x2 CSS grid, `grid-template-columns:
+    repeat(2, auto)`: View/Edit on the top row, Duplicate/Download on the
+    bottom row, directly beneath their respective top-row counterpart),
+    with Delete rendered as `.decks-row-actions`'s own second flex child
+    -- a sibling of the grid rather than a fifth grid cell -- so the one
+    irreversible action is both visually set apart from, and (via the
+    flex row's own `align-items: center`) vertically centered against,
+    the compact 2x2 block of everything else, making an accidental
+    click while reaching for View/Edit/Duplicate/Download far less
+    likely to land on Delete instead. Delete's own icon is also colored
+    with `.icon-action-button--delete { color: var(--color-error) }`
+    (the `<svg>`'s `fill="currentColor"` means setting the button's own
+    `color` is enough, no separate `fill` override needed) -- the same
+    error-red already used for validation messages, distinguishing the
+    one irreversible action by color as well as by position. "Friends' decks"
+    (`#decks-friends-list`) rows are simpler: `.decks-row-actions` holds
+    just a lone `view` icon button (View-only, see below), with no grid
+    needed for a single button. A
     friend with no friends-visible decks is omitted entirely from
     "Friends' decks," not shown with an empty section, and each of that
     section's rows is labeled with that friend's own username and stays

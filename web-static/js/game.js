@@ -359,6 +359,33 @@
         await refreshDecksData();
     }
 
+    // Left-hand column of a Decks dialog row: the deck's name on its own
+    // line, with the card-count icon+badge (and, for the owner's own
+    // rows, the friends-shared icon) on a second line underneath rather
+    // than crowded onto the same line as the name -- includeFriendsIcon
+    // is false for friends' decks list rows, since every deck shown
+    // there is already friends-visible by definition, so the icon would
+    // be redundant on every single row.
+    function buildDeckRowInfo(deck, includeFriendsIcon) {
+        const info = document.createElement('div');
+        info.className = 'decks-row-info';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'decks-row-name';
+        nameEl.textContent = deck.name;
+        info.appendChild(nameEl);
+
+        const meta = document.createElement('div');
+        meta.className = 'decks-row-meta';
+        meta.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
+        if (includeFriendsIcon && deck.visibility === 'friends') {
+            meta.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
+        }
+        info.appendChild(meta);
+
+        return info;
+    }
+
     async function refreshDecksData() {
         const { ok, body } = await listDecklists();
         const own = ok ? body.own : [];
@@ -370,18 +397,27 @@
             own,
             (deck) => {
                 const li = document.createElement('li');
-                li.append(deck.name + ' ');
-                li.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
-                li.append(' ');
-                if (deck.visibility === 'friends') {
-                    li.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
-                    li.append(' ');
-                }
-                li.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
-                li.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
-                li.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
-                li.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
-                li.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
+                li.appendChild(buildDeckRowInfo(deck, true));
+
+                // Right-justified action section: View/Edit stacked over
+                // Duplicate/Download in a 2x2 grid, with Delete standing
+                // alone alongside it (vertically centered against the
+                // grid's own height via .decks-row-actions's own
+                // align-items: center) -- physically separated from the
+                // other four so a stray click aimed at one of them can't
+                // land on the one irreversible action in the row.
+                const actions = document.createElement('div');
+                actions.className = 'decks-row-actions';
+                const grid = document.createElement('div');
+                grid.className = 'decks-row-actions-grid';
+                grid.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                grid.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
+                grid.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
+                grid.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
+                actions.appendChild(grid);
+                actions.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
+                li.appendChild(actions);
+
                 return li;
             }
         );
@@ -397,10 +433,13 @@
             const ul = document.createElement('ul');
             for (const deck of friend.decklists) {
                 const li = document.createElement('li');
-                li.append(deck.name + ' ');
-                li.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
-                li.append(' ');
-                li.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                li.appendChild(buildDeckRowInfo(deck, false));
+
+                const actions = document.createElement('div');
+                actions.className = 'decks-row-actions';
+                actions.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                li.appendChild(actions);
+
                 ul.appendChild(li);
             }
             friendsListEl.appendChild(ul);
