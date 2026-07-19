@@ -1425,24 +1425,17 @@
     // Malice's own cascade reads as two separate lines:
     //   Alice played Malice (targeting Bob)
     //   Charity moved from Bob's hand to Alice's hand
-    // A single-segment description (the common case -- most events are
-    // just "{actor} played {card}" with nothing else worth listing) is
-    // just that one line, with no grouping box around it. A multi-segment
-    // description gets wrapped in its own dotted-border box (see
-    // .game-log-entry-group in style.css) instead of a bulleted list --
-    // bullets read as a flat, unordered set, which is misleading here
-    // since these lines are really just several consequences of the SAME
-    // one play, in the order they happened, not a set of unrelated items.
+    // Every description -- single-segment or multi-segment -- gets
+    // wrapped in the same dotted-border box (see .game-log-entry-group in
+    // style.css), so a plain one-line play lines up at the same width as
+    // a multi-line one instead of running edge-to-edge past it. Bullets
+    // aren't used for the multi-line case since these lines are really
+    // just several consequences of the SAME one play, in the order they
+    // happened, not a set of unrelated items.
     function buildLogEntryContent(description) {
-        const parts = description.split('; ');
-        if (parts.length <= 1) {
-            const line = document.createElement('div');
-            line.textContent = description;
-            return line;
-        }
         const group = document.createElement('div');
         group.className = 'game-log-entry-group';
-        parts.forEach((part) => {
+        description.split('; ').forEach((part) => {
             const line = document.createElement('div');
             line.textContent = part;
             group.appendChild(line);

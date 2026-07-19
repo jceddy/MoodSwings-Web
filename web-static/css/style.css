@@ -949,12 +949,14 @@ dialog#game-log-dialog[open] {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
-/* The grouping box a multi-segment description renders as (see
-   buildLogEntryContent() in game.js) -- every line inside it is a
-   consequence of the SAME one play, in the order it happened, so a
-   dotted border around the whole group reads as "these lines belong
-   together" without implying they're an unordered set the way a
-   bulleted list would. */
+/* The box every log entry renders inside (see buildLogEntryContent() in
+   game.js), one line per description segment -- applied uniformly, even
+   to single-line entries, so every entry lines up at the same width
+   instead of single-line ones running edge-to-edge past the boxed
+   multi-line ones. For a multi-line entry, the dotted border reads as
+   "these lines belong together" (they're all consequences of the SAME
+   one play, in the order it happened) without implying they're an
+   unordered set the way a bulleted list would. */
 #game-log-list > li .game-log-entry-group {
     border: 1px dotted var(--color-border);
     border-radius: 0.25rem;
