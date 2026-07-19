@@ -1562,7 +1562,12 @@ too, proportional to the smaller card width.
     flex row's own `align-items: center`) vertically centered against,
     the compact 2x2 block of everything else, making an accidental
     click while reaching for View/Edit/Duplicate/Download far less
-    likely to land on Delete instead. "Friends' decks"
+    likely to land on Delete instead. Delete's own icon is also colored
+    with `.icon-action-button--delete { color: var(--color-error) }`
+    (the `<svg>`'s `fill="currentColor"` means setting the button's own
+    `color` is enough, no separate `fill` override needed) -- the same
+    error-red already used for validation messages, distinguishing the
+    one irreversible action by color as well as by position. "Friends' decks"
     (`#decks-friends-list`) rows are simpler: `.decks-row-actions` holds
     just a lone `view` icon button (View-only, see below), with no grid
     needed for a single button. A

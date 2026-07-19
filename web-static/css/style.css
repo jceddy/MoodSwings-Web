@@ -327,6 +327,10 @@ dialog#friends-dialog li button + button {
     fill: currentColor;
 }
 
+.icon-action-button--delete {
+    color: var(--color-error);
+}
+
 dialog#decks-dialog #decks-form label,
 dialog#decks-dialog #decks-form textarea {
     display: block;
