@@ -1639,20 +1639,21 @@ Catalog-loading/hydration (`loadCardCatalog()`'s name-resolution map and
 `UserDecklistService` can reuse them without depending on the whole of
 `GameService`; `GameService`'s own two methods are now one-line
 delegations, so none of their existing call sites changed. `serialize()`
-also includes each card's `set_code` (a scalar subquery against
-`card_sets`/`sets`, picking the lowest `sets.id` if a card ever belongs
-to more than one -- every card belongs to exactly one, `MSW`, today) --
-a field `buildCardThumb()`/`openCardDetail()` don't read, but the Decks
-dialog's own "Edit" flow does (see `buildDecklistText()` in
-`web-static/js/game.js`), to reconstruct a saved deck's decklist text in
-`DecklistParser`'s own `"1 Name (SET) NUMBER"` format when populating
-`#decks-form-text` for editing, so a click on "Edit" shows something the
-user can actually read/adjust instead of a blank field backed silently
-by stashed ids. `NUMBER` there is always just the card's own catalog id
--- this app has no separate collector-number concept distinct from
-`cards.id` -- and, like everywhere else that format is accepted, is
-purely cosmetic: `DecklistParser` ignores both the `(SET)` and the
-number on reparse, matching by name alone.
+also includes each card's `set_code`/`collector_number` (joined from
+`card_sets`/`sets`, picking the row with the lowest `sets.id` if a card
+ever belongs to more than one -- every card belongs to exactly one,
+`MSW`, today; `collector_number` itself is migration `0039`'s addition
+to `card_sets`, see "Sets" in `database/README.md`) -- fields
+`buildCardThumb()`/`openCardDetail()` don't read, but the Decks dialog's
+"Edit"/"Duplicate"/"Download" flows do (see `buildDecklistText()`/
+`buildDecklistCardsText()` in `web-static/js/game.js`), to reconstruct a
+saved deck's decklist text in `DecklistParser`'s own
+`"1 Name (SET) NUMBER"` format when populating `#decks-form-text` for
+editing or building a downloadable `.txt` file, so those actions work
+with something the user can actually read/adjust instead of a blank
+field backed silently by stashed ids. Like everywhere else that format
+is accepted, both `(SET)` and `NUMBER` are purely cosmetic on reparse:
+`DecklistParser` ignores both, matching by name alone.
 
 `GameService::createGame()`'s `'custom'` branch and
 `submitCustomDuelDeck()` each accept a new optional `savedDecklistId`

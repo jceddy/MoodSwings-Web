@@ -221,12 +221,11 @@
 
     // One line per distinct card in DecklistParser's own accepted format
     // ("1 Name (SET) NUMBER", see php-app/README.md "Saved decklists") --
-    // NUMBER is always just the card's own catalog id (card_id), the
-    // closest thing this app has to a collector number, since CardCatalog
-    // ::serialize() ties set_code to that same id rather than a separate
-    // per-printing field. Copies of the same card_id are collapsed into
-    // one counted line, in first-seen order, rather than one line per
-    // copy -- reads the same way a hand-typed decklist would.
+    // NUMBER is card.collector_number, a real per-printing field (see
+    // migration 0039), not just the card's own catalog id like before.
+    // Copies of the same card_id are collapsed into one counted line, in
+    // first-seen order, rather than one line per copy -- reads the same
+    // way a hand-typed decklist would.
     function formatDecklistCardLines(cards) {
         const groups = [];
         const indexByCardId = new Map();
@@ -238,7 +237,7 @@
                 groups.push({ card, count: 1 });
             }
         }
-        return groups.map(({ card, count }) => `${count} ${card.name} (${card.set_code}) ${card.card_id}`);
+        return groups.map(({ card, count }) => `${count} ${card.name} (${card.set_code}) ${card.collector_number}`);
     }
 
     // Just the card lines (main deck, optional Sideboard section) with no
