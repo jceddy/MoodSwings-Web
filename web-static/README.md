@@ -1491,17 +1491,19 @@ too, proportional to the smaller card width.
     `#decks-form-text`) the New Game dialog's Custom Decklist fields and
     the `custom_duel` waiting room already use. `refreshDecksData()`
     (`GET /decklists`) renders two lists: "Your decks"
-    (`#decks-own-list`), each row with View/Edit/Delete actions rendered
-    as small square icon-only buttons (`iconActionButton('view'/'edit'/
-    'delete', label, onClick)`, an eye/pencil/trash-can, standard
-    Material Design glyphs reused verbatim in a new `ACTION_ICON_PATHS`
-    map alongside the existing `PLAYER_STAT_ICON_PATHS` -- separate from
-    it since these live inside an actual `.icon-action-button` rather
-    than the players list's own icon+badge convention, and don't need a
-    badge overlay) instead of three separate text buttons, so they take
-    up noticeably less horizontal room next to a name that might already
-    be wrapping onto 2 lines -- same `title`/`aria-label` treatment as
-    every other icon on this page, so "View"/"Edit"/"Delete" are still
+    (`#decks-own-list`), each row with View/Edit/Duplicate/Download/Delete
+    actions rendered as small square icon-only buttons
+    (`iconActionButton('view'/'edit'/'duplicate'/'download'/'delete',
+    label, onClick)`, an eye/pencil/two-overlapping-sheets/download-tray/
+    trash-can, standard Material Design glyphs reused verbatim in a new
+    `ACTION_ICON_PATHS` map alongside the existing
+    `PLAYER_STAT_ICON_PATHS` -- separate from it since these live inside
+    an actual `.icon-action-button` rather than the players list's own
+    icon+badge convention, and don't need a badge overlay) instead of
+    five separate text buttons, so they take up noticeably less
+    horizontal room next to a name that might already be wrapping onto 2
+    lines -- same `title`/`aria-label` treatment as every other icon on
+    this page, so "View"/"Edit"/"Duplicate"/"Download"/"Delete" are still
     the button's accessible name for a screen reader (and Playwright's
     own `getByRole('button', {name: 'View'})`-style lookups) even though
     nothing on screen literally spells the word out anymore. "Friends'
@@ -1558,7 +1560,29 @@ too, proportional to the smaller card width.
     handler only re-parses `#decks-form-text` when it's non-empty,
     otherwise reusing the stashed ids. A hidden `#decks-form-id` field is
     what decides whether submitting calls `POST /decklists` (create) or
-    `POST /decklists/update` (edit) in the first place. "View" (`openDeckView()`) opens a separate small
+    `POST /decklists/update` (edit) in the first place.
+
+    "Duplicate" (`duplicateDeck()`) resets the form back to its own "new
+    deck" state (`resetDecksForm()`, the same reset a Cancel does) and
+    then fills `#decks-form-text` with just that deck's card lines
+    (`buildDecklistCardsText()` -- the same per-card-line formatting
+    `buildDecklistText()` uses, but deliberately *without* the `About`/
+    `Name` header, since showing "Name `<the old deck's name>`" in the
+    pasted text while the visible Name field sits blank -- ready for a
+    new name -- would read as a mismatch rather than an invitation to
+    type one) -- so clicking "Save deck" afterward creates a brand new
+    deck with the same cards under whatever name is typed in, leaving
+    the original deck untouched. "Download" (`downloadDeck()`) saves a
+    `<deck name>.txt` file containing that same full `buildDecklistText()`
+    output (`About`/`Name` header included this time, since there's no
+    blank-Name-field mismatch to worry about for a plain file save) via
+    the generic `downloadFile()` helper the game log's own download
+    button already established (an object-URL `<a download>` click,
+    since there's no server-side file to link to -- the content is
+    assembled entirely client-side) -- a slash in the deck's own name is
+    swapped for a dash first, since that's the one character which would
+    otherwise be misread as a path separator rather than literal text.
+    "View" (`openDeckView()`) opens a separate small
     `#deck-view-dialog` showing the deck's name, the same card-count
     icon+badge and (when applicable) friends-shared icon its own row in
     the list carries, and its full contents as two card-thumb grids
