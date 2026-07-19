@@ -38,6 +38,46 @@
         return button;
     }
 
+    // Populates a "use a saved deck" <select> (issue #92) with an
+    // <optgroup> for "My decks" and one per friend who has 1+
+    // friends-visible decks -- shared by the New Game dialog's own select
+    // and the in-game custom_duel submission form's select. Both keep the
+    // same fixed default option (value "", "Paste/upload a decklist
+    // instead"), rebuilt fresh here every call so a deck saved/deleted/
+    // shared since the select was last populated is always reflected.
+    async function populateSavedDecklistSelect(selectEl) {
+        const { ok, body } = await listDecklists();
+        if (!ok) {
+            return;
+        }
+
+        selectEl.innerHTML = '<option value="">Paste/upload a decklist instead</option>';
+
+        if (body.own.length > 0) {
+            const ownGroup = document.createElement('optgroup');
+            ownGroup.label = 'My decks';
+            for (const deck of body.own) {
+                const option = document.createElement('option');
+                option.value = deck.id;
+                option.textContent = deck.name;
+                ownGroup.appendChild(option);
+            }
+            selectEl.appendChild(ownGroup);
+        }
+
+        for (const friend of body.friends) {
+            const group = document.createElement('optgroup');
+            group.label = friend.friend_username + "'s decks";
+            for (const deck of friend.decklists) {
+                const option = document.createElement('option');
+                option.value = deck.id;
+                option.textContent = deck.name;
+                group.appendChild(option);
+            }
+            selectEl.appendChild(group);
+        }
+    }
+
     // Toggled by both refreshFriendsData() (the dialog's own data fetch)
     // and checkFriendRequestNotification() (an independent low-frequency
     // poll -- see below) so the dot appears the moment a request arrives
@@ -110,6 +150,125 @@
         );
     }
 
+    // -- Decks dialog (issue #92) -------------------------------------------
+    //
+    // Stashed by startEditingDeck() so a pure rename/visibility change
+    // during an edit doesn't require re-uploading/re-pasting the same
+    // content -- the form's own text field is left blank for an edit (the
+    // full decklist text isn't reconstructed from stored card ids), and an
+    // empty text field on submit falls back to these previously-fetched
+    // ids instead.
+    let editingDeckCardIds = null;
+    let editingDeckSideboardCardIds = null;
+
+    function resetDecksForm() {
+        document.getElementById('decks-form-title').textContent = 'Save a new deck';
+        document.getElementById('decks-form-id').value = '';
+        document.getElementById('decks-form-name').value = '';
+        document.getElementById('decks-form-file').value = '';
+        document.getElementById('decks-form-text').value = '';
+        document.getElementById('decks-form-friends-visible').checked = false;
+        document.getElementById('decks-form-submit-button').textContent = 'Save deck';
+        document.getElementById('decks-form-cancel-edit-button').hidden = true;
+        document.getElementById('decks-form-error').hidden = true;
+        document.getElementById('decks-form-success').hidden = true;
+        editingDeckCardIds = null;
+        editingDeckSideboardCardIds = null;
+    }
+
+    async function startEditingDeck(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        document.getElementById('decks-form-title').textContent = 'Edit deck';
+        document.getElementById('decks-form-id').value = deck.id;
+        document.getElementById('decks-form-name').value = deck.name;
+        document.getElementById('decks-form-file').value = '';
+        document.getElementById('decks-form-text').value = '';
+        document.getElementById('decks-form-friends-visible').checked = deck.visibility === 'friends';
+        document.getElementById('decks-form-submit-button').textContent = 'Update deck';
+        document.getElementById('decks-form-cancel-edit-button').hidden = false;
+        document.getElementById('decks-form-error').hidden = true;
+        document.getElementById('decks-form-success').hidden = true;
+        editingDeckCardIds = deck.cards.map((card) => card.card_id);
+        editingDeckSideboardCardIds = deck.sideboard_cards.map((card) => card.card_id);
+    }
+
+    async function openDeckView(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        document.getElementById('deck-view-title').textContent = deck.name;
+        document.getElementById('deck-view-meta').textContent =
+            deck.cards.length + ' card(s)' + (deck.visibility === 'friends' ? ' — shared with friends' : ' — private');
+
+        const cardsEl = document.getElementById('deck-view-cards');
+        cardsEl.innerHTML = '';
+        for (const card of deck.cards) {
+            cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+        }
+
+        const sideboardTitle = document.getElementById('deck-view-sideboard-title');
+        const sideboardEl = document.getElementById('deck-view-sideboard-cards');
+        sideboardEl.innerHTML = '';
+        sideboardTitle.hidden = deck.sideboard_cards.length === 0;
+        for (const card of deck.sideboard_cards) {
+            sideboardEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+        }
+
+        document.getElementById('deck-view-dialog').showModal();
+    }
+
+    async function deleteDeckAndRefresh(id) {
+        await deleteDecklist(id);
+        await refreshDecksData();
+    }
+
+    async function refreshDecksData() {
+        const { ok, body } = await listDecklists();
+        const own = ok ? body.own : [];
+        const friends = ok ? body.friends : [];
+
+        renderList(
+            document.getElementById('decks-own-list'),
+            document.getElementById('decks-own-empty'),
+            own,
+            (deck) => {
+                const li = document.createElement('li');
+                li.append(deck.name + ' (' + deck.card_count + ' cards' +
+                    (deck.visibility === 'friends' ? ', shared with friends' : '') + ') ');
+                li.appendChild(actionButton('View', () => openDeckView(deck.id)));
+                li.appendChild(actionButton('Edit', () => startEditingDeck(deck.id)));
+                li.appendChild(actionButton('Delete', () => deleteDeckAndRefresh(deck.id)));
+                return li;
+            }
+        );
+
+        const friendsListEl = document.getElementById('decks-friends-list');
+        friendsListEl.innerHTML = '';
+        document.getElementById('decks-friends-empty').hidden = friends.length > 0;
+        for (const friend of friends) {
+            const heading = document.createElement('h4');
+            heading.textContent = friend.friend_username + "'s decks";
+            friendsListEl.appendChild(heading);
+
+            const ul = document.createElement('ul');
+            for (const deck of friend.decklists) {
+                const li = document.createElement('li');
+                li.append(deck.name + ' (' + deck.card_count + ' cards) ');
+                li.appendChild(actionButton('View', () => openDeckView(deck.id)));
+                ul.appendChild(li);
+            }
+            friendsListEl.appendChild(ul);
+        }
+    }
+
     // -- Game lobby + board ----------------------------------------------
     //
     // Every card's `choices` payload has a card-specific shape (a target
@@ -136,6 +295,10 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Reset in showBoard() so the saved-deck dropdown is re-fetched fresh
+    // for each newly-viewed custom_duel game, but not on every 4-second
+    // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
+    let duelSavedDecklistSelectPopulated = false;
 
     // refreshBoard() can overlap with itself -- the 4-second poll timer
     // doesn't wait for a prior call to finish, and a user action (Start
@@ -170,6 +333,7 @@
 
     function showBoard(gameId) {
         currentGameId = gameId;
+        duelSavedDecklistSelectPopulated = false;
         lobbyView.hidden = true;
         boardView.hidden = false;
         // boardMessage ("Game complete!"/"Round scored...") is otherwise
@@ -311,6 +475,12 @@
         const deckType = document.getElementById('new-game-deck-type').value;
         document.getElementById('new-game-deck-type-description').textContent = DECK_TYPE_DESCRIPTIONS[deckType] || '';
         document.getElementById('new-game-decklist-fields').hidden = deckType !== 'custom';
+        // Hidden whenever a saved deck (issue #92) is chosen from the
+        // dropdown above it, in addition to whenever deckType isn't
+        // 'custom' at all -- mirrors duel-deck-submit-paste-fields' own
+        // toggle in renderDuelDeckSubmission()/its change listener below.
+        document.getElementById('new-game-decklist-paste-fields').hidden =
+            deckType !== 'custom' || document.getElementById('new-game-saved-decklist').value !== '';
         document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
         document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
         document.getElementById('new-game-winston-draft-fields').hidden = deckType !== 'winston_draft';
@@ -759,6 +929,7 @@
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
+    document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
@@ -868,6 +1039,7 @@
         }
 
         updateTeamFields();
+        await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
         newGameDialog.showModal();
     });
 
@@ -899,7 +1071,10 @@
 
         const partnerUserId = isTeamFormat ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
-        const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
+        const savedDecklistId = deckType === 'custom'
+            ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
+            : undefined;
+        const decklistText = deckType === 'custom' && !savedDecklistId ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
         const quickDraftPoolSource = deckType === 'quick_draft' ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
         const quickDraftCustomPoolText = deckType === 'quick_draft' && quickDraftPoolSource === 'custom'
@@ -927,6 +1102,7 @@
             winstonDraftCustomPoolText,
             gridDraftPoolSource,
             gridDraftCustomPoolText,
+            savedDecklistId,
         );
 
         if (!ok) {
@@ -2644,6 +2820,7 @@
         document.getElementById('draft-deck-building-title').textContent = 'Build your deck (' + sizeText + ')';
         const picker = document.getElementById('draft-deck-picker');
         const submitButton = document.getElementById('draft-deck-submit-button');
+        const saveButton = document.getElementById('draft-deck-save-button');
         const selectAllButton = document.getElementById('draft-deck-select-all-button');
         const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
         const resetButton = document.getElementById('draft-deck-reset-button');
@@ -2666,6 +2843,7 @@
             }
             picker.innerHTML = '';
             submitButton.hidden = true;
+            saveButton.hidden = true;
             selectAllButton.hidden = true;
             clearSelectionButton.hidden = true;
             resetButton.hidden = true;
@@ -2710,6 +2888,8 @@
 
         submitButton.hidden = false;
         submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size;
+        saveButton.hidden = false;
+        saveButton.disabled = submitButton.disabled;
         selectAllButton.hidden = false;
         clearSelectionButton.hidden = false;
         // Only a sideboard (game 2+ of a match) has a previous deck to
@@ -2748,6 +2928,47 @@
         }
         draftDeckSelectionInitialized = false;
         await refreshBoard();
+    });
+
+    // Draft formats' own "Save deck" button (issue #92) -- saves the
+    // current selection as a first-class, reusable decklist under a name,
+    // independent of (and without requiring) actually submitting it for
+    // this match. The "optional sideboard" the issue asks for is derived
+    // as the complement of the selection: every drafted card NOT
+    // currently selected -- no separate sideboard-picking UI is needed
+    // since it's just "everything else you drafted."
+    const draftDeckSaveDialog = document.getElementById('draft-deck-save-dialog');
+
+    document.getElementById('draft-deck-save-button').addEventListener('click', () => {
+        document.getElementById('draft-deck-save-name').value = '';
+        document.getElementById('draft-deck-save-friends-visible').checked = false;
+        document.getElementById('draft-deck-save-error').hidden = true;
+        draftDeckSaveDialog.showModal();
+    });
+
+    document.getElementById('draft-deck-save-cancel-button').addEventListener('click', () => {
+        draftDeckSaveDialog.close();
+    });
+
+    document.getElementById('draft-deck-save-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const errorEl = document.getElementById('draft-deck-save-error');
+        errorEl.hidden = true;
+
+        const deckCardIds = Array.from(draftDeckSelection).map((index) => currentDeckBuilding.drafted_cards[index].card_id);
+        const sideboardCardIds = currentDeckBuilding.drafted_cards
+            .filter((card, index) => !draftDeckSelection.has(index))
+            .map((card) => card.card_id);
+        const name = document.getElementById('draft-deck-save-name').value;
+        const visibility = document.getElementById('draft-deck-save-friends-visible').checked ? 'friends' : 'private';
+
+        const { ok, body } = await createDecklist(name, undefined, deckCardIds, sideboardCardIds, visibility);
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not save that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+        draftDeckSaveDialog.close();
     });
 
     function renderDraftPanel(state) {
@@ -2847,6 +3068,9 @@
         if (you.deck_submitted) {
             document.getElementById('duel-deck-submitted-message').textContent =
                 'You submitted: ' + (you.custom_deck_name || 'Uploaded Deck');
+        } else if (!duelSavedDecklistSelectPopulated) {
+            duelSavedDecklistSelectPopulated = true;
+            populateSavedDecklistSelect(document.getElementById('duel-deck-submit-saved-decklist'));
         }
     }
 
@@ -2859,12 +3083,17 @@
         document.getElementById('duel-deck-submit-text').value = await file.text();
     });
 
+    document.getElementById('duel-deck-submit-saved-decklist').addEventListener('change', (event) => {
+        document.getElementById('duel-deck-submit-paste-fields').hidden = event.target.value !== '';
+    });
+
     document.getElementById('duel-deck-submit-button').addEventListener('click', async () => {
         const submitError = document.getElementById('duel-deck-submit-error');
         submitError.hidden = true;
 
-        const decklistText = document.getElementById('duel-deck-submit-text').value;
-        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText);
+        const savedDecklistId = Number(document.getElementById('duel-deck-submit-saved-decklist').value) || undefined;
+        const decklistText = savedDecklistId ? undefined : document.getElementById('duel-deck-submit-text').value;
+        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText, savedDecklistId);
 
         if (!ok) {
             submitError.textContent = body.message || 'Could not submit that decklist.';
@@ -3744,6 +3973,76 @@
 
     document.getElementById('friends-close-button').addEventListener('click', () => {
         friendsDialog.close();
+    });
+
+    const decksDialog = document.getElementById('decks-dialog');
+    const decksForm = document.getElementById('decks-form');
+
+    document.getElementById('decks-button').addEventListener('click', async () => {
+        resetDecksForm();
+        decksDialog.showModal();
+        await refreshDecksData();
+    });
+
+    document.getElementById('decks-close-button').addEventListener('click', () => {
+        decksDialog.close();
+    });
+
+    document.getElementById('deck-view-close-button').addEventListener('click', () => {
+        document.getElementById('deck-view-dialog').close();
+    });
+
+    document.getElementById('decks-form-cancel-edit-button').addEventListener('click', () => {
+        resetDecksForm();
+    });
+
+    // Reading an uploaded decklist file into the textarea lets both input
+    // methods (file upload or pasted text) share the same submit-time
+    // field -- same pattern as #new-game-decklist-file/#duel-deck-submit-file.
+    document.getElementById('decks-form-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('decks-form-text').value = await file.text();
+    });
+
+    decksForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const errorEl = document.getElementById('decks-form-error');
+        const successEl = document.getElementById('decks-form-success');
+        errorEl.hidden = true;
+        successEl.hidden = true;
+
+        const id = document.getElementById('decks-form-id').value;
+        const name = document.getElementById('decks-form-name').value;
+        const decklistText = document.getElementById('decks-form-text').value;
+        const visibility = document.getElementById('decks-form-friends-visible').checked ? 'friends' : 'private';
+
+        // A blank text field during an edit means "keep the existing
+        // contents" -- falls back to the ids startEditingDeck() stashed
+        // when it fetched this deck, rather than requiring a pure rename/
+        // visibility change to re-paste the whole decklist.
+        const useStashedCards = decklistText.trim() === '' && editingDeckCardIds !== null;
+        const cardIds = useStashedCards ? editingDeckCardIds : undefined;
+        const sideboardCardIds = useStashedCards ? editingDeckSideboardCardIds : undefined;
+        const text = useStashedCards ? undefined : decklistText;
+
+        const { ok, body } = id
+            ? await updateDecklist(Number(id), name, text, cardIds, sideboardCardIds, visibility)
+            : await createDecklist(name, text, cardIds, sideboardCardIds, visibility);
+
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not save that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        resetDecksForm();
+        await refreshDecksData();
+        successEl.textContent = 'Deck saved.';
+        successEl.hidden = false;
     });
 
     friendInviteForm.addEventListener('submit', async (event) => {

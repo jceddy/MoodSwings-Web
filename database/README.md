@@ -299,3 +299,11 @@ half-migrated schema.
   overwrote the original choice instead of adding to it, so it only ever
   benefited from one of the two chosen colors (see `WonderEffect` in
   `php-app/README.md`).
+- **Saved decklists** (`0038`, issue #92): adds `user_decklists`
+  (`user_id`, `name`, `card_ids` JSON, nullable `sideboard_card_ids`
+  JSON, `visibility` ENUM `private`/`friends`) — a decklist as a
+  first-class, reusable, user-owned object, rather than only ever living
+  scoped to one `games`/`game_players` row via the `custom`/`custom_duel`
+  deck_type flows. `visibility` is deliberately two-state only; there is
+  no third "public to everyone" tier. See "Saved decklists" in
+  `php-app/README.md`.

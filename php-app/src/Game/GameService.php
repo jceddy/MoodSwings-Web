@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Game;
 
 use MoodSwings\Database\Connection;
+use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
@@ -216,6 +217,7 @@ final class GameService
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
         private readonly RoundScorer $scorer,
+        private readonly UserDecklistService $userDecklists,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
     ) {
     }
@@ -271,6 +273,7 @@ final class GameService
         ?string $winstonDraftCustomPoolText = null,
         ?string $gridDraftPoolSource = null,
         ?string $gridDraftCustomPoolText = null,
+        ?int $savedDecklistId = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -310,7 +313,12 @@ final class GameService
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
             }
 
-            ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->parseCustomDecklist($decklistText, count($userIds));
+            if ($savedDecklistId !== null) {
+                ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->userDecklists->cardIdsForUse($createdByUserId, $savedDecklistId);
+                $this->assertCustomDecklistCardCount($customDeckCardIds, count($userIds));
+            } else {
+                ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->parseCustomDecklist($decklistText, count($userIds));
+            }
         } elseif ($deckType === 'custom_duel') {
             if ($format !== 'duel') {
                 throw new GameStateException('The "custom_duel" deck type is only supported for duel games');
@@ -523,16 +531,7 @@ final class GameService
      */
     private function loadCardCatalog(): array
     {
-        $stmt = Connection::get()->query('SELECT id, name, rarity, color FROM cards');
-        $idsByName = [];
-        $rowsById = [];
-        foreach ($stmt->fetchAll() as $row) {
-            $id = (int) $row['id'];
-            $idsByName[mb_strtolower($row['name'])] = $id;
-            $rowsById[$id] = ['name' => $row['name'], 'rarity' => $row['rarity'], 'color' => $row['color']];
-        }
-
-        return ['idsByName' => $idsByName, 'rowsById' => $rowsById];
+        return CardCatalog::load();
     }
 
     /**
@@ -553,15 +552,27 @@ final class GameService
         }
 
         $parsed = (new DecklistParser($this->loadCardCatalog()['idsByName']))->parse($decklistText);
-
-        $minimumCards = 15 * ($playerCount - 1);
-        if (count($parsed['cardIds']) < $minimumCards) {
-            throw new GameStateException(
-                "The decklist has only " . count($parsed['cardIds']) . " card(s), but at least {$minimumCards} are required for {$playerCount} players"
-            );
-        }
+        $this->assertCustomDecklistCardCount($parsed['cardIds'], $playerCount);
 
         return $parsed;
+    }
+
+    /**
+     * Shared by parseCustomDecklist()'s text-parsing path and
+     * createGame()'s saved-decklist path (issue #92) -- both need the
+     * exact same minimum-card-count validation regardless of where the
+     * card ids came from.
+     *
+     * @param int[] $cardIds
+     */
+    private function assertCustomDecklistCardCount(array $cardIds, int $playerCount): void
+    {
+        $minimumCards = 15 * ($playerCount - 1);
+        if (count($cardIds) < $minimumCards) {
+            throw new GameStateException(
+                "The decklist has only " . count($cardIds) . " card(s), but at least {$minimumCards} are required for {$playerCount} players"
+            );
+        }
     }
 
     /**
@@ -656,7 +667,7 @@ final class GameService
      * itself refuses to deal for this deck_type until both seats have a
      * non-null custom_deck_card_ids.
      */
-    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, string $decklistText): void
+    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null): void
     {
         $game = $this->fetchGame($gameId);
         if ($game['deck_type'] !== 'custom_duel') {
@@ -666,18 +677,26 @@ final class GameService
             throw new GameStateException("Game {$gameId} has already started -- decklists can no longer be submitted");
         }
 
-        $ownerStmt = Connection::get()->prepare('SELECT COUNT(*) FROM game_players WHERE id = :id AND game_id = :game_id');
+        // Widened from "SELECT COUNT(*)" to also return user_id -- needed
+        // to authorize a $savedDecklistId lookup below without adding a
+        // new parameter to this method's own signature/callers.
+        $ownerStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id AND game_id = :game_id');
         $ownerStmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
-        if ((int) $ownerStmt->fetchColumn() === 0) {
+        $ownerRow = $ownerStmt->fetch();
+        if ($ownerRow === false) {
             throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
         }
 
-        if (trim($decklistText) === '') {
-            throw new GameStateException('A decklist is required');
-        }
-
         $catalog = $this->loadCardCatalog();
-        $parsed = (new DecklistParser($catalog['idsByName']))->parse($decklistText);
+
+        if ($savedDecklistId !== null) {
+            $parsed = $this->userDecklists->cardIdsForUse((int) $ownerRow['user_id'], $savedDecklistId);
+        } else {
+            if ($decklistText === null || trim($decklistText) === '') {
+                throw new GameStateException('A decklist is required');
+            }
+            $parsed = (new DecklistParser($catalog['idsByName']))->parse($decklistText);
+        }
 
         $rules = new DuelDeckRules(
             (int) $game['custom_duel_min_cards'],
@@ -1658,47 +1677,7 @@ final class GameService
      */
     private function serializeCatalogCards(array $cardIds): array
     {
-        if ($cardIds === []) {
-            return [];
-        }
-
-        // Deduplicated for the query -- $cardIds itself may legally contain
-        // the same catalog id twice (a custom pool can list "2 Charity"),
-        // but a card's own row only needs fetching once regardless of how
-        // many times it appears in the caller's list.
-        $distinctCardIds = array_values(array_unique($cardIds));
-        $placeholders = implode(',', array_fill(0, count($distinctCardIds), '?'));
-        $stmt = Connection::get()->prepare("SELECT * FROM cards WHERE id IN ({$placeholders})");
-        $stmt->execute($distinctCardIds);
-
-        $rowsById = [];
-        foreach ($stmt->fetchAll() as $row) {
-            $rowsById[(int) $row['id']] = $row;
-        }
-
-        return array_map(function (int $cardId) use ($rowsById): array {
-            $row = $rowsById[$cardId] ?? throw new GameStateException("No such card {$cardId}");
-
-            return [
-                'card_id' => $cardId,
-                'catalog_card_id' => $cardId,
-                'name' => $row['name'],
-                'color' => $row['color'],
-                'base_color' => $row['color'],
-                'value' => (int) $row['base_value'],
-                'base_value' => (int) $row['base_value'],
-                'alt_value' => $row['alt_value'] !== null ? (int) $row['alt_value'] : null,
-                'has_dice_value' => $row['alt_value'] !== null,
-                'effect_key' => $row['effect_key'],
-                'rules_text' => $row['rules_text'],
-                'choice_fields' => [],
-                'is_playable' => false,
-                'is_suppressed' => false,
-                'value_locked' => false,
-                'is_creativity_copy' => false,
-                'copy_simulation' => null,
-            ];
-        }, $cardIds);
+        return CardCatalog::serialize($cardIds);
     }
 
     // -- Winston Draft (issue #89) ------------------------------------------

@@ -203,7 +203,9 @@ dialog#resources-dialog #resources-close-button {
     }
 }
 
-dialog#friends-dialog {
+dialog#friends-dialog,
+dialog#decks-dialog,
+dialog#deck-view-dialog {
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
@@ -214,17 +216,20 @@ dialog#friends-dialog {
     border-radius: 0.5rem;
 }
 
-dialog#friends-dialog section {
+dialog#friends-dialog section,
+dialog#decks-dialog section {
     margin-bottom: 1.5rem;
 }
 
-dialog#friends-dialog ul {
+dialog#friends-dialog ul,
+dialog#decks-dialog ul {
     list-style: none;
     padding: 0;
     margin: 0;
 }
 
-dialog#friends-dialog li {
+dialog#friends-dialog li,
+dialog#decks-dialog li {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -232,12 +237,20 @@ dialog#friends-dialog li {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
-dialog#friends-dialog li button {
+dialog#friends-dialog li button,
+dialog#decks-dialog li button {
     margin-left: auto;
 }
 
-dialog#friends-dialog li button + button {
+dialog#friends-dialog li button + button,
+dialog#decks-dialog li button + button {
     margin-left: 0.25rem;
+}
+
+dialog#decks-dialog #decks-form label,
+dialog#decks-dialog #decks-form textarea {
+    display: block;
+    margin-bottom: 0.5rem;
 }
 
 body.game-page {
@@ -331,7 +344,9 @@ body.game-page {
 .winston-draft-pile-cards,
 #winston-draft-drafted-so-far,
 #grid-draft-drafted-so-far,
-#grid-draft-opponent-drafted-so-far {
+#grid-draft-opponent-drafted-so-far,
+#deck-view-cards,
+#deck-view-sideboard-cards {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
