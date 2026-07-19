@@ -4,9 +4,15 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests\Game;
 
+use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
+use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
+use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\UserDecklistRepository;
+use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
@@ -56,6 +62,8 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE game_rounds');
         $pdo->exec('TRUNCATE TABLE game_players');
         $pdo->exec('TRUNCATE TABLE games');
+        $pdo->exec('TRUNCATE TABLE user_decklists');
+        $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -68,10 +76,15 @@ final class GameServiceIntegrationTest extends TestCase
         $this->pdo = $pdo;
 
         $registry = DefaultEffectRegistry::build();
+        $userDecklists = new UserDecklistService(
+            new UserDecklistRepository(),
+            new FriendshipService(new UserRepository(), new FriendshipRepository()),
+        );
         $this->games = new GameService(
             new BoardStateRepository($registry),
             new MoodPlayService($registry),
             new RoundScorer(),
+            $userDecklists,
         );
     }
 
@@ -92,6 +105,22 @@ final class GameServiceIntegrationTest extends TestCase
         $stmt->execute(['id' => $userId]);
 
         return (string) $stmt->fetchColumn();
+    }
+
+    /** @param int[] $cardIds */
+    private function insertSavedDecklist(int $userId, string $name, array $cardIds, string $visibility = 'private'): int
+    {
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO user_decklists (user_id, name, card_ids, visibility) VALUES (:user_id, :name, :card_ids, :visibility)'
+        );
+        $stmt->execute([
+            'user_id' => $userId,
+            'name' => $name,
+            'card_ids' => json_encode($cardIds),
+            'visibility' => $visibility,
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
     }
 
     /** @return int game_players.id */
@@ -445,6 +474,46 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->createGame($creator, [$creator, $bob], deckType: 'custom');
     }
 
+    public function testCreateGameWithSavedDecklistIdUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('saved-deck-alice');
+        $bob = $this->insertUser('saved-deck-bob');
+        $decklistId = $this->insertSavedDecklist($creator, 'My Saved Deck', range(1, 15));
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', savedDecklistId: $decklistId);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('custom', $game['deck_type']);
+        self::assertSame('My Saved Deck', $game['custom_deck_name']);
+        self::assertSame(range(1, 15), array_map(intval(...), json_decode($game['custom_deck_card_ids'], true)));
+    }
+
+    public function testCreateGameWithSavedDecklistEnforcesMinimumCardCount(): void
+    {
+        $creator = $this->insertUser('saved-deck-few-alice');
+        $bob = $this->insertUser('saved-deck-few-bob');
+        $carol = $this->insertUser('saved-deck-few-carol');
+        // 3 players need at least 30 cards -- this saved deck only has 15.
+        $decklistId = $this->insertSavedDecklist($creator, 'Too Small', range(1, 15));
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 30 are required for 3 players');
+
+        $this->games->createGame($creator, [$creator, $bob, $carol], deckType: 'custom', savedDecklistId: $decklistId);
+    }
+
+    public function testCreateGameRejectsSavedDecklistNotOwnedOrShared(): void
+    {
+        $owner = $this->insertUser('saved-deck-owner');
+        $creator = $this->insertUser('saved-deck-stranger');
+        $bob = $this->insertUser('saved-deck-stranger-bob');
+        $decklistId = $this->insertSavedDecklist($owner, 'Not Yours', range(1, 15));
+
+        $this->expectException(NotAuthorizedToAccessDecklistException::class);
+
+        $this->games->createGame($creator, [$creator, $bob], deckType: 'custom', savedDecklistId: $decklistId);
+    }
+
     public function testGetStateExposesTheCustomDeckName(): void
     {
         $creator = $this->insertUser('custom-state-alice');
@@ -667,6 +736,32 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectExceptionMessage('is not seated');
 
         $this->games->submitCustomDuelDeck($gameId, $outsider, '1 Charity');
+    }
+
+    public function testSubmitCustomDuelDeckWithSavedDecklistId(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1] = $this->buildCustomDuelFixture(minCards: 7);
+        $decklistId = $this->insertSavedDecklist($u1, 'My Duel Deck', [3, 4, 5, 6, 7, 8, 9]);
+
+        $this->games->submitCustomDuelDeck($gameId, $p1, null, savedDecklistId: $decklistId);
+
+        $p1Row = $this->pdo->prepare('SELECT custom_deck_name, custom_deck_card_ids FROM game_players WHERE id = :id');
+        $p1Row->execute(['id' => $p1]);
+        $row = $p1Row->fetch();
+        self::assertSame('My Duel Deck', $row['custom_deck_name']);
+        self::assertSame([3, 4, 5, 6, 7, 8, 9], array_map(intval(...), json_decode($row['custom_deck_card_ids'], true)));
+    }
+
+    public function testSubmitCustomDuelDeckWithSavedDecklistStillValidatesAgainstDuelRules(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1] = $this->buildCustomDuelFixture(minCards: 10);
+        // Only 2 cards -- below this game's own 10-card minimum.
+        $decklistId = $this->insertSavedDecklist($u1, 'Too Small', [3, 4]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('has only 2 card(s), but at least 10 are required');
+
+        $this->games->submitCustomDuelDeck($gameId, $p1, null, savedDecklistId: $decklistId);
     }
 
     public function testStartGameRejectsACustomDuelGameUntilBothPlayersHaveSubmittedADeck(): void
@@ -2862,6 +2957,158 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    // -- Full event log (issue #98) ------------------------------------------
+
+    /**
+     * fullEventLog() is chronological oldest-first (the opposite order
+     * from recentEvents()'s own newest-first slice), and -- unlike
+     * recentEvents()'s hardcoded 15-row limit -- returns every event with
+     * no cap at all, so a game with more than 15 events still gets every
+     * one of them back.
+     */
+    public function testFullEventLogReturnsEveryEventChronologicallyUnlikeRecentEventsFifteenRowLimit(): void
+    {
+        $u1 = $this->insertUser('fulllogorder1');
+        $u2 = $this->insertUser('fulllogorder2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 99)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // 18 alternating pass()es -- comfortably more than recentEvents()'s
+        // own 15-row limit. Each pass() logs its own 'turn_passed' event,
+        // but with only 2 players every 2nd pass also completes and
+        // scores the round (wins_needed: 99 above only keeps the GAME
+        // itself from ever actually completing, not the individual
+        // rounds within it) -- so this isn't purely 18 'turn_passed' rows,
+        // it's however many game_events rows actually accumulate, fetched
+        // straight from the database below rather than assumed.
+        $currentPlayerId = $p1;
+        for ($i = 0; $i < 18; $i++) {
+            $this->games->pass($gameId, $currentPlayerId);
+            $currentPlayerId = $currentPlayerId === $p1 ? $p2 : $p1;
+        }
+
+        $recentEvents = $this->games->getState($gameId, $u1)['recent_events'];
+        self::assertCount(15, $recentEvents, "recentEvents()'s own hardcoded limit");
+
+        $countStmt = $this->pdo->prepare('SELECT COUNT(*) FROM game_events WHERE game_id = :game_id');
+        $countStmt->execute(['game_id' => $gameId]);
+        $actualEventCount = (int) $countStmt->fetchColumn();
+        self::assertGreaterThan(15, $actualEventCount, 'sanity check that this scenario really does exceed the 15-row limit');
+
+        $fullLog = $this->games->fullEventLog($gameId);
+        self::assertCount($actualEventCount, $fullLog, 'fullEventLog() has no cap at all');
+
+        $ids = array_column($fullLog, 'id');
+        $sortedIds = $ids;
+        sort($sortedIds);
+        self::assertSame($sortedIds, $ids, 'oldest first -- ascending id order');
+    }
+
+    /**
+     * Each entry carries the raw fields the frontend's "download data"
+     * button (see "Game log" in web-static/README.md) turns into a JSON
+     * export, alongside the same describeEvent()-rendered description
+     * recentEvents() itself uses -- both views can never drift out of
+     * phrasing sync since they share that one rendering method.
+     */
+    public function testFullEventLogEntriesCarryRawFieldsAlongsideTheRenderedDescription(): void
+    {
+        $u1 = $this->insertUser('fulllograw1');
+        $u2 = $this->insertUser('fulllograw2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $encouragementId = $this->insertGameCard($gameId, 11, 'hand', $p1); // Encouragement
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- the mood targeted
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $encouragementId, ['target_mood_id' => $dignityId]);
+
+        $fullLog = $this->games->fullEventLog($gameId);
+        self::assertCount(1, $fullLog);
+        $entry = $fullLog[0];
+
+        self::assertSame('mood_played', $entry['event_type']);
+        self::assertSame(1, $entry['round_number']);
+        self::assertSame($p1, $entry['acting_game_player_id']);
+        self::assertSame('fulllograw1', $entry['acting_username']);
+        self::assertSame($encouragementId, $entry['card_id']);
+        self::assertSame('Encouragement', $entry['card_name']);
+        self::assertSame($dignityId, $entry['details']['target_mood_id']);
+        self::assertStringContainsString('fulllograw1 played Encouragement', $entry['description']);
+        self::assertStringContainsString('target mood: Dignity', $entry['description']);
+    }
+
+    /**
+     * Every seated player sees the exact same full log, the same way
+     * recentEvents() itself already applies no per-viewer filtering --
+     * confirmed here against a Malice cascade specifically (see
+     * testRecentEventsDescribeEveryMoodMaliceDiscardsIncludingTheColorCascade())
+     * since that event's own description is exactly the kind of
+     * multi-segment, semicolon-joined text the frontend's "bulleted list
+     * headed by the first item" rendering (buildLogEntryContent() in
+     * game.js) exists for.
+     */
+    public function testFullEventLogIsIdenticalRegardlessOfViewerAndIncludesMultiSegmentDescriptions(): void
+    {
+        $u1 = $this->insertUser('fulllogmalice1');
+        $u2 = $this->insertUser('fulllogmalice2');
+        $u3 = $this->insertUser('fulllogmalice3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $maliceId = $this->insertGameCard($gameId, 68, 'hand', $p1); // Malice
+        $disciplineId = $this->insertGameCard($gameId, 9, 'in_play', $p2); // Discipline, white -- chosen
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p2); // Charity, white -- chosen
+        $this->insertGameCard($gameId, 8, 'in_play', $p3); // Dignity, white -- cascade, never chosen
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $maliceId, ['target_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p2, ['chosen_mood_ids' => [$disciplineId, $charityId]]);
+
+        // fullEventLog() itself takes no viewer argument at all -- unlike
+        // getState()'s own per-viewer 'recent_events' field -- so there's
+        // nothing to vary per user here; this just documents that fact by
+        // calling it once and using the one result to cover both checks.
+        $fullLog = $this->games->fullEventLog($gameId);
+
+        $resolvedEntry = null;
+        foreach ($fullLog as $entry) {
+            if ($entry['event_type'] === 'pending_decision_resolved') {
+                $resolvedEntry = $entry;
+                break;
+            }
+        }
+        self::assertNotNull($resolvedEntry, 'no pending_decision_resolved event found');
+        self::assertStringContainsString('; ', $resolvedEntry['description'], 'a multi-part, semicolon-joined description');
+        self::assertStringContainsString('Discipline moved from play to the discard pile', $resolvedEntry['description']);
+        self::assertStringContainsString('Charity moved from play to the discard pile', $resolvedEntry['description']);
+        self::assertStringContainsString('Dignity moved from play to the discard pile', $resolvedEntry['description']);
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {
@@ -4257,6 +4504,63 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->playMood($gameId, $p1, $complacencyId, []);
     }
 
+    /**
+     * Regression test: the 'pending_decision_resolved' event's own
+     * acting_game_player_id is the RESPONDER (p2, who reveals a card) --
+     * describeEvent()'s grants_created segment used to attribute the
+     * resulting grant to that same $actor, incorrectly crediting p2 with
+     * an extra play that's actually p1's own (p1 played Intimidation and
+     * is still mid-turn; p2 never gets a turn out of responding). See
+     * describeEvent()'s own 'initiating_game_player_id' handling.
+     */
+    public function testIntimidationsGrantIsAttributedToWhoeverPlayedItNotTheRespondingTarget(): void
+    {
+        $u1 = $this->insertUser('intimgrantevt1');
+        $u2 = $this->insertUser('intimgrantevt2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $intimidationId = $this->insertGameCard($gameId, 67, 'hand', $p1); // Intimidation
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2); // p2's only card -- guaranteed to be the one revealed
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $intimidationId, ['target_player_id' => $p2]);
+        $this->games->respondToDecision($gameId, $p2, ['revealed_card_id' => $card3Id]);
+
+        $events = $this->games->getState($gameId, $u1)['recent_events'];
+        $resolvedEvent = null;
+        foreach ($events as $event) {
+            if (str_contains($event['description'], 'was granted')) {
+                $resolvedEvent = $event;
+                break;
+            }
+        }
+        self::assertNotNull($resolvedEvent, 'no "was granted" event found');
+        self::assertStringContainsString('intimgrantevt1 was granted', $resolvedEvent['description'], 'p1 played Intimidation and is still mid-turn -- the grant is theirs, not the responding target\'s');
+        self::assertStringNotContainsString('intimgrantevt2 was granted', $resolvedEvent['description']);
+        // 'initiating_game_player_id' rides along in $details purely for
+        // this attribution fix -- it must never leak into the choice
+        // summary as an ordinary-looking "initiating game player: ..." clause.
+        self::assertStringNotContainsString('initiating', $resolvedEvent['description']);
+
+        $fullLogEntry = null;
+        foreach ($this->games->fullEventLog($gameId) as $entry) {
+            if ($entry['event_type'] === 'pending_decision_resolved') {
+                $fullLogEntry = $entry;
+                break;
+            }
+        }
+        self::assertNotNull($fullLogEntry);
+        self::assertSame($p1, $fullLogEntry['details']['initiating_game_player_id']);
+    }
+
     public function testInstabilityPausesForP2sOwnChoiceThenP1sOwnChoiceAndOnlyCompletesAfterBothRespond(): void
     {
         $u1 = $this->insertUser('instab1');
@@ -5549,6 +5853,10 @@ final class GameServiceIntegrationTest extends TestCase
             new BoardStateRepository($registry),
             new MoodPlayService($registry),
             new RoundScorer(),
+            new UserDecklistService(
+                new UserDecklistRepository(),
+                new FriendshipService(new UserRepository(), new FriendshipRepository()),
+            ),
             1, // seconds -- short so this test doesn't wait out the real 10s default
         );
 
@@ -7103,6 +7411,96 @@ final class GameServiceIntegrationTest extends TestCase
         self::fail('a best-of-three match can never need a 4th game');
     }
 
+    /**
+     * The pre-game analog of the isAwaitingResponseFrom()-driven lobby
+     * icons for an already-'in_progress' game (see
+     * testListGamesForUserExposesCurrentTurnAndAwaitingResponseUsernamesForEveryPlayer())
+     * -- while a quick_draft game is still 'waiting', awaiting_response_usernames
+     * instead names whoever draftAwaitingResponseUsernames() finds still
+     * owes an action for the CURRENT stage of the current round: both
+     * players until their own draw-stage pick is submitted, then just
+     * whoever's outstanding, then both again once the received stage
+     * opens up (only possible once BOTH have submitted the draw stage),
+     * then back down to whoever's outstanding there too. current_turn_username
+     * stays null throughout -- a still-'waiting' draft game has no board
+     * "turn" concept yet.
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernamesDuringQuickDraftDrafting(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $summary = $summaryFor($u1);
+        self::assertNull($summary['current_turn_username']);
+        self::assertSame([$u1Username, $u2Username], $summary['awaiting_response_usernames'], 'nobody has submitted a draw-stage pick yet -- both owe one');
+        self::assertTrue($summaryFor($u1)['is_awaiting_your_response']);
+        self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
+
+        $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'u1 already submitted this round\'s draw stage -- only u2 is still owed');
+        self::assertFalse($summaryFor($u1)['is_awaiting_your_response']);
+        self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
+
+        $pack = $this->games->getState($gameId, $u2)['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u2, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'both have their draw-stage picks in -- the received stage is now open and owed by both');
+
+        $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'received', [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'u1 finished round 1 -- only u2 is still owed the received stage');
+    }
+
+    /**
+     * Once quick_draft's own 4 rounds finish, the match moves to
+     * 'deck_building' but the game itself stays 'waiting' until both
+     * players submit a deck (see requireDraftDecksSubmitted()) --
+     * awaiting_response_usernames tracks that instead during this phase,
+     * reading draft_match_players.deck_card_ids directly rather than any
+     * round-pick data.
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernamesDuringQuickDraftDeckBuilding(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'neither has submitted a deck yet');
+
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+
+        self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames']);
+        self::assertFalse($summaryFor($u1)['is_awaiting_your_response']);
+        self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
+
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+
+        self::assertSame([], $summaryFor($u1)['awaiting_response_usernames'], 'both have submitted -- the game is ready for startGame(), nobody left to wait on');
+    }
+
     // -- Winston Draft (issue #89) -------------------------------------------
 
     /** @return array{gameId:int, u1:int, u2:int} */
@@ -7558,6 +7956,57 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    /**
+     * Unlike quick_draft's own simultaneous-blind picks, winston_draft is
+     * strictly single-active-player -- draftAwaitingResponseUsernames()
+     * names exactly whoever draft_winston_state.current_player_user_id
+     * currently is, never both at once. current_turn_username stays
+     * null throughout -- a still-'waiting' draft game has no board
+     * "turn" concept yet, only the pre-game equivalent exposed here.
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernameForWinstonDraftCurrentPlayer(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildWinstonDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $expectedUsername = $currentPlayerUserId === $u1 ? $u1Username : $u2Username;
+
+        $summary = $summaryFor($u1);
+        self::assertNull($summary['current_turn_username']);
+        self::assertSame([$expectedUsername], $summary['awaiting_response_usernames']);
+        self::assertSame($currentPlayerUserId === $u1, $summaryFor($u1)['is_awaiting_your_response']);
+        self::assertSame($currentPlayerUserId === $u2, $summaryFor($u2)['is_awaiting_your_response']);
+
+        // Passing the (empty, freshly-dealt) pile 1 hands the turn to
+        // pile 2 rather than the opponent -- current_player_user_id only
+        // changes once a full turn (take, or decline all 3 piles) ends,
+        // so this alone doesn't move who's awaited yet.
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+        self::assertSame([$expectedUsername], $summaryFor($u1)['awaiting_response_usernames'], 'still the same player\'s turn -- only the current pile advanced');
+
+        // Passing piles 2 and 3 too ends the turn (mandatory auto-draw),
+        // handing it to the other player.
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+
+        $otherUserId = $currentPlayerUserId === $u1 ? $u2 : $u1;
+        $otherUsername = $otherUserId === $u1 ? $u1Username : $u2Username;
+        self::assertSame($otherUserId, (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id']);
+        self::assertSame([$otherUsername], $summaryFor($u1)['awaiting_response_usernames']);
     }
 
     public function testWinstonDraftStartGameRequiresBothDecksSubmitted(): void
@@ -8024,6 +8473,46 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         self::fail('a best-of-three match can never need a 4th game');
+    }
+
+    /**
+     * Same single-active-player shape as Winston Draft's own equivalent
+     * test above -- draftAwaitingResponseUsernames() names exactly
+     * whoever draft_grid_state.current_turn_user_id currently is
+     * (Grid Draft alternates first-pick/second-pick within a round, and
+     * a first pick immediately hands the turn to the OTHER player for
+     * the second pick -- unlike Winston Draft, this can move the
+     * awaited player mid-round, not just at a round boundary).
+     */
+    public function testListGamesForUserShowsAwaitingResponseUsernameForGridDraftCurrentTurn(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildGridDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $u1Username = $this->fetchUsername($u1);
+        $u2Username = $this->fetchUsername($u2);
+
+        $summaryFor = function (int $userId) use ($gameId): array {
+            foreach ($this->games->listGamesForUser($userId) as $summary) {
+                if ($summary['id'] === $gameId) {
+                    return $summary;
+                }
+            }
+            self::fail("game {$gameId} missing from listGamesForUser()");
+        };
+
+        $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
+        $firstPickerUsername = $firstPickerUserId === $u1 ? $u1Username : $u2Username;
+
+        $summary = $summaryFor($u1);
+        self::assertNull($summary['current_turn_username']);
+        self::assertSame([$firstPickerUsername], $summary['awaiting_response_usernames']);
+
+        $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
+
+        $secondPickerUserId = $firstPickerUserId === $u1 ? $u2 : $u1;
+        $secondPickerUsername = $secondPickerUserId === $u1 ? $u1Username : $u2Username;
+        self::assertSame($secondPickerUserId, (int) $this->fetchGridState($draftMatchId)['current_turn_user_id']);
+        self::assertSame([$secondPickerUsername], $summaryFor($u1)['awaiting_response_usernames'], 'the first pick immediately hands the turn to the other player');
     }
 
     public function testGridDraftStartGameRequiresBothDecksSubmitted(): void

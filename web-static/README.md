@@ -155,6 +155,18 @@ for anything else -- an error page's HTML served with a stray `200`, or a
 truncated/empty body from a mid-write read, so neither the footer nor the
 watcher can ever mistake garbage content for a genuine version change.
 
+## Mobile text sizing
+
+`html { text-size-adjust: 100%; -webkit-text-size-adjust: 100%; }` in
+`style.css` opts every page out of mobile Chrome's "font boosting" text
+autosizer, which otherwise independently scales blocks of text to stay
+legible on a narrow screen. A correct `<meta name="viewport"
+content="width=device-width, initial-scale=1.0">` (already present on
+every page) doesn't by itself suppress this, and a page that renders
+correctly on desktop/emulated-viewport testing can still look subtly
+different on a real phone without it -- general defensive hygiene, not
+tied to any one page or feature.
+
 ## Assets
 
 - `img/` -- Game-level art not tied to any specific printed card, e.g.
@@ -365,10 +377,11 @@ too, proportional to the smaller card width.
   redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
-  "Friends" button (see below), and the game lobby/board itself. The
-  "Friends"/"Log out" buttons carry their own `margin-bottom` so they don't
-  touch whichever of the lobby or board view is showing directly beneath
-  them (most noticeably the board view's own "Back to your games" button).
+  "Friends" button (see below), a "Decks" button (see below), and the game
+  lobby/board itself. The "Friends"/"Decks"/"Log out" buttons carry their
+  own `margin-bottom` so they don't touch whichever of the lobby or board
+  view is showing directly beneath them (most noticeably the board view's
+  own "Back to your games" button).
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via
@@ -435,7 +448,25 @@ too, proportional to the smaller card width.
     (`buildPlayerFlag('pendingDecision', ..., 'player-flag--pendingDecision')`)
     -- so e.g. a game where you played Compulsion targeting an opponent
     shows the hourglass next to *their* name, not yours, even though it's
-    still nominally your own turn. `.player-flag`/`.player-stat` pick up a
+    still nominally your own turn. A still-`waiting` `quick_draft`/
+    `winston_draft`/`grid_draft` game reuses the exact same
+    `awaiting_response_usernames` field (see
+    `GameService::draftAwaitingResponseUsernames()`) for the same
+    hourglass icon, now naming whoever the draft/deck-building step
+    itself is blocked on instead: both players at once for quick_draft's
+    own simultaneous-blind draw/received stages until each has
+    submitted, or exactly one at a time for winston_draft's/grid_draft's
+    single active turn player; `current_turn_username` stays `null` the
+    whole time a game is still `waiting`, since there's no board "turn"
+    concept yet to name. This also required extracting the icon-rendering
+    logic into a shared `appendPlayersWithFlags()` helper, reused by both
+    `buildGameRow()`'s own (non-compact) opponents line and
+    `buildMatchGroupRow()`'s header -- a draft-based match's games are
+    always grouped (`draft_match_id` is set from game 1 onward), so
+    without that shared header call the icons would never render at all
+    for a draft game, since its own row only ever appears as a match
+    group's compact sub-row (which skips the opponents line entirely, see
+    `opts.compact` above). `.player-flag`/`.player-stat` pick up a
     `vertical-align: middle` rule (a no-op inside their usual flex
     `.player-icons` wrapper on the board, but needed here since these are
     now also reused inline in ordinary text flow) so they line up cleanly
@@ -525,11 +556,33 @@ too, proportional to the smaller card width.
     so the description shown always matches what's actually selected,
     never a stale one left over from the last time the dialog was open.
     Selecting Custom Decklist also reveals `#new-game-decklist-fields` -- a
+    saved-deck dropdown (`#new-game-saved-decklist`, issue #92) above a
     file input and a textarea, both ultimately feeding the same
     `decklist_text` string sent to `POST /games` (uploading a file just
     reads its text into the textarea via `FileReader`, so the server only
     ever sees one input shape regardless of which the player used) -- see
-    "Custom decklists" in `php-app/README.md` for the format itself.
+    "Custom decklists" in `php-app/README.md` for the format itself. The
+    textarea itself (like every other "Or paste your decklist"/"Or paste
+    the pool" field in the app -- the `custom_duel` waiting room's own
+    submission form, the Decks dialog's create/edit form, and the
+    Quick/Winston/Grid Draft custom-pool fields below, see below) carries
+    a shared `.decklist-textarea` class giving it an explicit `17.0625rem`
+    width, 150% of the ~`11.375rem` a bare `<textarea rows="10">` renders
+    at with no width set of its own -- a decklist or custom pool can run
+    to 60+ lines and the default width was cramped for reading it back
+    while pasting or editing. The
+    dropdown is populated (`populateSavedDecklistSelect()`, shared with the
+    `custom_duel` waiting room below and the draft "Save deck" dialog's own
+    friends-visible mirror) from `GET /decklists`, grouped into a "My
+    decks" `<optgroup>` and one further `<optgroup>` per friend who has at
+    least one friends-visible deck, labeled "`{friend}`'s decks" -- the same
+    grouping/omission rules `#decks-friends-list` uses. Its default option
+    reads "Paste/upload a decklist instead" and selecting anything else
+    hides `#new-game-decklist-paste-fields` (the file/textarea pair,
+    `updateDeckTypeDescription()`), since the two inputs are mutually
+    exclusive -- submitting sends `saved_decklist_id` instead of
+    `decklist_text` once a saved deck is picked, and the paste fields are
+    simply not read.
     `updateDeckTypeAvailability()` **hides** (`option.hidden`, not merely
     `option.disabled`) whichever deck-type options don't make sense for
     the currently-selected format -- so the dropdown only ever *lists*
@@ -618,9 +671,18 @@ too, proportional to the smaller card width.
     player's submission status (`state.players[].deck_submitted` --
     never the decklist contents themselves, so neither player can see the
     other's decklist before the game starts), and, if the viewer hasn't
-    submitted yet, the same file-upload/paste form the Traditional
-    `custom` deck_type uses in the New Game dialog, wired to
-    `POST /games/decklist` instead of `POST /games`. "Start game" itself
+    submitted yet, the same saved-deck dropdown/file-upload/paste form the
+    Traditional `custom` deck_type uses in the New Game dialog --
+    `#duel-deck-submit-saved-decklist` (populated the first time this
+    section renders for the current game, via the same
+    `populateSavedDecklistSelect()` helper, guarded by a
+    `duelSavedDecklistSelectPopulated` flag so it's only fetched once per
+    game view rather than on every 4-second board poll) hides
+    `#duel-deck-submit-paste-fields` once a saved deck is picked, the same
+    way the New Game dialog's own dropdown does -- wired to
+    `POST /games/decklist` instead of `POST /games`, sending
+    `saved_decklist_id` instead of `decklist_text` when a saved deck was
+    selected. "Start game" itself
     stays hidden until every player's own `deck_submitted` is true, since
     the server would just reject starting otherwise. Once a `custom_duel`
     game is actually in progress, each player's own row in the Players
@@ -791,7 +853,22 @@ too, proportional to the smaller card width.
       favor of a status line ("waiting for your opponent's deck" or "both
       decks are in"). "Start game" itself stays hidden until
       `deckBuilding.you_submitted` AND
-      `.opponent_submitted` are both true. Pool/pack/drafted cards are all
+      `.opponent_submitted` are both true. A `#draft-deck-save-button`
+      ("Save deck…", issue #92) sits right before the Submit button,
+      sharing its own min/max-size disabled check
+      (`renderDraftDeckBuilding()` mirrors the two buttons' `disabled`
+      state) -- it opens a small `#draft-deck-save-dialog` (name input, a
+      "Share with friends" checkbox) that, unlike Submit, never touches
+      `GameService`/match state at all: the frontend already knows the
+      current selection's resolved card ids client-side, so its submit
+      handler derives `deckCardIds` from the same `draftDeckSelection`
+      Set the picker itself uses and `sideboardCardIds` as its complement
+      -- every drafted card that *isn't* in the current selection --
+      and posts both straight to `POST /decklists` (`createDecklist()`),
+      saving a personal copy of the in-progress build under its own name
+      without submitting it, ending the deck-building step, or being
+      visible to the opponent. See "Saved decklists" in
+      `php-app/README.md`. Pool/pack/drafted cards are all
       served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
       rather than the usual in-play `serializeCard()` result, but with the
       exact same field names `buildCardThumb()`/`openCardDetail()` already
@@ -1234,6 +1311,42 @@ too, proportional to the smaller card width.
     *other* game's board opened, including a freshly created one that had
     never even started yet.
 
+    **Game log (issue #98).** The "Recent plays" list above is capped at
+    15 entries and shows only the current game's board -- a "View log"
+    button next to its own `<h3>Recent plays</h3>` heading, and a second
+    one under every lobby row's own Play/View button (so a *completed*
+    game's log is reachable without reopening its board at all), each
+    open the same `#game-log-dialog` (`openGameLog()`), fetching the
+    game's ENTIRE history via `GET /games/log`
+    (`GameService::fullEventLog()`, chronological oldest-first, no cap --
+    see `php-app/README.md`). Reusing recentEvents' own `describeEvent()`
+    rendering keeps the two views' phrasing identical; the only
+    presentation difference is how a description with more than one
+    semicolon-joined segment (e.g. Malice's own color cascade, or a
+    play that also logs a draw/grant) renders: instead of one run-on
+    sentence, `buildLogEntryContent()` splits it into a bulleted `<ul>`
+    headed by its first segment, one `<li>` per segment, so a multi-part
+    event reads as a scannable breakdown rather than a single dense line.
+    The dialog's three buttons all operate on the SAME already-fetched
+    `currentGameLogEvents` array, so none of them re-request the log:
+    **Copy text** (`navigator.clipboard.writeText()`) and **Download
+    text** (`downloadFile()`, a throwaway `<a download>` + object URL,
+    since there's no server-side file to link to) both render every
+    event through `formatLogEntryAsText()` -- the same "bulleted list
+    headed by the first item" treatment as on-screen, just `'- '`-prefixed
+    lines instead of an actual `<ul>`, joined with a blank line between
+    events -- while **Download data** hands the browser
+    `JSON.stringify(currentGameLogEvents, null, 2)` verbatim, a genuine
+    raw export (every event's own `event_type`/`round_number`/
+    `acting_game_player_id`/`card_id`/`details` alongside the resolved
+    `acting_username`/`card_name`/`description`) rather than a repeat of
+    the human-readable text the other two buttons produce. Both
+    "View log" buttons -- and both new lobby-row buttons more generally
+    -- sit in their own `.lobby-actions` column now (Play/View above,
+    View log below), rather than as flex siblings of `.lobby-row`
+    directly, so the secondary action reads as subordinate to the
+    primary one instead of competing with it for the row's right edge.
+
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
     `#in-progress-area` (a pending decision/scoring preview belongs to
@@ -1375,6 +1488,159 @@ too, proportional to the smaller card width.
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it
     talks to the `/friends/*` endpoints.
+  - A "Decks" button (`#decks-button`, issue #92) opens `#decks-dialog` for
+    managing saved decklists -- letting a player build up a personal
+    library of decks instead of re-pasting/re-uploading the same text
+    every time they start a `custom`/`custom_duel` game. A create/edit
+    form (`#decks-form`) takes a name, a "Share with friends" checkbox
+    (`#decks-form-friends-visible` -- the only visibility choice; there's
+    no third all-users-public tier, see "Saved decklists" in
+    `php-app/README.md`), and the deck's own cards via the exact same
+    file-upload-into-textarea pattern (`#decks-form-file`/
+    `#decks-form-text`) the New Game dialog's Custom Decklist fields and
+    the `custom_duel` waiting room already use. `refreshDecksData()`
+    (`GET /decklists`) renders two lists: "Your decks"
+    (`#decks-own-list`) and "Friends' decks" (`#decks-friends-list`).
+    Each `<li>` row is split into two flex children: a left,
+    flex-growing `.decks-row-info` (built by
+    `buildDeckRowInfo(deck, includeFriendsIcon)`, shared by both lists)
+    and a right, `flex-shrink: 0` `.decks-row-actions` holding that row's
+    buttons -- so the info column is free to wrap onto its own width
+    while the actions column stays put flush against the dialog's right
+    edge. `.decks-row-info` itself stacks two lines: `.decks-row-name`
+    (the deck's name, bold) above `.decks-row-meta`, a left-justified
+    row containing a card-count icon+badge
+    (`buildPlayerStat('hand', deck.card_count, ...)`) rather than a plain
+    "(N cards)" text clause -- reusing the exact same `.player-stat--hand`
+    icon (two overlapping card portraits) the board's own players list
+    already uses for hand size, since a saved deck and an in-hand card
+    count are conceptually the same thing: a pile of cards with a size
+    worth badging rather than spelling out in words -- and, for a
+    friends-visible own deck, a small two-person icon right after that
+    badge (`buildPlayerFlag('friendsShared', 'Shared with friends', ...)`,
+    `.player-flag--friendsShared`, colored via the same `--color-info`
+    blue already established for the lobby's own "in progress" status),
+    reusing the exact icon/tooltip/`aria-label` convention the board's
+    own players list established for issue #143
+    (`title`/`role="img"`/`aria-label` together mean a mouse-hover tooltip
+    and a screen reader both still get the full "Shared with friends"
+    text even though nothing on screen literally spells it out anymore).
+    `buildDeckRowInfo()`'s `includeFriendsIcon` flag is `true` for
+    "Your decks" rows and `false` for "Friends' decks" rows, since every
+    deck shown there is already friends-visible by definition -- the icon
+    would be redundant. Putting the card-count/friends-shared icons on
+    their own line under the name (rather than trailing after it, or
+    after the action buttons) replaced what used to be a plain
+    "(N cards, shared with friends)" text clause, since every own-deck row
+    already carries an action button per column and the extra text made
+    rows harder to scan at a glance. `.player-stat`/`.player-flag`'s
+    shared rule carries `flex-shrink: 0` -- without it, the icon (which
+    has no natural min-content size of its own to resist shrinking) gets
+    squeezed below its specified `1.5rem` by `.decks-row-meta`'s own
+    plain `display: flex` (no `flex-wrap`, unlike `.player-icons` on the
+    board, which wraps overflow to a second line instead of shrinking
+    it) whenever a row's name text and buttons don't leave quite enough
+    room -- and since how much room is left over depends on the name's
+    own length, two otherwise-identical icons on two different rows
+    would end up rendering at visibly different sizes purely because
+    their deck names differ.
+
+    A "Your decks" row's `.decks-row-actions` holds
+    View/Edit/Duplicate/Download/Delete, all rendered as small square
+    icon-only buttons (`iconActionButton('view'/'edit'/'duplicate'/
+    'download'/'delete', label, onClick)`, an eye/pencil/
+    two-overlapping-sheets/download-tray/trash-can, standard Material
+    Design glyphs reused verbatim in a new `ACTION_ICON_PATHS` map
+    alongside the existing `PLAYER_STAT_ICON_PATHS` -- separate from it
+    since these live inside an actual `.icon-action-button` rather than
+    the players list's own icon+badge convention, and don't need a badge
+    overlay) instead of five separate text buttons, so they take up
+    noticeably less horizontal room next to a name that might already be
+    wrapping onto 2 lines -- same `title`/`aria-label` treatment as every
+    other icon on this page, so "View"/"Edit"/"Duplicate"/"Download"/
+    "Delete" are still the button's accessible name for a screen reader
+    (and Playwright's own `getByRole('button', {name: 'View'})`-style
+    lookups) even though nothing on screen literally spells the word out
+    anymore. The four non-destructive actions sit in a
+    `.decks-row-actions-grid` (a 2x2 CSS grid, `grid-template-columns:
+    repeat(2, auto)`: View/Edit on the top row, Duplicate/Download on the
+    bottom row, directly beneath their respective top-row counterpart),
+    with Delete rendered as `.decks-row-actions`'s own second flex child
+    -- a sibling of the grid rather than a fifth grid cell -- so the one
+    irreversible action is both visually set apart from, and (via the
+    flex row's own `align-items: center`) vertically centered against,
+    the compact 2x2 block of everything else, making an accidental
+    click while reaching for View/Edit/Duplicate/Download far less
+    likely to land on Delete instead. Delete's own icon is also colored
+    with `.icon-action-button--delete { color: var(--color-error) }`
+    (the `<svg>`'s `fill="currentColor"` means setting the button's own
+    `color` is enough, no separate `fill` override needed) -- the same
+    error-red already used for validation messages, distinguishing the
+    one irreversible action by color as well as by position. "Friends'
+    decks" (`#decks-friends-list`) rows are simpler: `.decks-row-actions`
+    holds `view`, `duplicate`, and `download` icon buttons in a plain flex
+    row (no grid needed for three buttons) -- no Edit or Delete, since
+    those change/remove a deck someone else owns, but Duplicate and
+    Download both work exactly as they do on an owner's own row, since
+    both are just `viewDecklist(id)` under the hood and the backend's
+    `UserDecklistService::view()`/`authorizeViewer()` already authorizes
+    any accepted friend to view a `visibility='friends'` deck (the very
+    check that lets the row render in "Friends' decks" at all -- see
+    "Saved decklists" in `php-app/README.md`). A
+    friend with no friends-visible decks is omitted entirely from
+    "Friends' decks," not shown with an empty section, and each of that
+    section's rows is labeled with that friend's own username. "Edit" (`startEditingDeck()`)
+    populates the form from that deck's own contents, including
+    `#decks-form-text` itself -- `buildDecklistText()` reconstructs the
+    deck's decklist text in the exact `About`/`Name`/blank-line/card-lines/
+    optional-`Sideboard` format `DecklistParser` accepts (one counted line
+    per distinct card, e.g. `"1 Bliss (MSW) 108"`, collapsing repeat
+    copies of the same card rather than one line per copy), so editing a
+    deck's cards reads and works the same way creating one does instead of
+    leaving the field blank behind a silent stashed-ids fallback. That
+    fallback still exists (`editingDeckCardIds`/`editingDeckSideboardCardIds`,
+    stashed alongside) purely for the edge case of a user clearing the
+    (now pre-filled) field entirely and submitting anyway, meaning "keep
+    the cards, I only touched the name/visibility" -- the form's submit
+    handler only re-parses `#decks-form-text` when it's non-empty,
+    otherwise reusing the stashed ids. A hidden `#decks-form-id` field is
+    what decides whether submitting calls `POST /decklists` (create) or
+    `POST /decklists/update` (edit) in the first place.
+
+    "Duplicate" (`duplicateDeck()`) resets the form back to its own "new
+    deck" state (`resetDecksForm()`, the same reset a Cancel does) and
+    then fills `#decks-form-text` with just that deck's card lines
+    (`buildDecklistCardsText()` -- the same per-card-line formatting
+    `buildDecklistText()` uses, but deliberately *without* the `About`/
+    `Name` header, since showing "Name `<the old deck's name>`" in the
+    pasted text while the visible Name field sits blank -- ready for a
+    new name -- would read as a mismatch rather than an invitation to
+    type one) -- so clicking "Save deck" afterward creates a brand new
+    deck with the same cards under whatever name is typed in, leaving
+    the original deck untouched. "Download" (`downloadDeck()`) saves a
+    `<deck name>.txt` file containing that same full `buildDecklistText()`
+    output (`About`/`Name` header included this time, since there's no
+    blank-Name-field mismatch to worry about for a plain file save) via
+    the generic `downloadFile()` helper the game log's own download
+    button already established (an object-URL `<a download>` click,
+    since there's no server-side file to link to -- the content is
+    assembled entirely client-side) -- a slash in the deck's own name is
+    swapped for a dash first, since that's the one character which would
+    otherwise be misread as a path separator rather than literal text.
+    "View" (`openDeckView()`) opens a separate small
+    `#deck-view-dialog` showing the deck's name, the same card-count
+    icon+badge and (when applicable) friends-shared icon its own row in
+    the list carries, and its full contents as two card-thumb grids
+    (main deck, and a sideboard grid only shown when the deck actually
+    has one) -- reusing
+    `buildCardThumb()`/`openCardDetail()`, the same helpers every other
+    card grid in this app already uses, so a saved deck's cards are just
+    as clickable-for-detail as an in-game hand or draft pool.
+    `#deck-view-close-button` carries its own small `margin-top`
+    (`#deck-view-close-button` in `style.css`, the same reasoning as
+    `#new-game-close-button` above) so it doesn't sit flush against
+    whichever grid ends up last -- the card grid when there's no
+    sideboard, the sideboard grid otherwise.
   - That same button gets a small red notification dot
     (`.has-friend-request`, applied/removed by
     `setFriendRequestNotification()`) whenever `/friends/invites` returns

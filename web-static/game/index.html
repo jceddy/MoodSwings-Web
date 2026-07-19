@@ -30,6 +30,7 @@
         <h1>MoodSwings-Web</h1>
         <p>Welcome, <span id="username"></span>.</p>
         <button id="friends-button" type="button">Friends</button>
+        <button id="decks-button" type="button">Decks</button>
         <button id="logout-button">Log out</button>
 
         <section id="lobby-view">
@@ -71,12 +72,19 @@
                 <ul id="duel-deck-submission-status"></ul>
 
                 <div id="duel-deck-submit-form-container">
-                    <label>Upload a decklist file
-                        <input type="file" id="duel-deck-submit-file" accept=".txt,text/plain">
+                    <label>Use a saved deck
+                        <select id="duel-deck-submit-saved-decklist">
+                            <option value="">Paste/upload a decklist instead</option>
+                        </select>
                     </label>
-                    <label>Or paste your decklist
-                        <textarea id="duel-deck-submit-text" rows="10"></textarea>
-                    </label>
+                    <div id="duel-deck-submit-paste-fields">
+                        <label>Upload a decklist file
+                            <input type="file" id="duel-deck-submit-file" accept=".txt,text/plain">
+                        </label>
+                        <label>Or paste your decklist
+                            <textarea id="duel-deck-submit-text" class="decklist-textarea" rows="10"></textarea>
+                        </label>
+                    </div>
                     <button id="duel-deck-submit-button" type="button">Submit deck</button>
                     <p id="duel-deck-submit-error" class="error" hidden></p>
                 </div>
@@ -132,8 +140,25 @@
                     <button id="draft-deck-reset-button" type="button" hidden>Reset to previous deck</button>
                 </div>
                 <p id="draft-deck-error" class="error" hidden></p>
+                <button id="draft-deck-save-button" type="button">Save deck&hellip;</button>
                 <button id="draft-deck-submit-button" type="button">Submit deck</button>
             </div>
+
+            <dialog id="draft-deck-save-dialog">
+                <h3>Save deck</h3>
+                <form id="draft-deck-save-form">
+                    <label>Name
+                        <input type="text" id="draft-deck-save-name" required maxlength="120">
+                    </label>
+                    <label>
+                        <input type="checkbox" id="draft-deck-save-friends-visible">
+                        Share with friends
+                    </label>
+                    <p id="draft-deck-save-error" class="error" hidden></p>
+                    <button type="submit">Save</button>
+                    <button id="draft-deck-save-cancel-button" type="button">Cancel</button>
+                </form>
+            </dialog>
 
             <div id="in-progress-area" hidden>
                 <div id="scoring-effects" hidden>
@@ -226,6 +251,7 @@
                 <button id="resign-button" type="button" hidden>Resign game</button>
 
                 <h3>Recent plays</h3>
+                <button id="view-log-button" type="button">View log</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
             </div>
@@ -274,12 +300,19 @@
             <p id="new-game-deck-type-description"></p>
 
             <div id="new-game-decklist-fields" hidden>
-                <label>Upload a decklist file
-                    <input type="file" id="new-game-decklist-file" accept=".txt,text/plain">
+                <label>Use a saved deck
+                    <select id="new-game-saved-decklist">
+                        <option value="">Paste/upload a decklist instead</option>
+                    </select>
                 </label>
-                <label>Or paste your decklist
-                    <textarea id="new-game-decklist-text" rows="10"></textarea>
-                </label>
+                <div id="new-game-decklist-paste-fields">
+                    <label>Upload a decklist file
+                        <input type="file" id="new-game-decklist-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste your decklist
+                        <textarea id="new-game-decklist-text" class="decklist-textarea" rows="10"></textarea>
+                    </label>
+                </div>
             </div>
 
             <div id="new-game-duel-rules-fields" hidden>
@@ -350,7 +383,7 @@
                         <input type="file" id="new-game-quick-draft-custom-pool-file" accept=".txt,text/plain">
                     </label>
                     <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards)
-                        <textarea id="new-game-quick-draft-custom-pool-text" rows="10"></textarea>
+                        <textarea id="new-game-quick-draft-custom-pool-text" class="decklist-textarea" rows="10"></textarea>
                     </label>
                 </div>
             </div>
@@ -373,7 +406,7 @@
                         <input type="file" id="new-game-winston-draft-custom-pool-file" accept=".txt,text/plain">
                     </label>
                     <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards)
-                        <textarea id="new-game-winston-draft-custom-pool-text" rows="10"></textarea>
+                        <textarea id="new-game-winston-draft-custom-pool-text" class="decklist-textarea" rows="10"></textarea>
                     </label>
                 </div>
             </div>
@@ -395,7 +428,7 @@
                         <input type="file" id="new-game-grid-draft-custom-pool-file" accept=".txt,text/plain">
                     </label>
                     <label>Or paste the pool (one card per line, an optional leading count, at least 54 cards)
-                        <textarea id="new-game-grid-draft-custom-pool-text" rows="10"></textarea>
+                        <textarea id="new-game-grid-draft-custom-pool-text" class="decklist-textarea" rows="10"></textarea>
                     </label>
                 </div>
             </div>
@@ -426,6 +459,21 @@
     <dialog id="art-preview-dialog">
         <img id="art-preview-image" class="art-preview-image">
         <button id="art-preview-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- The entire game log (issue #98) -- see openGameLog() in game.js
+         and "Game log" in web-static/README.md. -->
+    <dialog id="game-log-dialog">
+        <h2>Game log</h2>
+        <div id="game-log-actions">
+            <button id="game-log-copy-button" type="button">Copy text</button>
+            <button id="game-log-download-text-button" type="button">Download text</button>
+            <button id="game-log-download-data-button" type="button">Download data</button>
+        </div>
+        <p id="game-log-copy-success" class="success" hidden>Copied to clipboard.</p>
+        <ul id="game-log-list"></ul>
+        <p id="game-log-empty" hidden>Nothing has happened yet.</p>
+        <button id="game-log-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="friends-dialog">
@@ -460,6 +508,57 @@
         </section>
 
         <button id="friends-close-button" type="button">Close</button>
+    </dialog>
+
+    <dialog id="decks-dialog">
+        <h2>Decks</h2>
+
+        <section>
+            <h3 id="decks-form-title">Save a new deck</h3>
+            <form id="decks-form">
+                <input type="hidden" id="decks-form-id" value="">
+                <label>Name
+                    <input type="text" id="decks-form-name" required maxlength="120">
+                </label>
+                <label>Upload a decklist file
+                    <input type="file" id="decks-form-file" accept=".txt,text/plain">
+                </label>
+                <label>Or paste your decklist
+                    <textarea id="decks-form-text" class="decklist-textarea" rows="10"></textarea>
+                </label>
+                <label>
+                    <input type="checkbox" id="decks-form-friends-visible">
+                    Share with friends
+                </label>
+                <p id="decks-form-error" class="error" hidden></p>
+                <p id="decks-form-success" class="success" hidden></p>
+                <button id="decks-form-submit-button" type="submit">Save deck</button>
+                <button id="decks-form-cancel-edit-button" type="button" hidden>Cancel edit</button>
+            </form>
+        </section>
+
+        <section>
+            <h3>Your decks</h3>
+            <ul id="decks-own-list"></ul>
+            <p id="decks-own-empty" hidden>You haven't saved any decks yet.</p>
+        </section>
+
+        <section>
+            <h3>Friends' decks</h3>
+            <div id="decks-friends-list"></div>
+            <p id="decks-friends-empty" hidden>None of your friends have shared any decks with you.</p>
+        </section>
+
+        <button id="decks-close-button" type="button">Close</button>
+    </dialog>
+
+    <dialog id="deck-view-dialog">
+        <h3 id="deck-view-title"></h3>
+        <p id="deck-view-meta"></p>
+        <div id="deck-view-cards"></div>
+        <h4 id="deck-view-sideboard-title" hidden>Sideboard</h4>
+        <div id="deck-view-sideboard-cards"></div>
+        <button id="deck-view-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="resources-dialog">

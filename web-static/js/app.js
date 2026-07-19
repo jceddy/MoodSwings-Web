@@ -100,7 +100,7 @@ function listGames() {
     return apiRequest('/games');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -125,6 +125,11 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // Draft" in web-static/README.md.
             grid_draft_pool_source: gridDraftPoolSource,
             grid_draft_custom_pool_text: gridDraftCustomPoolText,
+            // Only meaningful for deck_type 'custom' -- an alternative to
+            // decklistText, loading a previously-saved decklist (issue
+            // #92) instead of parsing freshly-pasted/uploaded text. See
+            // "Saved decklists" in web-static/README.md.
+            saved_decklist_id: savedDecklistId,
         }),
     });
 }
@@ -157,10 +162,59 @@ function submitInitialCardPass(gameId, cardIds) {
     });
 }
 
-function submitCustomDuelDeck(gameId, decklistText) {
+function submitCustomDuelDeck(gameId, decklistText, savedDecklistId) {
     return apiRequest('/games/decklist', {
         method: 'POST',
-        body: JSON.stringify({ game_id: gameId, decklist_text: decklistText }),
+        body: JSON.stringify({ game_id: gameId, decklist_text: decklistText, saved_decklist_id: savedDecklistId }),
+    });
+}
+
+// Saved user decklists (issue #92) -- see "Saved decklists" in
+// web-static/README.md. listDecklists() returns { own, friends } where
+// friends is grouped per accepted friend who has 1+ friends-visible decks.
+function listDecklists() {
+    return apiRequest('/decklists');
+}
+
+function viewDecklist(id) {
+    return apiRequest(`/decklists/view?id=${id}`);
+}
+
+// Exactly one of decklistText / cardIds should be given -- decklistText
+// for the Decks dialog's own paste/upload form, cardIds (+ optional
+// sideboardCardIds) for the draft formats' "Save deck" button, which
+// already has resolved card ids from its own selection state.
+function createDecklist(name, decklistText, cardIds, sideboardCardIds, visibility) {
+    return apiRequest('/decklists', {
+        method: 'POST',
+        body: JSON.stringify({
+            name,
+            decklist_text: decklistText,
+            card_ids: cardIds,
+            sideboard_card_ids: sideboardCardIds,
+            visibility,
+        }),
+    });
+}
+
+function updateDecklist(id, name, decklistText, cardIds, sideboardCardIds, visibility) {
+    return apiRequest('/decklists/update', {
+        method: 'POST',
+        body: JSON.stringify({
+            id,
+            name,
+            decklist_text: decklistText,
+            card_ids: cardIds,
+            sideboard_card_ids: sideboardCardIds,
+            visibility,
+        }),
+    });
+}
+
+function deleteDecklist(id) {
+    return apiRequest('/decklists/delete', {
+        method: 'POST',
+        body: JSON.stringify({ id }),
     });
 }
 
@@ -207,6 +261,11 @@ function submitGridDraftPick(gameId, axis, index) {
 
 function getGameState(gameId) {
     return apiRequest('/games/state?game_id=' + encodeURIComponent(gameId));
+}
+
+// The entire game log (issue #98) -- see GameService::fullEventLog().
+function getGameLog(gameId) {
+    return apiRequest('/games/log?game_id=' + encodeURIComponent(gameId));
 }
 
 function startGame(gameId) {

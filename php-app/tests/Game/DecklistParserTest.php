@@ -100,13 +100,14 @@ final class DecklistParserTest extends TestCase
         self::assertSame([36], $result['cardIds']);
     }
 
-    public function testEverythingAfterTheFirstBlankLineIsIgnoredAsASideboard(): void
+    public function testSideboardCardsAreCapturedSeparatelyFromTheMainDeck(): void
     {
         $text = "Charity\nKindness\n\nSideboard\n1 Panic\n1 Euphoria";
 
         $result = $this->parser()->parse($text);
 
         self::assertSame([3, 17], $result['cardIds']);
+        self::assertSame([48, 117], $result['sideboardCardIds']);
     }
 
     public function testASideboardHeaderIsOptional(): void
@@ -116,6 +117,31 @@ final class DecklistParserTest extends TestCase
         $result = $this->parser()->parse($text);
 
         self::assertSame([3], $result['cardIds']);
+        self::assertSame([48], $result['sideboardCardIds']);
+    }
+
+    public function testNoSideboardLeavesSideboardCardIdsEmpty(): void
+    {
+        $result = $this->parser()->parse('Charity');
+
+        self::assertSame([], $result['sideboardCardIds']);
+    }
+
+    public function testSideboardSupportsCountsAndSetCodesLikeTheMainDeck(): void
+    {
+        $text = "Charity\n\nSideboard\n2 Doubt (MSW) 36";
+
+        $result = $this->parser()->parse($text);
+
+        self::assertSame([36, 36], $result['sideboardCardIds']);
+    }
+
+    public function testAnUnrecognizedCardInTheSideboardThrows(): void
+    {
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('sideboard line');
+
+        $this->parser()->parse("Charity\n\nSideboard\nNot A Real Card");
     }
 
     public function testMetadataFieldsOtherThanNameAreIgnoredRatherThanRejected(): void

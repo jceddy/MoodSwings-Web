@@ -38,6 +38,89 @@
         return button;
     }
 
+    // Icon set for the Decks dialog's per-row View/Edit/Duplicate/
+    // Download/Delete buttons (issue #92 follow-ups) -- separate from
+    // PLAYER_STAT_ICON_PATHS below since these live inside an actual
+    // <button> rather than the players list's own icon+badge convention,
+    // and don't need a badge overlay. Standard Material Design glyphs
+    // (Apache-2.0), reused verbatim since "an eye"/"a pencil"/"two
+    // overlapping sheets"/"a tray with a down arrow"/"a trash can" are
+    // about as generic as icons get.
+    const ACTION_ICON_PATHS = {
+        view: '<path fill-rule="evenodd" d="M12,4.5C7,4.5,2.73,7.61,1,12c1.73,4.39,6,7.5,11,7.5s9.27-3.11,11-7.5' +
+            'C21.27,7.61,17,4.5,12,4.5z M12,17c-2.76,0-5-2.24-5-5s2.24-5,5-5s5,2.24,5,5S14.76,17,12,17z ' +
+            'M12,9c-1.66,0-3,1.34-3,3s1.34,3,3,3s3-1.34,3-3S13.66,9,12,9z"/>',
+        edit: '<path d="M3,17.25V21h3.75L17.81,9.94l-3.75-3.75L3,17.25z M20.71,7.04c0.39-0.39,0.39-1.02,0-1.41' +
+            'l-2.34-2.34c-0.39-0.39-1.02-0.39-1.41,0l-1.83,1.83l3.75,3.75L20.71,7.04z"/>',
+        duplicate: '<path fill-rule="evenodd" d="M16,1H4C2.9,1,2,1.9,2,3v14h2V3h12V1z ' +
+            'M19,5H8C6.9,5,6,5.9,6,7v14c0,1.1,0.9,2,2,2h11c1.1,0,2-0.9,2-2V7C21,5.9,20.1,5,19,5z ' +
+            'M19,21H8V7h11V21z"/>',
+        download: '<path d="M19,9h-4V3H9v6H5l7,7L19,9z M5,18v2h14v-2H5z"/>',
+        delete: '<path d="M6,7h12l-1.06,13.19C16.85,21.19,16,22,15,22H9c-1,0-1.85-0.81-1.94-1.81L6,7z ' +
+            'M9.5,4h5l1,2h4v2H4V6h4L9.5,4z"/>',
+    };
+
+    function buildActionIcon(kind) {
+        const template = document.createElement('template');
+        template.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + ACTION_ICON_PATHS[kind] + '</svg>';
+        return template.content.firstChild;
+    }
+
+    // Same icon+tooltip/aria-label treatment as buildPlayerFlag() (title
+    // AND aria-label both carry the full word, so a screen reader or a
+    // sighted user hovering the button still gets "View"/"Edit"/"Delete"
+    // even though the button's own visible label is now just an icon).
+    function iconActionButton(kind, label, onClick) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'icon-action-button icon-action-button--' + kind;
+        button.title = label;
+        button.setAttribute('aria-label', label);
+        button.appendChild(buildActionIcon(kind));
+        button.addEventListener('click', onClick);
+        return button;
+    }
+
+    // Populates a "use a saved deck" <select> (issue #92) with an
+    // <optgroup> for "My decks" and one per friend who has 1+
+    // friends-visible decks -- shared by the New Game dialog's own select
+    // and the in-game custom_duel submission form's select. Both keep the
+    // same fixed default option (value "", "Paste/upload a decklist
+    // instead"), rebuilt fresh here every call so a deck saved/deleted/
+    // shared since the select was last populated is always reflected.
+    async function populateSavedDecklistSelect(selectEl) {
+        const { ok, body } = await listDecklists();
+        if (!ok) {
+            return;
+        }
+
+        selectEl.innerHTML = '<option value="">Paste/upload a decklist instead</option>';
+
+        if (body.own.length > 0) {
+            const ownGroup = document.createElement('optgroup');
+            ownGroup.label = 'My decks';
+            for (const deck of body.own) {
+                const option = document.createElement('option');
+                option.value = deck.id;
+                option.textContent = deck.name;
+                ownGroup.appendChild(option);
+            }
+            selectEl.appendChild(ownGroup);
+        }
+
+        for (const friend of body.friends) {
+            const group = document.createElement('optgroup');
+            group.label = friend.friend_username + "'s decks";
+            for (const deck of friend.decklists) {
+                const option = document.createElement('option');
+                option.value = deck.id;
+                option.textContent = deck.name;
+                group.appendChild(option);
+            }
+            selectEl.appendChild(group);
+        }
+    }
+
     // Toggled by both refreshFriendsData() (the dialog's own data fetch)
     // and checkFriendRequestNotification() (an independent low-frequency
     // poll -- see below) so the dot appears the moment a request arrives
@@ -110,6 +193,268 @@
         );
     }
 
+    // -- Decks dialog (issue #92) -------------------------------------------
+    //
+    // Stashed by startEditingDeck() as a fallback for the rare case where
+    // the user clears the (now pre-populated, see buildDecklistText()
+    // below) text field entirely and submits anyway, intending a pure
+    // rename/visibility change without retyping the cards -- an empty
+    // text field on submit falls back to these previously-fetched ids
+    // instead of failing with "no cards in it."
+    let editingDeckCardIds = null;
+    let editingDeckSideboardCardIds = null;
+
+    function resetDecksForm() {
+        document.getElementById('decks-form-title').textContent = 'Save a new deck';
+        document.getElementById('decks-form-id').value = '';
+        document.getElementById('decks-form-name').value = '';
+        document.getElementById('decks-form-file').value = '';
+        document.getElementById('decks-form-text').value = '';
+        document.getElementById('decks-form-friends-visible').checked = false;
+        document.getElementById('decks-form-submit-button').textContent = 'Save deck';
+        document.getElementById('decks-form-cancel-edit-button').hidden = true;
+        document.getElementById('decks-form-error').hidden = true;
+        document.getElementById('decks-form-success').hidden = true;
+        editingDeckCardIds = null;
+        editingDeckSideboardCardIds = null;
+    }
+
+    // One line per distinct card in DecklistParser's own accepted format
+    // ("1 Name (SET) NUMBER", see php-app/README.md "Saved decklists") --
+    // NUMBER is card.collector_number, a real per-printing field (see
+    // migration 0039), not just the card's own catalog id like before.
+    // Copies of the same card_id are collapsed into one counted line, in
+    // first-seen order, rather than one line per copy -- reads the same
+    // way a hand-typed decklist would.
+    function formatDecklistCardLines(cards) {
+        const groups = [];
+        const indexByCardId = new Map();
+        for (const card of cards) {
+            if (indexByCardId.has(card.card_id)) {
+                groups[indexByCardId.get(card.card_id)].count++;
+            } else {
+                indexByCardId.set(card.card_id, groups.length);
+                groups.push({ card, count: 1 });
+            }
+        }
+        return groups.map(({ card, count }) => `${count} ${card.name} (${card.set_code}) ${card.collector_number}`);
+    }
+
+    // Just the card lines (main deck, optional Sideboard section) with no
+    // About/Name header -- shared by buildDecklistText() below and
+    // duplicateDeck(), which deliberately omits the header (see there for
+    // why).
+    function buildDecklistCardsText(deck) {
+        const lines = [...formatDecklistCardLines(deck.cards)];
+        if (deck.sideboard_cards.length > 0) {
+            lines.push('', 'Sideboard', ...formatDecklistCardLines(deck.sideboard_cards));
+        }
+        return lines.join('\n');
+    }
+
+    // Reconstructs a saved deck's own decklist text in the exact format
+    // startEditingDeck() below populates #decks-form-text with (and
+    // downloadDeck() saves to a .txt file in) -- so editing a deck's
+    // cards works the same way creating one does (type/paste something
+    // readable) instead of leaving the field blank and silently reusing
+    // whatever ids were last saved.
+    function buildDecklistText(deck) {
+        return 'About\nName ' + deck.name + '\n\n' + buildDecklistCardsText(deck);
+    }
+
+    async function startEditingDeck(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        document.getElementById('decks-form-title').textContent = 'Edit deck';
+        document.getElementById('decks-form-id').value = deck.id;
+        document.getElementById('decks-form-name').value = deck.name;
+        document.getElementById('decks-form-file').value = '';
+        document.getElementById('decks-form-text').value = buildDecklistText(deck);
+        document.getElementById('decks-form-friends-visible').checked = deck.visibility === 'friends';
+        document.getElementById('decks-form-submit-button').textContent = 'Update deck';
+        document.getElementById('decks-form-cancel-edit-button').hidden = false;
+        document.getElementById('decks-form-error').hidden = true;
+        document.getElementById('decks-form-success').hidden = true;
+        editingDeckCardIds = deck.cards.map((card) => card.card_id);
+        editingDeckSideboardCardIds = deck.sideboard_cards.map((card) => card.card_id);
+    }
+
+    // Pre-fills the create form with an existing deck's cards under a
+    // blank name, ready to save as a brand new deck -- resetDecksForm()
+    // gets the id/title/submit-button-label/visibility-checkbox back to
+    // "new deck" state first, then the text field is overwritten with
+    // just the card lines (buildDecklistCardsText(), not the full
+    // buildDecklistText() startEditingDeck() uses above) -- omitting the
+    // About/Name header here on purpose, since showing "Name <old deck's
+    // name>" in the pasted text while the visible Name field sits blank
+    // would read as a mismatch/bug rather than "type a new name."
+    async function duplicateDeck(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        resetDecksForm();
+        document.getElementById('decks-form-text').value = buildDecklistCardsText(deck);
+    }
+
+    // Saves a deck's decklist text (the exact same format/content
+    // startEditingDeck() above populates #decks-form-text with) to a
+    // local .txt file named after the deck -- reuses the generic
+    // downloadFile() helper (see below) the game log's own download
+    // button already established. Slashes are swapped for a dash since
+    // they're the one character a deck name could contain that would
+    // otherwise be misread as a path separator by the browser/filesystem
+    // rather than literal text.
+    async function downloadDeck(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        downloadFile(deck.name.replace(/[\\/]/g, '-') + '.txt', buildDecklistText(deck), 'text/plain');
+    }
+
+    async function openDeckView(id) {
+        const { ok, body } = await viewDecklist(id);
+        if (!ok) {
+            return;
+        }
+        const deck = body.decklist;
+
+        document.getElementById('deck-view-title').textContent = deck.name;
+        const metaEl = document.getElementById('deck-view-meta');
+        metaEl.innerHTML = '';
+        metaEl.appendChild(buildPlayerStat('hand', deck.cards.length, deck.cards.length + ' card(s) in this deck'));
+        if (deck.visibility === 'friends') {
+            metaEl.append(' ');
+            metaEl.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
+        }
+
+        const cardsEl = document.getElementById('deck-view-cards');
+        cardsEl.innerHTML = '';
+        for (const card of deck.cards) {
+            cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+        }
+
+        const sideboardTitle = document.getElementById('deck-view-sideboard-title');
+        const sideboardEl = document.getElementById('deck-view-sideboard-cards');
+        sideboardEl.innerHTML = '';
+        sideboardTitle.hidden = deck.sideboard_cards.length === 0;
+        for (const card of deck.sideboard_cards) {
+            sideboardEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+        }
+
+        document.getElementById('deck-view-dialog').showModal();
+    }
+
+    async function deleteDeckAndRefresh(id) {
+        await deleteDecklist(id);
+        await refreshDecksData();
+    }
+
+    // Left-hand column of a Decks dialog row: the deck's name on its own
+    // line, with the card-count icon+badge (and, for the owner's own
+    // rows, the friends-shared icon) on a second line underneath rather
+    // than crowded onto the same line as the name -- includeFriendsIcon
+    // is false for friends' decks list rows, since every deck shown
+    // there is already friends-visible by definition, so the icon would
+    // be redundant on every single row.
+    function buildDeckRowInfo(deck, includeFriendsIcon) {
+        const info = document.createElement('div');
+        info.className = 'decks-row-info';
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'decks-row-name';
+        nameEl.textContent = deck.name;
+        info.appendChild(nameEl);
+
+        const meta = document.createElement('div');
+        meta.className = 'decks-row-meta';
+        meta.appendChild(buildPlayerStat('hand', deck.card_count, deck.card_count + ' card(s) in this deck'));
+        if (includeFriendsIcon && deck.visibility === 'friends') {
+            meta.appendChild(buildPlayerFlag('friendsShared', 'Shared with friends', 'player-flag--friendsShared'));
+        }
+        info.appendChild(meta);
+
+        return info;
+    }
+
+    async function refreshDecksData() {
+        const { ok, body } = await listDecklists();
+        const own = ok ? body.own : [];
+        const friends = ok ? body.friends : [];
+
+        renderList(
+            document.getElementById('decks-own-list'),
+            document.getElementById('decks-own-empty'),
+            own,
+            (deck) => {
+                const li = document.createElement('li');
+                li.appendChild(buildDeckRowInfo(deck, true));
+
+                // Right-justified action section: View/Edit stacked over
+                // Duplicate/Download in a 2x2 grid, with Delete standing
+                // alone alongside it (vertically centered against the
+                // grid's own height via .decks-row-actions's own
+                // align-items: center) -- physically separated from the
+                // other four so a stray click aimed at one of them can't
+                // land on the one irreversible action in the row.
+                const actions = document.createElement('div');
+                actions.className = 'decks-row-actions';
+                const grid = document.createElement('div');
+                grid.className = 'decks-row-actions-grid';
+                grid.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                grid.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
+                grid.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
+                grid.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
+                actions.appendChild(grid);
+                actions.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
+                li.appendChild(actions);
+
+                return li;
+            }
+        );
+
+        const friendsListEl = document.getElementById('decks-friends-list');
+        friendsListEl.innerHTML = '';
+        document.getElementById('decks-friends-empty').hidden = friends.length > 0;
+        for (const friend of friends) {
+            const heading = document.createElement('h4');
+            heading.textContent = friend.friend_username + "'s decks";
+            friendsListEl.appendChild(heading);
+
+            const ul = document.createElement('ul');
+            for (const deck of friend.decklists) {
+                const li = document.createElement('li');
+                li.appendChild(buildDeckRowInfo(deck, false));
+
+                // Duplicate/Download both just call viewDecklist(id) under
+                // the hood, and the backend authorizes any accepted friend
+                // to view a friends-visible deck (the same check that lets
+                // this row render at all) -- so both work here exactly as
+                // they do on an owner's own row. No Edit/Delete though:
+                // those stay owner-only, changing/removing a deck someone
+                // else owns.
+                const actions = document.createElement('div');
+                actions.className = 'decks-row-actions';
+                actions.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                actions.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
+                actions.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
+                li.appendChild(actions);
+
+                ul.appendChild(li);
+            }
+            friendsListEl.appendChild(ul);
+        }
+    }
+
     // -- Game lobby + board ----------------------------------------------
     //
     // Every card's `choices` payload has a card-specific shape (a target
@@ -136,6 +481,10 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Reset in showBoard() so the saved-deck dropdown is re-fetched fresh
+    // for each newly-viewed custom_duel game, but not on every 4-second
+    // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
+    let duelSavedDecklistSelectPopulated = false;
 
     // refreshBoard() can overlap with itself -- the 4-second poll timer
     // doesn't wait for a prior call to finish, and a user action (Start
@@ -170,6 +519,7 @@
 
     function showBoard(gameId) {
         currentGameId = gameId;
+        duelSavedDecklistSelectPopulated = false;
         lobbyView.hidden = true;
         boardView.hidden = false;
         // boardMessage ("Game complete!"/"Round scored...") is otherwise
@@ -311,6 +661,12 @@
         const deckType = document.getElementById('new-game-deck-type').value;
         document.getElementById('new-game-deck-type-description').textContent = DECK_TYPE_DESCRIPTIONS[deckType] || '';
         document.getElementById('new-game-decklist-fields').hidden = deckType !== 'custom';
+        // Hidden whenever a saved deck (issue #92) is chosen from the
+        // dropdown above it, in addition to whenever deckType isn't
+        // 'custom' at all -- mirrors duel-deck-submit-paste-fields' own
+        // toggle in renderDuelDeckSubmission()/its change listener below.
+        document.getElementById('new-game-decklist-paste-fields').hidden =
+            deckType !== 'custom' || document.getElementById('new-game-saved-decklist').value !== '';
         document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
         document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
         document.getElementById('new-game-winston-draft-fields').hidden = deckType !== 'winston_draft';
@@ -465,6 +821,41 @@
         }
     }
 
+    // Appends game.players' usernames (comma-separated) to container,
+    // each with a play-arrow icon (reusing the same green
+    // player-flag--turn shape the board's own players list uses for "on
+    // turn" -- see buildPlayerFlag()) if current_turn_username names
+    // them, and/or a gold waiting-hourglass icon (player-flag--
+    // pendingDecision) if awaiting_response_usernames includes them --
+    // in place of the old "(your turn)"/"(waiting on ...)" text tags,
+    // which only ever named the viewer even though a whole game (or,
+    // pre-game, a draft/deck-building step -- see
+    // GameService::draftAwaitingResponseUsernames()) could be waiting on
+    // someone else entirely. A player can carry both at once in
+    // principle (e.g. a self-targeting decision resolving without ever
+    // handing the turn to anyone else), so the two checks are
+    // independent, not mutually exclusive. Shared by buildGameRow()'s
+    // own (non-compact) opponents line and buildMatchGroupRow()'s
+    // header, since a draft-based match's games are always grouped
+    // (draft_match_id is set from game 1 onward) -- without this shared
+    // helper, a still-'waiting'/drafting game's own icons would never
+    // render at all, since its row only ever appears as a match group's
+    // compact sub-row.
+    function appendPlayersWithFlags(container, game) {
+        game.players.forEach((player, index) => {
+            if (index > 0) {
+                container.append(', ');
+            }
+            container.append(player.username);
+            if (game.current_turn_username === player.username) {
+                container.appendChild(buildPlayerFlag('onTurn', player.username + "'s turn", 'player-flag--turn'));
+            }
+            if (game.awaiting_response_usernames.includes(player.username)) {
+                container.appendChild(buildPlayerFlag('pendingDecision', 'Waiting on ' + player.username, 'player-flag--pendingDecision'));
+            }
+        });
+    }
+
     // Builds one game's own lobby row. $opts.compact drops the
     // format/deck-type line and the opponents line (shown once already at
     // the Quick Draft match group's own header -- see buildMatchGroupRow())
@@ -529,30 +920,12 @@
 
         infoEl.appendChild(statusLineEl);
 
-        // Each player's own name gets a play-arrow icon (reusing the same
-        // green player-flag--turn shape the board's own players list uses
-        // for "on turn" -- see buildPlayerFlag()) if current_turn_username
-        // names them, and/or a gold waiting-hourglass icon (player-flag--
-        // pendingDecision) if awaiting_response_usernames includes them --
-        // in place of the old "(your turn)"/"(waiting on ...)" text tags,
-        // which only ever named the viewer even though a whole game could
-        // be waiting on someone else entirely. A player can carry both at
-        // once in principle (e.g. a self-targeting decision resolving
-        // without ever handing the turn to anyone else), so the two checks
-        // are independent, not mutually exclusive.
+        // Not shown on a match's own compact per-game sub-rows -- those
+        // already inherit the header's own appendPlayersWithFlags() call
+        // (see buildMatchGroupRow()), and repeating it per sub-row would
+        // just be noise for games that already completed.
         if (!opts.compact) {
-            game.players.forEach((player, index) => {
-                if (index > 0) {
-                    infoEl.append(', ');
-                }
-                infoEl.append(player.username);
-                if (game.current_turn_username === player.username) {
-                    infoEl.appendChild(buildPlayerFlag('onTurn', player.username + "'s turn", 'player-flag--turn'));
-                }
-                if (game.awaiting_response_usernames.includes(player.username)) {
-                    infoEl.appendChild(buildPlayerFlag('pendingDecision', 'Waiting on ' + player.username, 'player-flag--pendingDecision'));
-                }
-            });
+            appendPlayersWithFlags(infoEl, game);
         }
 
         // winner_usernames is only ever non-empty once the game is
@@ -574,6 +947,13 @@
 
         li.appendChild(infoEl);
 
+        // Play/View and View log sit stacked in their own column (rather
+        // than as two flex siblings of .lobby-row directly) so "View log"
+        // renders BELOW the primary action button instead of beside it --
+        // see .lobby-actions in style.css.
+        const actionsEl = document.createElement('div');
+        actionsEl.className = 'lobby-actions';
+
         // A 'waiting'/'in_progress' game is still something to actually
         // play; anything else (completed, or the rarer abandoned) is
         // read-only from here on, so the button reads "View" instead --
@@ -581,7 +961,9 @@
         // renders a read-only board once the game itself isn't
         // in_progress, see GameService::getState()'s own round: null).
         const canPlay = game.status === 'waiting' || game.status === 'in_progress';
-        li.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
+        actionsEl.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
+        actionsEl.appendChild(actionButton('View log', () => openGameLog(game.id)));
+        li.appendChild(actionsEl);
         return li;
     }
 
@@ -631,8 +1013,13 @@
             headerEl.appendChild(resultEl);
         }
 
-        const opponents = firstGame.players.map((p) => p.username).join(', ');
-        headerEl.append(opponents);
+        // Reuses buildGameRow()'s own icon logic (see
+        // appendPlayersWithFlags()) against firstGame -- the match's most
+        // recent (and only ever actionable) game -- since a draft-based
+        // match's games are always grouped here rather than rendered as
+        // buildGameRow()'s own top-level, non-compact row, which would
+        // otherwise never show these icons at all for a draft game.
+        appendPlayersWithFlags(headerEl, firstGame);
 
         li.appendChild(headerEl);
 
@@ -728,6 +1115,7 @@
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
+    document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
@@ -837,6 +1225,7 @@
         }
 
         updateTeamFields();
+        await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
         newGameDialog.showModal();
     });
 
@@ -868,7 +1257,10 @@
 
         const partnerUserId = isTeamFormat ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
-        const decklistText = deckType === 'custom' ? document.getElementById('new-game-decklist-text').value : undefined;
+        const savedDecklistId = deckType === 'custom'
+            ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
+            : undefined;
+        const decklistText = deckType === 'custom' && !savedDecklistId ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
         const quickDraftPoolSource = deckType === 'quick_draft' ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
         const quickDraftCustomPoolText = deckType === 'quick_draft' && quickDraftPoolSource === 'custom'
@@ -896,6 +1288,7 @@
             winstonDraftCustomPoolText,
             gridDraftPoolSource,
             gridDraftCustomPoolText,
+            savedDecklistId,
         );
 
         if (!ok) {
@@ -1371,6 +1764,135 @@
         artPreviewDialog.close();
     });
 
+    // -- Game log (issue #98) -----------------------------------------------
+    //
+    // A full, chronological (oldest-first) view of a game's entire
+    // game_events history -- GET /games/log (GameService::fullEventLog())
+    // -- opened from either the board's own "View log" button (next to
+    // "Recent plays", which only ever shows the last 15) or each lobby
+    // row's own "View log" button, so the log is reachable for a
+    // completed game too without first having to reopen its board.
+
+    const gameLogDialog = document.getElementById('game-log-dialog');
+
+    // The raw events from the most recently opened log -- kept around
+    // (rather than re-fetched) so the copy/download buttons below can
+    // build their own text/JSON straight from what's already on screen.
+    let currentGameLogEvents = [];
+
+    // Splits a describeEvent()-rendered description on its own '; '
+    // segment separator (see GameService::describeEvent()'s own
+    // docblock -- every additional card move/ownership change/draw/grant
+    // it records gets appended that way) into one line per segment, e.g.
+    // Malice's own cascade reads as two separate lines:
+    //   Alice played Malice (targeting Bob)
+    //   Charity moved from Bob's hand to Alice's hand
+    // Every description -- single-segment or multi-segment -- gets
+    // wrapped in the same dotted-border box (see .game-log-entry-group in
+    // style.css), so a plain one-line play lines up at the same width as
+    // a multi-line one instead of running edge-to-edge past it. Bullets
+    // aren't used for the multi-line case since these lines are really
+    // just several consequences of the SAME one play, in the order they
+    // happened, not a set of unrelated items.
+    function buildLogEntryContent(description) {
+        const group = document.createElement('div');
+        group.className = 'game-log-entry-group';
+        description.split('; ').forEach((part) => {
+            const line = document.createElement('div');
+            line.textContent = part;
+            group.appendChild(line);
+        });
+        return group;
+    }
+
+    // Plain-text rendering of one event for the copy/download-text
+    // buttons below -- the same segments buildLogEntryContent() renders
+    // as separate lines on screen, joined the same way here: one line per
+    // segment, no bullet marker. Consecutive events are already separated
+    // by a blank line (see gameLogAsText() below), which is the "insert a
+    // newline between groups" grouping cue for the plain-text output.
+    function formatLogEntryAsText(event) {
+        return event.description.split('; ').join('\n');
+    }
+
+    function gameLogAsText() {
+        return currentGameLogEvents.map(formatLogEntryAsText).join('\n\n');
+    }
+
+    // Builds a throwaway <a download> to trigger a browser file save --
+    // there's no server-side file to link to (the content is assembled
+    // entirely client-side from currentGameLogEvents), so an
+    // object URL is the standard way to hand the browser in-memory
+    // content to save as though it were a real download.
+    function downloadFile(filename, content, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    async function openGameLog(gameId) {
+        const listEl = document.getElementById('game-log-list');
+        const emptyEl = document.getElementById('game-log-empty');
+        document.getElementById('game-log-copy-success').hidden = true;
+        currentGameLogEvents = [];
+        // Cleared up front rather than left showing whatever the
+        // previously opened game's own log last rendered, but emptyEl
+        // stays hidden here too -- "Nothing has happened yet" would be
+        // misleading while the fetch below is still in flight.
+        listEl.innerHTML = '';
+        emptyEl.hidden = true;
+        // The download/copy buttons need to know which game's log this is
+        // for their own filenames -- stashed on the dialog itself rather
+        // than a separate module-level variable, since nothing else about
+        // this dialog's state needs to survive past it closing.
+        gameLogDialog.dataset.gameId = gameId;
+        gameLogDialog.showModal();
+
+        const { ok, body } = await getGameLog(gameId);
+        currentGameLogEvents = ok ? body.events : [];
+
+        renderList(listEl, emptyEl, currentGameLogEvents, (event) => {
+            const li = document.createElement('li');
+            li.appendChild(buildLogEntryContent(event.description));
+            return li;
+        });
+    }
+
+    document.getElementById('view-log-button').addEventListener('click', () => openGameLog(currentGameId));
+
+    document.getElementById('game-log-close-button').addEventListener('click', () => {
+        gameLogDialog.close();
+    });
+
+    document.getElementById('game-log-copy-button').addEventListener('click', async () => {
+        const successEl = document.getElementById('game-log-copy-success');
+        try {
+            await navigator.clipboard.writeText(gameLogAsText());
+            successEl.hidden = false;
+        } catch (e) {
+            successEl.hidden = true;
+            window.alert('Could not copy the game log to your clipboard.');
+        }
+    });
+
+    document.getElementById('game-log-download-text-button').addEventListener('click', () => {
+        downloadFile('game-' + gameLogDialog.dataset.gameId + '-log.txt', gameLogAsText(), 'text/plain');
+    });
+
+    document.getElementById('game-log-download-data-button').addEventListener('click', () => {
+        downloadFile(
+            'game-' + gameLogDialog.dataset.gameId + '-log.json',
+            JSON.stringify(currentGameLogEvents, null, 2),
+            'application/json',
+        );
+    });
+
     // Small inline pictograms (issue #143) replacing the players list's own
     // plain-text stat clauses ("4 point(s)", "went first this round", ...)
     // -- self-contained straight-line shapes rather than curves, so each is
@@ -1400,6 +1922,11 @@
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
         // A delayed decision response awaiting this player: an hourglass.
         pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
+        // Shared with friends (issue #92 follow-up): two overlapping people,
+        // replacing what used to be a plain "shared with friends" text
+        // clause next to a saved deck's name.
+        friendsShared: '<circle cx="8" cy="8" r="3"/><rect x="3" y="13" width="10" height="8" rx="3"/>'
+            + '<circle cx="16" cy="7" r="3.5"/><rect x="10" y="12" width="12" height="9" rx="3.5"/>',
     };
 
     // <template> parses its own innerHTML through the HTML parser's SVG
@@ -2484,6 +3011,7 @@
         document.getElementById('draft-deck-building-title').textContent = 'Build your deck (' + sizeText + ')';
         const picker = document.getElementById('draft-deck-picker');
         const submitButton = document.getElementById('draft-deck-submit-button');
+        const saveButton = document.getElementById('draft-deck-save-button');
         const selectAllButton = document.getElementById('draft-deck-select-all-button');
         const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
         const resetButton = document.getElementById('draft-deck-reset-button');
@@ -2506,6 +3034,7 @@
             }
             picker.innerHTML = '';
             submitButton.hidden = true;
+            saveButton.hidden = true;
             selectAllButton.hidden = true;
             clearSelectionButton.hidden = true;
             resetButton.hidden = true;
@@ -2550,6 +3079,8 @@
 
         submitButton.hidden = false;
         submitButton.disabled = draftDeckSelection.size < deckBuilding.min_deck_size || draftDeckSelection.size > deckBuilding.max_deck_size;
+        saveButton.hidden = false;
+        saveButton.disabled = submitButton.disabled;
         selectAllButton.hidden = false;
         clearSelectionButton.hidden = false;
         // Only a sideboard (game 2+ of a match) has a previous deck to
@@ -2588,6 +3119,47 @@
         }
         draftDeckSelectionInitialized = false;
         await refreshBoard();
+    });
+
+    // Draft formats' own "Save deck" button (issue #92) -- saves the
+    // current selection as a first-class, reusable decklist under a name,
+    // independent of (and without requiring) actually submitting it for
+    // this match. The "optional sideboard" the issue asks for is derived
+    // as the complement of the selection: every drafted card NOT
+    // currently selected -- no separate sideboard-picking UI is needed
+    // since it's just "everything else you drafted."
+    const draftDeckSaveDialog = document.getElementById('draft-deck-save-dialog');
+
+    document.getElementById('draft-deck-save-button').addEventListener('click', () => {
+        document.getElementById('draft-deck-save-name').value = '';
+        document.getElementById('draft-deck-save-friends-visible').checked = false;
+        document.getElementById('draft-deck-save-error').hidden = true;
+        draftDeckSaveDialog.showModal();
+    });
+
+    document.getElementById('draft-deck-save-cancel-button').addEventListener('click', () => {
+        draftDeckSaveDialog.close();
+    });
+
+    document.getElementById('draft-deck-save-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const errorEl = document.getElementById('draft-deck-save-error');
+        errorEl.hidden = true;
+
+        const deckCardIds = Array.from(draftDeckSelection).map((index) => currentDeckBuilding.drafted_cards[index].card_id);
+        const sideboardCardIds = currentDeckBuilding.drafted_cards
+            .filter((card, index) => !draftDeckSelection.has(index))
+            .map((card) => card.card_id);
+        const name = document.getElementById('draft-deck-save-name').value;
+        const visibility = document.getElementById('draft-deck-save-friends-visible').checked ? 'friends' : 'private';
+
+        const { ok, body } = await createDecklist(name, undefined, deckCardIds, sideboardCardIds, visibility);
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not save that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+        draftDeckSaveDialog.close();
     });
 
     function renderDraftPanel(state) {
@@ -2687,6 +3259,9 @@
         if (you.deck_submitted) {
             document.getElementById('duel-deck-submitted-message').textContent =
                 'You submitted: ' + (you.custom_deck_name || 'Uploaded Deck');
+        } else if (!duelSavedDecklistSelectPopulated) {
+            duelSavedDecklistSelectPopulated = true;
+            populateSavedDecklistSelect(document.getElementById('duel-deck-submit-saved-decklist'));
         }
     }
 
@@ -2699,12 +3274,17 @@
         document.getElementById('duel-deck-submit-text').value = await file.text();
     });
 
+    document.getElementById('duel-deck-submit-saved-decklist').addEventListener('change', (event) => {
+        document.getElementById('duel-deck-submit-paste-fields').hidden = event.target.value !== '';
+    });
+
     document.getElementById('duel-deck-submit-button').addEventListener('click', async () => {
         const submitError = document.getElementById('duel-deck-submit-error');
         submitError.hidden = true;
 
-        const decklistText = document.getElementById('duel-deck-submit-text').value;
-        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText);
+        const savedDecklistId = Number(document.getElementById('duel-deck-submit-saved-decklist').value) || undefined;
+        const decklistText = savedDecklistId ? undefined : document.getElementById('duel-deck-submit-text').value;
+        const { ok, body } = await submitCustomDuelDeck(currentGameId, decklistText, savedDecklistId);
 
         if (!ok) {
             submitError.textContent = body.message || 'Could not submit that decklist.';
@@ -3584,6 +4164,76 @@
 
     document.getElementById('friends-close-button').addEventListener('click', () => {
         friendsDialog.close();
+    });
+
+    const decksDialog = document.getElementById('decks-dialog');
+    const decksForm = document.getElementById('decks-form');
+
+    document.getElementById('decks-button').addEventListener('click', async () => {
+        resetDecksForm();
+        decksDialog.showModal();
+        await refreshDecksData();
+    });
+
+    document.getElementById('decks-close-button').addEventListener('click', () => {
+        decksDialog.close();
+    });
+
+    document.getElementById('deck-view-close-button').addEventListener('click', () => {
+        document.getElementById('deck-view-dialog').close();
+    });
+
+    document.getElementById('decks-form-cancel-edit-button').addEventListener('click', () => {
+        resetDecksForm();
+    });
+
+    // Reading an uploaded decklist file into the textarea lets both input
+    // methods (file upload or pasted text) share the same submit-time
+    // field -- same pattern as #new-game-decklist-file/#duel-deck-submit-file.
+    document.getElementById('decks-form-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('decks-form-text').value = await file.text();
+    });
+
+    decksForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const errorEl = document.getElementById('decks-form-error');
+        const successEl = document.getElementById('decks-form-success');
+        errorEl.hidden = true;
+        successEl.hidden = true;
+
+        const id = document.getElementById('decks-form-id').value;
+        const name = document.getElementById('decks-form-name').value;
+        const decklistText = document.getElementById('decks-form-text').value;
+        const visibility = document.getElementById('decks-form-friends-visible').checked ? 'friends' : 'private';
+
+        // A blank text field during an edit means "keep the existing
+        // contents" -- falls back to the ids startEditingDeck() stashed
+        // when it fetched this deck, rather than requiring a pure rename/
+        // visibility change to re-paste the whole decklist.
+        const useStashedCards = decklistText.trim() === '' && editingDeckCardIds !== null;
+        const cardIds = useStashedCards ? editingDeckCardIds : undefined;
+        const sideboardCardIds = useStashedCards ? editingDeckSideboardCardIds : undefined;
+        const text = useStashedCards ? undefined : decklistText;
+
+        const { ok, body } = id
+            ? await updateDecklist(Number(id), name, text, cardIds, sideboardCardIds, visibility)
+            : await createDecklist(name, text, cardIds, sideboardCardIds, visibility);
+
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not save that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        resetDecksForm();
+        await refreshDecksData();
+        successEl.textContent = 'Deck saved.';
+        successEl.hidden = false;
     });
 
     friendInviteForm.addEventListener('submit', async (event) => {

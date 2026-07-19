@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace MoodSwings\Game;
 
 use MoodSwings\Database\Connection;
+use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
@@ -216,6 +217,7 @@ final class GameService
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
         private readonly RoundScorer $scorer,
+        private readonly UserDecklistService $userDecklists,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
     ) {
     }
@@ -271,6 +273,7 @@ final class GameService
         ?string $winstonDraftCustomPoolText = null,
         ?string $gridDraftPoolSource = null,
         ?string $gridDraftCustomPoolText = null,
+        ?int $savedDecklistId = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -310,7 +313,12 @@ final class GameService
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
             }
 
-            ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->parseCustomDecklist($decklistText, count($userIds));
+            if ($savedDecklistId !== null) {
+                ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->userDecklists->cardIdsForUse($createdByUserId, $savedDecklistId);
+                $this->assertCustomDecklistCardCount($customDeckCardIds, count($userIds));
+            } else {
+                ['name' => $customDeckName, 'cardIds' => $customDeckCardIds] = $this->parseCustomDecklist($decklistText, count($userIds));
+            }
         } elseif ($deckType === 'custom_duel') {
             if ($format !== 'duel') {
                 throw new GameStateException('The "custom_duel" deck type is only supported for duel games');
@@ -523,16 +531,7 @@ final class GameService
      */
     private function loadCardCatalog(): array
     {
-        $stmt = Connection::get()->query('SELECT id, name, rarity, color FROM cards');
-        $idsByName = [];
-        $rowsById = [];
-        foreach ($stmt->fetchAll() as $row) {
-            $id = (int) $row['id'];
-            $idsByName[mb_strtolower($row['name'])] = $id;
-            $rowsById[$id] = ['name' => $row['name'], 'rarity' => $row['rarity'], 'color' => $row['color']];
-        }
-
-        return ['idsByName' => $idsByName, 'rowsById' => $rowsById];
+        return CardCatalog::load();
     }
 
     /**
@@ -553,15 +552,27 @@ final class GameService
         }
 
         $parsed = (new DecklistParser($this->loadCardCatalog()['idsByName']))->parse($decklistText);
-
-        $minimumCards = 15 * ($playerCount - 1);
-        if (count($parsed['cardIds']) < $minimumCards) {
-            throw new GameStateException(
-                "The decklist has only " . count($parsed['cardIds']) . " card(s), but at least {$minimumCards} are required for {$playerCount} players"
-            );
-        }
+        $this->assertCustomDecklistCardCount($parsed['cardIds'], $playerCount);
 
         return $parsed;
+    }
+
+    /**
+     * Shared by parseCustomDecklist()'s text-parsing path and
+     * createGame()'s saved-decklist path (issue #92) -- both need the
+     * exact same minimum-card-count validation regardless of where the
+     * card ids came from.
+     *
+     * @param int[] $cardIds
+     */
+    private function assertCustomDecklistCardCount(array $cardIds, int $playerCount): void
+    {
+        $minimumCards = 15 * ($playerCount - 1);
+        if (count($cardIds) < $minimumCards) {
+            throw new GameStateException(
+                "The decklist has only " . count($cardIds) . " card(s), but at least {$minimumCards} are required for {$playerCount} players"
+            );
+        }
     }
 
     /**
@@ -656,7 +667,7 @@ final class GameService
      * itself refuses to deal for this deck_type until both seats have a
      * non-null custom_deck_card_ids.
      */
-    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, string $decklistText): void
+    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null): void
     {
         $game = $this->fetchGame($gameId);
         if ($game['deck_type'] !== 'custom_duel') {
@@ -666,18 +677,26 @@ final class GameService
             throw new GameStateException("Game {$gameId} has already started -- decklists can no longer be submitted");
         }
 
-        $ownerStmt = Connection::get()->prepare('SELECT COUNT(*) FROM game_players WHERE id = :id AND game_id = :game_id');
+        // Widened from "SELECT COUNT(*)" to also return user_id -- needed
+        // to authorize a $savedDecklistId lookup below without adding a
+        // new parameter to this method's own signature/callers.
+        $ownerStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id AND game_id = :game_id');
         $ownerStmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
-        if ((int) $ownerStmt->fetchColumn() === 0) {
+        $ownerRow = $ownerStmt->fetch();
+        if ($ownerRow === false) {
             throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
         }
 
-        if (trim($decklistText) === '') {
-            throw new GameStateException('A decklist is required');
-        }
-
         $catalog = $this->loadCardCatalog();
-        $parsed = (new DecklistParser($catalog['idsByName']))->parse($decklistText);
+
+        if ($savedDecklistId !== null) {
+            $parsed = $this->userDecklists->cardIdsForUse((int) $ownerRow['user_id'], $savedDecklistId);
+        } else {
+            if ($decklistText === null || trim($decklistText) === '') {
+                throw new GameStateException('A decklist is required');
+            }
+            $parsed = (new DecklistParser($catalog['idsByName']))->parse($decklistText);
+        }
 
         $rules = new DuelDeckRules(
             (int) $game['custom_duel_min_cards'],
@@ -1658,47 +1677,7 @@ final class GameService
      */
     private function serializeCatalogCards(array $cardIds): array
     {
-        if ($cardIds === []) {
-            return [];
-        }
-
-        // Deduplicated for the query -- $cardIds itself may legally contain
-        // the same catalog id twice (a custom pool can list "2 Charity"),
-        // but a card's own row only needs fetching once regardless of how
-        // many times it appears in the caller's list.
-        $distinctCardIds = array_values(array_unique($cardIds));
-        $placeholders = implode(',', array_fill(0, count($distinctCardIds), '?'));
-        $stmt = Connection::get()->prepare("SELECT * FROM cards WHERE id IN ({$placeholders})");
-        $stmt->execute($distinctCardIds);
-
-        $rowsById = [];
-        foreach ($stmt->fetchAll() as $row) {
-            $rowsById[(int) $row['id']] = $row;
-        }
-
-        return array_map(function (int $cardId) use ($rowsById): array {
-            $row = $rowsById[$cardId] ?? throw new GameStateException("No such card {$cardId}");
-
-            return [
-                'card_id' => $cardId,
-                'catalog_card_id' => $cardId,
-                'name' => $row['name'],
-                'color' => $row['color'],
-                'base_color' => $row['color'],
-                'value' => (int) $row['base_value'],
-                'base_value' => (int) $row['base_value'],
-                'alt_value' => $row['alt_value'] !== null ? (int) $row['alt_value'] : null,
-                'has_dice_value' => $row['alt_value'] !== null,
-                'effect_key' => $row['effect_key'],
-                'rules_text' => $row['rules_text'],
-                'choice_fields' => [],
-                'is_playable' => false,
-                'is_suppressed' => false,
-                'value_locked' => false,
-                'is_creativity_copy' => false,
-                'copy_simulation' => null,
-            ];
-        }, $cardIds);
+        return CardCatalog::serialize($cardIds);
     }
 
     // -- Winston Draft (issue #89) ------------------------------------------
@@ -2553,7 +2532,27 @@ final class GameService
                 // this used to, right after the UPDATE above) would always
                 // log an empty move list, since none of these moves have
                 // happened yet at that point.
-                $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices, $state);
+                //
+                // 'initiating_game_player_id' rides along in $details
+                // purely so describeEvent()'s own grants_created/grants_lost
+                // segments can attribute a grant to the right player --
+                // this event's own acting_game_player_id is $gamePlayerId,
+                // the RESPONDER (e.g. Intimidation's target, who just
+                // revealed a card), but any grant a card like Intimidation
+                // creates here always belongs to whoever's turn is actually
+                // active (the player who played the card in the first
+                // place), which is $initiatingPlayerId, not the responder --
+                // see describeEvent()'s own docblock for why $actor alone
+                // isn't a safe default for this one event type.
+                $this->logEvent(
+                    $gameId,
+                    $roundId,
+                    $gamePlayerId,
+                    'pending_decision_resolved',
+                    $playedCardId,
+                    [...$choices, 'initiating_game_player_id' => $initiatingPlayerId],
+                    $state,
+                );
 
                 if ($result->isPending) {
                     // Resolving the last decision uncovered another one --
@@ -4239,6 +4238,8 @@ final class GameService
                 }
             }
 
+            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+
             $currentTurnGamePlayerId = null;
             $awaitingYourResponse = false;
             $currentTurnUsername = null;
@@ -4274,9 +4275,22 @@ final class GameService
                         $awaitingYourResponse = $rowAwaitingResponse;
                     }
                 }
+            } elseif ($game['status'] === 'waiting' && $draftMatchId !== null) {
+                // No current_turn_username here -- a still-'waiting' draft
+                // game has no board "turn" concept yet, only who the draft
+                // itself is blocked on (see draftAwaitingResponseUsernames()).
+                $awaitingResponseUsernames = $this->draftAwaitingResponseUsernames($draftMatchId, $game['deck_type'], $playerRows);
+                if ($yourGamePlayerId !== null) {
+                    $yourUsername = null;
+                    foreach ($playerRows as $row) {
+                        if ((int) $row['id'] === $yourGamePlayerId) {
+                            $yourUsername = $row['username'];
+                            break;
+                        }
+                    }
+                    $awaitingYourResponse = $yourUsername !== null && in_array($yourUsername, $awaitingResponseUsernames, true);
+                }
             }
-
-            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
 
             $games[] = [
                 'id' => $gameId,
@@ -4298,7 +4312,11 @@ final class GameService
                 // RequiresOpponentDecision), your own team's turn_order/
                 // draw_recipient decision needing your propose/confirm, or
                 // (closed_team only) your still-unsubmitted pregame blind
-                // card pass. See isAwaitingResponseFrom().
+                // card pass. See isAwaitingResponseFrom(). Also true while
+                // the game is still 'waiting' on a draft-based deck_type
+                // (quick_draft/winston_draft/grid_draft) if the draft or
+                // deck-building step itself is specifically blocked on you
+                // -- see draftAwaitingResponseUsernames().
                 'is_awaiting_your_response' => $awaitingYourResponse,
                 // Whichever seated player current_turn_game_player_id
                 // actually belongs to, by username -- lets the lobby show a
@@ -4307,7 +4325,10 @@ final class GameService
                 // that only ever named the viewer. Null whenever the game
                 // isn't 'in_progress' or the round is between turns (e.g.
                 // an open team turn_order decision -- see
-                // applyTurnOrderDecision()'s own docblock).
+                // applyTurnOrderDecision()'s own docblock) -- also null for
+                // a still-'waiting' draft game, which has no board "turn"
+                // concept yet (see awaiting_response_usernames below for
+                // who a drafting/deck-building game is blocked on instead).
                 'current_turn_username' => $currentTurnUsername,
                 // Every seated player isAwaitingResponseFrom() currently
                 // returns true for -- the generalized, all-players version
@@ -4315,6 +4336,11 @@ final class GameService
                 // waiting-hourglass icon next to each one specifically
                 // (there can be more than one at once, e.g. closed_team's
                 // pregame card pass before every player has submitted).
+                // For a still-'waiting' draft-based game, this is instead
+                // draftAwaitingResponseUsernames()'s own view of who the
+                // draft/deck-building step is blocked on -- same field,
+                // same icon, just a pre-game source instead of an
+                // in-progress one.
                 'awaiting_response_usernames' => $awaitingResponseUsernames,
                 'winner_usernames' => $winnerUsernames,
                 // Lets the lobby group any draft-based match's (Quick
@@ -4402,6 +4428,119 @@ final class GameService
         $decisionRow = $this->activePendingDecision((int) $batch['id']);
 
         return $decisionRow !== null && (int) $decisionRow['target_game_player_id'] === $gamePlayerId;
+    }
+
+    /**
+     * listGamesForUser()'s own "who is a still-'waiting' draft game
+     * currently blocked on" -- the pre-game analog of
+     * isAwaitingResponseFrom(), which only ever applies once a game
+     * reaches 'in_progress'. During 'deck_building' this is whichever
+     * player(s) haven't yet submitted THIS game's own deck
+     * (draft_match_players.deck_card_ids still null -- see
+     * submitDraftDeck()). During 'drafting' it's deck-type-specific:
+     * quick_draft's per-player draw/received pick stage (delegated to
+     * quickDraftAwaitingResponseUsernames(), mirroring
+     * quickDraftDraftingStateFor()'s own 'stage' derivation), or
+     * winston_draft's/grid_draft's single active turn player
+     * (draft_winston_state.current_player_user_id /
+     * draft_grid_state.current_turn_user_id -- there's never more than
+     * one at once for either, since both are strictly alternating
+     * single-active-player formats). Empty once the match itself has
+     * completed (nothing left to wait on).
+     *
+     * @param array<int, array<string, mixed>> $playerRows game_players rows joined to users, this game's own seats
+     * @return string[]
+     */
+    private function draftAwaitingResponseUsernames(int $draftMatchId, string $deckType, array $playerRows): array
+    {
+        $match = $this->fetchDraftMatch($draftMatchId);
+
+        $usernamesByUserId = [];
+        foreach ($playerRows as $row) {
+            $usernamesByUserId[(int) $row['user_id']] = $row['username'];
+        }
+
+        if ($match['status'] === 'deck_building') {
+            $stmt = Connection::get()->prepare(
+                'SELECT user_id FROM draft_match_players WHERE draft_match_id = :id AND deck_card_ids IS NULL'
+            );
+            $stmt->execute(['id' => $draftMatchId]);
+
+            $usernames = [];
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $userId) {
+                if (isset($usernamesByUserId[(int) $userId])) {
+                    $usernames[] = $usernamesByUserId[(int) $userId];
+                }
+            }
+
+            return $usernames;
+        }
+
+        if ($match['status'] !== 'drafting') {
+            return [];
+        }
+
+        if ($deckType === 'quick_draft') {
+            return $this->quickDraftAwaitingResponseUsernames($draftMatchId, (int) $match['current_round'], $usernamesByUserId);
+        }
+
+        $turnStmt = match ($deckType) {
+            'winston_draft' => Connection::get()->prepare(
+                'SELECT current_player_user_id FROM draft_winston_state WHERE draft_match_id = :id'
+            ),
+            'grid_draft' => Connection::get()->prepare(
+                'SELECT current_turn_user_id FROM draft_grid_state WHERE draft_match_id = :id'
+            ),
+            default => null,
+        };
+        if ($turnStmt === null) {
+            return [];
+        }
+
+        $turnStmt->execute(['id' => $draftMatchId]);
+        $currentTurnUserId = $turnStmt->fetchColumn();
+        if ($currentTurnUserId === false || !isset($usernamesByUserId[(int) $currentTurnUserId])) {
+            return [];
+        }
+
+        return [$usernamesByUserId[(int) $currentTurnUserId]];
+    }
+
+    /**
+     * draftAwaitingResponseUsernames()'s own quick_draft piece --
+     * mirrors quickDraftDraftingStateFor()'s per-viewer 'stage'
+     * derivation (draw / awaiting_opponent_draw / received /
+     * awaiting_opponent_received), generalized to every seated player
+     * at once: a player is "awaited" if their own next action (this
+     * round's draw-stage keep, or its received-stage keep once BOTH
+     * players' draw-stage picks exist so the received pack is actually
+     * determined) hasn't been submitted yet.
+     *
+     * @param array<int, string> $usernamesByUserId
+     * @return string[]
+     */
+    private function quickDraftAwaitingResponseUsernames(int $draftMatchId, int $currentRound, array $usernamesByUserId): array
+    {
+        $picksThisRound = $this->loadDraftRoundPicks($draftMatchId)[$currentRound] ?? [];
+
+        $bothSubmittedDraw = true;
+        foreach ($usernamesByUserId as $userId => $username) {
+            if (($picksThisRound[$userId]['kept_from_draw'] ?? null) === null) {
+                $bothSubmittedDraw = false;
+                break;
+            }
+        }
+
+        $usernames = [];
+        foreach ($usernamesByUserId as $userId => $username) {
+            $keptFromDraw = $picksThisRound[$userId]['kept_from_draw'] ?? null;
+            $keptFromReceived = $picksThisRound[$userId]['kept_from_received'] ?? null;
+            if ($keptFromDraw === null || ($keptFromReceived === null && $bothSubmittedDraw)) {
+                $usernames[] = $username;
+            }
+        }
+
+        return $usernames;
     }
 
     /**
@@ -5306,6 +5445,85 @@ final class GameService
     }
 
     /**
+     * The entire game_events log for $gameId, oldest first (issue #98) --
+     * unlike recentEvents() below, this is deliberately unbounded and
+     * unpaginated: a typical game's event count (rarely more than a few
+     * hundred rows even for a long multiplayer game) is small enough that
+     * returning the whole thing in one response is simpler than adding
+     * pagination for a case that doesn't actually need it. Reuses the same
+     * describeEvent() rendering recentEvents() does (so the two views can
+     * never drift out of phrasing sync), but each entry additionally
+     * carries the raw event_type/round_number/acting_game_player_id/
+     * card_id/details alongside the resolved acting_username/card_name --
+     * recentEvents()'s own {id, created_at, description} shape only ever
+     * needs to be displayed, but this is also the one response the
+     * frontend's "download data" button (see "Game log" in
+     * web-static/README.md) turns directly into a JSON export, so it's
+     * worth including enough raw data for that export to be genuinely
+     * useful offline, not just a repeat of the human-readable text the
+     * "download text"/"copy text" buttons already cover. No per-viewer
+     * filtering, same as recentEvents() -- every event is already visible
+     * to every seated player regardless of who originally triggered it
+     * (see recentEvents()'s own docblock re: Paranoia/Curiosity reveals),
+     * so this only needs requireGamePlayer()'s seated-player check, not
+     * anything further.
+     *
+     * @return array<int, array{id:int, created_at:string, round_number:?int, event_type:string, acting_game_player_id:?int, acting_username:?string, card_id:?int, card_name:?string, details:array<string,mixed>, description:string}>
+     */
+    public function fullEventLog(int $gameId): array
+    {
+        $pdo = Connection::get();
+
+        $playersStmt = $pdo->prepare(
+            'SELECT gp.id, gp.team_id, u.username FROM game_players gp
+             JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id'
+        );
+        $playersStmt->execute(['game_id' => $gameId]);
+        $playerRows = $playersStmt->fetchAll();
+
+        $playerNames = array_column($playerRows, 'username', 'id');
+        $cardNames = $this->cardNamesFor($gameId);
+
+        // Only populated for format 'team' -- see recentEvents()'s own
+        // identical construction below.
+        $teamMembersByTeamId = [];
+        foreach ($playerRows as $row) {
+            if ($row['team_id'] !== null) {
+                $teamMembersByTeamId[(int) $row['team_id']][] = $row['username'];
+            }
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
+             FROM game_events e
+             LEFT JOIN game_rounds r ON r.id = e.game_round_id
+             WHERE e.game_id = :game_id ORDER BY e.id ASC'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(
+            function (array $row) use ($playerNames, $cardNames, $teamMembersByTeamId): array {
+                $actingId = $row['acting_game_player_id'] !== null ? (int) $row['acting_game_player_id'] : null;
+                $cardId = $row['card_id'] !== null ? (int) $row['card_id'] : null;
+
+                return [
+                    'id' => (int) $row['id'],
+                    'created_at' => $row['created_at'],
+                    'round_number' => $row['round_number'] !== null ? (int) $row['round_number'] : null,
+                    'event_type' => $row['event_type'],
+                    'acting_game_player_id' => $actingId,
+                    'acting_username' => $actingId !== null ? ($playerNames[$actingId] ?? null) : null,
+                    'card_id' => $cardId,
+                    'card_name' => $cardId !== null ? ($cardNames[$cardId] ?? null) : null,
+                    'details' => $row['details'] !== null ? json_decode((string) $row['details'], true) : [],
+                    'description' => $this->describeEvent($row, $playerNames, $cardNames, $teamMembersByTeamId),
+                ];
+            },
+            $stmt->fetchAll(),
+        );
+    }
+
+    /**
      * The last few plays/passes/rounds-scored for this game, newest first,
      * as ready-to-display strings -- a "smallish panel" alternative to
      * building out a full game-history view, specifically so a player who
@@ -5482,14 +5700,26 @@ final class GameService
         // this event -- source/restriction/zone, via the same
         // describeGrantDetails() wording a just-used grant gets above and
         // an outstanding one gets in round.play_grants (see
-        // describePlayGrant()). Attributed to $actor: grantExtraPlay()
-        // always grants to whoever's turn is currently active, which is
-        // always the same player this event's own acting_game_player_id
-        // already names (see $pendingGrantsCreated's own docblock).
+        // describePlayGrant()). Attributed to $grantRecipient rather than
+        // $actor: grantExtraPlay() always grants to whoever's turn is
+        // currently active, which for most event types IS the same player
+        // acting_game_player_id already names -- EXCEPT
+        // 'pending_decision_resolved', whose own acting_game_player_id is
+        // the RESPONDER (e.g. Intimidation's target, who reveals a card),
+        // not the player whose turn it actually is. respondToDecision()
+        // threads the real turn-owner through as
+        // $details['initiating_game_player_id'] specifically so this stays
+        // correct for that one event type -- see its own call site's
+        // docblock. Falls back to $actor for every other event type, where
+        // that key is never set and $actor is already right.
+        $grantRecipient = isset($details['initiating_game_player_id'])
+            ? ($playerNames[(int) $details['initiating_game_player_id']] ?? 'A player')
+            : $actor;
+
         $grantsCreated = $details['grants_created'] ?? [];
         if ($grantsCreated !== []) {
             $grantParts = array_map(
-                fn (?array $restriction) => "{$actor} was granted " . $this->describeGrantDetails($restriction ?? [], $cardNames),
+                fn (?array $restriction) => "{$grantRecipient} was granted " . $this->describeGrantDetails($restriction ?? [], $cardNames),
                 $grantsCreated,
             );
             $description .= '; ' . implode('; ', $grantParts);
@@ -5498,18 +5728,15 @@ final class GameService
         // Every 'requiresSourceInPlay' grant BoardState::consumeGrantsLost()
         // recorded as orphaned by this event -- Hope's/Grace's own bonus,
         // never used, because the specific card that created it just left
-        // play (see grantIsActive()'s own docblock). Attributed to $actor
-        // for the same reason $grantsCreated above is: $playGrants only
-        // ever holds whoever's turn is currently active, so the player
-        // whose own move triggered the card leaving play is always the
-        // same one the lost grant belonged to. Surfaced explicitly here
-        // (rather than leaving players to infer it from plays_remaining
-        // quietly dropping by one) so there's no confusion later about
-        // where an expected extra play went.
+        // play (see grantIsActive()'s own docblock). Attributed to
+        // $grantRecipient for the same reason $grantsCreated above is.
+        // Surfaced explicitly here (rather than leaving players to infer
+        // it from plays_remaining quietly dropping by one) so there's no
+        // confusion later about where an expected extra play went.
         $grantsLost = $details['grants_lost'] ?? [];
         if ($grantsLost !== []) {
             $lostParts = array_map(
-                fn (array $restriction) => "{$actor} lost " . $this->describeGrantDetails($restriction, $cardNames) . ' -- its source left play before it was used',
+                fn (array $restriction) => "{$grantRecipient} lost " . $this->describeGrantDetails($restriction, $cardNames) . ' -- its source left play before it was used',
                 $grantsLost,
             );
             $description .= '; ' . implode('; ', $lostParts);
@@ -5634,7 +5861,7 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger'], true)) {
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger', 'initiating_game_player_id'], true)) {
                 continue; // already spoken for elsewhere in describeEvent()
             }
 

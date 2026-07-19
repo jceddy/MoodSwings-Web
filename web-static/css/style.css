@@ -64,6 +64,21 @@
     --color-gold: #e0b93a;
 }
 
+/* Opts out of mobile Chrome's "font boosting" text autosizer, which
+   independently scales each block of text (list items, in particular)
+   to stay legible based on how its content happens to wrap -- harmless
+   for plain text, but it also inflates whatever's sized in rem sitting
+   inline in that text (e.g. the card-count icon+badge next to a saved
+   deck's name, see buildPlayerStat() in game.js), making two otherwise
+   identically-styled rows render their icon at visibly different sizes
+   purely because their names wrap differently. Already have a correct
+   `<meta name="viewport">` on every page, which isn't enough on its own
+   to suppress this. */
+html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
 body {
     font-family: system-ui, sans-serif;
     max-width: 40rem;
@@ -178,6 +193,18 @@ dialog#resources-dialog #resources-close-button {
     box-sizing: border-box;
 }
 
+/* Shared by every "Or paste your decklist"/"Or paste the pool" textarea
+   in the app (the New Game dialog's Custom Decklist fields, the in-game
+   custom_duel waiting room's submission form, the Decks dialog's
+   create/edit form, and the Quick/Winston/Grid Draft custom-pool fields)
+   -- without this they all fall back to the browser's intrinsic default
+   textarea width (~11.375rem/182px measured live), which is cramped for
+   a multi-line decklist or pool. 17.0625rem is 150% of that default. */
+.decklist-textarea {
+    width: 17.0625rem;
+    box-sizing: border-box;
+}
+
 .error {
     color: var(--color-error);
 }
@@ -203,7 +230,9 @@ dialog#resources-dialog #resources-close-button {
     }
 }
 
-dialog#friends-dialog {
+dialog#friends-dialog,
+dialog#decks-dialog,
+dialog#deck-view-dialog {
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
@@ -214,17 +243,20 @@ dialog#friends-dialog {
     border-radius: 0.5rem;
 }
 
-dialog#friends-dialog section {
+dialog#friends-dialog section,
+dialog#decks-dialog section {
     margin-bottom: 1.5rem;
 }
 
-dialog#friends-dialog ul {
+dialog#friends-dialog ul,
+dialog#decks-dialog ul {
     list-style: none;
     padding: 0;
     margin: 0;
 }
 
-dialog#friends-dialog li {
+dialog#friends-dialog li,
+dialog#decks-dialog li {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -238,6 +270,83 @@ dialog#friends-dialog li button {
 
 dialog#friends-dialog li button + button {
     margin-left: 0.25rem;
+}
+
+/* A Decks dialog row (issue #92 follow-up) is exactly two direct
+   children -- .decks-row-info (name + meta, grows to fill the leftover
+   space) and .decks-row-actions (right-justified against the row's own
+   right edge purely by .decks-row-info's flex-grow leaving it no other
+   place to sit -- unlike dialog#friends-dialog li above, no
+   margin-left: auto needed here). */
+.decks-row-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.decks-row-name {
+    font-weight: bold;
+}
+
+/* Card-count icon+badge (and, on the owner's own rows, the
+   friends-shared icon) on their own line under the name, rather than
+   crowding the same line -- left-justified, matching the name above
+   it, via flex's own default start-alignment. */
+.decks-row-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.decks-row-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+}
+
+/* View/Edit stacked over Duplicate/Download (issue #92 follow-up) --
+   Delete itself lives outside this grid, as .decks-row-actions' own
+   second child, so it stands physically apart from the other four
+   rather than being a fifth grid cell a stray click could land on by
+   mistake reaching for one of them. */
+.decks-row-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, auto);
+    gap: 0.25rem;
+}
+
+/* A fixed square button just large enough for its icon, rather than the
+   width a text label like "Delete" would otherwise need, so the Decks
+   dialog's own action grid takes up noticeably less room than five
+   separate text buttons would next to a deck name that might already be
+   wrapping onto 2 lines. */
+.icon-action-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.icon-action-button svg {
+    width: 1.1rem;
+    height: 1.1rem;
+    fill: currentColor;
+}
+
+.icon-action-button--delete {
+    color: var(--color-error);
+}
+
+dialog#decks-dialog #decks-form label,
+dialog#decks-dialog #decks-form textarea {
+    display: block;
+    margin-bottom: 0.5rem;
 }
 
 body.game-page {
@@ -331,7 +440,9 @@ body.game-page {
 .winston-draft-pile-cards,
 #winston-draft-drafted-so-far,
 #grid-draft-drafted-so-far,
-#grid-draft-opponent-drafted-so-far {
+#grid-draft-opponent-drafted-so-far,
+#deck-view-cards,
+#deck-view-sideboard-cards {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -766,6 +877,21 @@ body.game-page {
     position: relative;
     display: inline-flex;
     color: var(--color-muted);
+    /* Without this, a non-wrapping flex-container ancestor (e.g.
+       `dialog#decks-dialog li`'s own `display: flex`, no `flex-wrap`)
+       squeezes this icon below its specified width/height rather than
+       wrapping the row -- these icons have no natural min-content size
+       of their own to resist that shrink, and how much room is left
+       over for them varies with the row's own text length (a longer
+       deck/friend name leaves less room, so its icon shrinks more),
+       which is how two otherwise-identical icons ended up rendering at
+       visibly different sizes on two different rows. `.player-icons`
+       (the board's own players list) sidesteps this the other way,
+       via `flex-wrap: wrap` instead -- fine there since overflow
+       wrapping to a second line reads naturally among several
+       same-sized icons, but not appropriate for a single icon sitting
+       inline with a row's own name text. */
+    flex-shrink: 0;
     /* A no-op inside .player-icons (a flex container -- flex items ignore
        vertical-align), but keeps these icons lined up with the text
        baseline when reused inline in ordinary text flow instead, e.g. the
@@ -847,6 +973,15 @@ body.game-page {
     color: var(--color-pending);
 }
 
+/* Reuses --color-info (already established for "in progress"/informational
+   status elsewhere on this page) for the Decks dialog's friends-shared
+   icon -- see buildPlayerFlag('friendsShared', ...) in game.js, which
+   replaced a plain "shared with friends" text clause next to a deck's
+   name/card count. */
+.player-flag--friendsShared {
+    color: var(--color-info);
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {
@@ -894,6 +1029,14 @@ dialog#card-detail-dialog {
     margin-top: 0.5rem;
 }
 
+/* Same reasoning as #new-game-close-button above -- without this, the
+   Close button sits flush against the card grid (or the sideboard grid,
+   or the hidden sideboard heading, whichever ends up last) directly
+   above it. */
+#deck-view-close-button {
+    margin-top: 0.5rem;
+}
+
 dialog#art-preview-dialog {
     box-sizing: border-box;
     max-width: 24rem;
@@ -904,6 +1047,67 @@ dialog#art-preview-dialog {
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     text-align: center;
+}
+
+/* The game log (issue #98) can run to hundreds of events for a long
+   game -- max-height + overflow-y keeps the dialog itself from growing
+   taller than the viewport, scrolling the list internally instead.
+   Scoped to [open]: an unqualified `dialog#game-log-dialog { display:
+   flex }` rule would override the browser's own default `dialog:not(
+   [open]) { display: none }` (an author rule always wins over the user
+   agent stylesheet regardless of specificity), permanently rendering
+   the dialog inline in the page -- visible on every page load before
+   it's ever opened, and still visible after close() since removing the
+   [open] attribute wouldn't `display: none` it either. */
+dialog#game-log-dialog[open] {
+    box-sizing: border-box;
+    max-width: 36rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+#game-log-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+#game-log-list {
+    overflow-y: auto;
+    list-style: none;
+    padding: 0;
+    margin: 0 0 1rem;
+}
+
+#game-log-list > li {
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* The box every log entry renders inside (see buildLogEntryContent() in
+   game.js), one line per description segment -- applied uniformly, even
+   to single-line entries, so every entry lines up at the same width
+   instead of single-line ones running edge-to-edge past the boxed
+   multi-line ones. For a multi-line entry, the dotted border reads as
+   "these lines belong together" (they're all consequences of the SAME
+   one play, in the order it happened) without implying they're an
+   unordered set the way a bulleted list would. */
+#game-log-list > li .game-log-entry-group {
+    border: 1px dotted var(--color-border);
+    border-radius: 0.25rem;
+    padding: 0.35rem 0.5rem;
+}
+
+#game-log-list > li .game-log-entry-group > div + div {
+    margin-top: 0.25rem;
 }
 
 .card-detail-art {
@@ -1016,12 +1220,23 @@ dialog#art-preview-dialog {
     min-width: 0;
 }
 
-/* Fixed width (rather than shrinking to fit "Play" vs the wider "View")
-   so every row's button lines up in a column regardless of which label
-   its own game's status picked. */
-.lobby-row button {
-    width: 4rem;
+/* Play/View and View log (issue #98) stack vertically in their own
+   column -- the row's second flex child alongside .lobby-info -- rather
+   than sitting side by side, so "View log" reads as a secondary action
+   underneath the primary Play/View button instead of competing with it
+   for the row's own right edge. */
+.lobby-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
     flex-shrink: 0;
+}
+
+/* Fixed width (wide enough for "View log", the longest of the three
+   possible labels) so every row's buttons line up in a column regardless
+   of which label its own game's status/action picked. */
+.lobby-actions button {
+    width: 5.5rem;
 }
 
 .lobby-format {
