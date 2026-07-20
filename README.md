@@ -9,7 +9,7 @@ A web-based simulator for the Mood Swings TCG.
 - [Card Specific Rulings](https://magic.wizards.com/en/news/feature/mood-swings-card-notes)
 - [Card Gallery](https://magic.wizards.com/en/news/card-image-gallery/mood-swings)
 - [Moodiest (Card Repository)](https://moodiest.app/)
-- [Moodfall (another card repository)](https://moodswings.scryfall.com/)
+- [Moodfall (another Card Repository)](https://moodswings.scryfall.com/)
 - [Discord](https://discord.gg/GgHFEBAd6C)
 - [Reddit](https://www.reddit.com/r/moodswingstcg/)
 
