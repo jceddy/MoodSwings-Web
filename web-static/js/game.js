@@ -404,27 +404,24 @@
                 const li = document.createElement('li');
                 li.appendChild(buildDeckRowInfo(deck, true));
 
-                // Right-justified action section: View/Edit stacked over
-                // Duplicate/Download in a 2x2 grid, with Delete standing
-                // alone alongside it (vertically centered against the
-                // grid's own height via .decks-row-actions's own
-                // align-items: center) -- physically separated from the
-                // other four so a stray click aimed at one of them can't
-                // land on the one irreversible action in the row.
+                // Right-justified action section: View/Build/Edit over
+                // Duplicate/Download/Delete in a 3x3... a 3x2 grid --
+                // grid-auto-flow lays these out row-major, so this order
+                // is exactly the two rows it produces.
                 const actions = document.createElement('div');
                 actions.className = 'decks-row-actions';
                 const grid = document.createElement('div');
                 grid.className = 'decks-row-actions-grid';
                 grid.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
-                grid.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
-                grid.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
-                grid.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
-                // Card-by-card alternative to Edit above (issue #93) --
+                // Card-by-card alternative to Edit below (issue #93) --
                 // opens #deck-builder-dialog pre-loaded with this deck's
                 // own cards/name/visibility instead of its decklist text.
                 grid.appendChild(iconActionButton('build', 'Build', () => openDeckBuilder(deck.id)));
+                grid.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
+                grid.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
+                grid.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
+                grid.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
                 actions.appendChild(grid);
-                actions.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
                 li.appendChild(actions);
 
                 return li;

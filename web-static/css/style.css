@@ -307,14 +307,12 @@ dialog#friends-dialog li button + button {
     flex-shrink: 0;
 }
 
-/* View/Edit stacked over Duplicate/Download (issue #92 follow-up) --
-   Delete itself lives outside this grid, as .decks-row-actions' own
-   second child, so it stands physically apart from the other four
-   rather than being a fifth grid cell a stray click could land on by
-   mistake reaching for one of them. */
+/* View/Build/Edit over Duplicate/Download/Delete (issue #93 follow-up) --
+   a 3-column grid, so the 6 buttons land in exactly those two rows via
+   plain row-major auto-flow (the order they're appended in game.js). */
 .decks-row-actions-grid {
     display: grid;
-    grid-template-columns: repeat(2, auto);
+    grid-template-columns: repeat(3, auto);
     gap: 0.25rem;
 }
 
