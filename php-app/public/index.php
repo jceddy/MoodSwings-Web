@@ -611,6 +611,24 @@ if ($path === '/games/log' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
 }
 
+// Every card in a shared-deck game's single deck (issue #197) -- named
+// "/games/deck" rather than "/games/decklist" to avoid colliding with the
+// existing POST /games/decklist (custom_duel's own per-player deck
+// submission, a completely different thing). Same no-per-viewer-filtering
+// reasoning as GET /games/log immediately above.
+if ($path === '/games/deck' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        respond(200, ['status' => 'ok', 'cards' => $games->viewSharedDeck($gameId)]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/games/start' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

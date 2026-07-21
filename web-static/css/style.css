@@ -442,7 +442,8 @@ body.game-page {
 #grid-draft-drafted-so-far,
 #grid-draft-opponent-drafted-so-far,
 #deck-view-cards,
-#deck-view-sideboard-cards {
+#deck-view-sideboard-cards,
+#shared-deck-cards {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -1071,6 +1072,26 @@ dialog#game-log-dialog[open] {
     border-radius: 0.5rem;
     display: flex;
     flex-direction: column;
+}
+
+/* A shared-deck game's full deck (issue #197) can run to 133 cards
+   ('one_of_each') -- same reasoning as dialog#game-log-dialog[open]
+   immediately above (max-width wide enough for #shared-deck-cards' own
+   flex-wrap grid to show several columns at once, max-height + overflow-y
+   so the dialog scrolls internally instead of growing past the
+   viewport), just wider still since a card thumbnail takes up
+   considerably more horizontal room than a line of log text. */
+dialog#shared-deck-dialog[open] {
+    box-sizing: border-box;
+    max-width: 48rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    overflow-y: auto;
 }
 
 #game-log-actions {

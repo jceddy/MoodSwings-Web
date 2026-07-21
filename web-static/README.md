@@ -1347,6 +1347,36 @@ too, proportional to the smaller card width.
     directly, so the secondary action reads as subordinate to the
     primary one instead of competing with it for the row's right edge.
 
+    **Shared deck view (issue #197).** Until now, the board only ever
+    showed a deck *count* (`Deck: N cards left`) and, for `custom`, the
+    deck's own name -- never its actual contents. A "View decklist"
+    button (`#view-shared-deck-button`, right next to "View log") and a
+    matching one on every applicable lobby row (same
+    `.lobby-actions`-column placement as "View log") both open the same
+    `#shared-deck-dialog` (`openSharedDeckView()`), fetching a shared-deck
+    game's entire deck via `GET /games/deck`
+    (`GameService::viewSharedDeck()`, sorted white/blue/black/red/green
+    then alphabetically by name -- see `php-app/README.md`). Both buttons
+    are conditional on `isSharedDeckType(deckType)`, a small JS mirror of
+    `GameService::isSharedDeckType()` (every `deck_type` except
+    `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, which each
+    give every player their own separate deck instead of one shared pool)
+    -- the board's own button is toggled in `renderBoard()` alongside
+    `resign-button`, and each lobby row's is only appended
+    (`buildGameRow()`) when the game is also *not* still `'waiting'`,
+    since nothing's been dealt yet at that point (matching
+    `viewSharedDeck()`'s own `409` for that case). The dialog itself just
+    renders `body.cards` in the order the server already returned them
+    (`buildCardThumb()`/`openCardDetail()`, the same card-grid pattern
+    every other card list in this app uses -- hand, discard pile, drafted
+    pool, a saved deck's own view) rather than re-sorting client-side.
+    `dialog#shared-deck-dialog[open]` gets its own wider `max-width`
+    (48rem, vs. the game log dialog's 36rem) plus `max-height`/
+    `overflow-y: auto` (same reasoning as `dialog#game-log-dialog[open]`
+    just above it in `style.css` -- a `one_of_each` deck can run to 133
+    cards, and a card thumbnail takes up considerably more room than a
+    line of log text).
+
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
     `#in-progress-area` (a pending decision/scoring preview belongs to

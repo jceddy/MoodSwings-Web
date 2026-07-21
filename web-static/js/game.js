@@ -589,6 +589,15 @@
         return DECK_TYPE_LABELS[deckType] || deckType;
     }
 
+    // Mirrors GameService::isSharedDeckType() -- every deck_type except
+    // custom_duel and the three draft-based ones puts the whole table on
+    // one shared deck rather than giving each player their own, so those
+    // four are the only deck_types with no single "the deck" for
+    // openSharedDeckView() (issue #197) to show.
+    function isSharedDeckType(deckType) {
+        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft'].includes(deckType);
+    }
+
     // Plain-language explanation shown under the New Game dialog's own
     // Deck dropdown (see updateDeckTypeDescription()) -- kept in sync with
     // GameService::buildStructureDeckCardIds()/buildPowerDeckCardIds()/
@@ -963,6 +972,15 @@
         const canPlay = game.status === 'waiting' || game.status === 'in_progress';
         actionsEl.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
         actionsEl.appendChild(actionButton('View log', () => openGameLog(game.id)));
+        // Same "no single shared deck"/"nothing dealt yet" conditions as
+        // the board's own #view-shared-deck-button (issue #197) -- a
+        // still-'waiting' game (including a match's own compact sub-rows,
+        // which are always 'completed' by definition, so this only ever
+        // matters for the outer opts.compact === false rows) has no
+        // game_cards rows to show yet.
+        if (isSharedDeckType(game.deck_type) && game.status !== 'waiting') {
+            actionsEl.appendChild(actionButton('View decklist', () => openSharedDeckView(game.id)));
+        }
         li.appendChild(actionsEl);
         return li;
     }
@@ -1893,6 +1911,39 @@
         );
     });
 
+    // A shared-deck game's full deck (issue #197) -- GET /games/deck
+    // already returns every card sorted white/blue/black/red/green then
+    // alphabetically (see GameService::viewSharedDeck()), so this just
+    // renders what it's given in that same order rather than re-sorting
+    // client-side. Reuses buildCardThumb()/openCardDetail(), the same
+    // card-grid pattern every other card list in this app (hand, discard
+    // pile, drafted pool, a saved deck's own view) already uses, so a
+    // shared deck's cards are just as clickable-for-detail as any of
+    // those.
+    async function openSharedDeckView(gameId) {
+        const metaEl = document.getElementById('shared-deck-meta');
+        const cardsEl = document.getElementById('shared-deck-cards');
+        metaEl.textContent = '';
+        cardsEl.innerHTML = '';
+        document.getElementById('shared-deck-dialog').showModal();
+
+        const { ok, body } = await getSharedDeck(gameId);
+        if (!ok) {
+            return;
+        }
+
+        metaEl.textContent = body.cards.length + ' card(s) in this deck';
+        for (const card of body.cards) {
+            cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+        }
+    }
+
+    document.getElementById('view-shared-deck-button').addEventListener('click', () => openSharedDeckView(currentGameId));
+
+    document.getElementById('shared-deck-close-button').addEventListener('click', () => {
+        document.getElementById('shared-deck-dialog').close();
+    });
+
     // Small inline pictograms (issue #143) replacing the players list's own
     // plain-text stat clauses ("4 point(s)", "went first this round", ...)
     // -- self-contained straight-line shapes rather than curves, so each is
@@ -2331,6 +2382,15 @@
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = state.game.status !== 'in_progress' || Boolean(you && you.resigned);
         resignButton.disabled = Boolean(pendingDecision);
+
+        // "View decklist" (issue #197) -- hidden entirely for a deck_type
+        // with no single shared deck (custom_duel and the three
+        // draft-based ones, see isSharedDeckType()). Always visible for
+        // every other deck_type once #in-progress-area itself is showing
+        // at all, which -- unlike resign-button above -- already implies
+        // the game has actually started and its deck has been dealt (see
+        // the 'waiting' branch above, which hides this whole area).
+        document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
