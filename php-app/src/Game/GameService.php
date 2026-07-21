@@ -968,9 +968,9 @@ final class GameService
      * startGame()'s own first-player pick for round/game 1. Every game
      * still gets a uniform coin flip EXCEPT games 2/3 of a best-of-three
      * draft match (games.draft_match_id set, match_game_number > 1), where
-     * the previous game's loser may have chosen who goes first via
-     * chooseFirstPlayerForNextMatchGame() -- see that method's own
-     * docblock. Falls back to the previous game's own winner going first
+     * the previous game's loser may have opted to go first themselves via
+     * setPlayFirstNextMatchGame() -- see that method's own docblock.
+     * Falls back to the previous game's own winner going first
      * again if the loser never made a choice, rather than a fresh coin
      * flip, so declining the choice isn't itself a coin flip on top of the
      * one game 1 already had.
@@ -1013,7 +1013,8 @@ final class GameService
      * happen once $matchGameNumber > 1 -- advanceDraftMatch() always
      * creates the next game before the previous one's own winner is even
      * returned to the caller). resolveFirstPlayerId()'s own default when
-     * neither game's loser exercised chooseFirstPlayerForNextMatchGame().
+     * the previous game's loser never opted to play first via
+     * setPlayFirstNextMatchGame().
      */
     private function previousMatchGameWinnerUserId(int $draftMatchId, int $matchGameNumber): ?int
     {
@@ -1030,16 +1031,19 @@ final class GameService
     }
 
     /**
-     * Lets the loser of a best-of-three draft match's game N choose who
-     * goes first in game N+1 (Quick Draft/Winston Draft/Grid Draft) --
-     * entirely optional, see resolveFirstPlayerId()'s own default when
-     * this is never called. Only the loser of game N may call this for
-     * game N+1 -- $chosenUserId may be either seat (the loser can send
-     * themselves out first, or let the winner go first again). Callable
-     * any time before game N+1 itself starts (it's still 'waiting');
-     * calling it again before then overwrites the earlier choice.
+     * Lets the loser of a best-of-three draft match's game N opt to go
+     * first themselves in game N+1 (Quick Draft/Winston Draft/Grid Draft)
+     * -- a single checkbox ("play first next game"), not a real choice
+     * between seats: leaving it unchecked (the common case) already means
+     * "the previous winner goes first again", resolveFirstPlayerId()'s own
+     * default when this is never called, so there's nothing else useful
+     * for the loser to explicitly pick. Only the loser of game N may call
+     * this for game N+1. Callable any time before game N+1 itself starts
+     * (it's still 'waiting'); calling it again (e.g. unchecking the box)
+     * overwrites the earlier value, including clearing it back to null
+     * (the default) when $playFirst is false.
      */
-    public function chooseFirstPlayerForNextMatchGame(int $gameId, int $choosingUserId, int $chosenUserId): void
+    public function setPlayFirstNextMatchGame(int $gameId, int $userId, bool $playFirst): void
     {
         $game = $this->fetchGame($gameId);
         if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true) || $game['draft_match_id'] === null) {
@@ -1058,21 +1062,17 @@ final class GameService
         $seatsStmt->execute(['game_id' => $gameId]);
         $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
 
-        if (!in_array($chosenUserId, $seatUserIds, true)) {
-            throw new GameStateException("User {$chosenUserId} is not seated in this match");
-        }
-
         $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
         $previousLoserUserId = $previousWinnerUserId !== null
             ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
             : null;
 
-        if ($previousLoserUserId === null || $choosingUserId !== $previousLoserUserId) {
+        if ($previousLoserUserId === null || $userId !== $previousLoserUserId) {
             throw new GameStateException('Only the loser of the previous game can choose who goes first next');
         }
 
         $pdo->prepare('UPDATE games SET first_player_choice_user_id = :chosen WHERE id = :game_id')
-            ->execute(['chosen' => $chosenUserId, 'game_id' => $gameId]);
+            ->execute(['chosen' => $playFirst ? $userId : null, 'game_id' => $gameId]);
     }
 
     /**
@@ -4856,8 +4856,8 @@ final class GameService
      * draftDeckBuildingStateFor()'s own 'first_player_choice' field -- null
      * for game 1 of a match (no previous game to base a choice on).
      * 'you_are_previous_loser' gates whether $viewerUserId's own client
-     * should offer chooseFirstPlayerForNextMatchGame() at all (only the
-     * loser may actually call it -- see that method). 'chosen_user_id' is
+     * should offer the "play first next game" checkbox at all (only the
+     * loser may actually call setPlayFirstNextMatchGame()). 'chosen_user_id' is
      * whatever the loser has already chosen, if anything; 'default_user_id'
      * is who goes first if nobody ever calls it (game N's own winner --
      * mirrors resolveFirstPlayerId()'s own fallback exactly, so the

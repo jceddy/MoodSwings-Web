@@ -7410,22 +7410,20 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * The heart of the "loser chooses who goes first" feature (a follow-up
-     * to issue #88/#89's own best-of-three match progression): the loser
-     * of game N may choose either seat to go first in game N+1, and
-     * startGame() must actually honor that choice rather than its usual
-     * coin flip.
+     * The heart of the "loser opts to play first" feature (a follow-up to
+     * issue #88/#89's own best-of-three match progression): checking the
+     * box sends the loser of game N out first in game N+1, and
+     * startGame() must actually honor that rather than its usual coin
+     * flip / the previous winner going first again.
      */
-    public function testLoserOfPreviousGameCanChooseWhoGoesFirstInNextGame(): void
+    public function testLoserOfPreviousGameCanOptToPlayFirstInNextGame(): void
     {
         [
             'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId,
             'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
         ] = $this->buildQuickDraftMatchThroughGameOne();
 
-        // The loser sends themselves out first instead of the winner going
-        // first again (the default -- see the sibling test below).
-        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $loserUserId);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
 
         $this->submitFullQuickDraftDeck($nextGameId, $u1);
         $this->submitFullQuickDraftDeck($nextGameId, $u2);
@@ -7439,15 +7437,16 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNotSame($winnerUserId, $firstPlayerUserId);
     }
 
-    /** The loser may also choose to let the previous game's winner go first again -- a real (if unexciting) choice. */
-    public function testLoserCanChooseTheWinnerToGoFirstAgain(): void
+    /** Unchecking the box (clearing a previously-set choice) must revert to the default -- the previous winner going first again. */
+    public function testLoserCanUncheckThePlayFirstBoxToRevertToTheDefault(): void
     {
         [
             'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId,
             'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
         ] = $this->buildQuickDraftMatchThroughGameOne();
 
-        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $winnerUserId);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
 
         $this->submitFullQuickDraftDeck($nextGameId, $u1);
         $this->submitFullQuickDraftDeck($nextGameId, $u2);
@@ -7461,8 +7460,8 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * Declining the choice entirely (the common case) must NOT fall back
-     * to a fresh coin flip -- it defaults to the previous game's own
+     * Leaving the box unchecked entirely (the common case) must NOT fall
+     * back to a fresh coin flip -- it defaults to the previous game's own
      * winner going first again, exactly like resolveFirstPlayerId()'s own
      * docblock says.
      */
@@ -7482,36 +7481,37 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($winnerUserId, $firstPlayerUserId);
     }
 
-    public function testOnlyTheLoserOfThePreviousGameCanChooseTheNextFirstPlayer(): void
+    public function testOnlyTheLoserOfThePreviousGameCanSetThePlayFirstBox(): void
     {
-        ['nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId]
+        ['nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId]
             = $this->buildQuickDraftMatchThroughGameOne();
 
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('Only the loser');
 
-        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $winnerUserId, $loserUserId);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $winnerUserId, true);
     }
 
-    public function testChooseFirstPlayerRejectsGameOneOfAMatch(): void
+    public function testSetPlayFirstRejectsGameOneOfAMatch(): void
     {
         ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture(winsNeeded: 2);
 
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('no previous game');
 
-        $this->games->chooseFirstPlayerForNextMatchGame($gameId, $u1, $u1);
+        $this->games->setPlayFirstNextMatchGame($gameId, $u1, true);
     }
 
-    public function testChooseFirstPlayerRejectsAUserNotSeatedInTheMatch(): void
+    /** Someone not even seated in the match is rejected the same way a non-loser seated player would be. */
+    public function testSetPlayFirstRejectsAUserNotSeatedInTheMatch(): void
     {
-        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchThroughGameOne();
+        ['nextGameId' => $nextGameId] = $this->buildQuickDraftMatchThroughGameOne();
         $outsider = $this->insertUser('quickdraft-first-player-outsider');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('not seated');
+        $this->expectExceptionMessage('Only the loser');
 
-        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $outsider);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $outsider, true);
     }
 
     /**
@@ -7552,7 +7552,7 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($winnerUserId, $winnerChoice['default_user_id']);
         self::assertNull($winnerChoice['chosen_user_id']);
 
-        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $loserUserId);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
 
         $loserChoiceAfter = $this->games->getState($nextGameId, $loserUserId)['quick_draft']['deck_building']['first_player_choice'];
         self::assertSame($loserUserId, $loserChoiceAfter['chosen_user_id']);

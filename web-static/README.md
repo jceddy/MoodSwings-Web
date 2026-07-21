@@ -875,13 +875,16 @@ too, proportional to the smaller card width.
       game 1 of a match, so the whole block stays hidden there. From
       game 2 on, both players always see a status line naming who's
       going first (either the previous game's own winner by default, or
-      whoever the previous loser actually chose); only the previous
-      loser's own client shows the two choice buttons ("I'll go first" /
-      "`<opponent>` goes first"), which call
-      `chooseFirstPlayerForNextMatchGame()` (`POST
-      /games/draft/first-player-choice`) and re-render immediately once
-      a choice sticks. Entirely optional -- nothing here gates the
-      Submit-deck button or `autoStartGameIfReady()`. Pool/pack/drafted cards are all
+      whoever the previous loser has opted into); only the previous
+      loser's own client also sees a single `#draft-first-player-choice-checkbox`
+      ("Play first next game"), unchecked by default. Checking it calls
+      `setPlayFirstNextMatchGame(gameId, true)` (`POST
+      /games/draft/first-player-choice`, `{"play_first": true}`);
+      unchecking it calls the same wrapper with `false`, clearing the
+      choice back to the default. There's no separate "opponent goes
+      first" control -- leaving the box unchecked already means that.
+      Entirely optional -- nothing here gates the Submit-deck button or
+      `autoStartGameIfReady()`. Pool/pack/drafted cards are all
       served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
       rather than the usual in-play `serializeCard()` result, but with the
       exact same field names `buildCardThumb()`/`openCardDetail()` already
