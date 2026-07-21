@@ -1576,42 +1576,38 @@ too, proportional to the smaller card width.
     their deck names differ.
 
     A "Your decks" row's `.decks-row-actions` holds
-    View/Edit/Duplicate/Download/Delete, all rendered as small square
-    icon-only buttons (`iconActionButton('view'/'edit'/'duplicate'/
-    'download'/'delete', label, onClick)`, an eye/pencil/
+    View/Build/Edit/Duplicate/Download/Delete, all rendered as small square
+    icon-only buttons (`iconActionButton('view'/'build'/'edit'/'duplicate'/
+    'download'/'delete', label, onClick)`, an eye/wrench/pencil/
     two-overlapping-sheets/download-tray/trash-can, standard Material
     Design glyphs reused verbatim in a new `ACTION_ICON_PATHS` map
     alongside the existing `PLAYER_STAT_ICON_PATHS` -- separate from it
     since these live inside an actual `.icon-action-button` rather than
     the players list's own icon+badge convention, and don't need a badge
-    overlay) instead of five separate text buttons, so they take up
+    overlay) instead of six separate text buttons, so they take up
     noticeably less horizontal room next to a name that might already be
     wrapping onto 2 lines -- same `title`/`aria-label` treatment as every
-    other icon on this page, so "View"/"Edit"/"Duplicate"/"Download"/
-    "Delete" are still the button's accessible name for a screen reader
-    (and Playwright's own `getByRole('button', {name: 'View'})`-style
-    lookups) even though nothing on screen literally spells the word out
-    anymore. The four non-destructive actions sit in a
-    `.decks-row-actions-grid` (a 2x2 CSS grid, `grid-template-columns:
-    repeat(2, auto)`: View/Edit on the top row, Duplicate/Download on the
-    bottom row, directly beneath their respective top-row counterpart),
-    with Delete rendered as `.decks-row-actions`'s own second flex child
-    -- a sibling of the grid rather than a fifth grid cell -- so the one
-    irreversible action is both visually set apart from, and (via the
-    flex row's own `align-items: center`) vertically centered against,
-    the compact 2x2 block of everything else, making an accidental
-    click while reaching for View/Edit/Duplicate/Download far less
-    likely to land on Delete instead. Delete's own icon is also colored
-    with `.icon-action-button--delete { color: var(--color-error) }`
-    (the `<svg>`'s `fill="currentColor"` means setting the button's own
-    `color` is enough, no separate `fill` override needed) -- the same
-    error-red already used for validation messages, distinguishing the
-    one irreversible action by color as well as by position. "Friends'
-    decks" (`#decks-friends-list`) rows are simpler: `.decks-row-actions`
-    holds `view`, `duplicate`, and `download` icon buttons in a plain flex
-    row (no grid needed for three buttons) -- no Edit or Delete, since
-    those change/remove a deck someone else owns, but Duplicate and
-    Download both work exactly as they do on an owner's own row, since
+    other icon on this page, so "View"/"Build"/"Edit"/"Duplicate"/
+    "Download"/"Delete" are still each button's accessible name for a
+    screen reader (and Playwright's own `getByRole('button', {name:
+    'View'})`-style lookups) even though nothing on screen literally
+    spells the word out anymore. All six sit together in one
+    `.decks-row-actions-grid` (a 3-column CSS grid,
+    `grid-template-columns: repeat(3, auto)`, filled row-major in the
+    order they're appended -- View/Build/Edit on the top row,
+    Duplicate/Download/Delete directly beneath). Delete's own icon is
+    still colored with `.icon-action-button--delete { color:
+    var(--color-error) }` (the `<svg>`'s `fill="currentColor"` means
+    setting the button's own `color` is enough, no separate `fill`
+    override needed) -- the same error-red already used for validation
+    messages, so the one irreversible action still stands out by color
+    even though it's no longer set physically apart from the rest.
+    "Friends' decks" (`#decks-friends-list`) rows are simpler:
+    `.decks-row-actions` holds `view`, `duplicate`, and `download` icon
+    buttons in a plain flex row (no grid needed for three buttons) -- no
+    Build/Edit/Delete, since those change/remove a deck someone else
+    owns, but Duplicate and Download both work exactly as they do on an
+    owner's own row, since
     both are just `viewDecklist(id)` under the hood and the backend's
     `UserDecklistService::view()`/`authorizeViewer()` already authorizes
     any accepted friend to view a `visibility='friends'` deck (the very

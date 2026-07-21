@@ -532,6 +532,11 @@
                 <label>Name
                     <input type="text" id="decks-form-name" required maxlength="120">
                 </label>
+                <!-- Card-by-card alternative to the paste/upload fields
+                     below (issue #93) -- opens #deck-builder-dialog with
+                     an empty deck. type="button" so it never submits
+                     this form. See openDeckBuilder() in game.js. -->
+                <button id="decks-build-new-button" type="button">Build a new deck</button>
                 <label>Upload a decklist file
                     <input type="file" id="decks-form-file" accept=".txt,text/plain">
                 </label>
@@ -547,10 +552,6 @@
                 <button id="decks-form-submit-button" type="submit">Save deck</button>
                 <button id="decks-form-cancel-edit-button" type="button" hidden>Cancel edit</button>
             </form>
-            <!-- Card-by-card alternative to the paste/upload form above
-                 (issue #93) -- opens #deck-builder-dialog with an empty
-                 deck. See openDeckBuilder() in game.js. -->
-            <button id="decks-build-new-button" type="button">Build a new deck</button>
         </section>
 
         <section>
