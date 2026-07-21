@@ -47,7 +47,9 @@ final class CardCatalog
      * today), which buildCardThumb()/openCardDetail() don't read but the
      * Decks dialog's "Edit"/"Download" flows do, to reconstruct a saved
      * deck's own decklist text in DecklistParser's "1 Name (SET) NUMBER"
-     * format (issue #92 follow-up).
+     * format (issue #92 follow-up). Also includes rarity, which neither
+     * of those two flows reads but the deck builder (issue #93) needs for
+     * its own filter/sort/format-restriction controls.
      *
      * @param int[] $cardIds
      * @return array<int, array<string, mixed>>
@@ -96,6 +98,7 @@ final class CardCatalog
                 'set_code' => $row['set_code'],
                 'collector_number' => $row['collector_number'] !== null ? (int) $row['collector_number'] : null,
                 'name' => $row['name'],
+                'rarity' => $row['rarity'],
                 'color' => $row['color'],
                 'base_color' => $row['color'],
                 'value' => (int) $row['base_value'],

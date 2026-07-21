@@ -169,6 +169,11 @@ function submitCustomDuelDeck(gameId, decklistText, savedDecklistId) {
     });
 }
 
+// Every printed card (issue #93's deck builder) -- see GET /cards/catalog.
+function getCardCatalog() {
+    return apiRequest('/cards/catalog');
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.
