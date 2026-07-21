@@ -1050,11 +1050,14 @@ dialog#card-detail-dialog {
 }
 
 /* Same reasoning as #new-game-close-button above -- without this, the
-   Close button sits flush against the card grid (or the sideboard grid,
-   or the hidden sideboard heading, whichever ends up last) directly
-   above it. */
+   Close button (or, for the deck builder, the Save button immediately
+   before it -- #deck-builder-close-button follows right after in the
+   same flow, so pushing Save down carries Close with it) sits flush
+   against the card grid (or the sideboard grid, or the hidden sideboard
+   heading, whichever ends up last) directly above it. */
 #deck-view-close-button,
-#shared-deck-close-button {
+#shared-deck-close-button,
+#deck-builder-save-button {
     margin-top: 0.5rem;
 }
 
