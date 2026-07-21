@@ -895,8 +895,10 @@ final class GameService
             // Fair 50/50 between the two teams for a team-format game too --
             // exactly 2 of the 4 seats belong to each team, so an ordinary
             // uniform pick over all 4 already picks a team fairly without
-            // needing its own separate randomization step.
-            $firstPlayerId = $playerIds[array_rand($playerIds)];
+            // needing its own separate randomization step. Games 2/3 of a
+            // best-of-three draft match are the one exception -- see
+            // resolveFirstPlayerId()'s own docblock.
+            $firstPlayerId = $this->resolveFirstPlayerId($game, $playerIds);
 
             if ($game['format'] === 'team') {
                 // Which specific teammate actually takes the real first
@@ -960,6 +962,117 @@ final class GameService
             $pdo->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * startGame()'s own first-player pick for round/game 1. Every game
+     * still gets a uniform coin flip EXCEPT games 2/3 of a best-of-three
+     * draft match (games.draft_match_id set, match_game_number > 1), where
+     * the previous game's loser may have chosen who goes first via
+     * chooseFirstPlayerForNextMatchGame() -- see that method's own
+     * docblock. Falls back to the previous game's own winner going first
+     * again if the loser never made a choice, rather than a fresh coin
+     * flip, so declining the choice isn't itself a coin flip on top of the
+     * one game 1 already had.
+     *
+     * @param array<string, mixed> $game
+     * @param int[] $playerIds this game's own seats (game_players.id), seat_order ASC
+     */
+    private function resolveFirstPlayerId(array $game, array $playerIds): int
+    {
+        $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+        if ($game['draft_match_id'] === null || $matchGameNumber === null || $matchGameNumber <= 1) {
+            return $playerIds[array_rand($playerIds)];
+        }
+
+        $chosenUserId = $game['first_player_choice_user_id'] !== null
+            ? (int) $game['first_player_choice_user_id']
+            : $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+
+        if ($chosenUserId !== null) {
+            $pdo = Connection::get();
+            $placeholders = implode(',', array_fill(0, count($playerIds), '?'));
+            $userStmt = $pdo->prepare("SELECT id, user_id FROM game_players WHERE id IN ({$placeholders})");
+            $userStmt->execute($playerIds);
+            foreach ($userStmt->fetchAll() as $row) {
+                if ((int) $row['user_id'] === $chosenUserId) {
+                    return (int) $row['id'];
+                }
+            }
+        }
+
+        // Should never happen (both seats always carry over unchanged from
+        // the previous game -- see advanceDraftMatch()) -- a safety net
+        // rather than a hard failure to start the game over it.
+        return $playerIds[array_rand($playerIds)];
+    }
+
+    /**
+     * The user_id of match_game_number $matchGameNumber - 1's own winner
+     * within $draftMatchId, or null if that game can't be found (shouldn't
+     * happen once $matchGameNumber > 1 -- advanceDraftMatch() always
+     * creates the next game before the previous one's own winner is even
+     * returned to the caller). resolveFirstPlayerId()'s own default when
+     * neither game's loser exercised chooseFirstPlayerForNextMatchGame().
+     */
+    private function previousMatchGameWinnerUserId(int $draftMatchId, int $matchGameNumber): ?int
+    {
+        $pdo = Connection::get();
+        $stmt = $pdo->prepare(
+            'SELECT gp.user_id FROM games g
+             JOIN game_players gp ON gp.id = g.winner_game_player_id
+             WHERE g.draft_match_id = :match_id AND g.match_game_number = :num'
+        );
+        $stmt->execute(['match_id' => $draftMatchId, 'num' => $matchGameNumber - 1]);
+        $userId = $stmt->fetchColumn();
+
+        return $userId !== false ? (int) $userId : null;
+    }
+
+    /**
+     * Lets the loser of a best-of-three draft match's game N choose who
+     * goes first in game N+1 (Quick Draft/Winston Draft/Grid Draft) --
+     * entirely optional, see resolveFirstPlayerId()'s own default when
+     * this is never called. Only the loser of game N may call this for
+     * game N+1 -- $chosenUserId may be either seat (the loser can send
+     * themselves out first, or let the winner go first again). Callable
+     * any time before game N+1 itself starts (it's still 'waiting');
+     * calling it again before then overwrites the earlier choice.
+     */
+    public function chooseFirstPlayerForNextMatchGame(int $gameId, int $choosingUserId, int $chosenUserId): void
+    {
+        $game = $this->fetchGame($gameId);
+        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true) || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a draft match game");
+        }
+        if ($game['status'] !== 'waiting') {
+            throw new GameStateException("Game {$gameId} has already started");
+        }
+        $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+        if ($matchGameNumber === null || $matchGameNumber <= 1) {
+            throw new GameStateException('The first game of a match has no previous game to base this choice on');
+        }
+
+        $pdo = Connection::get();
+        $seatsStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
+        $seatsStmt->execute(['game_id' => $gameId]);
+        $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        if (!in_array($chosenUserId, $seatUserIds, true)) {
+            throw new GameStateException("User {$chosenUserId} is not seated in this match");
+        }
+
+        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+        $previousLoserUserId = $previousWinnerUserId !== null
+            ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
+            : null;
+
+        if ($previousLoserUserId === null || $choosingUserId !== $previousLoserUserId) {
+            throw new GameStateException('Only the loser of the previous game can choose who goes first next');
+        }
+
+        $pdo->prepare('UPDATE games SET first_player_choice_user_id = :chosen WHERE id = :game_id')
+            ->execute(['chosen' => $chosenUserId, 'game_id' => $gameId]);
     }
 
     /**
@@ -4676,6 +4789,7 @@ final class GameService
             $state['drafting'] = $this->quickDraftDraftingStateFor($draftMatchId, (int) $match['current_round'], $viewerUserId, $userIds);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $game,
                 $playersByUser,
                 $viewerUserId,
                 $opponentUserId,
@@ -4696,9 +4810,11 @@ final class GameService
      * passing null caps it at however many cards $viewerUserId actually
      * drafted instead of a shared constant.
      *
+     * @param array<string, mixed> $game
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      */
     private function draftDeckBuildingStateFor(
+        array $game,
         array $playersByUser,
         int $viewerUserId,
         ?int $opponentUserId,
@@ -4732,6 +4848,40 @@ final class GameService
             'max_deck_size' => $maxDeckSize ?? count($draftedCardIds),
             'you_submitted' => $deckCardIds !== null,
             'opponent_submitted' => $opponentSubmitted,
+            'first_player_choice' => $this->firstPlayerChoiceStateFor($game, $viewerUserId, $opponentUserId),
+        ];
+    }
+
+    /**
+     * draftDeckBuildingStateFor()'s own 'first_player_choice' field -- null
+     * for game 1 of a match (no previous game to base a choice on).
+     * 'you_are_previous_loser' gates whether $viewerUserId's own client
+     * should offer chooseFirstPlayerForNextMatchGame() at all (only the
+     * loser may actually call it -- see that method). 'chosen_user_id' is
+     * whatever the loser has already chosen, if anything; 'default_user_id'
+     * is who goes first if nobody ever calls it (game N's own winner --
+     * mirrors resolveFirstPlayerId()'s own fallback exactly, so the
+     * frontend can always show a definite answer to "who goes first?").
+     * Both ids are user_ids -- matched against getState()'s own top-level
+     * 'players' list for display.
+     */
+    private function firstPlayerChoiceStateFor(array $game, int $viewerUserId, ?int $opponentUserId): ?array
+    {
+        $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+        if ($matchGameNumber === null || $matchGameNumber <= 1 || $opponentUserId === null) {
+            return null;
+        }
+
+        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+        if ($previousWinnerUserId === null) {
+            return null;
+        }
+        $previousLoserUserId = $previousWinnerUserId === $viewerUserId ? $opponentUserId : $viewerUserId;
+
+        return [
+            'you_are_previous_loser' => $previousLoserUserId === $viewerUserId,
+            'default_user_id' => $previousWinnerUserId,
+            'chosen_user_id' => $game['first_player_choice_user_id'] !== null ? (int) $game['first_player_choice_user_id'] : null,
         ];
     }
 
@@ -4869,6 +5019,7 @@ final class GameService
             $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $opponentUserId, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $game,
                 $playersByUser,
                 $viewerUserId,
                 $opponentUserId,
@@ -5008,6 +5159,7 @@ final class GameService
             $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $opponentUserId, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $game,
                 $playersByUser,
                 $viewerUserId,
                 $opponentUserId,
