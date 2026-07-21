@@ -318,3 +318,9 @@ half-migrated schema.
   deck_type flows. `visibility` is deliberately two-state only; there is
   no third "public to everyone" tier. See "Saved decklists" in
   `php-app/README.md`.
+- **Deck builder polish** (`0040`, issue #93 follow-up): another
+  schema-less `UPDATE schema_version`, same rationale as
+  `0024`/`0025`/`0026`/`0037` — the deck builder itself and its UI-only
+  follow-ups (repositioned Decks dialog buttons, small-screen card-thumb
+  shrink, catalog-panel multi-sort, Save/Close button spacing) never
+  touched the schema. See "Deck builder" in `php-app/README.md`.
