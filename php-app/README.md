@@ -72,6 +72,7 @@ maintenance page) — see "Maintenance mode" below.
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, or `closed_team`'s still-unsubmitted pregame card pass; see `isAwaitingResponseFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username"}`, `winner_username` only set once the match's own status is `completed`) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/log`    | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player regardless of who triggered it. See `GameService::fullEventLog()`. |
+| GET    | `/games/deck`   | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
@@ -2360,6 +2361,46 @@ A typical game's event count (rarely more than a few hundred rows even
 for a long multiplayer game) is small enough that returning the whole
 thing in one response was judged simpler than adding pagination for a
 case that doesn't actually need it.
+
+### Shared deck view (issue #197)
+
+`GET /games/deck` (`GameService::viewSharedDeck()`) returns every card in
+a shared-deck game's single deck -- every `deck_type` where the whole
+table draws from one pool rather than each player having their own
+(`structure`/`power`/`jceddys_75`/`custom`/`one_of_each`, as opposed to
+`custom_duel` and the three draft-based deck_types, which each give every
+player their own separate deck and have no single "the deck" for this to
+show -- see `GameService::isSharedDeckType()`). Today, the board only
+ever shows a deck *count* (`Deck: N cards left`) and, for `custom`, the
+deck's name -- never its actual contents.
+
+Read back from the game's own persisted `game_cards` rows across every
+zone (`deck`/`hand`/`in_play`/`discard` combined = the entire deck, since
+every row is created once at `POST /games/start` time and nothing is
+ever added to `game_cards` afterward -- see `BoardStateRepository`'s own
+docblock), **not** recomputed by re-calling `buildStructureDeckCardIds()`
+etc. -- those pick randomly, so calling them again after the game has
+already started would show a different random deck than the one actually
+dealt, not the real one. (`custom`'s own `custom_deck_card_ids` is
+already stable without this, but reading `game_cards` uniformly here is
+simpler than special-casing it.) `409` if the `deck_type` has no single
+shared deck, or the game is still `waiting` -- nothing's been dealt yet,
+so there's no deck to show.
+
+Sorted white/blue/black/red/green, then alphabetically by name within a
+color, so the same deck always lists the same way regardless of what
+order its cards happened to get dealt/shuffled in -- not a per-viewer
+concern the way `GET /games/state` is, so (like `GET /games/log`
+immediately above) this only needs `requireGamePlayer()`'s ordinary
+seated check, nothing further. A duplicate catalog card (e.g. a
+`jceddys_75` deck's own up-to-2-copies-per-card slots, see
+`randomCardIdsWithCopyLimit()`) appears as two separate entries, matching
+`GET /decklists/view`'s own convention for a saved decklist rather than
+collapsing into one entry with a count.
+
+See "Shared deck view" in `web-static/README.md` for the frontend side
+(the board's own "View decklist" button, and the lobby list's per-row
+one).
 
 ### Resigning
 

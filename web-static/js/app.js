@@ -268,6 +268,11 @@ function getGameLog(gameId) {
     return apiRequest('/games/log?game_id=' + encodeURIComponent(gameId));
 }
 
+// A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().
+function getSharedDeck(gameId) {
+    return apiRequest('/games/deck?game_id=' + encodeURIComponent(gameId));
+}
+
 function startGame(gameId) {
     return apiRequest('/games/start', {
         method: 'POST',

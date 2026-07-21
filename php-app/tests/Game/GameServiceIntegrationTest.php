@@ -3109,6 +3109,126 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('Dignity moved from play to the discard pile', $resolvedEntry['description']);
     }
 
+    // -- Shared deck view (issue #197) ----------------------------------------
+
+    /**
+     * A shared-deck game's deck is every card actually dealt (across every
+     * zone -- game_cards rows are created once, at startGame() time, and
+     * never added to afterward, see BoardStateRepository's own docblock),
+     * sorted white/blue/black/red/green, then alphabetically by name
+     * within a color -- not whatever order the shuffle happened to deal
+     * them in. deckType is pinned to 'one_of_each' so the expected total
+     * (133, one of every printed card) is exact regardless of
+     * createGame()'s own default, same reasoning as
+     * testCreateGameAndStartGameDealsCardsAndBeginsFirstRound().
+     */
+    public function testViewSharedDeckReturnsEveryDealtCardSortedByColorThenName(): void
+    {
+        $creator = $this->insertUser('sharedviewsort1');
+        $bob = $this->insertUser('sharedviewsort2');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'one_of_each');
+        $this->games->startGame($gameId);
+
+        $cards = $this->games->viewSharedDeck($gameId);
+        self::assertCount(133, $cards, 'every printed card, once');
+
+        $expectedColorOrder = ['white', 'blue', 'black', 'red', 'green'];
+        $colorIndexes = array_map(
+            static fn (array $c) => array_search($c['color'], $expectedColorOrder, true),
+            $cards
+        );
+        self::assertNotContains(false, $colorIndexes, 'every card has one of the five printed colors');
+        $sortedColorIndexes = $colorIndexes;
+        sort($sortedColorIndexes);
+        self::assertSame(
+            $sortedColorIndexes,
+            $colorIndexes,
+            'colors appear white/blue/black/red/green, contiguously grouped -- no color interleaved out of place'
+        );
+        self::assertCount(5, array_unique($colorIndexes), 'all five colors actually represented, none collapsed');
+
+        // Within a color, alphabetical by name -- checked against every
+        // white card this game dealt ('one_of_each' guarantees every
+        // color is fully represented), not a hand-picked pair, so this
+        // would catch a comparator bug that only misorders some of them.
+        $whiteNames = array_values(array_map(
+            static fn (array $c) => $c['name'],
+            array_filter($cards, static fn (array $c) => $c['color'] === 'white')
+        ));
+        $sortedWhiteNames = $whiteNames;
+        sort($sortedWhiteNames, SORT_STRING);
+        self::assertSame($sortedWhiteNames, $whiteNames);
+    }
+
+    /**
+     * Two copies of the same catalog card (e.g. a jceddys_75 deck's own
+     * up-to-2-copies slots -- see randomCardIdsWithCopyLimit()) appear as
+     * two separate entries, not collapsed into one with a count -- the
+     * same convention openDeckView() already uses for a saved decklist's
+     * cards in game.js.
+     */
+    public function testViewSharedDeckKeepsDuplicateCopiesAsSeparateEntries(): void
+    {
+        $creator = $this->insertUser('sharedviewdup1');
+        $bob = $this->insertUser('sharedviewdup2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, deck_type, status, created_by_user_id, wins_needed) VALUES ('standard', 'jceddys_75', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $creator]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $creator, 0);
+        $this->insertGamePlayer($gameId, $bob, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, white
+        $this->insertGameCard($gameId, 3, 'deck', null, 0); // a second Charity
+        $this->insertGameCard($gameId, 100, 'discard'); // Recklessness, red
+
+        $cards = $this->games->viewSharedDeck($gameId);
+        $names = array_map(static fn (array $c) => $c['name'], $cards);
+        self::assertSame(['Charity', 'Charity', 'Recklessness'], $names);
+    }
+
+    /**
+     * custom_duel and the three draft-based deck_types each give every
+     * player their own separate deck -- there's no single "the deck" for
+     * viewSharedDeck() to show (see isSharedDeckType()'s own docblock).
+     */
+    public function testViewSharedDeckRejectsADeckTypeWithNoSingleSharedDeck(): void
+    {
+        $u1 = $this->insertUser('sharedviewreject1');
+        $u2 = $this->insertUser('sharedviewreject2');
+
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'structure'],
+        );
+
+        $this->expectException(GameStateException::class);
+        $this->games->viewSharedDeck($gameId);
+    }
+
+    /**
+     * A still-'waiting' game has no game_cards rows at all yet -- its
+     * deck doesn't exist until startGame() actually deals it -- so
+     * there's nothing for viewSharedDeck() to show.
+     */
+    public function testViewSharedDeckRejectsAGameThatHasntStartedYet(): void
+    {
+        $creator = $this->insertUser('sharedviewwaiting1');
+        $bob = $this->insertUser('sharedviewwaiting2');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: 'one_of_each');
+
+        $this->expectException(GameStateException::class);
+        $this->games->viewSharedDeck($gameId);
+    }
+
     /** @param array<int, array<string, mixed>> $cards */
     private static function findByCardId(array $cards, int $cardId): array
     {

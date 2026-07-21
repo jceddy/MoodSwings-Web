@@ -252,6 +252,7 @@
 
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
+                <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
             </div>
@@ -474,6 +475,17 @@
         <ul id="game-log-list"></ul>
         <p id="game-log-empty" hidden>Nothing has happened yet.</p>
         <button id="game-log-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- A shared-deck game's full deck (issue #197) -- every deck_type
+         except custom_duel/quick_draft/winston_draft/grid_draft, where each
+         player has their own deck instead of one shared pool. See
+         openSharedDeckView() in game.js and GameService::viewSharedDeck(). -->
+    <dialog id="shared-deck-dialog">
+        <h2>Deck</h2>
+        <p id="shared-deck-meta"></p>
+        <div id="shared-deck-cards"></div>
+        <button id="shared-deck-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="friends-dialog">
