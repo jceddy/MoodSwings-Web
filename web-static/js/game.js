@@ -979,7 +979,7 @@
         // matters for the outer opts.compact === false rows) has no
         // game_cards rows to show yet.
         if (isSharedDeckType(game.deck_type) && game.status !== 'waiting') {
-            actionsEl.appendChild(actionButton('Deck list', () => openSharedDeckView(game.id)));
+            actionsEl.appendChild(actionButton('Decklist', () => openSharedDeckView(game.id)));
         }
         li.appendChild(actionsEl);
         return li;
