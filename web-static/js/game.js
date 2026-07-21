@@ -465,10 +465,12 @@
     //
     // A card-by-card alternative to the Decks dialog's paste/upload form
     // above -- browse the full card catalog (filter by set/color/rarity/
-    // text, see renderDeckBuilderCatalog()), click a card to add it to
-    // the deck under construction (sorted per deck-builder-sort-1/2/3,
-    // see renderDeckBuilderDeck()), then save through the exact same
-    // createDecklist()/updateDecklist() calls the paste/upload form uses.
+    // text, sorted per deck-builder-catalog-sort-1/2/3, see
+    // renderDeckBuilderCatalog()), click a card to add it to the deck
+    // under construction (sorted independently per
+    // deck-builder-deck-sort-1/2/3, see renderDeckBuilderDeck()), then
+    // save through the exact same createDecklist()/updateDecklist()
+    // calls the paste/upload form uses.
     //
     // The format selector only restricts which cards canAddCardToBuilderDeck()
     // allows adding *while building* -- a saved decklist has no "format"
@@ -652,13 +654,17 @@
         name: (a, b) => a.name.localeCompare(b.name),
     };
 
-    // Applies deck-builder-sort-1/2/3 in order (issue #93's "multi-sort"
-    // requirement) -- each selected key only breaks ties left by the
-    // ones before it, via Array.sort()'s own stable-sort guarantee (ES2019+)
-    // rather than needing to chain tiebreakers by hand.
-    function sortBuilderDeckCards(cards) {
-        const keys = ['deck-builder-sort-1', 'deck-builder-sort-2', 'deck-builder-sort-3']
-            .map((id) => document.getElementById(id).value)
+    // Applies the three sort-key selects named by $selectIdPrefix (issue
+    // #93's "multi-sort" requirement) in order -- each selected key only
+    // breaks ties left by the ones before it, via Array.sort()'s own
+    // stable-sort guarantee (ES2019+) rather than needing to chain
+    // tiebreakers by hand. Shared by both the catalog panel
+    // ('deck-builder-catalog-sort') and the deck-under-construction panel
+    // ('deck-builder-deck-sort') -- same three Color/Rarity/Name options,
+    // just two independent sets of selects.
+    function sortBuilderCards(cards, selectIdPrefix) {
+        const keys = ['1', '2', '3']
+            .map((n) => document.getElementById(selectIdPrefix + '-' + n).value)
             .filter((key) => key !== '');
 
         if (keys.length === 0) {
@@ -733,7 +739,8 @@
     function renderDeckBuilderCatalog() {
         const formatKey = document.getElementById('deck-builder-format').value;
         const filters = deckBuilderCatalogFilters();
-        const cards = deckBuilderCatalog.filter((card) => cardMatchesDeckBuilderFilters(card, filters));
+        const filtered = deckBuilderCatalog.filter((card) => cardMatchesDeckBuilderFilters(card, filters));
+        const cards = sortBuilderCards(filtered, 'deck-builder-catalog-sort');
 
         const gridEl = document.getElementById('deck-builder-catalog-cards');
         gridEl.innerHTML = '';
@@ -748,7 +755,7 @@
     function renderDeckBuilderDeck() {
         const formatKey = document.getElementById('deck-builder-format').value;
         const cardsInDeck = deckBuilderCardIds.map((id) => deckBuilderCatalogById.get(id));
-        const sorted = sortBuilderDeckCards(cardsInDeck);
+        const sorted = sortBuilderCards(cardsInDeck, 'deck-builder-deck-sort');
 
         const gridEl = document.getElementById('deck-builder-deck-cards');
         gridEl.innerHTML = '';
@@ -770,9 +777,11 @@
         document.getElementById('deck-builder-filter-color').value = '';
         document.getElementById('deck-builder-filter-rarity').value = '';
         document.getElementById('deck-builder-filter-text').value = '';
-        document.getElementById('deck-builder-sort-1').value = 'color';
-        document.getElementById('deck-builder-sort-2').value = 'rarity';
-        document.getElementById('deck-builder-sort-3').value = 'name';
+        for (const prefix of ['deck-builder-catalog-sort', 'deck-builder-deck-sort']) {
+            document.getElementById(prefix + '-1').value = 'color';
+            document.getElementById(prefix + '-2').value = 'rarity';
+            document.getElementById(prefix + '-3').value = 'name';
+        }
         document.getElementById('deck-builder-error').hidden = true;
         document.getElementById('deck-builder-success').hidden = true;
         document.getElementById('deck-builder-format-description').textContent = DECK_BUILDER_FORMATS.free_form.description;
@@ -4679,15 +4688,18 @@
         renderDeckBuilderDeck();
     });
 
-    // Every filter control re-renders just the catalog panel; every sort
-    // control re-renders just the deck panel -- neither affects the
-    // other's own displayed cards.
-    for (const id of ['deck-builder-filter-set', 'deck-builder-filter-color', 'deck-builder-filter-rarity']) {
+    // Every filter/catalog-sort control re-renders just the catalog
+    // panel; every deck-sort control re-renders just the deck panel --
+    // neither panel's own controls affect the other's displayed cards.
+    for (const id of [
+        'deck-builder-filter-set', 'deck-builder-filter-color', 'deck-builder-filter-rarity',
+        'deck-builder-catalog-sort-1', 'deck-builder-catalog-sort-2', 'deck-builder-catalog-sort-3',
+    ]) {
         document.getElementById(id).addEventListener('change', renderDeckBuilderCatalog);
     }
     document.getElementById('deck-builder-filter-text').addEventListener('input', renderDeckBuilderCatalog);
 
-    for (const id of ['deck-builder-sort-1', 'deck-builder-sort-2', 'deck-builder-sort-3']) {
+    for (const id of ['deck-builder-deck-sort-1', 'deck-builder-deck-sort-2', 'deck-builder-deck-sort-3']) {
         document.getElementById(id).addEventListener('change', renderDeckBuilderDeck);
     }
 
