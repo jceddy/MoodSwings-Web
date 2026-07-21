@@ -547,6 +547,10 @@
                 <button id="decks-form-submit-button" type="submit">Save deck</button>
                 <button id="decks-form-cancel-edit-button" type="button" hidden>Cancel edit</button>
             </form>
+            <!-- Card-by-card alternative to the paste/upload form above
+                 (issue #93) -- opens #deck-builder-dialog with an empty
+                 deck. See openDeckBuilder() in game.js. -->
+            <button id="decks-build-new-button" type="button">Build a new deck</button>
         </section>
 
         <section>
@@ -571,6 +575,114 @@
         <h4 id="deck-view-sideboard-title" hidden>Sideboard</h4>
         <div id="deck-view-sideboard-cards"></div>
         <button id="deck-view-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Card-by-card deck builder (issue #93) -- an alternative to the
+         Decks dialog's paste/upload form, opened either empty ("Build a
+         new deck") or pre-loaded with an existing owned deck's cards
+         ("Build" on a deck row, see openDeckBuilder() in game.js). Saves
+         through the same createDecklist()/updateDecklist() calls the
+         paste/upload form itself uses -- the format selector below only
+         restricts which cards can be ADDED while building (see
+         canAddCardToBuilderDeck()); a saved decklist has no "format"
+         field of its own, same as one built by pasting text. -->
+    <dialog id="deck-builder-dialog">
+        <h2 id="deck-builder-title">Build a new deck</h2>
+        <input type="hidden" id="deck-builder-editing-id" value="">
+
+        <div class="deck-builder-meta-fields">
+            <label>Name
+                <input type="text" id="deck-builder-name" maxlength="120">
+            </label>
+            <label>Format
+                <select id="deck-builder-format">
+                    <option value="free_form">Free-form</option>
+                    <option value="power">Power Duel</option>
+                    <option value="structure">Structure Deck</option>
+                    <option value="jceddys_75">jceddy's 75 Card</option>
+                </select>
+            </label>
+            <label>
+                <input type="checkbox" id="deck-builder-friends-visible">
+                Share with friends
+            </label>
+        </div>
+        <p id="deck-builder-format-description"></p>
+        <p id="deck-builder-error" class="error" hidden></p>
+        <p id="deck-builder-success" class="success" hidden></p>
+
+        <div class="deck-builder-columns">
+            <section class="deck-builder-catalog">
+                <h3>Card catalog</h3>
+                <div class="deck-builder-filters">
+                    <label>Set
+                        <select id="deck-builder-filter-set">
+                            <option value="">All</option>
+                        </select>
+                    </label>
+                    <label>Color
+                        <select id="deck-builder-filter-color">
+                            <option value="">All</option>
+                            <option value="white">White</option>
+                            <option value="blue">Blue</option>
+                            <option value="black">Black</option>
+                            <option value="red">Red</option>
+                            <option value="green">Green</option>
+                        </select>
+                    </label>
+                    <label>Rarity
+                        <select id="deck-builder-filter-rarity">
+                            <option value="">All</option>
+                            <option value="common">Common</option>
+                            <option value="uncommon">Uncommon</option>
+                            <option value="rare">Rare</option>
+                            <option value="mythic">Mythic</option>
+                        </select>
+                    </label>
+                    <label>Search
+                        <input type="text" id="deck-builder-filter-text" placeholder="Name or rules text">
+                    </label>
+                </div>
+                <p id="deck-builder-catalog-empty" hidden>No cards match these filters.</p>
+                <div id="deck-builder-catalog-cards" class="deck-builder-card-grid"></div>
+            </section>
+
+            <section class="deck-builder-deck">
+                <h3>Your deck</h3>
+                <div class="deck-builder-sort">
+                    <label>Sort by
+                        <select id="deck-builder-sort-1" class="deck-builder-sort-select">
+                            <option value="">(unsorted)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                    <label>then
+                        <select id="deck-builder-sort-2" class="deck-builder-sort-select">
+                            <option value="">(nothing)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                    <label>then
+                        <select id="deck-builder-sort-3" class="deck-builder-sort-select">
+                            <option value="">(nothing)</option>
+                            <option value="color">Color</option>
+                            <option value="rarity">Rarity</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </label>
+                </div>
+                <p id="deck-builder-deck-summary"></p>
+                <p id="deck-builder-deck-empty" hidden>No cards in this deck yet -- add some from the catalog.</p>
+                <div id="deck-builder-deck-cards" class="deck-builder-card-grid"></div>
+            </section>
+        </div>
+
+        <button id="deck-builder-save-button" type="button">Save deck</button>
+        <button id="deck-builder-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="resources-dialog">

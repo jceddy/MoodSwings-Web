@@ -1671,6 +1671,61 @@ too, proportional to the smaller card width.
     `#new-game-close-button` above) so it doesn't sit flush against
     whichever grid ends up last -- the card grid when there's no
     sideboard, the sideboard grid otherwise.
+  - **Deck builder (issue #93).** A card-by-card alternative to the form
+    above, opened either empty (`#decks-build-new-button`, "Build a new
+    deck") or pre-loaded with an owned deck's own cards/name/visibility
+    (a "Build" icon action alongside View/Edit/Duplicate/Download on each
+    of "Your decks"' own rows) -- both call `openDeckBuilder(existingId?)`,
+    which shows `#deck-builder-dialog`. The catalog panel
+    (`#deck-builder-catalog-cards`) lists every card from `GET
+    /cards/catalog` (fetched once and cached in `deckBuilderCatalog`,
+    read-only reference data no more likely to change mid-session than
+    `DECK_TYPE_DESCRIPTIONS`), filterable by set/color/rarity (three
+    `<select>`s) and a case-insensitive name-or-rules-text substring
+    (`#deck-builder-filter-text`, matched client-side in
+    `cardMatchesDeckBuilderFilters()`) -- clicking a card's own "+ Add"
+    button (not the card-thumb itself, which still opens the usual detail
+    dialog on click, same as every other card grid) appends it to
+    `deckBuilderCardIds`, the flat array (one entry per copy, same
+    convention `GameService::viewSharedDeck()`/`openDeckView()` already
+    use) backing the deck panel (`#deck-builder-deck-cards`) on the other
+    side. The deck panel's own three `#deck-builder-sort-1/2/3` selects
+    (Color/Rarity/Name/unsorted) apply in order via a single stable
+    `Array.sort()` pass (`sortBuilderDeckCards()`) -- issue #93's own
+    "multi-sort" ask -- each later key only breaking ties the earlier
+    ones left, with Color/Rarity using the same
+    white/blue/black/red/green / common/uncommon/rare/mythic reference
+    orders `GameService::viewSharedDeck()`/`DuelDeckRules` already sort
+    by rather than plain alphabetical (neither name sorts into a
+    meaningful order alphabetically).
+
+    `#deck-builder-format` (Free-form/Power Duel/Structure Deck/jceddy's
+    75 Card) restricts which cards `canAddCardToBuilderDeck()` allows
+    adding *while building* -- its four options' numbers mirror
+    `GameService`'s own `buildPowerDeckCardIds()`/
+    `buildStructureDeckCardIds()`/`buildJceddys75DeckCardIds()` (Power:
+    exactly 1 mythic + 14 other singleton non-mythics; Structure: 23
+    common/14 uncommon/6 rare/2 mythic, all singleton; jceddy's 75: per
+    color, 1 mythic/2 rares (singleton)/4 uncommons (up to 2 copies
+    each)/8 commons (up to 3 copies each)) -- a card's own "+ Add" button
+    is `disabled` once adding it would exceed whatever cap applies, so
+    the deck can never be walked into an over-cap state to begin with,
+    rather than only being validated after the fact. Switching formats
+    mid-build does NOT retroactively remove anything already added (a
+    saved decklist has no `format` column of its own, same as one built
+    by pasting text) -- only further additions are gated by the newly
+    selected format. `#deck-builder-deck-summary` shows a running
+    `<count> / <target>` (or just `<count>` for Free-form, which has no
+    target) so the caps stay visible while building.
+
+    Saving (`#deck-builder-save-button`) calls the exact same
+    `createDecklist()`/`updateDecklist()` the paste/upload form's own
+    submit handler uses -- `deckBuilderEditingId` (set by
+    `openDeckBuilder()` when opened via a "Build" row action, null
+    otherwise) decides create vs. update, the same role
+    `#decks-form-id` plays for that form. No separate save endpoint
+    needed, since a saved decklist is just a `card_ids` array regardless
+    of how it was assembled.
   - That same button gets a small red notification dot
     (`.has-friend-request`, applied/removed by
     `setFriendRequestNotification()`) whenever `/friends/invites` returns

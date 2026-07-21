@@ -58,6 +58,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
 | POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel`/`draft` game doesn't seat *exactly* 2 players total, a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of 54 cards), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"?, "saved_decklist_id"?}`           | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, either as pasted/uploaded text or by referencing one of their own or a friend's shared saved decklists (see "Saved decklists" below), validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it. Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
+| GET    | `/cards/catalog` | —                                                                | Requires auth. Every printed card, hydrated the same way `/decklists/view` hydrates a saved decklist's cards (now including `rarity`, which no other card-view route needed until this one). Not scoped to a game/decklist -- the catalog itself is public knowledge, same reasoning as `/games/log`. Returns `{"cards": [...]}`. Powers the deck builder's (issue #93) own catalog-browsing panel -- see "Deck builder" below. |
 | GET    | `/decklists`    | —                                                                 | Requires auth. Returns `{"own": [...], "friends": [{"friend_id", "friend_username", "decklists": [...]}]}` -- summaries only (`id`/`name`/`card_count`/`sideboard_card_count`/`visibility`/`created_at`/`updated_at`, never card contents). `friends` only lists friends who have 1+ decks shared with you. See "Saved decklists" below. |
 | GET    | `/decklists/view` | query param `id`                                               | Requires auth. Returns `{"decklist": {"id", "name", "visibility", "owner_user_id", "cards": [...], "sideboard_cards": [...]}}` with full hydrated card details. `404` if no such decklist, `403` if it's private and you're not the owner (or `friends`-visible and you're not an accepted friend of the owner). |
 | POST   | `/decklists`    | `{"name", "decklist_text"?, "card_ids"?, "sideboard_card_ids"?, "visibility"?}` | Requires auth. Saves a new decklist under your account -- either `decklist_text` (parsed the same way as "Custom decklists" below, capturing an optional Sideboard section too) or already-resolved `card_ids`/`sideboard_card_ids` (used by the draft formats' own "Save deck" button, see "Quick Draft" etc.). `visibility` is `private` (default) or `friends`. `400` if the name is blank, no cards were given, a card id doesn't exist, or `visibility` is invalid. Returns `{"decklist_id"}`. |
@@ -1674,6 +1675,35 @@ so it POSTs directly to `POST /decklists` with `card_ids` (the current
 selection) and `sideboard_card_ids` (every drafted card *not* currently
 selected -- the "optional sideboard" the issue asks for, derived as the
 selection's complement rather than picked via any separate UI).
+
+### Deck builder
+
+Issue #93: a card-by-card alternative to typing/pasting a decklist for
+the Decks dialog's own save/edit form -- browse the full card catalog
+(`GET /cards/catalog`, added for this: every printed card, hydrated via
+`CardCatalog::serialize()`, now including `rarity` alongside the fields
+that method already returned), click a card to add it to the deck under
+construction, then save through the exact same `POST /decklists`/
+`POST /decklists/update` the paste/upload form already uses -- no new
+save endpoint needed, since a saved decklist is just a `card_ids` array
+regardless of how it was assembled.
+
+Everything else -- filtering the catalog by set/color/rarity/name-or-
+rules-text substring, multi-key sorting the deck under construction by
+color/rarity/name, and restricting which cards a chosen format allows
+adding -- is entirely client-side (`web-static/js/game.js`'s "Deck
+builder" section), the same duplication-with-a-mirrors-comment
+convention `DECK_TYPE_DESCRIPTIONS` already uses for prose rather than a
+matching backend endpoint: `DECK_BUILDER_FORMATS`' four options
+(`free_form`/`power`/`structure`/`jceddys_75`) mirror
+`GameService::buildPowerDeckCardIds()`/`buildStructureDeckCardIds()`/
+`buildJceddys75DeckCardIds()`'s own card counts/rarity splits/copy caps.
+The format selector only gates which cards `canAddCardToBuilderDeck()`
+lets you click "+ Add" on *while building* -- a saved decklist has no
+`format` column of its own (same as one built by pasting text), so
+switching formats mid-build doesn't retroactively strip anything already
+added, only further additions. `web-static/README.md`'s "Deck builder"
+section covers the dialog/UI side in more detail.
 
 ### Quick Draft
 

@@ -101,6 +101,8 @@ final class UserDecklistIntegrationTest extends TestCase
         // MSW printing (this custom game's own id order IS the
         // collector-number order -- see that migration's own comment).
         self::assertSame($charityId, $view['cards'][0]['collector_number']);
+        // Charity is a white common -- see CardCatalogIntegrationTest.
+        self::assertSame('common', $view['cards'][0]['rarity']);
     }
 
     public function testCreateFromCardIdsStoresDirectly(): void
