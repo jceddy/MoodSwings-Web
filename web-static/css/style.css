@@ -695,6 +695,20 @@ body.game-page {
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--suppressed {
         bottom: calc(0.25rem + 15px);
     }
+
+    /* A saved/shared deck's full card list (issue #197) can run to well
+       over a hundred cards -- at .card-thumb's normal 5.5rem width that's
+       a lot of scrolling to see the whole thing on a phone screen. Same
+       shrink as .in-play-zone above, minus the suppressed-badge scaling
+       (deck-view cards are catalog-only display, never suppressed). */
+    #deck-view-cards .card-thumb,
+    #deck-view-cards .card-thumb__art,
+    #deck-view-sideboard-cards .card-thumb,
+    #deck-view-sideboard-cards .card-thumb__art,
+    #shared-deck-cards .card-thumb,
+    #shared-deck-cards .card-thumb__art {
+        width: 4rem;
+    }
 }
 
 /* -- Card art thumbnails (hand/in-play/discard) --------------------- */
@@ -1034,7 +1048,8 @@ dialog#card-detail-dialog {
    Close button sits flush against the card grid (or the sideboard grid,
    or the hidden sideboard heading, whichever ends up last) directly
    above it. */
-#deck-view-close-button {
+#deck-view-close-button,
+#shared-deck-close-button {
     margin-top: 0.5rem;
 }
 
