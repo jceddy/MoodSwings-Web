@@ -244,12 +244,13 @@ function submitDraftDeck(gameId, cardIds) {
 }
 
 // Only the loser of the match's previous game may call this -- see
-// GameService::chooseFirstPlayerForNextMatchGame(). chosenUserId may be
-// either seat's own user_id.
-function chooseFirstPlayerForNextMatchGame(gameId, chosenUserId) {
+// GameService::setPlayFirstNextMatchGame(). playFirst true opts the
+// loser into going first themselves; false clears that back to the
+// default (the previous game's winner going first again).
+function setPlayFirstNextMatchGame(gameId, playFirst) {
     return apiRequest('/games/draft/first-player-choice', {
         method: 'POST',
-        body: JSON.stringify({ game_id: gameId, chosen_user_id: chosenUserId }),
+        body: JSON.stringify({ game_id: gameId, play_first: playFirst }),
     });
 }
 

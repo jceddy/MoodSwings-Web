@@ -3438,68 +3438,52 @@
     // handlers' own re-renders, which don't otherwise need it).
     let currentOpponentUsername = 'your opponent';
     // Set alongside currentOpponentUsername, for renderFirstPlayerChoice()'s
-    // own "is this user_id you, or your opponent?" checks and for the
-    // choice buttons' own click handlers below (chooseFirstPlayerForNextMatchGame()
-    // needs a real user_id, not a display name).
+    // own "is this user_id you, or your opponent?" check.
     let currentViewerUserId = null;
-    let currentOpponentUserId = null;
 
-    // Lets the loser of the match's previous game choose who goes first in
-    // this one -- see GameService::chooseFirstPlayerForNextMatchGame().
+    // Lets the loser of the match's previous game opt to go first in this
+    // one via a single checkbox -- see GameService::setPlayFirstNextMatchGame().
     // Purely optional: `choice` is null for game 1 of a match (nothing to
-    // base a choice on yet), and even once it's present, declining to
-    // choose just falls back to the previous game's own winner going first
-    // again (choice.default_user_id) rather than blocking anything.
+    // base a choice on yet), and leaving the checkbox unchecked just falls
+    // back to the previous game's own winner going first again
+    // (choice.default_user_id) rather than blocking anything. The status
+    // line itself is shown to both players regardless of who's the loser.
     function renderFirstPlayerChoice(choice) {
         const container = document.getElementById('draft-first-player-choice');
         const statusEl = document.getElementById('draft-first-player-choice-status');
-        const actions = document.getElementById('draft-first-player-choice-actions');
+        const checkboxLabel = document.getElementById('draft-first-player-choice-checkbox-label');
+        const checkbox = document.getElementById('draft-first-player-choice-checkbox');
         const errorEl = document.getElementById('draft-first-player-choice-error');
         errorEl.hidden = true;
 
         if (!choice) {
             container.hidden = true;
-            actions.hidden = true;
+            checkboxLabel.hidden = true;
             return;
         }
         container.hidden = false;
 
         const nameFor = (userId) => (userId === currentViewerUserId ? 'You' : currentOpponentUsername);
+        const goingFirstUserId = choice.chosen_user_id !== null ? choice.chosen_user_id : choice.default_user_id;
+        statusEl.textContent = nameFor(goingFirstUserId) + ' will go first in this game.';
 
-        if (choice.chosen_user_id !== null) {
-            statusEl.textContent = nameFor(choice.chosen_user_id) + ' will go first in this game.';
-            actions.hidden = true;
-        } else if (choice.you_are_previous_loser) {
-            statusEl.textContent = 'You lost the last game -- choose who goes first in this one (defaults to '
-                + nameFor(choice.default_user_id) + ' if you don\'t choose):';
-            actions.hidden = false;
-            document.getElementById('draft-first-player-choice-self-button').textContent = "I'll go first";
-            document.getElementById('draft-first-player-choice-opponent-button').textContent = currentOpponentUsername + ' goes first';
-        } else {
-            statusEl.textContent = nameFor(choice.default_user_id) + ' will go first in this game, unless '
-                + currentOpponentUsername + ' (who lost the last game) chooses otherwise.';
-            actions.hidden = true;
+        checkboxLabel.hidden = !choice.you_are_previous_loser;
+        if (choice.you_are_previous_loser) {
+            checkbox.checked = choice.chosen_user_id === currentViewerUserId;
         }
     }
 
-    async function submitFirstPlayerChoice(chosenUserId) {
+    document.getElementById('draft-first-player-choice-checkbox').addEventListener('change', async (event) => {
         const errorEl = document.getElementById('draft-first-player-choice-error');
         errorEl.hidden = true;
-        const { ok, body } = await chooseFirstPlayerForNextMatchGame(currentGameId, chosenUserId);
+        const { ok, body } = await setPlayFirstNextMatchGame(currentGameId, event.target.checked);
         if (!ok) {
             errorEl.textContent = body.message || 'Could not record that choice.';
             errorEl.hidden = false;
+            event.target.checked = !event.target.checked;
             return;
         }
         await refreshBoard();
-    }
-
-    document.getElementById('draft-first-player-choice-self-button').addEventListener('click', () => {
-        submitFirstPlayerChoice(currentViewerUserId);
-    });
-
-    document.getElementById('draft-first-player-choice-opponent-button').addEventListener('click', () => {
-        submitFirstPlayerChoice(currentOpponentUserId);
     });
 
     function renderDraftDeckBuilding(deckBuilding) {
@@ -3677,7 +3661,6 @@
         currentOpponentUsername = opponent ? opponent.username : 'your opponent';
         const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
         currentViewerUserId = you ? you.user_id : null;
-        currentOpponentUserId = opponent ? opponent.user_id : null;
 
         if (state.game.deck_type === 'quick_draft') {
             const qd = state.quick_draft;
