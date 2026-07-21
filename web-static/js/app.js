@@ -243,6 +243,16 @@ function submitDraftDeck(gameId, cardIds) {
     });
 }
 
+// Only the loser of the match's previous game may call this -- see
+// GameService::chooseFirstPlayerForNextMatchGame(). chosenUserId may be
+// either seat's own user_id.
+function chooseFirstPlayerForNextMatchGame(gameId, chosenUserId) {
+    return apiRequest('/games/draft/first-player-choice', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, chosen_user_id: chosenUserId }),
+    });
+}
+
 // Winston Draft (issue #89) -- see "Winston Draft" in web-static/README.md.
 // action is 'take' (claim the whole current pile) or 'pass' (move on to
 // the next pile, or the mandatory deck draw after declining pile 3).

@@ -802,6 +802,26 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
     }
 }
 
+// Lets the loser of a best-of-three draft match's game N choose who goes
+// first in game N+1 -- see GameService::chooseFirstPlayerForNextMatchGame().
+// Entirely optional (falls back to game N's own winner going first again),
+// so unlike /games/draft/deck above this never gates startGame().
+if ($path === '/games/draft/first-player-choice' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $chosenUserId = (int) ($body['chosen_user_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->chooseFirstPlayerForNextMatchGame($gameId, (int) $currentUser['id'], $chosenUserId);
+        respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/games/draft/winston-pick' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

@@ -868,7 +868,20 @@ too, proportional to the smaller card width.
       saving a personal copy of the in-progress build under its own name
       without submitting it, ending the deck-building step, or being
       visible to the opponent. See "Saved decklists" in
-      `php-app/README.md`. Pool/pack/drafted cards are all
+      `php-app/README.md`.
+    - **Who goes first** (`#draft-first-player-choice`, sitting inside
+      `#draft-deck-building` above the picker so it's visible independent
+      of deck submission -- `renderFirstPlayerChoice()`) -- `null` for
+      game 1 of a match, so the whole block stays hidden there. From
+      game 2 on, both players always see a status line naming who's
+      going first (either the previous game's own winner by default, or
+      whoever the previous loser actually chose); only the previous
+      loser's own client shows the two choice buttons ("I'll go first" /
+      "`<opponent>` goes first"), which call
+      `chooseFirstPlayerForNextMatchGame()` (`POST
+      /games/draft/first-player-choice`) and re-render immediately once
+      a choice sticks. Entirely optional -- nothing here gates the
+      Submit-deck button or `autoStartGameIfReady()`. Pool/pack/drafted cards are all
       served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
       rather than the usual in-play `serializeCard()` result, but with the
       exact same field names `buildCardThumb()`/`openCardDetail()` already

@@ -3437,6 +3437,70 @@
     // through every call site (including the select-all/clear-selection
     // handlers' own re-renders, which don't otherwise need it).
     let currentOpponentUsername = 'your opponent';
+    // Set alongside currentOpponentUsername, for renderFirstPlayerChoice()'s
+    // own "is this user_id you, or your opponent?" checks and for the
+    // choice buttons' own click handlers below (chooseFirstPlayerForNextMatchGame()
+    // needs a real user_id, not a display name).
+    let currentViewerUserId = null;
+    let currentOpponentUserId = null;
+
+    // Lets the loser of the match's previous game choose who goes first in
+    // this one -- see GameService::chooseFirstPlayerForNextMatchGame().
+    // Purely optional: `choice` is null for game 1 of a match (nothing to
+    // base a choice on yet), and even once it's present, declining to
+    // choose just falls back to the previous game's own winner going first
+    // again (choice.default_user_id) rather than blocking anything.
+    function renderFirstPlayerChoice(choice) {
+        const container = document.getElementById('draft-first-player-choice');
+        const statusEl = document.getElementById('draft-first-player-choice-status');
+        const actions = document.getElementById('draft-first-player-choice-actions');
+        const errorEl = document.getElementById('draft-first-player-choice-error');
+        errorEl.hidden = true;
+
+        if (!choice) {
+            container.hidden = true;
+            actions.hidden = true;
+            return;
+        }
+        container.hidden = false;
+
+        const nameFor = (userId) => (userId === currentViewerUserId ? 'You' : currentOpponentUsername);
+
+        if (choice.chosen_user_id !== null) {
+            statusEl.textContent = nameFor(choice.chosen_user_id) + ' will go first in this game.';
+            actions.hidden = true;
+        } else if (choice.you_are_previous_loser) {
+            statusEl.textContent = 'You lost the last game -- choose who goes first in this one (defaults to '
+                + nameFor(choice.default_user_id) + ' if you don\'t choose):';
+            actions.hidden = false;
+            document.getElementById('draft-first-player-choice-self-button').textContent = "I'll go first";
+            document.getElementById('draft-first-player-choice-opponent-button').textContent = currentOpponentUsername + ' goes first';
+        } else {
+            statusEl.textContent = nameFor(choice.default_user_id) + ' will go first in this game, unless '
+                + currentOpponentUsername + ' (who lost the last game) chooses otherwise.';
+            actions.hidden = true;
+        }
+    }
+
+    async function submitFirstPlayerChoice(chosenUserId) {
+        const errorEl = document.getElementById('draft-first-player-choice-error');
+        errorEl.hidden = true;
+        const { ok, body } = await chooseFirstPlayerForNextMatchGame(currentGameId, chosenUserId);
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not record that choice.';
+            errorEl.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
+    document.getElementById('draft-first-player-choice-self-button').addEventListener('click', () => {
+        submitFirstPlayerChoice(currentViewerUserId);
+    });
+
+    document.getElementById('draft-first-player-choice-opponent-button').addEventListener('click', () => {
+        submitFirstPlayerChoice(currentOpponentUserId);
+    });
 
     function renderDraftDeckBuilding(deckBuilding) {
         currentDeckBuilding = deckBuilding;
@@ -3451,6 +3515,12 @@
         const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
         const resetButton = document.getElementById('draft-deck-reset-button');
         const statusEl = document.getElementById('draft-deck-building-status');
+
+        // Independent of deck submission -- the loser of the previous game
+        // may choose who goes first in this one either before, after, or
+        // without ever (re)submitting a deck, so this isn't gated behind
+        // the you_submitted early return below.
+        renderFirstPlayerChoice(deckBuilding.first_player_choice);
 
         if (deckBuilding.you_submitted) {
             statusEl.innerHTML = '';
@@ -3605,6 +3675,9 @@
         // "other" seated player is always the opponent.
         const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
         currentOpponentUsername = opponent ? opponent.username : 'your opponent';
+        const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
+        currentViewerUserId = you ? you.user_id : null;
+        currentOpponentUserId = opponent ? opponent.user_id : null;
 
         if (state.game.deck_type === 'quick_draft') {
             const qd = state.quick_draft;

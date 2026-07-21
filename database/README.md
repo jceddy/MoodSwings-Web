@@ -324,3 +324,12 @@ half-migrated schema.
   follow-ups (repositioned Decks dialog buttons, small-screen card-thumb
   shrink, catalog-panel multi-sort, Save/Close button spacing) never
   touched the schema. See "Deck builder" in `php-app/README.md`.
+- **Draft match first-player choice** (`0041`): adds nullable
+  `games.first_player_choice_user_id` (FK to `users`, `ON DELETE SET
+  NULL`) — lets the loser of a best-of-three draft match's game N choose
+  who goes first in game N+1, entirely optionally (defaults to game N's
+  own winner going first again if the loser never exercises the choice).
+  Scoped to `games` rather than `draft_matches` since it's specific to
+  one particular game within the match, the same way `match_game_number`
+  itself already is. See "Quick Draft"/"Winston Draft"/"Grid Draft" in
+  `php-app/README.md`.

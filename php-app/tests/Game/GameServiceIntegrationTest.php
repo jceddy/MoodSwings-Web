@@ -7380,6 +7380,186 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    /** @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int} */
+    private function buildQuickDraftMatchThroughGameOne(): array
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        return [
+            'gameId' => $gameId,
+            'u1' => $u1,
+            'u2' => $u2,
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId,
+            'loserUserId' => $loserUserId,
+        ];
+    }
+
+    /**
+     * The heart of the "loser chooses who goes first" feature (a follow-up
+     * to issue #88/#89's own best-of-three match progression): the loser
+     * of game N may choose either seat to go first in game N+1, and
+     * startGame() must actually honor that choice rather than its usual
+     * coin flip.
+     */
+    public function testLoserOfPreviousGameCanChooseWhoGoesFirstInNextGame(): void
+    {
+        [
+            'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildQuickDraftMatchThroughGameOne();
+
+        // The loser sends themselves out first instead of the winner going
+        // first again (the default -- see the sibling test below).
+        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $loserUserId);
+
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($loserUserId, $firstPlayerUserId);
+        self::assertNotSame($winnerUserId, $firstPlayerUserId);
+    }
+
+    /** The loser may also choose to let the previous game's winner go first again -- a real (if unexciting) choice. */
+    public function testLoserCanChooseTheWinnerToGoFirstAgain(): void
+    {
+        [
+            'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildQuickDraftMatchThroughGameOne();
+
+        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $winnerUserId);
+
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($winnerUserId, $firstPlayerUserId);
+    }
+
+    /**
+     * Declining the choice entirely (the common case) must NOT fall back
+     * to a fresh coin flip -- it defaults to the previous game's own
+     * winner going first again, exactly like resolveFirstPlayerId()'s own
+     * docblock says.
+     */
+    public function testFirstPlayerDefaultsToPreviousWinnerWhenChoiceNotExercised(): void
+    {
+        ['u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId]
+            = $this->buildQuickDraftMatchThroughGameOne();
+
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($winnerUserId, $firstPlayerUserId);
+    }
+
+    public function testOnlyTheLoserOfThePreviousGameCanChooseTheNextFirstPlayer(): void
+    {
+        ['nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId]
+            = $this->buildQuickDraftMatchThroughGameOne();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Only the loser');
+
+        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $winnerUserId, $loserUserId);
+    }
+
+    public function testChooseFirstPlayerRejectsGameOneOfAMatch(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture(winsNeeded: 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('no previous game');
+
+        $this->games->chooseFirstPlayerForNextMatchGame($gameId, $u1, $u1);
+    }
+
+    public function testChooseFirstPlayerRejectsAUserNotSeatedInTheMatch(): void
+    {
+        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchThroughGameOne();
+        $outsider = $this->insertUser('quickdraft-first-player-outsider');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not seated');
+
+        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $outsider);
+    }
+
+    /**
+     * getState()'s own 'first_player_choice' field for the deck_building
+     * sub-state -- null for game 1 (nothing to base a choice on yet),
+     * then reflects both the previous winner's default and, once made,
+     * the loser's own actual choice for both viewers.
+     */
+    public function testGetStateExposesFirstPlayerChoiceForDeckBuildingSubState(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        self::assertNull(
+            $this->games->getState($gameId, $u1)['quick_draft']['deck_building']['first_player_choice'],
+            'game 1 of a match has no previous game to base a choice on',
+        );
+
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $loserChoice = $this->games->getState($nextGameId, $loserUserId)['quick_draft']['deck_building']['first_player_choice'];
+        self::assertTrue($loserChoice['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $loserChoice['default_user_id']);
+        self::assertNull($loserChoice['chosen_user_id']);
+
+        $winnerChoice = $this->games->getState($nextGameId, $winnerUserId)['quick_draft']['deck_building']['first_player_choice'];
+        self::assertFalse($winnerChoice['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $winnerChoice['default_user_id']);
+        self::assertNull($winnerChoice['chosen_user_id']);
+
+        $this->games->chooseFirstPlayerForNextMatchGame($nextGameId, $loserUserId, $loserUserId);
+
+        $loserChoiceAfter = $this->games->getState($nextGameId, $loserUserId)['quick_draft']['deck_building']['first_player_choice'];
+        self::assertSame($loserUserId, $loserChoiceAfter['chosen_user_id']);
+        $winnerChoiceAfter = $this->games->getState($nextGameId, $winnerUserId)['quick_draft']['deck_building']['first_player_choice'];
+        self::assertSame($loserUserId, $winnerChoiceAfter['chosen_user_id']);
+    }
+
     /**
      * A genuinely-trimmed (not full-16) deck must reappear as the new
      * game's previous_deck_card_ids once the match advances, so the
