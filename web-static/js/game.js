@@ -58,6 +58,11 @@
         download: '<path d="M19,9h-4V3H9v6H5l7,7L19,9z M5,18v2h14v-2H5z"/>',
         delete: '<path d="M6,7h12l-1.06,13.19C16.85,21.19,16,22,15,22H9c-1,0-1.85-0.81-1.94-1.81L6,7z ' +
             'M9.5,4h5l1,2h4v2H4V6h4L9.5,4z"/>',
+        // The deck builder (issue #93)'s own "Build a new deck"/per-row
+        // "Build" buttons -- a wrench, Material Design's own generic
+        // "build/construct something" glyph.
+        build: '<path d="M22.7,19l-9.1-9.1c0.9-2.3,0.4-5-1.5-6.9c-2-2-5-2.4-7.4-1.3L9,6L6,9L1.6,4.7C0.4,7.1,0.9,10.1,2.9,12.1' +
+            'c1.9,1.9,4.6,2.4,6.9,1.5l9.1,9.1c0.4,0.4,1,0.4,1.4,0l2.3-2.3C23.1,20.1,23.1,19.4,22.7,19z"/>',
     };
 
     function buildActionIcon(kind) {
@@ -399,23 +404,24 @@
                 const li = document.createElement('li');
                 li.appendChild(buildDeckRowInfo(deck, true));
 
-                // Right-justified action section: View/Edit stacked over
-                // Duplicate/Download in a 2x2 grid, with Delete standing
-                // alone alongside it (vertically centered against the
-                // grid's own height via .decks-row-actions's own
-                // align-items: center) -- physically separated from the
-                // other four so a stray click aimed at one of them can't
-                // land on the one irreversible action in the row.
+                // Right-justified action section: View/Build/Edit over
+                // Duplicate/Download/Delete in a 3x3... a 3x2 grid --
+                // grid-auto-flow lays these out row-major, so this order
+                // is exactly the two rows it produces.
                 const actions = document.createElement('div');
                 actions.className = 'decks-row-actions';
                 const grid = document.createElement('div');
                 grid.className = 'decks-row-actions-grid';
                 grid.appendChild(iconActionButton('view', 'View', () => openDeckView(deck.id)));
+                // Card-by-card alternative to Edit below (issue #93) --
+                // opens #deck-builder-dialog pre-loaded with this deck's
+                // own cards/name/visibility instead of its decklist text.
+                grid.appendChild(iconActionButton('build', 'Build', () => openDeckBuilder(deck.id)));
                 grid.appendChild(iconActionButton('edit', 'Edit', () => startEditingDeck(deck.id)));
                 grid.appendChild(iconActionButton('duplicate', 'Duplicate', () => duplicateDeck(deck.id)));
                 grid.appendChild(iconActionButton('download', 'Download', () => downloadDeck(deck.id)));
+                grid.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
                 actions.appendChild(grid);
-                actions.appendChild(iconActionButton('delete', 'Delete', () => deleteDeckAndRefresh(deck.id)));
                 li.appendChild(actions);
 
                 return li;
@@ -453,6 +459,368 @@
             }
             friendsListEl.appendChild(ul);
         }
+    }
+
+    // -- Deck builder (issue #93) -----------------------------------------
+    //
+    // A card-by-card alternative to the Decks dialog's paste/upload form
+    // above -- browse the full card catalog (filter by set/color/rarity/
+    // text, sorted per deck-builder-catalog-sort-1/2/3, see
+    // renderDeckBuilderCatalog()), click a card to add it to the deck
+    // under construction (sorted independently per
+    // deck-builder-deck-sort-1/2/3, see renderDeckBuilderDeck()), then
+    // save through the exact same createDecklist()/updateDecklist()
+    // calls the paste/upload form uses.
+    //
+    // The format selector only restricts which cards canAddCardToBuilderDeck()
+    // allows adding *while building* -- a saved decklist has no "format"
+    // column of its own (same as one built by pasting text), so switching
+    // formats after cards are already added does NOT retroactively
+    // invalidate/remove anything already in the deck, only gates further
+    // additions.
+    //
+    // Numbers mirror GameService's own three deck_type builders --
+    // buildStructureDeckCardIds()/buildPowerDeckCardIds()/
+    // buildJceddys75DeckCardIds() -- the same duplication-with-a-mirrors-
+    // comment convention DECK_TYPE_DESCRIPTIONS above and DuelDeckRules's
+    // own presets already use, rather than a new backend endpoint just to
+    // hand these same four numbers to the client.
+    const DECK_BUILDER_FORMATS = {
+        free_form: {
+            label: 'Free-form',
+            description: 'No restrictions -- add any card, any number of copies.',
+        },
+        power: {
+            label: 'Power Duel',
+            description: 'A 15-card deck: exactly 1 mythic mood plus 14 other non-mythic moods, all singleton (no duplicates).',
+            totalTarget: 15,
+            mythicTarget: 1,
+            nonMythicTarget: 14,
+            singleton: true,
+        },
+        structure: {
+            label: 'Structure Deck',
+            description: 'A 45-card deck: 23 common, 14 uncommon, 6 rare, and 2 mythic moods, all singleton (no duplicates).',
+            totalTarget: 45,
+            rarityTargets: { common: 23, uncommon: 14, rare: 6, mythic: 2 },
+            singleton: true,
+        },
+        jceddys_75: {
+            label: "jceddy's 75 Card",
+            description: 'A 75-card deck: for each color, 1 mythic, 2 different rares, 4 uncommons (up to 2 copies of any one), and 8 commons (up to 3 copies of any one).',
+            totalTarget: 75,
+            raritySpec: {
+                mythic: { count: 1, maxCopies: 1 },
+                rare: { count: 2, maxCopies: 1 },
+                uncommon: { count: 4, maxCopies: 2 },
+                common: { count: 8, maxCopies: 3 },
+            },
+        },
+    };
+
+    // Card catalog fetched once and cached for the lifetime of the page --
+    // it's read-only reference data (133 cards total), no different from
+    // DECK_TYPE_DESCRIPTIONS above in how static it is, just too large to
+    // hand-write as a JS literal the way that one's prose is.
+    let deckBuilderCatalog = null;
+    let deckBuilderCatalogById = null;
+
+    // The deck under construction: one entry per copy (duplicates appear
+    // as repeated ids), same convention GameService::viewSharedDeck()/
+    // openDeckView() already use rather than a { cardId: count } map --
+    // keeps add/remove/sort all operating on one flat array.
+    let deckBuilderCardIds = [];
+    // Set by openDeckBuilder(existingId) when editing an existing owned
+    // deck via its "Build" row action -- null means "Build a new deck"
+    // (create on save), non-null means "update this deck (id) on save".
+    let deckBuilderEditingId = null;
+
+    async function ensureDeckBuilderCatalogLoaded() {
+        if (deckBuilderCatalog !== null) {
+            return;
+        }
+
+        const { ok, body } = await getCardCatalog();
+        if (!ok) {
+            return;
+        }
+
+        deckBuilderCatalog = body.cards;
+        deckBuilderCatalogById = new Map(deckBuilderCatalog.map((card) => [card.card_id, card]));
+
+        // Populated from whatever set_code values actually exist in the
+        // catalog rather than hardcoded -- today that's just "MSW" (see
+        // CardCatalog::serialize()'s own docblock), but this stays
+        // correct without a matching update if a second Set is ever added.
+        const setSelect = document.getElementById('deck-builder-filter-set');
+        const setCodes = [...new Set(deckBuilderCatalog.map((card) => card.set_code))].sort();
+        setSelect.innerHTML = '<option value="">All</option>';
+        for (const setCode of setCodes) {
+            const option = document.createElement('option');
+            option.value = setCode;
+            option.textContent = setCode;
+            setSelect.appendChild(option);
+        }
+    }
+
+    // Whether $card can be added to a deck already containing
+    // $deckCardIds without exceeding $formatKey's own caps -- checked
+    // BEFORE every add (see addCardToBuilderDeck()) rather than only at
+    // save time, so the builder can never be walked into an over-cap
+    // state to begin with. Free-form and an unrecognized/missing format
+    // key both mean "no restriction," matching DECK_BUILDER_FORMATS.free_form
+    // having no cap fields at all.
+    function canAddCardToBuilderDeck(formatKey, deckCardIds, card) {
+        const format = DECK_BUILDER_FORMATS[formatKey];
+        if (!format || formatKey === 'free_form') {
+            return true;
+        }
+
+        const copiesOfThisCard = deckCardIds.filter((id) => id === card.card_id).length;
+
+        if (format.singleton) {
+            // Power/Structure: every card is capped at 1 copy...
+            if (copiesOfThisCard >= 1) {
+                return false;
+            }
+            if (format.rarityTargets) {
+                // ...Structure: each rarity capped at its own target.
+                const rarityCount = deckCardIds.filter((id) => deckBuilderCatalogById.get(id).rarity === card.rarity).length;
+                return rarityCount < (format.rarityTargets[card.rarity] || 0);
+            }
+            // ...Power: mythic capped at mythicTarget, everything else
+            // pooled together and capped at nonMythicTarget.
+            if (card.rarity === 'mythic') {
+                const mythicCount = deckCardIds.filter((id) => deckBuilderCatalogById.get(id).rarity === 'mythic').length;
+                return mythicCount < format.mythicTarget;
+            }
+            const nonMythicCount = deckCardIds.filter((id) => deckBuilderCatalogById.get(id).rarity !== 'mythic').length;
+            return nonMythicCount < format.nonMythicTarget;
+        }
+
+        // jceddy's 75 Card: per-color-per-rarity count/copy caps.
+        const spec = format.raritySpec[card.rarity];
+        if (!spec || copiesOfThisCard >= spec.maxCopies) {
+            return false;
+        }
+        const colorRarityCount = deckCardIds.filter((id) => {
+            const c = deckBuilderCatalogById.get(id);
+            return c.color === card.color && c.rarity === card.rarity;
+        }).length;
+        return colorRarityCount < spec.count;
+    }
+
+    // Running total-vs-target summary line for #deck-builder-deck-summary
+    // -- just a card count for free-form (no target to compare against),
+    // "current/target" for every other format so the caps
+    // canAddCardToBuilderDeck() enforces stay visible while building.
+    function deckBuilderSummaryText(formatKey, deckCardIds) {
+        const format = DECK_BUILDER_FORMATS[formatKey];
+        if (!format || !format.totalTarget) {
+            return deckCardIds.length + ' card(s) in this deck.';
+        }
+        return deckCardIds.length + ' / ' + format.totalTarget + ' card(s) in this deck.';
+    }
+
+    function addCardToBuilderDeck(card) {
+        const formatKey = document.getElementById('deck-builder-format').value;
+        if (!canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card)) {
+            return;
+        }
+        deckBuilderCardIds.push(card.card_id);
+        renderDeckBuilderCatalog();
+        renderDeckBuilderDeck();
+    }
+
+    function removeCardFromBuilderDeck(cardId) {
+        const index = deckBuilderCardIds.indexOf(cardId);
+        if (index !== -1) {
+            deckBuilderCardIds.splice(index, 1);
+        }
+        renderDeckBuilderCatalog();
+        renderDeckBuilderDeck();
+    }
+
+    // Comparator for one sort key (see SORT_COMPARATORS below) -- color
+    // uses JCEDDYS_75_DECK_COLORS' white/blue/black/red/green order (the
+    // same reference GameService::viewSharedDeck() sorts by, issue #197)
+    // and rarity uses RARITIES' common/uncommon/rare/mythic order (the
+    // same reference DuelDeckRules/GameService::RARITIES already use),
+    // rather than plain alphabetical, since neither color nor rarity
+    // names sort alphabetically into a meaningful order.
+    const DECK_BUILDER_SORT_COMPARATORS = {
+        color: (a, b) => JCEDDYS_75_DECK_COLORS.indexOf(a.color) - JCEDDYS_75_DECK_COLORS.indexOf(b.color),
+        rarity: (a, b) => RARITIES.indexOf(a.rarity) - RARITIES.indexOf(b.rarity),
+        name: (a, b) => a.name.localeCompare(b.name),
+    };
+
+    // Applies the three sort-key selects named by $selectIdPrefix (issue
+    // #93's "multi-sort" requirement) in order -- each selected key only
+    // breaks ties left by the ones before it, via Array.sort()'s own
+    // stable-sort guarantee (ES2019+) rather than needing to chain
+    // tiebreakers by hand. Shared by both the catalog panel
+    // ('deck-builder-catalog-sort') and the deck-under-construction panel
+    // ('deck-builder-deck-sort') -- same three Color/Rarity/Name options,
+    // just two independent sets of selects.
+    function sortBuilderCards(cards, selectIdPrefix) {
+        const keys = ['1', '2', '3']
+            .map((n) => document.getElementById(selectIdPrefix + '-' + n).value)
+            .filter((key) => key !== '');
+
+        if (keys.length === 0) {
+            return cards;
+        }
+
+        return [...cards].sort((a, b) => {
+            for (const key of keys) {
+                const result = DECK_BUILDER_SORT_COMPARATORS[key](a, b);
+                if (result !== 0) {
+                    return result;
+                }
+            }
+            return 0;
+        });
+    }
+
+    function deckBuilderCatalogFilters() {
+        return {
+            set: document.getElementById('deck-builder-filter-set').value,
+            color: document.getElementById('deck-builder-filter-color').value,
+            rarity: document.getElementById('deck-builder-filter-rarity').value,
+            // Case-insensitive substring match against name OR rules
+            // text (issue #93) -- lowercased once here rather than per
+            // card in the filter loop below.
+            text: document.getElementById('deck-builder-filter-text').value.trim().toLowerCase(),
+        };
+    }
+
+    function cardMatchesDeckBuilderFilters(card, filters) {
+        if (filters.set && card.set_code !== filters.set) {
+            return false;
+        }
+        if (filters.color && card.color !== filters.color) {
+            return false;
+        }
+        if (filters.rarity && card.rarity !== filters.rarity) {
+            return false;
+        }
+        if (filters.text) {
+            const name = card.name.toLowerCase();
+            const rulesText = (card.rules_text || '').toLowerCase();
+            if (!name.includes(filters.text) && !rulesText.includes(filters.text)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Wraps a card-thumb (click = inspect, same as everywhere else this
+    // app shows a card) with a distinct "Add"/"Remove" button underneath
+    // -- buildCardThumb() itself stays untouched (its own onClick is
+    // shared by every OTHER caller for "open the detail dialog", not
+    // "add/remove this specific card"), so the deck builder's own
+    // add/remove action lives in a sibling button instead of overloading
+    // the thumb's own click.
+    function buildDeckBuilderCardItem(card, actionLabel, onAction, disabled) {
+        const item = document.createElement('div');
+        item.className = 'deck-builder-card-item';
+        item.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = actionLabel;
+        button.disabled = disabled;
+        button.addEventListener('click', onAction);
+        item.appendChild(button);
+
+        return item;
+    }
+
+    function renderDeckBuilderCatalog() {
+        const formatKey = document.getElementById('deck-builder-format').value;
+        const filters = deckBuilderCatalogFilters();
+        const filtered = deckBuilderCatalog.filter((card) => cardMatchesDeckBuilderFilters(card, filters));
+        const cards = sortBuilderCards(filtered, 'deck-builder-catalog-sort');
+
+        const gridEl = document.getElementById('deck-builder-catalog-cards');
+        gridEl.innerHTML = '';
+        document.getElementById('deck-builder-catalog-empty').hidden = cards.length > 0;
+
+        for (const card of cards) {
+            const canAdd = canAddCardToBuilderDeck(formatKey, deckBuilderCardIds, card);
+            gridEl.appendChild(buildDeckBuilderCardItem(card, '+ Add', () => addCardToBuilderDeck(card), !canAdd));
+        }
+    }
+
+    function renderDeckBuilderDeck() {
+        const formatKey = document.getElementById('deck-builder-format').value;
+        const cardsInDeck = deckBuilderCardIds.map((id) => deckBuilderCatalogById.get(id));
+        const sorted = sortBuilderCards(cardsInDeck, 'deck-builder-deck-sort');
+
+        const gridEl = document.getElementById('deck-builder-deck-cards');
+        gridEl.innerHTML = '';
+        document.getElementById('deck-builder-deck-empty').hidden = sorted.length > 0;
+
+        for (const card of sorted) {
+            gridEl.appendChild(buildDeckBuilderCardItem(card, 'Remove', () => removeCardFromBuilderDeck(card.card_id), false));
+        }
+
+        document.getElementById('deck-builder-deck-summary').textContent = deckBuilderSummaryText(formatKey, deckBuilderCardIds);
+    }
+
+    function resetDeckBuilderForm() {
+        document.getElementById('deck-builder-title').textContent = 'Build a new deck';
+        document.getElementById('deck-builder-editing-id').value = '';
+        document.getElementById('deck-builder-name').value = '';
+        document.getElementById('deck-builder-format').value = 'free_form';
+        document.getElementById('deck-builder-friends-visible').checked = false;
+        document.getElementById('deck-builder-filter-color').value = '';
+        document.getElementById('deck-builder-filter-rarity').value = '';
+        document.getElementById('deck-builder-filter-text').value = '';
+        for (const prefix of ['deck-builder-catalog-sort', 'deck-builder-deck-sort']) {
+            document.getElementById(prefix + '-1').value = 'color';
+            document.getElementById(prefix + '-2').value = 'rarity';
+            document.getElementById(prefix + '-3').value = 'name';
+        }
+        document.getElementById('deck-builder-error').hidden = true;
+        document.getElementById('deck-builder-success').hidden = true;
+        document.getElementById('deck-builder-format-description').textContent = DECK_BUILDER_FORMATS.free_form.description;
+        deckBuilderCardIds = [];
+        deckBuilderEditingId = null;
+    }
+
+    // existingDeckId: omit (or null) for "Build a new deck" starting
+    // empty; pass an owned deck's id (from its row's "Build" action) to
+    // load that deck's own cards/name/visibility into the builder instead
+    // -- format always starts at 'free_form' either way, since a saved
+    // decklist has no format of its own to restore (see this section's
+    // own top-of-block comment).
+    async function openDeckBuilder(existingDeckId) {
+        await ensureDeckBuilderCatalogLoaded();
+        if (deckBuilderCatalog === null) {
+            return;
+        }
+
+        resetDeckBuilderForm();
+
+        if (existingDeckId) {
+            const { ok, body } = await viewDecklist(existingDeckId);
+            if (!ok) {
+                return;
+            }
+            const deck = body.decklist;
+
+            document.getElementById('deck-builder-title').textContent = 'Build: ' + deck.name;
+            document.getElementById('deck-builder-editing-id').value = deck.id;
+            document.getElementById('deck-builder-name').value = deck.name;
+            document.getElementById('deck-builder-friends-visible').checked = deck.visibility === 'friends';
+            deckBuilderCardIds = deck.cards.map((card) => card.card_id);
+            deckBuilderEditingId = deck.id;
+        }
+
+        renderDeckBuilderCatalog();
+        renderDeckBuilderDeck();
+        document.getElementById('deck-builder-dialog').showModal();
     }
 
     // -- Game lobby + board ----------------------------------------------
@@ -589,6 +957,15 @@
         return DECK_TYPE_LABELS[deckType] || deckType;
     }
 
+    // Mirrors GameService::isSharedDeckType() -- every deck_type except
+    // custom_duel and the three draft-based ones puts the whole table on
+    // one shared deck rather than giving each player their own, so those
+    // four are the only deck_types with no single "the deck" for
+    // openSharedDeckView() (issue #197) to show.
+    function isSharedDeckType(deckType) {
+        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft'].includes(deckType);
+    }
+
     // Plain-language explanation shown under the New Game dialog's own
     // Deck dropdown (see updateDeckTypeDescription()) -- kept in sync with
     // GameService::buildStructureDeckCardIds()/buildPowerDeckCardIds()/
@@ -645,6 +1022,13 @@
     };
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
+
+    // Mirrors GameService::JCEDDYS_75_DECK_COLORS -- used by the deck
+    // builder's own color sort/format caps (issue #93, see
+    // DECK_BUILDER_FORMATS/DECK_BUILDER_SORT_COMPARATORS above), the same
+    // white/blue/black/red/green reference order GameService::viewSharedDeck()
+    // already sorts a shared-deck view by (issue #197).
+    const JCEDDYS_75_DECK_COLORS = ['white', 'blue', 'black', 'red', 'green'];
 
     // Plain-language summaries of DuelDeckRules::forPreset()'s own locked
     // values, shown read-only when a preset other than User-Defined is
@@ -963,6 +1347,15 @@
         const canPlay = game.status === 'waiting' || game.status === 'in_progress';
         actionsEl.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
         actionsEl.appendChild(actionButton('View log', () => openGameLog(game.id)));
+        // Same "no single shared deck"/"nothing dealt yet" conditions as
+        // the board's own #view-shared-deck-button (issue #197) -- a
+        // still-'waiting' game (including a match's own compact sub-rows,
+        // which are always 'completed' by definition, so this only ever
+        // matters for the outer opts.compact === false rows) has no
+        // game_cards rows to show yet.
+        if (isSharedDeckType(game.deck_type) && game.status !== 'waiting') {
+            actionsEl.appendChild(actionButton('Decklist', () => openSharedDeckView(game.id)));
+        }
         li.appendChild(actionsEl);
         return li;
     }
@@ -1893,6 +2286,39 @@
         );
     });
 
+    // A shared-deck game's full deck (issue #197) -- GET /games/deck
+    // already returns every card sorted white/blue/black/red/green then
+    // alphabetically (see GameService::viewSharedDeck()), so this just
+    // renders what it's given in that same order rather than re-sorting
+    // client-side. Reuses buildCardThumb()/openCardDetail(), the same
+    // card-grid pattern every other card list in this app (hand, discard
+    // pile, drafted pool, a saved deck's own view) already uses, so a
+    // shared deck's cards are just as clickable-for-detail as any of
+    // those.
+    async function openSharedDeckView(gameId) {
+        const metaEl = document.getElementById('shared-deck-meta');
+        const cardsEl = document.getElementById('shared-deck-cards');
+        metaEl.textContent = '';
+        cardsEl.innerHTML = '';
+        document.getElementById('shared-deck-dialog').showModal();
+
+        const { ok, body } = await getSharedDeck(gameId);
+        if (!ok) {
+            return;
+        }
+
+        metaEl.textContent = body.cards.length + ' card(s) in this deck';
+        for (const card of body.cards) {
+            cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+        }
+    }
+
+    document.getElementById('view-shared-deck-button').addEventListener('click', () => openSharedDeckView(currentGameId));
+
+    document.getElementById('shared-deck-close-button').addEventListener('click', () => {
+        document.getElementById('shared-deck-dialog').close();
+    });
+
     // Small inline pictograms (issue #143) replacing the players list's own
     // plain-text stat clauses ("4 point(s)", "went first this round", ...)
     // -- self-contained straight-line shapes rather than curves, so each is
@@ -2331,6 +2757,15 @@
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = state.game.status !== 'in_progress' || Boolean(you && you.resigned);
         resignButton.disabled = Boolean(pendingDecision);
+
+        // "View decklist" (issue #197) -- hidden entirely for a deck_type
+        // with no single shared deck (custom_duel and the three
+        // draft-based ones, see isSharedDeckType()). Always visible for
+        // every other deck_type once #in-progress-area itself is showing
+        // at all, which -- unlike resign-button above -- already implies
+        // the game has actually started and its deck has been dealt (see
+        // the 'waiting' branch above, which hides this whole area).
+        document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
@@ -4234,6 +4669,62 @@
         await refreshDecksData();
         successEl.textContent = 'Deck saved.';
         successEl.hidden = false;
+    });
+
+    // -- Deck builder dialog wiring (issue #93) --------------------------
+
+    const deckBuilderDialog = document.getElementById('deck-builder-dialog');
+
+    document.getElementById('decks-build-new-button').addEventListener('click', () => openDeckBuilder());
+
+    document.getElementById('deck-builder-close-button').addEventListener('click', () => {
+        deckBuilderDialog.close();
+    });
+
+    document.getElementById('deck-builder-format').addEventListener('change', (event) => {
+        document.getElementById('deck-builder-format-description').textContent =
+            DECK_BUILDER_FORMATS[event.target.value].description;
+        renderDeckBuilderCatalog();
+        renderDeckBuilderDeck();
+    });
+
+    // Every filter/catalog-sort control re-renders just the catalog
+    // panel; every deck-sort control re-renders just the deck panel --
+    // neither panel's own controls affect the other's displayed cards.
+    for (const id of [
+        'deck-builder-filter-set', 'deck-builder-filter-color', 'deck-builder-filter-rarity',
+        'deck-builder-catalog-sort-1', 'deck-builder-catalog-sort-2', 'deck-builder-catalog-sort-3',
+    ]) {
+        document.getElementById(id).addEventListener('change', renderDeckBuilderCatalog);
+    }
+    document.getElementById('deck-builder-filter-text').addEventListener('input', renderDeckBuilderCatalog);
+
+    for (const id of ['deck-builder-deck-sort-1', 'deck-builder-deck-sort-2', 'deck-builder-deck-sort-3']) {
+        document.getElementById(id).addEventListener('change', renderDeckBuilderDeck);
+    }
+
+    document.getElementById('deck-builder-save-button').addEventListener('click', async () => {
+        const errorEl = document.getElementById('deck-builder-error');
+        const successEl = document.getElementById('deck-builder-success');
+        errorEl.hidden = true;
+        successEl.hidden = true;
+
+        const name = document.getElementById('deck-builder-name').value;
+        const visibility = document.getElementById('deck-builder-friends-visible').checked ? 'friends' : 'private';
+
+        const { ok, body } = deckBuilderEditingId
+            ? await updateDecklist(deckBuilderEditingId, name, undefined, deckBuilderCardIds, undefined, visibility)
+            : await createDecklist(name, undefined, deckBuilderCardIds, undefined, visibility);
+
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not save that deck.';
+            errorEl.hidden = false;
+            return;
+        }
+
+        successEl.textContent = 'Deck saved.';
+        successEl.hidden = false;
+        await refreshDecksData();
     });
 
     friendInviteForm.addEventListener('submit', async (event) => {

@@ -169,6 +169,11 @@ function submitCustomDuelDeck(gameId, decklistText, savedDecklistId) {
     });
 }
 
+// Every printed card (issue #93's deck builder) -- see GET /cards/catalog.
+function getCardCatalog() {
+    return apiRequest('/cards/catalog');
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.
@@ -266,6 +271,11 @@ function getGameState(gameId) {
 // The entire game log (issue #98) -- see GameService::fullEventLog().
 function getGameLog(gameId) {
     return apiRequest('/games/log?game_id=' + encodeURIComponent(gameId));
+}
+
+// A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().
+function getSharedDeck(gameId) {
+    return apiRequest('/games/deck?game_id=' + encodeURIComponent(gameId));
 }
 
 function startGame(gameId) {

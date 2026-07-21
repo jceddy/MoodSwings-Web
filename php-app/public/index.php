@@ -23,6 +23,7 @@ use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Friends\NotAuthorizedToRespondException;
 use MoodSwings\Friends\UserNotFoundException;
 use MoodSwings\Game\BoardStateRepository;
+use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Mail\Mailer;
@@ -405,6 +406,18 @@ if ($path === '/friends/remove' && $method === 'POST') {
 
 $userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships);
 
+// Every printed card, for the deck builder's (issue #93) own catalog-
+// browsing panel -- filtering/sorting/searching all happen client-side
+// against this one full list (only 133 cards total, small enough to send
+// in one shot) rather than a bespoke server-side search endpoint per
+// filter. Auth-gated like every other route here, but otherwise not
+// scoped to any particular user/game -- the catalog itself is public
+// knowledge, same reasoning as GET /games/log.
+if ($path === '/cards/catalog' && $method === 'GET') {
+    requireAuth($auth);
+    respond(200, ['status' => 'ok', 'cards' => CardCatalog::serialize(array_keys(CardCatalog::load()['rowsById']))]);
+}
+
 if ($path === '/decklists' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     respond(200, ['status' => 'ok', ...$userDecklists->listForViewer((int) $currentUser['id'])]);
@@ -609,6 +622,24 @@ if ($path === '/games/log' && $method === 'GET') {
 
     requireGamePlayer($games, $gameId, (int) $currentUser['id']);
     respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
+}
+
+// Every card in a shared-deck game's single deck (issue #197) -- named
+// "/games/deck" rather than "/games/decklist" to avoid colliding with the
+// existing POST /games/decklist (custom_duel's own per-player deck
+// submission, a completely different thing). Same no-per-viewer-filtering
+// reasoning as GET /games/log immediately above.
+if ($path === '/games/deck' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        respond(200, ['status' => 'ok', 'cards' => $games->viewSharedDeck($gameId)]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 if ($path === '/games/start' && $method === 'POST') {

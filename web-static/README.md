@@ -25,8 +25,8 @@ select in its own `<footer>`, opening a static `<dialog id="resources-dialog">`
 in `js/app.js` alongside the theme-select/version-indicator footer logic
 every page already shares) -- issue #148. Contains external links to the
 official rules, formats, card-specific rulings, and card gallery pages, the
-Moodfall card repository, and the community Discord/Reddit -- the same set
-documented in the top-level README's own "Resources" section, just
+Moodiest and Moodfall card repositories, and the community Discord/Reddit --
+the same set documented in the top-level README's own "Resources" section, just
 reachable in-app rather than only from the repo itself -- plus a link to
 this GitHub repository. The dialog also embeds Buy Me a Coffee's own
 official `<script data-name="bmc-button">` widget (`cdnjs.buymeacoffee.com`),
@@ -1347,6 +1347,36 @@ too, proportional to the smaller card width.
     directly, so the secondary action reads as subordinate to the
     primary one instead of competing with it for the row's right edge.
 
+    **Shared deck view (issue #197).** Until now, the board only ever
+    showed a deck *count* (`Deck: N cards left`) and, for `custom`, the
+    deck's own name -- never its actual contents. A "View decklist"
+    button (`#view-shared-deck-button`, right next to "View log") and a
+    matching one on every applicable lobby row (same
+    `.lobby-actions`-column placement as "View log") both open the same
+    `#shared-deck-dialog` (`openSharedDeckView()`), fetching a shared-deck
+    game's entire deck via `GET /games/deck`
+    (`GameService::viewSharedDeck()`, sorted white/blue/black/red/green
+    then alphabetically by name -- see `php-app/README.md`). Both buttons
+    are conditional on `isSharedDeckType(deckType)`, a small JS mirror of
+    `GameService::isSharedDeckType()` (every `deck_type` except
+    `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, which each
+    give every player their own separate deck instead of one shared pool)
+    -- the board's own button is toggled in `renderBoard()` alongside
+    `resign-button`, and each lobby row's is only appended
+    (`buildGameRow()`) when the game is also *not* still `'waiting'`,
+    since nothing's been dealt yet at that point (matching
+    `viewSharedDeck()`'s own `409` for that case). The dialog itself just
+    renders `body.cards` in the order the server already returned them
+    (`buildCardThumb()`/`openCardDetail()`, the same card-grid pattern
+    every other card list in this app uses -- hand, discard pile, drafted
+    pool, a saved deck's own view) rather than re-sorting client-side.
+    `dialog#shared-deck-dialog[open]` gets its own wider `max-width`
+    (48rem, vs. the game log dialog's 36rem) plus `max-height`/
+    `overflow-y: auto` (same reasoning as `dialog#game-log-dialog[open]`
+    just above it in `style.css` -- a `one_of_each` deck can run to 133
+    cards, and a card thumbnail takes up considerably more room than a
+    line of log text).
+
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
     `#in-progress-area` (a pending decision/scoring preview belongs to
@@ -1546,42 +1576,38 @@ too, proportional to the smaller card width.
     their deck names differ.
 
     A "Your decks" row's `.decks-row-actions` holds
-    View/Edit/Duplicate/Download/Delete, all rendered as small square
-    icon-only buttons (`iconActionButton('view'/'edit'/'duplicate'/
-    'download'/'delete', label, onClick)`, an eye/pencil/
+    View/Build/Edit/Duplicate/Download/Delete, all rendered as small square
+    icon-only buttons (`iconActionButton('view'/'build'/'edit'/'duplicate'/
+    'download'/'delete', label, onClick)`, an eye/wrench/pencil/
     two-overlapping-sheets/download-tray/trash-can, standard Material
     Design glyphs reused verbatim in a new `ACTION_ICON_PATHS` map
     alongside the existing `PLAYER_STAT_ICON_PATHS` -- separate from it
     since these live inside an actual `.icon-action-button` rather than
     the players list's own icon+badge convention, and don't need a badge
-    overlay) instead of five separate text buttons, so they take up
+    overlay) instead of six separate text buttons, so they take up
     noticeably less horizontal room next to a name that might already be
     wrapping onto 2 lines -- same `title`/`aria-label` treatment as every
-    other icon on this page, so "View"/"Edit"/"Duplicate"/"Download"/
-    "Delete" are still the button's accessible name for a screen reader
-    (and Playwright's own `getByRole('button', {name: 'View'})`-style
-    lookups) even though nothing on screen literally spells the word out
-    anymore. The four non-destructive actions sit in a
-    `.decks-row-actions-grid` (a 2x2 CSS grid, `grid-template-columns:
-    repeat(2, auto)`: View/Edit on the top row, Duplicate/Download on the
-    bottom row, directly beneath their respective top-row counterpart),
-    with Delete rendered as `.decks-row-actions`'s own second flex child
-    -- a sibling of the grid rather than a fifth grid cell -- so the one
-    irreversible action is both visually set apart from, and (via the
-    flex row's own `align-items: center`) vertically centered against,
-    the compact 2x2 block of everything else, making an accidental
-    click while reaching for View/Edit/Duplicate/Download far less
-    likely to land on Delete instead. Delete's own icon is also colored
-    with `.icon-action-button--delete { color: var(--color-error) }`
-    (the `<svg>`'s `fill="currentColor"` means setting the button's own
-    `color` is enough, no separate `fill` override needed) -- the same
-    error-red already used for validation messages, distinguishing the
-    one irreversible action by color as well as by position. "Friends'
-    decks" (`#decks-friends-list`) rows are simpler: `.decks-row-actions`
-    holds `view`, `duplicate`, and `download` icon buttons in a plain flex
-    row (no grid needed for three buttons) -- no Edit or Delete, since
-    those change/remove a deck someone else owns, but Duplicate and
-    Download both work exactly as they do on an owner's own row, since
+    other icon on this page, so "View"/"Build"/"Edit"/"Duplicate"/
+    "Download"/"Delete" are still each button's accessible name for a
+    screen reader (and Playwright's own `getByRole('button', {name:
+    'View'})`-style lookups) even though nothing on screen literally
+    spells the word out anymore. All six sit together in one
+    `.decks-row-actions-grid` (a 3-column CSS grid,
+    `grid-template-columns: repeat(3, auto)`, filled row-major in the
+    order they're appended -- View/Build/Edit on the top row,
+    Duplicate/Download/Delete directly beneath). Delete's own icon is
+    still colored with `.icon-action-button--delete { color:
+    var(--color-error) }` (the `<svg>`'s `fill="currentColor"` means
+    setting the button's own `color` is enough, no separate `fill`
+    override needed) -- the same error-red already used for validation
+    messages, so the one irreversible action still stands out by color
+    even though it's no longer set physically apart from the rest.
+    "Friends' decks" (`#decks-friends-list`) rows are simpler:
+    `.decks-row-actions` holds `view`, `duplicate`, and `download` icon
+    buttons in a plain flex row (no grid needed for three buttons) -- no
+    Build/Edit/Delete, since those change/remove a deck someone else
+    owns, but Duplicate and Download both work exactly as they do on an
+    owner's own row, since
     both are just `viewDecklist(id)` under the hood and the backend's
     `UserDecklistService::view()`/`authorizeViewer()` already authorizes
     any accepted friend to view a `visibility='friends'` deck (the very
@@ -1641,6 +1667,66 @@ too, proportional to the smaller card width.
     `#new-game-close-button` above) so it doesn't sit flush against
     whichever grid ends up last -- the card grid when there's no
     sideboard, the sideboard grid otherwise.
+  - **Deck builder (issue #93).** A card-by-card alternative to the form
+    above, opened either empty (`#decks-build-new-button`, "Build a new
+    deck") or pre-loaded with an owned deck's own cards/name/visibility
+    (a "Build" icon action alongside View/Edit/Duplicate/Download on each
+    of "Your decks"' own rows) -- both call `openDeckBuilder(existingId?)`,
+    which shows `#deck-builder-dialog`. The catalog panel
+    (`#deck-builder-catalog-cards`) lists every card from `GET
+    /cards/catalog` (fetched once and cached in `deckBuilderCatalog`,
+    read-only reference data no more likely to change mid-session than
+    `DECK_TYPE_DESCRIPTIONS`), filterable by set/color/rarity (three
+    `<select>`s) and a case-insensitive name-or-rules-text substring
+    (`#deck-builder-filter-text`, matched client-side in
+    `cardMatchesDeckBuilderFilters()`) -- clicking a card's own "+ Add"
+    button (not the card-thumb itself, which still opens the usual detail
+    dialog on click, same as every other card grid) appends it to
+    `deckBuilderCardIds`, the flat array (one entry per copy, same
+    convention `GameService::viewSharedDeck()`/`openDeckView()` already
+    use) backing the deck panel (`#deck-builder-deck-cards`) on the other
+    side. Both panels get their own independent three-select multi-sort
+    (`#deck-builder-catalog-sort-1/2/3` for the catalog,
+    `#deck-builder-deck-sort-1/2/3` for the deck under construction) --
+    Color/Rarity/Name/unsorted, applied in order via a single stable
+    `Array.sort()` pass (`sortBuilderCards(cards, selectIdPrefix)`, shared
+    by `renderDeckBuilderCatalog()`/`renderDeckBuilderDeck()`) -- issue
+    #93's own "multi-sort" ask -- each later key only breaking ties the
+    earlier ones left, with Color/Rarity using the same
+    white/blue/black/red/green / common/uncommon/rare/mythic reference
+    orders `GameService::viewSharedDeck()`/`DuelDeckRules` already sort
+    by rather than plain alphabetical (neither name sorts into a
+    meaningful order alphabetically). Sorting the catalog doesn't affect
+    the deck panel's own order or vice versa -- each panel's sort
+    controls only re-render that one panel.
+
+    `#deck-builder-format` (Free-form/Power Duel/Structure Deck/jceddy's
+    75 Card) restricts which cards `canAddCardToBuilderDeck()` allows
+    adding *while building* -- its four options' numbers mirror
+    `GameService`'s own `buildPowerDeckCardIds()`/
+    `buildStructureDeckCardIds()`/`buildJceddys75DeckCardIds()` (Power:
+    exactly 1 mythic + 14 other singleton non-mythics; Structure: 23
+    common/14 uncommon/6 rare/2 mythic, all singleton; jceddy's 75: per
+    color, 1 mythic/2 rares (singleton)/4 uncommons (up to 2 copies
+    each)/8 commons (up to 3 copies each)) -- a card's own "+ Add" button
+    is `disabled` once adding it would exceed whatever cap applies, so
+    the deck can never be walked into an over-cap state to begin with,
+    rather than only being validated after the fact. Switching formats
+    mid-build does NOT retroactively remove anything already added (a
+    saved decklist has no `format` column of its own, same as one built
+    by pasting text) -- only further additions are gated by the newly
+    selected format. `#deck-builder-deck-summary` shows a running
+    `<count> / <target>` (or just `<count>` for Free-form, which has no
+    target) so the caps stay visible while building.
+
+    Saving (`#deck-builder-save-button`) calls the exact same
+    `createDecklist()`/`updateDecklist()` the paste/upload form's own
+    submit handler uses -- `deckBuilderEditingId` (set by
+    `openDeckBuilder()` when opened via a "Build" row action, null
+    otherwise) decides create vs. update, the same role
+    `#decks-form-id` plays for that form. No separate save endpoint
+    needed, since a saved decklist is just a `card_ids` array regardless
+    of how it was assembled.
   - That same button gets a small red notification dot
     (`.has-friend-request`, applied/removed by
     `setFriendRequestNotification()`) whenever `/friends/invites` returns

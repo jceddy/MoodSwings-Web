@@ -527,6 +527,21 @@ final class GameService
     }
 
     /**
+     * Whether $deckType puts the whole table on one shared deck rather than
+     * giving each player their own -- every deck_type except 'custom_duel'
+     * and the three draft-based ones (quick_draft/winston_draft/grid_draft),
+     * the same four deckCardIdsFor() itself refuses to build a deck for
+     * (each reads its own per-player card ids from somewhere else instead
+     * -- game_players.custom_deck_card_ids or draft_match_players.deck_card_ids).
+     * Used by viewSharedDeck() (issue #197) to reject a request for a
+     * deck_type with no single "the deck" to show.
+     */
+    private static function isSharedDeckType(string $deckType): bool
+    {
+        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft'], true);
+    }
+
+    /**
      * @return array{idsByName: array<string,int>, rowsById: array<int, array{name:string, rarity:string, color:string}>}
      */
     private function loadCardCatalog(): array
@@ -5521,6 +5536,62 @@ final class GameService
             },
             $stmt->fetchAll(),
         );
+    }
+
+    /**
+     * Every card in a shared-deck game's single deck (issue #197) --
+     * every deck_type where the whole table draws from one pool rather
+     * than each player having their own, see isSharedDeckType(). Read
+     * back from the game's own persisted game_cards rows across every
+     * zone (deck/hand/in_play/discard combined = the entire deck, since
+     * every row is created once at startGame() time and nothing is ever
+     * added to game_cards afterward -- see BoardStateRepository's own
+     * docblock), NOT recomputed by re-calling buildStructureDeckCardIds()
+     * etc. -- those pick randomly, so a second call after the game
+     * started would show a different random deck than the one actually
+     * dealt, not the real one. ('custom''s own custom_deck_card_ids is
+     * already stable without this, but reading game_cards uniformly here
+     * is simpler than special-casing it.)
+     *
+     * Sorted by color (white/blue/black/red/green -- JCEDDYS_75_DECK_COLORS
+     * happens to already be exactly this order, reused rather than
+     * duplicated) then alphabetically by name within a color, so the same
+     * deck always lists the same way regardless of what order its cards
+     * happened to get dealt/shuffled in. Duplicate catalog ids (e.g. a
+     * jceddys_75 deck's own up-to-2-copies-per-card slots -- see
+     * randomCardIdsWithCopyLimit()) appear as one thumbnail per copy, the
+     * same convention openDeckView() already uses for a saved decklist,
+     * rather than a single entry with a count badge.
+     *
+     * No per-viewer filtering, same as fullEventLog() immediately above --
+     * every card in the deck is equally visible to every seated player,
+     * so this only needs requireGamePlayer()'s seated-player check, not
+     * anything further.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function viewSharedDeck(int $gameId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if (!self::isSharedDeckType($game['deck_type'])) {
+            throw new GameStateException("Game {$gameId}'s deck_type \"{$game['deck_type']}\" has no single shared deck to view -- each player has their own");
+        }
+        if ($game['status'] === 'waiting') {
+            throw new GameStateException("Game {$gameId} hasn't started yet -- its deck hasn't been dealt");
+        }
+
+        $stmt = Connection::get()->prepare('SELECT card_id FROM game_cards WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $cardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $cards = CardCatalog::serialize($cardIds);
+        usort(
+            $cards,
+            static fn (array $a, array $b): int => [array_search($a['color'], self::JCEDDYS_75_DECK_COLORS, true), $a['name']]
+                <=> [array_search($b['color'], self::JCEDDYS_75_DECK_COLORS, true), $b['name']]
+        );
+
+        return $cards;
     }
 
     /**

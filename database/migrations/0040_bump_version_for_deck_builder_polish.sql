@@ -1,0 +1,14 @@
+-- No schema change here -- this migration exists purely to keep
+-- schema_version in sync with a VERSION bump for the deck builder
+-- (issue #93) and its follow-up UI polish (repositioned Decks dialog
+-- buttons, small-screen card-thumb shrink, catalog-panel multi-sort,
+-- Save/Close button spacing), none of which touched the schema --
+-- GET /cards/catalog and CardCatalog::serialize()'s new rarity field
+-- read the existing `cards` table as-is. MaintenanceGate compares the
+-- deployed VERSION file against this table on every request (see
+-- migration 0021's own docblock), so a VERSION bump with no
+-- corresponding schema_version update would show maintenance mode
+-- after deploy even though nothing about the schema actually changed
+-- -- this keeps that invariant intact the same way 0024/0025/0026/0037
+-- already did for their own schema-less fixes.
+UPDATE schema_version SET version = '0.13.1' WHERE id = 1;

@@ -307,14 +307,12 @@ dialog#friends-dialog li button + button {
     flex-shrink: 0;
 }
 
-/* View/Edit stacked over Duplicate/Download (issue #92 follow-up) --
-   Delete itself lives outside this grid, as .decks-row-actions' own
-   second child, so it stands physically apart from the other four
-   rather than being a fifth grid cell a stray click could land on by
-   mistake reaching for one of them. */
+/* View/Build/Edit over Duplicate/Download/Delete (issue #93 follow-up) --
+   a 3-column grid, so the 6 buttons land in exactly those two rows via
+   plain row-major auto-flow (the order they're appended in game.js). */
 .decks-row-actions-grid {
     display: grid;
-    grid-template-columns: repeat(2, auto);
+    grid-template-columns: repeat(3, auto);
     gap: 0.25rem;
 }
 
@@ -442,7 +440,9 @@ body.game-page {
 #grid-draft-drafted-so-far,
 #grid-draft-opponent-drafted-so-far,
 #deck-view-cards,
-#deck-view-sideboard-cards {
+#deck-view-sideboard-cards,
+#shared-deck-cards,
+.deck-builder-card-grid {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -693,6 +693,26 @@ body.game-page {
 
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--suppressed {
         bottom: calc(0.25rem + 15px);
+    }
+
+    /* A saved/shared deck's full card list (issue #197) can run to well
+       over a hundred cards -- at .card-thumb's normal 5.5rem width that's
+       a lot of scrolling to see the whole thing on a phone screen. Same
+       shrink as .in-play-zone above, minus the suppressed-badge scaling
+       (deck-view cards are catalog-only display, never suppressed).
+       .deck-builder-card-grid (issue #93 follow-up) covers both the deck
+       builder's own catalog panel and its deck-under-construction panel
+       in one selector -- same reasoning, just two grids instead of one,
+       so fitting more cards per row matters even more here. */
+    #deck-view-cards .card-thumb,
+    #deck-view-cards .card-thumb__art,
+    #deck-view-sideboard-cards .card-thumb,
+    #deck-view-sideboard-cards .card-thumb__art,
+    #shared-deck-cards .card-thumb,
+    #shared-deck-cards .card-thumb__art,
+    .deck-builder-card-grid .card-thumb,
+    .deck-builder-card-grid .card-thumb__art {
+        width: 4rem;
     }
 }
 
@@ -1030,10 +1050,14 @@ dialog#card-detail-dialog {
 }
 
 /* Same reasoning as #new-game-close-button above -- without this, the
-   Close button sits flush against the card grid (or the sideboard grid,
-   or the hidden sideboard heading, whichever ends up last) directly
-   above it. */
-#deck-view-close-button {
+   Close button (or, for the deck builder, the Save button immediately
+   before it -- #deck-builder-close-button follows right after in the
+   same flow, so pushing Save down carries Close with it) sits flush
+   against the card grid (or the sideboard grid, or the hidden sideboard
+   heading, whichever ends up last) directly above it. */
+#deck-view-close-button,
+#shared-deck-close-button,
+#deck-builder-save-button {
     margin-top: 0.5rem;
 }
 
@@ -1071,6 +1095,86 @@ dialog#game-log-dialog[open] {
     border-radius: 0.5rem;
     display: flex;
     flex-direction: column;
+}
+
+/* A shared-deck game's full deck (issue #197) can run to 133 cards
+   ('one_of_each') -- same reasoning as dialog#game-log-dialog[open]
+   immediately above (max-width wide enough for #shared-deck-cards' own
+   flex-wrap grid to show several columns at once, max-height + overflow-y
+   so the dialog scrolls internally instead of growing past the
+   viewport), just wider still since a card thumbnail takes up
+   considerably more horizontal room than a line of log text. */
+dialog#shared-deck-dialog[open] {
+    box-sizing: border-box;
+    max-width: 48rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    overflow-y: auto;
+}
+
+/* The deck builder (issue #93) shows the full card catalog next to the
+   deck under construction side by side -- wider still than
+   dialog#shared-deck-dialog[open] above, since it needs room for two of
+   .deck-builder-card-grid's own flex-wrap grids at once rather than one. */
+dialog#deck-builder-dialog[open] {
+    box-sizing: border-box;
+    max-width: 72rem;
+    width: 95%;
+    max-height: 90vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    overflow-y: auto;
+}
+
+.deck-builder-meta-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-end;
+    margin-bottom: 0.5rem;
+}
+
+.deck-builder-filters,
+.deck-builder-sort {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+/* Catalog/deck side by side above ~60rem (two .deck-builder-card-grid
+   panels comfortably fit), stacked below that -- same max-width: 100%
+   min-width: 0 flex-basis trick used elsewhere in this stylesheet so
+   neither panel's own card grid forces the row wider than the dialog. */
+.deck-builder-columns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5rem;
+}
+
+.deck-builder-catalog,
+.deck-builder-deck {
+    flex: 1 1 24rem;
+    min-width: 0;
+    max-width: 100%;
+}
+
+/* Each catalog/deck entry is a card-thumb plus its own Add/Remove button
+   stacked underneath -- a plain flex column, same shape as
+   .card-thumb's own internal layout one level up. */
+.deck-builder-card-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.25rem;
 }
 
 #game-log-actions {
