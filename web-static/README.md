@@ -1685,15 +1685,20 @@ too, proportional to the smaller card width.
     `deckBuilderCardIds`, the flat array (one entry per copy, same
     convention `GameService::viewSharedDeck()`/`openDeckView()` already
     use) backing the deck panel (`#deck-builder-deck-cards`) on the other
-    side. The deck panel's own three `#deck-builder-sort-1/2/3` selects
-    (Color/Rarity/Name/unsorted) apply in order via a single stable
-    `Array.sort()` pass (`sortBuilderDeckCards()`) -- issue #93's own
-    "multi-sort" ask -- each later key only breaking ties the earlier
-    ones left, with Color/Rarity using the same
+    side. Both panels get their own independent three-select multi-sort
+    (`#deck-builder-catalog-sort-1/2/3` for the catalog,
+    `#deck-builder-deck-sort-1/2/3` for the deck under construction) --
+    Color/Rarity/Name/unsorted, applied in order via a single stable
+    `Array.sort()` pass (`sortBuilderCards(cards, selectIdPrefix)`, shared
+    by `renderDeckBuilderCatalog()`/`renderDeckBuilderDeck()`) -- issue
+    #93's own "multi-sort" ask -- each later key only breaking ties the
+    earlier ones left, with Color/Rarity using the same
     white/blue/black/red/green / common/uncommon/rare/mythic reference
     orders `GameService::viewSharedDeck()`/`DuelDeckRules` already sort
     by rather than plain alphabetical (neither name sorts into a
-    meaningful order alphabetically).
+    meaningful order alphabetically). Sorting the catalog doesn't affect
+    the deck panel's own order or vice versa -- each panel's sort
+    controls only re-render that one panel.
 
     `#deck-builder-format` (Free-form/Power Duel/Structure Deck/jceddy's
     75 Card) restricts which cards `canAddCardToBuilderDeck()` allows
