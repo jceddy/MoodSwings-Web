@@ -296,6 +296,38 @@ function getSharedDeck(gameId) {
     return apiRequest('/games/deck?game_id=' + encodeURIComponent(gameId));
 }
 
+// Spectator mode (issue #128) -- see GameService::listFriendsInProgressGames()/
+// getOrCreateSpectateCode()/resolveSpectateCode()/getSpectatorState(). Shared
+// here (rather than only in game.js) since both game/index.html (sharing a
+// game's own code) and spectate/index.html (the friends' list, the code-entry
+// form, and the spectator board itself, via game/index.html's
+// ?spectate_game_id= param) all need these.
+function getSpectatableFriendsGames() {
+    return apiRequest('/games/spectatable');
+}
+
+function getOrCreateSpectateCode(gameId) {
+    return apiRequest('/games/spectate/code', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId }),
+    });
+}
+
+function resolveSpectateCode(code) {
+    return apiRequest('/games/spectate/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+    });
+}
+
+function getSpectatorGameState(gameId, code) {
+    let path = '/games/spectate/state?game_id=' + encodeURIComponent(gameId);
+    if (code) {
+        path += '&code=' + encodeURIComponent(code);
+    }
+    return apiRequest(path);
+}
+
 function startGame(gameId) {
     return apiRequest('/games/start', {
         method: 'POST',
@@ -329,6 +361,117 @@ function respondToDecision(gameId, choices) {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, choices: choices || {} }),
     });
+}
+
+// --- Shared list/label rendering helpers ------------------------------
+//
+// Originally game.js-local; moved here (issue #128) once spectate.js
+// needed the same per-row list rendering and format/deck-type labels for
+// its own friends'-games list, without duplicating them.
+
+function renderList(listEl, emptyEl, items, buildItem) {
+    listEl.innerHTML = '';
+    emptyEl.hidden = items.length > 0;
+    for (const item of items) {
+        listEl.appendChild(buildItem(item));
+    }
+}
+
+function actionButton(label, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.addEventListener('click', onClick);
+    return button;
+}
+
+// Icon set for the Decks dialog's per-row View/Edit/Duplicate/Download/
+// Delete buttons (issue #92 follow-ups) and the Spectate page's own eye
+// icon (issue #128) -- separate from game.js's PLAYER_STAT_ICON_PATHS
+// since these live inside an actual <button> rather than the players
+// list's own icon+badge convention, and don't need a badge overlay.
+// Standard Material Design glyphs (Apache-2.0), reused verbatim since "an
+// eye"/"a pencil"/"two overlapping sheets"/"a tray with a down arrow"/"a
+// trash can" are about as generic as icons get.
+const ACTION_ICON_PATHS = {
+    view: '<path fill-rule="evenodd" d="M12,4.5C7,4.5,2.73,7.61,1,12c1.73,4.39,6,7.5,11,7.5s9.27-3.11,11-7.5' +
+        'C21.27,7.61,17,4.5,12,4.5z M12,17c-2.76,0-5-2.24-5-5s2.24-5,5-5s5,2.24,5,5S14.76,17,12,17z ' +
+        'M12,9c-1.66,0-3,1.34-3,3s1.34,3,3,3s3-1.34,3-3S13.66,9,12,9z"/>',
+    edit: '<path d="M3,17.25V21h3.75L17.81,9.94l-3.75-3.75L3,17.25z M20.71,7.04c0.39-0.39,0.39-1.02,0-1.41' +
+        'l-2.34-2.34c-0.39-0.39-1.02-0.39-1.41,0l-1.83,1.83l3.75,3.75L20.71,7.04z"/>',
+    duplicate: '<path fill-rule="evenodd" d="M16,1H4C2.9,1,2,1.9,2,3v14h2V3h12V1z ' +
+        'M19,5H8C6.9,5,6,5.9,6,7v14c0,1.1,0.9,2,2,2h11c1.1,0,2-0.9,2-2V7C21,5.9,20.1,5,19,5z ' +
+        'M19,21H8V7h11V21z"/>',
+    download: '<path d="M19,9h-4V3H9v6H5l7,7L19,9z M5,18v2h14v-2H5z"/>',
+    delete: '<path d="M6,7h12l-1.06,13.19C16.85,21.19,16,22,15,22H9c-1,0-1.85-0.81-1.94-1.81L6,7z ' +
+        'M9.5,4h5l1,2h4v2H4V6h4L9.5,4z"/>',
+    // The deck builder (issue #93)'s own "Build a new deck"/per-row
+    // "Build" buttons -- a wrench, Material Design's own generic
+    // "build/construct something" glyph.
+    build: '<path d="M22.7,19l-9.1-9.1c0.9-2.3,0.4-5-1.5-6.9c-2-2-5-2.4-7.4-1.3L9,6L6,9L1.6,4.7C0.4,7.1,0.9,10.1,2.9,12.1' +
+        'c1.9,1.9,4.6,2.4,6.9,1.5l9.1,9.1c0.4,0.4,1,0.4,1.4,0l2.3-2.3C23.1,20.1,23.1,19.4,22.7,19z"/>',
+};
+
+function buildActionIcon(kind) {
+    const template = document.createElement('template');
+    template.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + ACTION_ICON_PATHS[kind] + '</svg>';
+    return template.content.firstChild;
+}
+
+// Same icon+tooltip/aria-label treatment as game.js's buildPlayerFlag()
+// (title AND aria-label both carry the full word, so a screen reader or
+// a sighted user hovering the button still gets "View"/"Edit"/"Delete"/
+// "Spectate" even though the button's own visible label is now just an
+// icon).
+function iconActionButton(kind, label, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'icon-action-button icon-action-button--' + kind;
+    button.title = label;
+    button.setAttribute('aria-label', label);
+    button.appendChild(buildActionIcon(kind));
+    button.addEventListener('click', onClick);
+    return button;
+}
+
+// Turns a raw snake_case status value ('in_progress', 'waiting', ...)
+// into a human-friendly one ('In Progress', 'Waiting') -- generic rather
+// than a fixed lookup table, so any future status value reads reasonably
+// without this needing to be updated too.
+function humanizeStatus(status) {
+    return status
+        .split('_')
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+}
+
+// The 'standard' format's own display name is "Traditional" -- the
+// underlying value stays 'standard' (it's the API/DB enum value, used as
+// the <option>'s own value and everywhere on the backend), so this only
+// overrides how it's *labeled* here; every other format falls back to
+// humanizeStatus()'s generic capitalization.
+function formatLabel(format) {
+    return format === 'standard' ? 'Traditional' : humanizeStatus(format);
+}
+
+// deck_type's own display names -- matching the <option> labels in the
+// New Game dialog -- don't fit humanizeStatus()'s generic
+// underscore-splitting capitalization ("one_of_each" would become "One
+// Of Each", capitalizing "Of"), so this is a fixed lookup instead.
+const DECK_TYPE_LABELS = {
+    structure: 'Structure',
+    power: 'Power',
+    jceddys_75: 'jceddy\'s 75 Card',
+    custom: 'Custom Decklist',
+    custom_duel: 'Custom Decklists (Duel)',
+    quick_draft: 'Quick Draft',
+    winston_draft: 'Winston Draft',
+    grid_draft: 'Grid Draft',
+    one_of_each: 'One of Each Card',
+};
+
+function deckTypeLabel(deckType) {
+    return DECK_TYPE_LABELS[deckType] || deckType;
 }
 
 // VERSION is a plain static file at the site root (deployed alongside

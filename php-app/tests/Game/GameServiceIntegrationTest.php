@@ -9397,4 +9397,192 @@ final class GameServiceIntegrationTest extends TestCase
             $this->games->lifetimeStatsFor($u1)
         );
     }
+
+    // --- Spectator mode (issue #128) ---
+
+    public function testGetSpectatorStateOmitsYouAndHandContentsForAnInProgressGame(): void
+    {
+        $alice = $this->insertUser('spectate-inprogress-alice');
+        $bob = $this->insertUser('spectate-inprogress-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], deckType: 'one_of_each');
+        $this->games->startGame($gameId);
+
+        $state = $this->games->getSpectatorState($gameId);
+
+        self::assertSame('in_progress', $state['game']['status']);
+        self::assertArrayNotHasKey('you', $state);
+        self::assertNotNull($state['round']);
+        foreach ($state['players'] as $player) {
+            self::assertSame(5, $player['hand_count']);
+            self::assertArrayNotHasKey('hand', $player);
+        }
+        // A shared (non-'duel') deck -- every player's own deck_count
+        // reads the same single remaining pool, not a per-player split.
+        foreach ($state['players'] as $player) {
+            self::assertSame(133 - 5 * 2, $player['deck_count']);
+        }
+        self::assertSame([], $state['in_play']);
+        self::assertSame([], $state['discard_pile']);
+    }
+
+    public function testGetSpectatorStateRejectsAWaitingGame(): void
+    {
+        $alice = $this->insertUser('spectate-waiting-alice');
+        $bob = $this->insertUser('spectate-waiting-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob]);
+
+        $this->expectException(GameStateException::class);
+        $this->games->getSpectatorState($gameId);
+    }
+
+    public function testGetSpectatorStateRejectsAnAbandonedGame(): void
+    {
+        $alice = $this->insertUser('spectate-abandoned-alice');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, wins_needed, created_by_user_id) VALUES ('standard', 'abandoned', 3, :created_by)"
+        );
+        $stmt->execute(['created_by' => $alice]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $this->expectException(GameStateException::class);
+        $this->games->getSpectatorState($gameId);
+    }
+
+    public function testGetSpectatorStateRevealsEveryPlayersHandOnceTheGameIsCompleted(): void
+    {
+        $alice = $this->insertUser('spectate-completed-alice');
+        $bob = $this->insertUser('spectate-completed-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], deckType: 'one_of_each');
+        $this->games->startGame($gameId);
+        $aliceGamePlayerId = $this->games->gamePlayerIdFor($gameId, $alice);
+        $this->games->resignGame($gameId, $aliceGamePlayerId);
+
+        $state = $this->games->getSpectatorState($gameId);
+
+        self::assertSame('completed', $state['game']['status']);
+        self::assertArrayNotHasKey('you', $state);
+        foreach ($state['players'] as $player) {
+            self::assertArrayHasKey('hand', $player);
+            self::assertCount(5, $player['hand']);
+            foreach ($player['hand'] as $card) {
+                self::assertArrayHasKey('name', $card);
+            }
+        }
+    }
+
+    public function testGetOrCreateSpectateCodeIsIdempotentAndUniqueAcrossGames(): void
+    {
+        $alice = $this->insertUser('spectate-code-alice');
+        $bob = $this->insertUser('spectate-code-bob');
+
+        $gameOneId = $this->games->createGame($alice, [$alice, $bob]);
+        $gameTwoId = $this->games->createGame($alice, [$alice, $bob]);
+
+        $codeOne = $this->games->getOrCreateSpectateCode($gameOneId);
+        $codeOneAgain = $this->games->getOrCreateSpectateCode($gameOneId);
+        $codeTwo = $this->games->getOrCreateSpectateCode($gameTwoId);
+
+        self::assertSame($codeOne, $codeOneAgain);
+        self::assertNotSame($codeOne, $codeTwo);
+        self::assertSame(8, strlen($codeOne));
+        self::assertSame($codeOne, $this->games->spectateCodeFor($gameOneId));
+    }
+
+    public function testResolveSpectateCodeReturnsTheGameId(): void
+    {
+        $alice = $this->insertUser('spectate-resolve-alice');
+        $bob = $this->insertUser('spectate-resolve-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob]);
+        $this->games->startGame($gameId);
+        $code = $this->games->getOrCreateSpectateCode($gameId);
+
+        self::assertSame($gameId, $this->games->resolveSpectateCode($code));
+    }
+
+    public function testResolveSpectateCodeRejectsAnUnknownCode(): void
+    {
+        $this->expectException(GameStateException::class);
+        $this->games->resolveSpectateCode('deadbeef');
+    }
+
+    public function testResolveSpectateCodeRejectsAWaitingGame(): void
+    {
+        $alice = $this->insertUser('spectate-resolve-waiting-alice');
+        $bob = $this->insertUser('spectate-resolve-waiting-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob]);
+        $code = $this->games->getOrCreateSpectateCode($gameId);
+
+        $this->expectException(GameStateException::class);
+        $this->games->resolveSpectateCode($code);
+    }
+
+    public function testListFriendsInProgressGamesExcludesGamesTheViewerIsSeatedIn(): void
+    {
+        $alice = $this->insertUser('spectate-list-alice');
+        $bob = $this->insertUser('spectate-list-bob');
+        $carol = $this->insertUser('spectate-list-carol');
+
+        // Alice and Bob's own game -- Bob is a friend, but Alice (the
+        // viewer) is seated in it too, so it must never appear here.
+        $ownGameId = $this->games->createGame($alice, [$alice, $bob]);
+        $this->games->startGame($ownGameId);
+
+        // Bob and Carol's game -- Alice isn't seated in this one.
+        $friendsGameId = $this->games->createGame($bob, [$bob, $carol]);
+        $this->games->startGame($friendsGameId);
+
+        $result = $this->games->listFriendsInProgressGames($alice, [$bob, $carol]);
+
+        self::assertCount(1, $result);
+        self::assertSame($friendsGameId, $result[0]['id']);
+    }
+
+    public function testListFriendsInProgressGamesExcludesNonFriendsGames(): void
+    {
+        $alice = $this->insertUser('spectate-nonfriend-alice');
+        $bob = $this->insertUser('spectate-nonfriend-bob');
+        $stranger = $this->insertUser('spectate-nonfriend-stranger');
+
+        $gameId = $this->games->createGame($stranger, [$stranger, $bob]);
+        $this->games->startGame($gameId);
+
+        // $bob is passed as a friend, but the game only involves $stranger
+        // and $bob -- listing friend ids that happen to include a seated
+        // player is exactly how this should surface it (via $bob), so
+        // pass only a truly unrelated friend id to confirm nothing shows.
+        $unrelatedFriend = $this->insertUser('spectate-nonfriend-unrelated');
+        $result = $this->games->listFriendsInProgressGames($alice, [$unrelatedFriend]);
+
+        self::assertSame([], $result);
+    }
+
+    public function testListFriendsInProgressGamesOnlyIncludesInProgressGames(): void
+    {
+        $alice = $this->insertUser('spectate-status-alice');
+        $bob = $this->insertUser('spectate-status-bob');
+        $carol = $this->insertUser('spectate-status-carol');
+
+        $waitingGameId = $this->games->createGame($bob, [$bob, $carol]);
+
+        $completedGameId = $this->games->createGame($bob, [$bob, $carol]);
+        $this->games->startGame($completedGameId);
+        $bobGamePlayerId = $this->games->gamePlayerIdFor($completedGameId, $bob);
+        $this->games->resignGame($completedGameId, $bobGamePlayerId);
+
+        $inProgressGameId = $this->games->createGame($bob, [$bob, $carol]);
+        $this->games->startGame($inProgressGameId);
+
+        $result = $this->games->listFriendsInProgressGames($alice, [$bob, $carol]);
+
+        self::assertCount(1, $result);
+        self::assertSame($inProgressGameId, $result[0]['id']);
+        self::assertNotContains($waitingGameId, array_column($result, 'id'));
+        self::assertNotContains($completedGameId, array_column($result, 'id'));
+    }
 }

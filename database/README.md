@@ -344,3 +344,9 @@ half-migrated schema.
   `recordMatchCompletionStats()`), since old game history is expected to
   be cleaned up eventually and a live re-aggregation would then silently
   under-report. See "Lifetime stats" in `php-app/README.md`.
+- **Spectator mode** (`0043`, issue #128): adds `games.spectate_code`
+  (`CHAR(8) DEFAULT NULL UNIQUE`) — a casually-shareable, plaintext
+  (not hashed) code letting anyone with it spectate that one game,
+  generated lazily the first time a seated player asks to share it (see
+  `GameService::getOrCreateSpectateCode()`) rather than populated for
+  every game up front. See "Spectator mode" in `php-app/README.md`.

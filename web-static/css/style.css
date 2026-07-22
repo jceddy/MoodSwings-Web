@@ -146,11 +146,13 @@ dialog#resources-dialog #resources-close-button {
 /* #friends-button/#logout-button sit directly above whichever of
    #lobby-view/#board-view is currently visible -- without this they'd
    touch it with no gap, most noticeably #board-view's own
-   #back-to-lobby-button immediately below. #user-info-button (a real
-   page, ../user/, not an in-page dialog like Friends/Decks) sits in the
-   same row and needs the same spacing. */
+   #back-to-lobby-button immediately below. #user-info-button/
+   #spectate-button (real pages, ../user/ and ../spectate/, not in-page
+   dialogs like Friends/Decks) sit in the same row and need the same
+   spacing. */
 #friends-button,
 #user-info-button,
+#spectate-button,
 #logout-button {
     margin-bottom: 0.5rem;
 }
@@ -445,7 +447,8 @@ body.game-page {
 #deck-view-cards,
 #deck-view-sideboard-cards,
 #shared-deck-cards,
-.deck-builder-card-grid {
+.deck-builder-card-grid,
+.spectator-final-hand ul {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -458,8 +461,18 @@ body.game-page {
 #winston-draft-drafted-so-far li,
 #grid-draft-drafted-so-far li,
 #grid-draft-opponent-drafted-so-far li,
-.in-play-zone__list li {
+.in-play-zone__list li,
+.spectator-final-hand ul li {
     list-style: none;
+}
+
+/* Spectator mode (issue #128): one of these per seated player once a
+   spectated game is 'completed' and every hand is revealed -- see
+   renderSpectatorFinalHands() in game.js. Stacked with a bit of breathing
+   room between each player's group, same as the section headings around
+   it. */
+.spectator-final-hand {
+    margin-bottom: 1rem;
 }
 
 /* Grid Draft's own 3x3 grid, laid out in the same row-major order

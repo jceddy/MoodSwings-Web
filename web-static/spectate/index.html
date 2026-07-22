@@ -22,38 +22,37 @@
     })();
     </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>User info - MoodSwings-Web</title>
+    <title>Spectate - MoodSwings-Web</title>
     <link rel="stylesheet" href="../css/style.css">
 </head>
 <body>
-    <main id="user-main" hidden>
-        <button id="user-back-to-lobby-button" type="button">&larr; Back to your games</button>
-        <h1>User info</h1>
-        <p>Welcome, <span id="user-info-username"></span>.</p>
+    <main id="spectate-main" hidden>
+        <button id="spectate-back-to-lobby-button" type="button">&larr; Back to your games</button>
+        <h1>Spectate</h1>
 
-        <!-- Lifetime stats (issue #106) -- the first section this page
-             has; more sections (format breakdowns, tournament standings
-             once issue #91 lands, etc.) are expected to join it later, so
-             each is its own <section> rather than one flat list. -->
-        <section id="user-lifetime-stats-section">
-            <h2>Lifetime stats</h2>
-            <table id="user-lifetime-stats-table">
-                <tbody>
-                    <tr>
-                        <th scope="row">Games</th>
-                        <td id="user-stats-game-record"></td>
-                    </tr>
-                    <tr>
-                        <th scope="row">Matches</th>
-                        <td id="user-stats-match-record"></td>
-                    </tr>
-                </tbody>
-            </table>
-            <!-- Matches here means best-of-three draft matches (Quick/
-                 Winston/Grid Draft) specifically -- best-of-three for
-                 every other format (issue #90) doesn't exist yet, so
-                 there's nothing else to fold into this row until then. -->
-            <p id="user-stats-match-note">Matches are Quick/Winston/Grid Draft best-of-three results.</p>
+        <!-- Spectator mode (issue #128) -- a stranger with a game's own
+             share code can spectate it regardless of friendship (see
+             GameService::resolveSpectateCode()); this form is that entry
+             point. -->
+        <section id="spectate-code-section">
+            <h2>Enter a spectate code</h2>
+            <form id="spectate-code-form">
+                <input type="text" id="spectate-code-input" placeholder="Spectate code" autocomplete="off" required>
+                <button type="submit">Spectate</button>
+            </form>
+            <p id="spectate-code-error" hidden></p>
+        </section>
+
+        <!-- The other path in (issue #128): any friend's game currently
+             'in_progress' that the viewer isn't seated in themselves --
+             see GameService::listFriendsInProgressGames(). A friend's
+             completed game isn't listed here (per the issue's own "games
+             any of your friends are currently in" wording), but is still
+             reachable via its own spectate code above. -->
+        <section id="spectate-friends-section">
+            <h2>Friends' games</h2>
+            <ul id="spectate-friends-games-list"></ul>
+            <p id="spectate-friends-games-empty">None of your friends are currently in a game.</p>
         </section>
     </main>
 
@@ -82,6 +81,6 @@
         </select>
     </label></footer>
     <script src="../js/app.js"></script>
-    <script src="../js/user.js"></script>
+    <script src="../js/spectate.js"></script>
 </body>
 </html>

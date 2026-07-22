@@ -625,6 +625,91 @@ if ($path === '/games/state' && $method === 'GET') {
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
+// Spectator mode (issue #128): every currently-in_progress game any of
+// the caller's friends is seated in, that the caller isn't -- the
+// code-entry field on the "Spectate" page's other feature (below) covers
+// games spectatable by code instead, friend or not.
+if ($path === '/games/spectatable' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $friendUserIds = array_map(
+        fn (array $friend): int => (int) $friend['friend_id'],
+        $friendships->listFriends((int) $currentUser['id']),
+    );
+    respond(200, [
+        'status' => 'ok',
+        'games' => $games->listFriendsInProgressGames((int) $currentUser['id'], $friendUserIds),
+    ]);
+}
+
+// Get-or-create the calling player's own game's spectate code (issue
+// #128), to show/copy for sharing -- only a seated player may mint or
+// reveal it (requireGamePlayer(), same as every other game_id-taking
+// route that mutates/reveals something about one specific game).
+if ($path === '/games/spectate/code' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    try {
+        respond(200, ['status' => 'ok', 'code' => $games->getOrCreateSpectateCode($gameId)]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Resolves a spectate code (issue #128) typed into the "Spectate" page's
+// code-entry field to the game_id it belongs to, for the frontend to then
+// navigate to. Deliberately no requireGamePlayer()/friendship check here
+// -- holding the code is itself the authorization (see "Spectator mode"
+// in php-app/README.md) -- only requireAuth(), since every page in this
+// app requires an account.
+if ($path === '/games/spectate/resolve' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $code = trim((string) ($body['code'] ?? ''));
+
+    try {
+        respond(200, ['status' => 'ok', 'game_id' => $games->resolveSpectateCode($code)]);
+    } catch (GameStateException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// The spectator-mode equivalent of GET /games/state -- deliberately the
+// first route in this app that accepts a bare game_id with no
+// requireGamePlayer() seat check (a spectator is by definition not
+// seated). Authorized instead by either being friends with at least one
+// seated player, or supplying the game's own spectate_code as a query
+// param -- either one is sufficient, matching how the "Spectate" page
+// offers both a friends' list and a code-entry field as independent
+// paths to the same board. See GameService::getSpectatorState() for
+// exactly what a spectator does/doesn't see.
+if ($path === '/games/spectate/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
+
+    $authorized = $code !== null && $code !== '' && $games->spectateCodeFor($gameId) === $code;
+    if (!$authorized) {
+        foreach ($games->seatedUserIdsFor($gameId) as $seatedUserId) {
+            if ($friendships->areFriends((int) $currentUser['id'], $seatedUserId)) {
+                $authorized = true;
+                break;
+            }
+        }
+    }
+    if (!$authorized) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to spectate this game.']);
+    }
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->getSpectatorState($gameId)]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 // The entire game log (issue #98) -- unlike GET /games/state, no
 // per-viewer customization at all (see GameService::fullEventLog()'s own
 // docblock), so this doesn't need $currentUser beyond requireGamePlayer()'s
