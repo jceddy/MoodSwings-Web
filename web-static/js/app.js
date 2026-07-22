@@ -292,8 +292,14 @@ function getGameLog(gameId) {
 }
 
 // A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().
-function getSharedDeck(gameId) {
-    return apiRequest('/games/deck?game_id=' + encodeURIComponent(gameId));
+// code is only ever passed while spectating (issue #128) via a share code
+// rather than friendship -- see openSharedDeckView() in game.js.
+function getSharedDeck(gameId, code) {
+    let path = '/games/deck?game_id=' + encodeURIComponent(gameId);
+    if (code) {
+        path += '&code=' + encodeURIComponent(code);
+    }
+    return apiRequest(path);
 }
 
 // Spectator mode (issue #128) -- see GameService::listFriendsInProgressGames()/
