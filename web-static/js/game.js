@@ -2692,6 +2692,7 @@
         renderScoringPreview(state.round && state.round.scoring_preview);
         renderScoringEffects(state.round && state.round.scoring_effects);
         renderBoardEffects(state.round && state.round.board_effects);
+        renderFirstPlayerDecision(state, state.first_player_decision);
 
         renderInPlay(state);
 
@@ -3437,54 +3438,6 @@
     // through every call site (including the select-all/clear-selection
     // handlers' own re-renders, which don't otherwise need it).
     let currentOpponentUsername = 'your opponent';
-    // Set alongside currentOpponentUsername, for renderFirstPlayerChoice()'s
-    // own "is this user_id you, or your opponent?" check.
-    let currentViewerUserId = null;
-
-    // Lets the loser of the match's previous game opt to go first in this
-    // one via a single checkbox -- see GameService::setPlayFirstNextMatchGame().
-    // Purely optional: `choice` is null for game 1 of a match (nothing to
-    // base a choice on yet), and leaving the checkbox unchecked just falls
-    // back to the previous game's own winner going first again
-    // (choice.default_user_id) rather than blocking anything. The status
-    // line itself is shown to both players regardless of who's the loser.
-    function renderFirstPlayerChoice(choice) {
-        const container = document.getElementById('draft-first-player-choice');
-        const statusEl = document.getElementById('draft-first-player-choice-status');
-        const checkboxLabel = document.getElementById('draft-first-player-choice-checkbox-label');
-        const checkbox = document.getElementById('draft-first-player-choice-checkbox');
-        const errorEl = document.getElementById('draft-first-player-choice-error');
-        errorEl.hidden = true;
-
-        if (!choice) {
-            container.hidden = true;
-            checkboxLabel.hidden = true;
-            return;
-        }
-        container.hidden = false;
-
-        const nameFor = (userId) => (userId === currentViewerUserId ? 'You' : currentOpponentUsername);
-        const goingFirstUserId = choice.chosen_user_id !== null ? choice.chosen_user_id : choice.default_user_id;
-        statusEl.textContent = nameFor(goingFirstUserId) + ' will go first in this game.';
-
-        checkboxLabel.hidden = !choice.you_are_previous_loser;
-        if (choice.you_are_previous_loser) {
-            checkbox.checked = choice.chosen_user_id === currentViewerUserId;
-        }
-    }
-
-    document.getElementById('draft-first-player-choice-checkbox').addEventListener('change', async (event) => {
-        const errorEl = document.getElementById('draft-first-player-choice-error');
-        errorEl.hidden = true;
-        const { ok, body } = await setPlayFirstNextMatchGame(currentGameId, event.target.checked);
-        if (!ok) {
-            errorEl.textContent = body.message || 'Could not record that choice.';
-            errorEl.hidden = false;
-            event.target.checked = !event.target.checked;
-            return;
-        }
-        await refreshBoard();
-    });
 
     function renderDraftDeckBuilding(deckBuilding) {
         currentDeckBuilding = deckBuilding;
@@ -3499,12 +3452,6 @@
         const clearSelectionButton = document.getElementById('draft-deck-clear-selection-button');
         const resetButton = document.getElementById('draft-deck-reset-button');
         const statusEl = document.getElementById('draft-deck-building-status');
-
-        // Independent of deck submission -- the loser of the previous game
-        // may choose who goes first in this one either before, after, or
-        // without ever (re)submitting a deck, so this isn't gated behind
-        // the you_submitted early return below.
-        renderFirstPlayerChoice(deckBuilding.first_player_choice);
 
         if (deckBuilding.you_submitted) {
             statusEl.innerHTML = '';
@@ -3659,8 +3606,6 @@
         // "other" seated player is always the opponent.
         const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
         currentOpponentUsername = opponent ? opponent.username : 'your opponent';
-        const you = state.players.find((p) => p.game_player_id === state.you.game_player_id);
-        currentViewerUserId = you ? you.user_id : null;
 
         if (state.game.deck_type === 'quick_draft') {
             const qd = state.quick_draft;
@@ -4498,6 +4443,59 @@
             return li;
         });
     }
+
+    // Post-start "who goes first" decision for game 2/3 of a best-of-three
+    // draft match -- per a rules clarification, the previous game's loser
+    // doesn't have to choose until they can see their own opening hand, so
+    // this is decided after the game (and round 1) has already started
+    // rather than during deck-building -- see GameService::
+    // setPlayFirstNextMatchGame()/firstPlayerDecisionStateFor(). Round 1
+    // stays frozen (see canAct in renderBoard()) for both players until
+    // this resolves one way or the other; state.first_player_decision is
+    // null once it has (or for game 1, which has no previous game to base
+    // a choice on), at which point this panel just stays hidden.
+    function renderFirstPlayerDecision(state, decision) {
+        const panel = document.getElementById('first-player-decision-panel');
+        const statusEl = document.getElementById('first-player-decision-status');
+        const actionsEl = document.getElementById('first-player-decision-actions');
+        const opponentButton = document.getElementById('first-player-decision-opponent-button');
+        const errorEl = document.getElementById('first-player-decision-error');
+        errorEl.hidden = true;
+
+        if (!decision) {
+            panel.hidden = true;
+            return;
+        }
+        panel.hidden = false;
+
+        const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
+        const opponentUsername = opponent ? opponent.username : 'your opponent';
+
+        if (decision.you_are_previous_loser) {
+            statusEl.textContent = 'You lost the previous game -- now that you can see your opening hand, choose who goes first.';
+            actionsEl.hidden = false;
+            opponentButton.textContent = 'Let ' + opponentUsername + ' go first';
+        } else {
+            statusEl.textContent = 'Waiting for ' + opponentUsername +
+                ' to decide who goes first, now that they can see their opening hand.';
+            actionsEl.hidden = true;
+        }
+    }
+
+    async function submitFirstPlayerDecision(playFirst) {
+        const errorEl = document.getElementById('first-player-decision-error');
+        errorEl.hidden = true;
+        const { ok, body } = await setPlayFirstNextMatchGame(currentGameId, playFirst);
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not record that choice.';
+            errorEl.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
+    document.getElementById('first-player-decision-self-button').addEventListener('click', () => submitFirstPlayerDecision(true));
+    document.getElementById('first-player-decision-opponent-button').addEventListener('click', () => submitFirstPlayerDecision(false));
 
     function updateRespondButtonEnabled() {
         const respondButton = document.getElementById('respond-decision-button');

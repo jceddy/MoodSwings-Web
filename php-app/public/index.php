@@ -804,8 +804,10 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
 
 // Lets the loser of a best-of-three draft match's game N opt to go first
 // themselves in game N+1 -- see GameService::setPlayFirstNextMatchGame().
-// Entirely optional (falls back to game N's own winner going first again),
-// so unlike /games/draft/deck above this never gates startGame().
+// Only callable once game N+1 has actually started (per the game's own
+// rules, the loser doesn't have to decide until they can see their
+// opening hand) -- round 1 stays frozen (nobody may play) until this
+// resolves, one answer either way.
 if ($path === '/games/draft/first-player-choice' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

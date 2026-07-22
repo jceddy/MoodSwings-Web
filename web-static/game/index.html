@@ -133,14 +133,6 @@
             <div id="draft-deck-building" hidden>
                 <h3 id="draft-deck-building-title"></h3>
                 <p id="draft-deck-building-status"></p>
-                <div id="draft-first-player-choice" hidden>
-                    <p id="draft-first-player-choice-status"></p>
-                    <label id="draft-first-player-choice-checkbox-label" hidden>
-                        <input type="checkbox" id="draft-first-player-choice-checkbox">
-                        Play first next game
-                    </label>
-                    <p id="draft-first-player-choice-error" class="error" hidden></p>
-                </div>
                 <div id="draft-deck-picker"></div>
                 <div id="draft-deck-selection-actions">
                     <button id="draft-deck-select-all-button" type="button">Select all</button>
@@ -169,6 +161,16 @@
             </dialog>
 
             <div id="in-progress-area" hidden>
+                <div id="first-player-decision-panel" hidden>
+                    <h4>Who goes first?</h4>
+                    <p id="first-player-decision-status"></p>
+                    <div id="first-player-decision-actions" hidden>
+                        <button id="first-player-decision-self-button" type="button">I'll go first</button>
+                        <button id="first-player-decision-opponent-button" type="button"></button>
+                    </div>
+                    <p id="first-player-decision-error" class="error" hidden></p>
+                </div>
+
                 <div id="scoring-effects" hidden>
                     <h4>How scoring will be affected</h4>
                     <ul id="scoring-effects-list"></ul>

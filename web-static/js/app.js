@@ -243,10 +243,11 @@ function submitDraftDeck(gameId, cardIds) {
     });
 }
 
-// Only the loser of the match's previous game may call this -- see
-// GameService::setPlayFirstNextMatchGame(). playFirst true opts the
-// loser into going first themselves; false clears that back to the
-// default (the previous game's winner going first again).
+// Only the loser of the match's previous game may call this, and only
+// once the next game has actually started (they get to see their
+// opening hand first) -- see GameService::setPlayFirstNextMatchGame().
+// playFirst true sends the loser out first themselves; false lets the
+// previous game's winner go first again.
 function setPlayFirstNextMatchGame(gameId, playFirst) {
     return apiRequest('/games/draft/first-player-choice', {
         method: 'POST',

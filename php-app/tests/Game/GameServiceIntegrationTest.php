@@ -7375,6 +7375,12 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullQuickDraftDeck((int) $nextGame['id'], $u1);
             $this->submitFullQuickDraftDeck((int) $nextGame['id'], $u2);
             $this->games->startGame((int) $nextGame['id']);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first (see setPlayFirstNextMatchGame())
+            // -- resolve it to the default (previous winner goes first
+            // again) so completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame((int) $nextGame['id'], $loserUserId, false);
 
             $currentGameId = (int) $nextGame['id'];
         }
@@ -7410,24 +7416,42 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * buildQuickDraftMatchThroughGameOne() only gets game 2 to 'waiting'
+     * (decks not yet submitted) -- per the rules clarification that the
+     * loser doesn't have to choose who goes first until they can see
+     * their own opening hand, setPlayFirstNextMatchGame() is now only
+     * callable once game 2 has actually started, so every test below
+     * needs it submitted and started first.
+     *
+     * @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int}
+     */
+    private function buildQuickDraftMatchAtGameTwoStart(): array
+    {
+        $fixture = $this->buildQuickDraftMatchThroughGameOne();
+        $this->submitFullQuickDraftDeck($fixture['nextGameId'], $fixture['u1']);
+        $this->submitFullQuickDraftDeck($fixture['nextGameId'], $fixture['u2']);
+        $this->games->startGame($fixture['nextGameId']);
+        return $fixture;
+    }
+
+    /**
      * The heart of the "loser opts to play first" feature (a follow-up to
-     * issue #88/#89's own best-of-three match progression): checking the
-     * box sends the loser of game N out first in game N+1, and
-     * startGame() must actually honor that rather than its usual coin
-     * flip / the previous winner going first again.
+     * issue #88/#89's own best-of-three match progression): game 2 starts
+     * with round 1 frozen (nobody can act) until the loser decides, and
+     * choosing to play first themselves sends them out first once
+     * resolved.
      */
     public function testLoserOfPreviousGameCanOptToPlayFirstInNextGame(): void
     {
         [
-            'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId,
+            'nextGameId' => $nextGameId,
             'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
-        ] = $this->buildQuickDraftMatchThroughGameOne();
+        ] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $frozenRound = $this->fetchRound($nextGameId);
+        self::assertNull($frozenRound['current_turn_game_player_id'], 'round 1 must stay frozen until the loser decides');
 
         $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
-
-        $this->submitFullQuickDraftDeck($nextGameId, $u1);
-        $this->submitFullQuickDraftDeck($nextGameId, $u2);
-        $this->games->startGame($nextGameId);
 
         $round = $this->fetchRound($nextGameId);
         $firstPlayerUserId = (int) $this->pdo->query(
@@ -7435,56 +7459,75 @@ final class GameServiceIntegrationTest extends TestCase
         )->fetchColumn();
         self::assertSame($loserUserId, $firstPlayerUserId);
         self::assertNotSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
     }
 
-    /** Unchecking the box (clearing a previously-set choice) must revert to the default -- the previous winner going first again. */
-    public function testLoserCanUncheckThePlayFirstBoxToRevertToTheDefault(): void
+    /** Choosing to let the previous winner go first again is still a real, round-unfreezing decision -- not a no-op. */
+    public function testLoserCanChooseToLetThePreviousWinnerGoFirstAgain(): void
     {
         [
-            'u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId,
+            'nextGameId' => $nextGameId,
             'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
-        ] = $this->buildQuickDraftMatchThroughGameOne();
+        ] = $this->buildQuickDraftMatchAtGameTwoStart();
 
-        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
         $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
-
-        $this->submitFullQuickDraftDeck($nextGameId, $u1);
-        $this->submitFullQuickDraftDeck($nextGameId, $u2);
-        $this->games->startGame($nextGameId);
 
         $round = $this->fetchRound($nextGameId);
         $firstPlayerUserId = (int) $this->pdo->query(
             'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
         )->fetchColumn();
         self::assertSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    /** The decision gets its own event-log phrasing rather than falling through describeEvent()'s generic "played a card" default. */
+    public function testFirstPlayerDecisionGetsItsOwnEventLogPhrasing(): void
+    {
+        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        $description = $this->games->getState($nextGameId, $loserUserId)['recent_events'][0]['description'];
+        self::assertSame($this->fetchUsername($loserUserId) . ' will go first this game', $description);
     }
 
     /**
-     * Leaving the box unchecked entirely (the common case) must NOT fall
-     * back to a fresh coin flip -- it defaults to the previous game's own
-     * winner going first again, exactly like resolveFirstPlayerId()'s own
-     * docblock says.
+     * Round 1 of game 2+ stays frozen -- not even the acting seat's own
+     * placeholder can pass -- until the loser's decision resolves it,
+     * mirroring closed_team's own frozen-round-1 pattern.
      */
-    public function testFirstPlayerDefaultsToPreviousWinnerWhenChoiceNotExercised(): void
+    public function testRoundStaysFrozenUntilTheLoserDecides(): void
     {
-        ['u1' => $u1, 'u2' => $u2, 'nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId]
-            = $this->buildQuickDraftMatchThroughGameOne();
-
-        $this->submitFullQuickDraftDeck($nextGameId, $u1);
-        $this->submitFullQuickDraftDeck($nextGameId, $u2);
-        $this->games->startGame($nextGameId);
+        ['nextGameId' => $nextGameId] = $this->buildQuickDraftMatchAtGameTwoStart();
 
         $round = $this->fetchRound($nextGameId);
-        $firstPlayerUserId = (int) $this->pdo->query(
-            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
-        )->fetchColumn();
-        self::assertSame($winnerUserId, $firstPlayerUserId);
+        $placeholderGamePlayerId = (int) $round['first_game_player_id'];
+
+        try {
+            $this->games->pass($nextGameId, $placeholderGamePlayerId);
+            self::fail('Expected passing before the first-player decision is made to be rejected');
+        } catch (GameStateException) {
+            // expected
+        }
     }
 
-    public function testOnlyTheLoserOfThePreviousGameCanSetThePlayFirstBox(): void
+    /** Once decided (either way), the choice is permanent -- there is no changing your mind, unlike the old pre-start checkbox. */
+    public function testSetPlayFirstRejectsBeingDecidedTwice(): void
+    {
+        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('already been decided');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+    }
+
+    public function testOnlyTheLoserOfThePreviousGameCanSetWhoGoesFirst(): void
     {
         ['nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId]
-            = $this->buildQuickDraftMatchThroughGameOne();
+            = $this->buildQuickDraftMatchAtGameTwoStart();
 
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('Only the loser');
@@ -7502,10 +7545,21 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->setPlayFirstNextMatchGame($gameId, $u1, true);
     }
 
+    /** Before game 2 has actually started (still deck-building), the loser can't see their opening hand yet, so the choice isn't open yet either. */
+    public function testSetPlayFirstRejectsAGameThatHasNotStartedYet(): void
+    {
+        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchThroughGameOne();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("hasn't started yet");
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+    }
+
     /** Someone not even seated in the match is rejected the same way a non-loser seated player would be. */
     public function testSetPlayFirstRejectsAUserNotSeatedInTheMatch(): void
     {
-        ['nextGameId' => $nextGameId] = $this->buildQuickDraftMatchThroughGameOne();
+        ['nextGameId' => $nextGameId] = $this->buildQuickDraftMatchAtGameTwoStart();
         $outsider = $this->insertUser('quickdraft-first-player-outsider');
 
         $this->expectException(GameStateException::class);
@@ -7515,23 +7569,24 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * getState()'s own 'first_player_choice' field for the deck_building
-     * sub-state -- null for game 1 (nothing to base a choice on yet),
-     * then reflects both the previous winner's default and, once made,
-     * the loser's own actual choice for both viewers.
+     * getState()'s own 'first_player_decision' field -- only populated
+     * once game 2+ has actually started with round 1 still frozen (null
+     * for game 1, which has no previous game to base a choice on, and
+     * null again once the decision resolves, since the round is no
+     * longer frozen at that point).
      */
-    public function testGetStateExposesFirstPlayerChoiceForDeckBuildingSubState(): void
+    public function testGetStateExposesFirstPlayerDecisionWhileRoundOneIsFrozen(): void
     {
         ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
         $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
-        self::assertNull(
-            $this->games->getState($gameId, $u1)['quick_draft']['deck_building']['first_player_choice'],
-            'game 1 of a match has no previous game to base a choice on',
-        );
-
         $this->submitFullQuickDraftDeck($gameId, $u1);
         $this->submitFullQuickDraftDeck($gameId, $u2);
         $this->games->startGame($gameId);
+        self::assertNull(
+            $this->games->getState($gameId, $u1)['first_player_decision'],
+            'game 1 of a match has no previous game to base a choice on',
+        );
+
         $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
         $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
 
@@ -7542,22 +7597,25 @@ final class GameServiceIntegrationTest extends TestCase
         $nextGameStmt->execute(['match_id' => $draftMatchId]);
         $nextGameId = (int) $nextGameStmt->fetchColumn();
 
-        $loserChoice = $this->games->getState($nextGameId, $loserUserId)['quick_draft']['deck_building']['first_player_choice'];
-        self::assertTrue($loserChoice['you_are_previous_loser']);
-        self::assertSame($winnerUserId, $loserChoice['default_user_id']);
-        self::assertNull($loserChoice['chosen_user_id']);
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
 
-        $winnerChoice = $this->games->getState($nextGameId, $winnerUserId)['quick_draft']['deck_building']['first_player_choice'];
-        self::assertFalse($winnerChoice['you_are_previous_loser']);
-        self::assertSame($winnerUserId, $winnerChoice['default_user_id']);
-        self::assertNull($winnerChoice['chosen_user_id']);
+        $loserDecision = $this->games->getState($nextGameId, $loserUserId)['first_player_decision'];
+        self::assertTrue($loserDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $loserDecision['default_user_id']);
+
+        $winnerDecision = $this->games->getState($nextGameId, $winnerUserId)['first_player_decision'];
+        self::assertFalse($winnerDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $winnerDecision['default_user_id']);
 
         $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
 
-        $loserChoiceAfter = $this->games->getState($nextGameId, $loserUserId)['quick_draft']['deck_building']['first_player_choice'];
-        self::assertSame($loserUserId, $loserChoiceAfter['chosen_user_id']);
-        $winnerChoiceAfter = $this->games->getState($nextGameId, $winnerUserId)['quick_draft']['deck_building']['first_player_choice'];
-        self::assertSame($loserUserId, $winnerChoiceAfter['chosen_user_id']);
+        self::assertNull(
+            $this->games->getState($nextGameId, $loserUserId)['first_player_decision'],
+            'no longer frozen, so there is nothing left to decide',
+        );
+        self::assertNull($this->games->getState($nextGameId, $winnerUserId)['first_player_decision']);
     }
 
     /**
@@ -7705,6 +7763,11 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullQuickDraftDeck($nextGameId, $u1);
             $this->submitFullQuickDraftDeck($nextGameId, $u2);
             $this->games->startGame($nextGameId);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first -- resolve to the default so
+            // completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
             $currentGameId = $nextGameId;
         }
 
@@ -8252,6 +8315,11 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullWinstonDraftDeck($nextGameId, $u1);
             $this->submitFullWinstonDraftDeck($nextGameId, $u2);
             $this->games->startGame($nextGameId);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first -- resolve to the default so
+            // completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
             $currentGameId = $nextGameId;
         }
 
@@ -8769,6 +8837,11 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullGridDraftDeck($nextGameId, $u1);
             $this->submitFullGridDraftDeck($nextGameId, $u2);
             $this->games->startGame($nextGameId);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first -- resolve to the default so
+            // completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
             $currentGameId = $nextGameId;
         }
 

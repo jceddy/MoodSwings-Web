@@ -869,22 +869,13 @@ too, proportional to the smaller card width.
       without submitting it, ending the deck-building step, or being
       visible to the opponent. See "Saved decklists" in
       `php-app/README.md`.
-    - **Who goes first** (`#draft-first-player-choice`, sitting inside
-      `#draft-deck-building` above the picker so it's visible independent
-      of deck submission -- `renderFirstPlayerChoice()`) -- `null` for
-      game 1 of a match, so the whole block stays hidden there. From
-      game 2 on, both players always see a status line naming who's
-      going first (either the previous game's own winner by default, or
-      whoever the previous loser has opted into); only the previous
-      loser's own client also sees a single `#draft-first-player-choice-checkbox`
-      ("Play first next game"), unchecked by default. Checking it calls
-      `setPlayFirstNextMatchGame(gameId, true)` (`POST
-      /games/draft/first-player-choice`, `{"play_first": true}`);
-      unchecking it calls the same wrapper with `false`, clearing the
-      choice back to the default. There's no separate "opponent goes
-      first" control -- leaving the box unchecked already means that.
-      Entirely optional -- nothing here gates the Submit-deck button or
-      `autoStartGameIfReady()`. Pool/pack/drafted cards are all
+    - **Who goes first** used to live in the deck-building screen as a
+      checkbox, but per a rules clarification the previous game's loser
+      doesn't have to decide until they can see their own opening hand --
+      so it's no longer part of deck-building at all. See
+      `#first-player-decision-panel` below (alongside `scoring_effects`/
+      `board_effects`), which renders once game 2/3 has actually started
+      with round 1 still frozen. Pool/pack/drafted cards are all
       served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
       rather than the usual in-play `serializeCard()` result, but with the
       exact same field names `buildCardThumb()`/`openCardDetail()` already
@@ -1263,6 +1254,28 @@ too, proportional to the smaller card width.
     `container.hidden = entries.length === 0` pattern) whenever there's
     nothing to say, so an ordinary board with neither in play shows
     neither heading.
+
+    `state.first_player_decision` (non-null only for game 2/3 of a
+    best-of-three draft match, while round 1 is still frozen -- see
+    "Who goes first" in `php-app/README.md`) drives
+    `#first-player-decision-panel`, rendered as the first child of
+    `#in-progress-area` so it's the first thing either player sees once
+    the game's actually started (`renderFirstPlayerDecision()`, called
+    from `renderBoard()` alongside `renderScoringEffects()`/
+    `renderBoardEffects()`). Both players see a status line; only the
+    previous game's loser also sees two buttons,
+    `#first-player-decision-self-button` ("I'll go first") and
+    `#first-player-decision-opponent-button` (labeled with the
+    opponent's own username, e.g. "Let Alice go first"), each calling
+    `setPlayFirstNextMatchGame(gameId, true/false)` (`POST
+    /games/draft/first-player-choice`) and then `refreshBoard()`. There's
+    no third "still deciding" state to render beyond that -- the panel
+    itself disappears (`first_player_decision` goes back to `null`) the
+    instant either button resolves it, at which point the board's own
+    ordinary `canAct`/turn logic takes back over. This replaced an
+    earlier checkbox that lived in the deck-building screen instead (see
+    "Who goes first" in `php-app/README.md` for why the decision moved
+    to after the game starts).
 
     A "Recent plays" list at the bottom of the board shows the last 15
     plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
