@@ -378,13 +378,15 @@ too, proportional to the smaller card width.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
   "Friends" button (see below), a "Decks" button (see below), a "User
-  info" link (`#user-info-link`, to `user/index.html` below), and the
-  game lobby/board itself. The "Friends"/"Decks"/"Log out" buttons carry
-  their own `margin-bottom` so they don't touch whichever of the lobby or
-  board view is showing directly beneath them (most noticeably the board
-  view's own "Back to your games" button); `#user-info-link` is a real
-  `<a>` (an actual page, not an in-page dialog like Friends/Decks), styled
-  with the same spacing so it still lines up in that row.
+  info" button (`#user-info-button`, navigates to `user/index.html`
+  below), and the game lobby/board itself. The "Friends"/"Decks"/"User
+  info"/"Log out" buttons carry their own `margin-bottom` so they don't
+  touch whichever of the lobby or board view is showing directly beneath
+  them (most noticeably the board view's own "Back to your games"
+  button); `#user-info-button` is a plain `<button>` whose click handler
+  does a real navigation (`window.location.href = '../user/'`) rather
+  than opening a dialog, since it leads to an actual separate page, not
+  an in-page overlay like Friends/Decks.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via
@@ -1778,7 +1780,7 @@ using the same-origin `session_token` cookie for auth — see
 [`../php-app/README.md`](../php-app/README.md) for the API itself.
 
 - `user/index.html` (`/user/`, issue #106) — A small "User info" page,
-  reached via the lobby's own `#user-info-link` (see above) and linking
+  reached via the lobby's own `#user-info-button` (see above) and linking
   back with its own "Back to your games" anchor to `/game/`. Redirects to
   `/` if there's no active session, same as `game/index.html`. Currently
   just one section, `#user-lifetime-stats-section` -- a "Games" row
@@ -1786,8 +1788,12 @@ using the same-origin `session_token` cookie for auth — see
   wins-losses, `quick_draft`/`winston_draft`/`grid_draft` best-of-three
   results only, with a small note under the table saying so, since
   best-of-three doesn't exist yet for any other format) -- via
-  `GET /user/stats` (`js/user.js`). Deliberately its own page rather than
-  a dialog like Friends/Decks: the issue asks for something that can grow
+  `GET /user/stats` (`js/user.js`). Each row appends a win percentage in
+  parentheses once at least one game/match has completed (e.g.
+  `"3-1 (75%)"`); `js/user.js`'s `recordFormatted()` leaves it off
+  entirely while the percentage is `null`, rather than showing a
+  misleading `"0%"` for a user who's never played. Deliberately its own
+  page rather than a dialog like Friends/Decks: the issue asks for something that can grow
   (tournament standings once issue #91's tournament system exists,
   per-format breakdowns, etc.), and each addition is meant to be its own
   `<section>` alongside this one rather than one flat list -- see

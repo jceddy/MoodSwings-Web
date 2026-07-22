@@ -9221,8 +9221,14 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->playMood($gameId, $p1, $apathyId, []);
         $this->games->pass($gameId, $p2);
 
-        self::assertSame(['game_wins' => 1, 'game_losses' => 0, 'match_wins' => 0, 'match_losses' => 0], $this->games->lifetimeStatsFor($u1));
-        self::assertSame(['game_wins' => 0, 'game_losses' => 1, 'match_wins' => 0, 'match_losses' => 0], $this->games->lifetimeStatsFor($u2));
+        self::assertSame(
+            ['game_wins' => 1, 'game_losses' => 0, 'game_win_percentage' => 100, 'match_wins' => 0, 'match_losses' => 0, 'match_win_percentage' => null],
+            $this->games->lifetimeStatsFor($u1)
+        );
+        self::assertSame(
+            ['game_wins' => 0, 'game_losses' => 1, 'game_win_percentage' => 0, 'match_wins' => 0, 'match_losses' => 0, 'match_win_percentage' => null],
+            $this->games->lifetimeStatsFor($u2)
+        );
     }
 
     /** A team win credits BOTH teammates' lifetime game_wins, not just the one representative game_player_id games.winner_game_player_id itself points at. */
@@ -9380,7 +9386,14 @@ final class GameServiceIntegrationTest extends TestCase
         $u1 = $this->insertUser('statsfresh');
 
         self::assertSame(
-            ['game_wins' => 0, 'game_losses' => 0, 'match_wins' => 0, 'match_losses' => 0],
+            [
+                'game_wins' => 0,
+                'game_losses' => 0,
+                'game_win_percentage' => null,
+                'match_wins' => 0,
+                'match_losses' => 0,
+                'match_win_percentage' => null,
+            ],
             $this->games->lifetimeStatsFor($u1)
         );
     }

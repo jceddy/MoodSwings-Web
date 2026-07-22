@@ -80,7 +80,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress`, you've already resigned, or a decision is pending. Gives up instead of playing the game out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
-| GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "match_wins", "match_losses"}}` -- your own lifetime totals only (issue #106), all-zero for a user with no completed games/matches yet. See "Lifetime stats" below. |
+| GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -2605,17 +2605,24 @@ completing, so it contributes to `match_wins`/`match_losses` but not
 through `bumpLifetimeStats(array $userIds, string $column)`, a single
 `INSERT ... ON DUPLICATE KEY UPDATE ... = ... + 1` per user id -- there's
 no row at all for a user nothing has ever happened to; `GameService::
-lifetimeStatsFor(int $userId): array{game_wins, game_losses, match_wins,
-match_losses}` (backing `GET /user/stats`) reads that back as all-zero
-rather than requiring a row to exist first.
+lifetimeStatsFor(int $userId): array{game_wins, game_losses,
+game_win_percentage, match_wins, match_losses, match_win_percentage}`
+(backing `GET /user/stats`) reads that back as all-zero (percentages
+`null`) rather than requiring a row to exist first. The percentage
+fields are computed here, server-side, rather than in the frontend --
+`(int) round($wins / ($wins + $losses) * 100)`, or `null` when
+`$wins + $losses === 0` so a brand-new user sees no percentage at all
+instead of a misleading "0%".
 
 The frontend surfaces this on a new dedicated page,
-`web-static/user/index.html`/`user.js` (a "User info" link sits next to
-Friends/Decks/Log out on the lobby page) -- see "User info" in
+`web-static/user/index.html`/`user.js` (a "User info" button sits next
+to Friends/Decks/Log out on the lobby page) -- see "User info" in
 `web-static/README.md`. Deliberately its own page rather than a dialog:
 the issue explicitly asks for a page that can grow (tournament
 standings once #91 lands, per-format breakdowns, etc.), and lifetime
 stats are the first section on it, not the only thing it will ever show.
+Each record renders as `wins-losses`, or `wins-losses (NN%)` once the
+percentage is non-null.
 
 ### Duel: separate per-player decks
 

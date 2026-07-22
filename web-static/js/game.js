@@ -16,6 +16,13 @@
         window.location.replace('/');
     });
 
+    // Lifetime stats (issue #106) -- a real page (../user/), not an
+    // in-page dialog like Friends/Decks, so this is a plain navigation
+    // rather than opening a dialog.
+    document.getElementById('user-info-button').addEventListener('click', () => {
+        window.location.href = '../user/';
+    });
+
     const friendsDialog = document.getElementById('friends-dialog');
     const friendInviteForm = document.getElementById('friend-invite-form');
     const friendInviteInput = document.getElementById('friend-invite-input');

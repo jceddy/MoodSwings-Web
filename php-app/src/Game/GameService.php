@@ -3581,12 +3581,30 @@ final class GameService
         $stmt->execute(['user_id' => $userId]);
         $row = $stmt->fetch();
 
+        $gameWins = $row !== false ? (int) $row['game_wins'] : 0;
+        $gameLosses = $row !== false ? (int) $row['game_losses'] : 0;
+        $matchWins = $row !== false ? (int) $row['match_wins'] : 0;
+        $matchLosses = $row !== false ? (int) $row['match_losses'] : 0;
+
         return [
-            'game_wins' => $row !== false ? (int) $row['game_wins'] : 0,
-            'game_losses' => $row !== false ? (int) $row['game_losses'] : 0,
-            'match_wins' => $row !== false ? (int) $row['match_wins'] : 0,
-            'match_losses' => $row !== false ? (int) $row['match_losses'] : 0,
+            'game_wins' => $gameWins,
+            'game_losses' => $gameLosses,
+            // Rounded to the nearest whole percent; null (rather than a
+            // divide-by-zero 0%) until at least one game/match has
+            // actually completed -- 0% would misleadingly read as "you've
+            // lost every game" for a user who simply hasn't played yet.
+            'game_win_percentage' => self::winPercentage($gameWins, $gameLosses),
+            'match_wins' => $matchWins,
+            'match_losses' => $matchLosses,
+            'match_win_percentage' => self::winPercentage($matchWins, $matchLosses),
         ];
+    }
+
+    private static function winPercentage(int $wins, int $losses): ?int
+    {
+        $total = $wins + $losses;
+
+        return $total > 0 ? (int) round($wins / $total * 100) : null;
     }
 
     /**

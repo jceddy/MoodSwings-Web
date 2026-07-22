@@ -146,18 +146,12 @@ dialog#resources-dialog #resources-close-button {
 /* #friends-button/#logout-button sit directly above whichever of
    #lobby-view/#board-view is currently visible -- without this they'd
    touch it with no gap, most noticeably #board-view's own
-   #back-to-lobby-button immediately below. */
+   #back-to-lobby-button immediately below. #user-info-button (a real
+   page, ../user/, not an in-page dialog like Friends/Decks) sits in the
+   same row and needs the same spacing. */
 #friends-button,
+#user-info-button,
 #logout-button {
-    margin-bottom: 0.5rem;
-}
-
-/* #user-info-link is a real page (../user/), not an in-page dialog like
-   Friends/Decks -- an <a>, not a <button> -- but sits in the same button
-   row, so it needs the same vertical spacing/alignment those get for
-   free from being buttons. */
-#user-info-link {
-    display: inline-block;
     margin-bottom: 0.5rem;
 }
 
