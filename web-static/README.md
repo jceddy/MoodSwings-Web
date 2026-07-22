@@ -1781,7 +1781,9 @@ using the same-origin `session_token` cookie for auth — see
 
 - `user/index.html` (`/user/`, issue #106) — A small "User info" page,
   reached via the lobby's own `#user-info-button` (see above) and linking
-  back with its own "Back to your games" anchor to `/game/`. Redirects to
+  back with its own "Back to your games" button (`#user-back-to-lobby-button`,
+  a real `<button>` matching the rest of the app's buttons rather than an
+  anchor, with a click handler that navigates to `/game/`). Redirects to
   `/` if there's no active session, same as `game/index.html`. Currently
   just one section, `#user-lifetime-stats-section` -- a "Games" row
   (lifetime wins-losses, every format) and a "Matches" row (lifetime

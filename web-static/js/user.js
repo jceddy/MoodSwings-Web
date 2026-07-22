@@ -9,6 +9,10 @@
     document.getElementById('user-main').hidden = false;
     startVersionWatcher();
 
+    document.getElementById('user-back-to-lobby-button').addEventListener('click', () => {
+        window.location.href = '../game/';
+    });
+
     // Lifetime stats (issue #106) -- see GameService::lifetimeStatsFor()/
     // GET /user/stats. Self only for now; "Games" covers every format,
     // "Matches" is Quick/Winston/Grid Draft best-of-three results only
