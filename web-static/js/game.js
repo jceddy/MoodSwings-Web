@@ -2296,7 +2296,7 @@
         cardsEl.innerHTML = '';
         document.getElementById('shared-deck-dialog').showModal();
 
-        const { ok, body } = await getSharedDeck(gameId);
+        const { ok, body } = await getSharedDeck(gameId, isSpectating ? spectateCode : null);
         if (!ok) {
             return;
         }

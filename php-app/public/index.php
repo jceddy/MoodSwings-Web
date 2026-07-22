@@ -524,6 +524,25 @@ function requireGamePlayer(GameService $games, int $gameId, int $userId): int
     return $gamePlayerId;
 }
 
+// Spectator mode (issue #128): the same "friends with a seated player OR
+// holds the game's own code" rule GET /games/spectate/state enforces
+// inline, factored out so GET /games/deck (below) can reuse it verbatim
+// rather than re-deriving it -- a spectator viewing a shared-deck game's
+// board should be able to open its decklist too, not just seated players.
+function canSpectateGame(GameService $games, FriendshipService $friendships, int $gameId, int $userId, ?string $code): bool
+{
+    if ($code !== null && $code !== '' && $games->spectateCodeFor($gameId) === $code) {
+        return true;
+    }
+    foreach ($games->seatedUserIdsFor($gameId) as $seatedUserId) {
+        if ($friendships->areFriends($userId, $seatedUserId)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 if ($path === '/games' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
@@ -690,16 +709,7 @@ if ($path === '/games/spectate/state' && $method === 'GET') {
     $gameId = (int) ($_GET['game_id'] ?? 0);
     $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
 
-    $authorized = $code !== null && $code !== '' && $games->spectateCodeFor($gameId) === $code;
-    if (!$authorized) {
-        foreach ($games->seatedUserIdsFor($gameId) as $seatedUserId) {
-            if ($friendships->areFriends((int) $currentUser['id'], $seatedUserId)) {
-                $authorized = true;
-                break;
-            }
-        }
-    }
-    if (!$authorized) {
+    if (!canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
         respond(403, ['status' => 'error', 'message' => 'You are not authorized to spectate this game.']);
     }
 
@@ -726,12 +736,19 @@ if ($path === '/games/log' && $method === 'GET') {
 // "/games/deck" rather than "/games/decklist" to avoid colliding with the
 // existing POST /games/decklist (custom_duel's own per-player deck
 // submission, a completely different thing). Same no-per-viewer-filtering
-// reasoning as GET /games/log immediately above.
+// reasoning as GET /games/log immediately above -- viewSharedDeck() itself
+// takes no viewer at all, so a spectator (issue #128) is just as able to
+// open a shared-deck game's own "View decklist" as a seated player, via
+// the same canSpectateGame() authorization GET /games/spectate/state uses.
 if ($path === '/games/deck' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $gameId = (int) ($_GET['game_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
 
-    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    $isSeated = $games->gamePlayerIdFor($gameId, (int) $currentUser['id']) !== null;
+    if (!$isSeated && !canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
+    }
 
     try {
         respond(200, ['status' => 'ok', 'cards' => $games->viewSharedDeck($gameId)]);
