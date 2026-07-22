@@ -68,7 +68,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/draft/winston-pick` | `{"game_id", "action": "take"\|"pass"}`                  | Requires auth; `403` if you're not seated in that game. A `winston_draft` match's own pile take/pass -- no `card_ids`, since a pile is taken/passed as a whole and the server already knows whose turn it is and which pile is current. `409` if the game isn't `winston_draft`, the match isn't currently drafting, it isn't your turn, or `action` isn't `take`/`pass`. See "Winston Draft" below. Returns `{"action_completed", "turn_advanced", "draft_completed"}`. |
 | POST   | `/games/draft/grid-pick` | `{"game_id", "axis": "row"\|"column", "index": 0-2}`        | Requires auth; `403` if you're not seated in that game. A `grid_draft` match's own row/column pick against the current 3x3 grid. `409` if the game isn't `grid_draft`, the match isn't currently drafting, it isn't your turn, `axis`/`index` are invalid, or the chosen line has no cards left. See "Grid Draft" below. Returns `{"axis", "index", "cards_taken": [int], "round_completed", "turn_advanced", "draft_completed"}`. |
 | POST   | `/games/draft/deck` | `{"game_id", "card_ids": [int]}`                             | Requires auth; `403` if you're not seated in that game. A `quick_draft`/`winston_draft`/`grid_draft` match's own deck trim/sideboard -- used both for the initial trim and every later sideboard between the match's games. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, the match isn't currently `deck_building`, `card_ids` isn't within that format's min/max size (12-16 for `quick_draft`; at least 12, at most however many you drafted, for `winston_draft`/`grid_draft`) or drawn from your own `drafted_card_ids`. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
-| POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Lets the loser of a best-of-three draft match's previous game opt to go first themselves in this one (`play_first: true`), or clear that back to the default (`play_first: false`) -- entirely optional, never gates `startGame()`. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, has already started, is game 1 of its match (nothing to base the choice on), or the calling user wasn't the previous game's loser. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
+| POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Only callable once a best-of-three draft match's game 2/3 has actually started -- the loser of the previous game doesn't have to decide who goes first until they can see their own opening hand, and round 1 stays frozen (nobody can play/pass) until they do. Lets them go first themselves (`play_first: true`) or leave the previous winner going first again (`play_first: false`); either answer permanently unfreezes the round. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, hasn't started yet, is game 1 of its match (nothing to base the choice on), the calling user wasn't the previous game's loser, or the decision was already made. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, or `closed_team`'s still-unsubmitted pregame card pass; see `isAwaitingResponseFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username"}`, `winner_username` only set once the match's own status is `completed`) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
@@ -1834,27 +1834,41 @@ defaulting to every drafted card and forcing a full retrim from scratch
 before every single game -- it plays no part in `startGame()`'s own
 "deck submitted" gate, which still only ever looks at `deck_card_ids`.
 
-**Who goes first** (`resolveFirstPlayerId()`, `setPlayFirstNextMatchGame()`) --
-game 1 of a match still gets a uniform coin flip (`startGame()`'s
-default for every non-draft-match game too). Games 2/3 are the one
-exception: the loser of the previous game may opt to go first themselves
-in the next one via `POST /games/draft/first-player-choice`
-(`{"game_id", "play_first": bool}`, `games.first_player_choice_user_id`,
-migration `0041`) -- a single checkbox, not a real choice between seats,
-since leaving it unchecked already means "the previous winner goes
-first again"; there's nothing else useful to explicitly pick. Entirely
-optional, never gating `startGame()` the way deck submission does; the
-loser can flip it back and forth any time before the next game starts,
-`play_first: false` clearing `first_player_choice_user_id` back to
-`null`. If the loser never checks it, the default is the previous
-game's own winner going first again (`previousMatchGameWinnerUserId()`),
-not a fresh coin flip -- declining the choice isn't itself a second coin
-flip on top of game 1's own. `draftDeckBuildingStateFor()`'s own
-`first_player_choice` field (`null` for game 1) exposes
-`you_are_previous_loser`, `default_user_id`, and whatever's already been
-`chosen_user_id` so the
-frontend can show both players the same live status regardless of who
-made the choice.
+**Who goes first** (`resolveFirstPlayerId()`, `setPlayFirstNextMatchGame()`,
+`firstPlayerDecisionStateFor()`) -- game 1 of a match still gets a
+uniform coin flip (`startGame()`'s default for every non-draft-match
+game too). Games 2/3 are the one exception, and per a rules
+clarification the previous game's loser doesn't have to decide who
+goes first until they can see their own opening hand -- so unlike a
+pre-start preference, this is resolved *after* `startGame()`, not
+before it. `startGame()` still picks a placeholder first player for
+games 2/3 (`previousMatchGameWinnerUserId()`, same as always), but
+creates round 1 frozen (`current_turn_game_player_id NULL`,
+`plays_remaining 0`, `pending_play_grants '[]'`, mirroring `team`/
+`closed_team`'s own frozen-round-1 pattern) instead of immediately
+playable -- hands are dealt, nobody (including the placeholder "first"
+player) can play or pass, until the loser explicitly decides.
+`setPlayFirstNextMatchGame(gameId, userId, bool $playFirst)` (`POST
+/games/draft/first-player-choice`, `{"game_id", "play_first": bool}`)
+is only callable once that game has actually started; `$playFirst`
+true sends the loser out first themselves, false leaves the
+placeholder (the previous winner) going first again -- either answer
+is a real, round-unfreezing decision (`computeFreshGrants()` +
+`updateRoundTurnState()`, the same pair `submitInitialCardPass()` uses
+to unfreeze `closed_team`'s own round 1), not a "did nothing" default,
+and it's permanent -- calling it again once decided throws. `games.
+first_player_choice_user_id` still just records whoever ends up going
+first, for parity with the old field. `getState()`'s own top-level
+`first_player_decision` field is non-null only while round 1 is still
+frozen waiting on this (`null` for game 1, and null again once
+resolved): `you_are_previous_loser` and `default_user_id` let the
+frontend show the loser two buttons ("I'll go first" / "let so-and-so
+go first again") and show the winner a waiting status, both reading
+from the same field. The decision also gets its own `describeEvent()`
+case (`'draft_match_first_player_decided'` -- "{loser} will go first
+this game"), the same way `team_turn_order_decided`/
+`team_draw_recipient_decided` get their own phrasing rather than
+falling through to the generic "{actor} played {card}" default.
 
 **State exposure** -- `getState()`'s own `game.match_game_number` and
 `quick_draft` field (`null` for every other deck_type) are populated
