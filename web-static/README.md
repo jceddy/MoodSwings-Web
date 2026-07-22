@@ -379,14 +379,37 @@ too, proportional to the smaller card width.
   session; otherwise shows the logged-in username, a logout button, a
   "Friends" button (see below), a "Decks" button (see below), a "User
   info" button (`#user-info-button`, navigates to `user/index.html`
-  below), and the game lobby/board itself. The "Friends"/"Decks"/"User
-  info"/"Log out" buttons carry their own `margin-bottom` so they don't
-  touch whichever of the lobby or board view is showing directly beneath
-  them (most noticeably the board view's own "Back to your games"
-  button); `#user-info-button` is a plain `<button>` whose click handler
-  does a real navigation (`window.location.href = '../user/'`) rather
-  than opening a dialog, since it leads to an actual separate page, not
-  an in-page overlay like Friends/Decks.
+  below), a "Spectate" button (`#spectate-button`, navigates to
+  `spectate/index.html` below), and the game lobby/board itself. The
+  "Friends"/"Decks"/"User info"/"Spectate"/"Log out" buttons carry their
+  own `margin-bottom` so they don't touch whichever of the lobby or board
+  view is showing directly beneath them (most noticeably the board
+  view's own "Back to your games" button); `#user-info-button`/
+  `#spectate-button` are plain `<button>`s whose click handlers do a real
+  navigation (`window.location.href = '../user/'` /`'../spectate/'`)
+  rather than opening a dialog, since they lead to actual separate
+  pages, not an in-page overlay like Friends/Decks.
+  - **Spectator mode** (issue #128): if the URL carries a
+    `?spectate_game_id=` param (as `spectate/index.html` navigates with,
+    see below), `js/game.js` skips the normal lobby entirely and shows
+    the board read-only via `showSpectatorBoard()` — a module-level
+    `isSpectating` flag and a synthesized `state.you = {game_player_id:
+    null, hand: [], is_your_turn: false}` stub make the existing
+    `renderBoard()` degrade correctly (Play/Pass/resign controls hidden,
+    the turn indicator naming the actual current-turn player instead of
+    "your turn," the first-player choice panel hidden outright). A
+    `&spectate_code=` param, present only for a code-entry visit (not a
+    friend's-game visit, where friendship alone authorizes it), is
+    re-sent on every poll to `GET /games/spectate/state`. A completed
+    game additionally reveals every seated player's hand
+    (`players[].hand`) instead of the viewer's own (which a spectator
+    has none of) — rendered in `#spectator-final-hands-section`,
+    grouped one `<h3>` + card-thumb list per player, in place of
+    `#your-hand-section`. A seated player (not spectating) sees a
+    "Share spectate code" button (`#spectate-share-button`, hidden while
+    `waiting`) opening a small dialog with the game's code
+    (`POST /games/spectate/code`) and a copy-to-clipboard button. See
+    "Spectator mode" in `../php-app/README.md`.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via
@@ -1802,9 +1825,31 @@ using the same-origin `session_token` cookie for auth — see
   "Lifetime stats" in `../php-app/README.md`. Shares the same footer
   (version indicator, Resources link/dialog, theme select) every other
   page already has.
+- `spectate/index.html` (`/spectate/`, issue #128) — Reached via the
+  lobby's own `#spectate-button` (see above), with its own "Back to your
+  games" button navigating to `/game/`. Redirects to `/` if there's no
+  active session, same as the other pages. Two sections: a
+  `#spectate-code-section` form that resolves a share code
+  (`POST /games/spectate/resolve`, `js/spectate.js`) to a game id and
+  navigates to `../game/?spectate_game_id=<id>&spectate_code=<code>`;
+  and `#spectate-friends-section`, listing any friend's game currently
+  `in_progress` that you aren't seated in yourself
+  (`GET /games/spectatable`), each row getting an eye-icon
+  `iconActionButton('view', 'Spectate', ...)` (the shared icon-button
+  helper, moved to `app.js` — see below) that navigates to
+  `../game/?spectate_game_id=<id>` with no code, since friendship alone
+  authorizes it. Shares the same footer every other page has.
 
 ## Layout
 
 - `css/` — Stylesheets.
 - `js/` — Client-side scripts (`app.js` holds shared API helpers; each page
-  has its own small script wiring up that page's behavior).
+  has its own small script wiring up that page's behavior). `app.js` is a
+  plain script (not an IIFE), loaded before every page's own script, so
+  its top-level declarations are callable globally from any page —
+  `renderList()`/`actionButton()`/`iconActionButton()`/
+  `ACTION_ICON_PATHS`/`humanizeStatus()`/`formatLabel()`/
+  `deckTypeLabel()` moved here from `game.js` (issue #128) specifically
+  so `js/spectate.js` could reuse them without duplicating the code;
+  `game.js` itself is unaffected since it still calls them by the same
+  names, just resolved globally instead of from its own IIFE.

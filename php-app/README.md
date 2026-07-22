@@ -80,6 +80,10 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress`, you've already resigned, or a decision is pending. Gives up instead of playing the game out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
+| GET    | `/games/spectatable` | —                                                             | Requires auth. Lists any friend's game that's currently `in_progress` and you're not seated in yourself, same shape as `GET /games` rows (minus the viewer-scoped fields, `draft_match` always `null`). See "Spectator mode" below. |
+| POST   | `/games/spectate/code` | `{"game_id"}`                                              | Requires auth; `403` if you're not seated in that game. Returns `{"code"}` -- that game's own share code (an existing one if already minted, else a freshly generated one). See "Spectator mode" below. |
+| POST   | `/games/spectate/resolve` | `{"code"}`                                              | Requires auth. `404` if no game has that code, or it's `waiting`/`abandoned`. Returns `{"game_id"}` for the frontend to navigate with. See "Spectator mode" below. |
+| GET    | `/games/spectate/state` | query params `game_id`, `code`?                        | Requires auth; deliberately does **not** require you to be seated in that game -- see "Spectator mode" below for its own authorization rule. `403` unless you're friends with a seated player or `code` matches the game's own spectate code; `400` if the game is `waiting`/`abandoned`. Same shape as `GET /games/state`, minus `you`, `team_decision`'s propose/confirm affordances, and any draft-match internals -- plus, once the game is `completed`, every player's `hand` is additionally revealed (there's nothing left to hide once the outcome is decided). |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
@@ -2569,6 +2573,79 @@ live participant in every other sense a card effect can reach:
   `getState()`'s response, so a resigned player never even appears as a
   selectable option client-side -- purely a UI convenience layered on top
   of the server-side enforcement above, which is what actually matters.
+
+### Spectator mode
+
+Issue #128. Any logged-in user can watch a game they aren't seated in,
+either because they're friends with a seated player or because they hold
+that game's own share code -- login is required either way; there's no
+anonymous access. Two ways in:
+
+- **Friends' games.** `GET /games/spectatable`
+  (`GameService::listFriendsInProgressGames()`) lists every game
+  currently `in_progress` that at least one of your accepted friends is
+  seated in and you aren't -- a friend's `waiting` game (nothing dealt
+  yet) or `completed` game isn't listed here, though a completed one
+  remains reachable via its own code (below).
+- **A shared code.** Any seated player can mint their game's own share
+  code via `POST /games/spectate/code`
+  (`GameService::getOrCreateSpectateCode()`) -- an 8-hex-character code
+  (`games.spectate_code`, migration `0043`) generated lazily on first
+  request and reused after that, not pre-populated for every game.
+  Holding the code is itself the authorization; there's no additional
+  friendship check. Anyone can resolve a code to a game id via
+  `POST /games/spectate/resolve` (`GameService::resolveSpectateCode()`)
+  without needing to already know which game it belongs to.
+
+`GET /games/spectate/state` (`GameService::getSpectatorState()`) is the
+actual board view, and is deliberately the one `game_id`-taking route in
+this app that does **not** call `requireGamePlayer()` -- every other
+route's authorization is "are you seated in this game," which a
+spectator by definition isn't. Its own rule (enforced by the route, not
+`GameService` -- kept decoupled from `FriendshipService` the same way the
+rest of `GameService` has no friendship awareness) is: friends with at
+least one seated player, OR the request's own `code` query param matches
+the game's `spectate_code`. Authorization is checked first regardless of
+status; only once it passes does `getSpectatorState()` itself reject a
+still-`waiting` (nothing dealt yet) or `abandoned` (nothing worth
+watching) game with a `400`.
+
+`getState()`'s roughly 300-line body (card/round/effect serialization)
+is now a shared `private buildGameState(int $gameId, ?int $viewerUserId,
+?int $viewerGamePlayerId, bool $revealAllHands = false)`, called by both
+`getState()` (a thin wrapper resolving the real seated player, unchanged
+behavior) and `getSpectatorState()` (`$viewerGamePlayerId = null`). A
+spectator's response omits `you` entirely (there's no player point of
+view to report), and every seat gains a `deck_count` (previously only
+computed for the viewer's own seat -- this incidentally also fixes a
+real gap where a duel-format opponent's own deck size wasn't visible to
+the *other real player* either). Team-format teammate-hand/draft-match
+internals are skipped for a spectator the same way they're skipped for
+any viewer not party to them.
+
+**While the game is still `in_progress`, a spectator sees only public
+information** -- no hand contents for anyone, matching what an opponent
+currently can't see either. **Once the game is `completed`,
+`$revealAllHands` additionally populates every seated player's `hand`**
+in full, since nothing competitive remains to hide once the outcome is
+decided. This mirrors how the frontend already treats in-play/discard
+cards as fine to inspect read-only regardless of turn -- a completed
+game's hands are just as safe to show. Since a spectator has no "you,"
+`web-static/js/game.js`'s existing board renderer runs with a
+`state.you` stub (`{game_player_id: null, hand: [], is_your_turn:
+false}`) synthesized client-side, so its "your turn"/"waiting on
+another player" text instead resolves the actual current-turn player's
+username from `state.players`, and every `state.you.*`-driven control
+(Play/Pass buttons, the first-player choice panel, etc.) degrades to
+hidden/disabled rather than crashing.
+
+Only *public* information is exposed for a live game in this first
+implementation. A follow-up "tournament spectator mode" issue tracks a
+separate, trusted-viewer-only mode that would additionally reveal hands
+and pending-decision internals for a still-`in_progress` game (for
+casting/streaming) -- deliberately not built on top of the plain
+`spectate_code` mechanism above, since that mechanism's entire premise
+is that holding a code never reveals hands before the game ends.
 
 ### Lifetime stats
 
