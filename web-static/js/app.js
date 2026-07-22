@@ -174,6 +174,12 @@ function getCardCatalog() {
     return apiRequest('/cards/catalog');
 }
 
+// Lifetime game/match wins-losses (issue #106) -- see GET /user/stats and
+// "User info" in web-static/README.md. Self only for now.
+function getUserStats() {
+    return apiRequest('/user/stats');
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.

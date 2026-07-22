@@ -63,6 +63,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE game_players');
         $pdo->exec('TRUNCATE TABLE games');
         $pdo->exec('TRUNCATE TABLE user_decklists');
+        $pdo->exec('TRUNCATE TABLE user_lifetime_stats');
         $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
@@ -9192,5 +9193,195 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('decision still pending');
         $this->games->resignGame($gameId, $p2);
+    }
+
+    /**
+     * Lifetime game/match stats (issue #106) -- recordGameCompletionStats()/
+     * recordMatchCompletionStats() are called from every code path that
+     * completes a game/match, so these exercise each of those paths
+     * rather than the stats-writing logic itself in isolation.
+     */
+    public function testStandardGameCompletionRecordsLifetimeGameWinAndLoss(): void
+    {
+        $u1 = $this->insertUser('statsgame-p1');
+        $u2 = $this->insertUser('statsgame-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed)
+             VALUES ('standard', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $apathyId, []);
+        $this->games->pass($gameId, $p2);
+
+        self::assertSame(['game_wins' => 1, 'game_losses' => 0, 'match_wins' => 0, 'match_losses' => 0], $this->games->lifetimeStatsFor($u1));
+        self::assertSame(['game_wins' => 0, 'game_losses' => 1, 'match_wins' => 0, 'match_losses' => 0], $this->games->lifetimeStatsFor($u2));
+    }
+
+    /** A team win credits BOTH teammates' lifetime game_wins, not just the one representative game_player_id games.winner_game_player_id itself points at. */
+    public function testTeamGameCompletionCreditsBothTeammatesLifetimeGameWins(): void
+    {
+        $u1 = $this->insertUser('statsteam-p1');
+        $u2 = $this->insertUser('statsteam-p2');
+        $u3 = $this->insertUser('statsteam-p3');
+        $u4 = $this->insertUser('statsteam-p4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('team', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 0);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 1);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // white, value 4
+        $this->insertGameCard($gameId, 44, 'hand', $p2);
+        $this->insertGameCard($gameId, 55, 'hand', $p3);
+        $this->insertGameCard($gameId, 83, 'hand', $p4);
+
+        $roundId = $this->insertTeamGameRound($gameId, 1, $p1);
+        $this->pdo->prepare(
+            'UPDATE game_rounds SET current_turn_game_player_id = :p1, plays_remaining = 1, team_turn_1_game_player_id = :p1, team_turn_2_game_player_id = :p3 WHERE id = :round_id'
+        )->execute(['p1' => $p1, 'p3' => $p3, 'round_id' => $roundId]);
+
+        // Team 0 (p1 + p2) scores 4 to team 1's 0 -- an outright win that,
+        // with wins_needed = 1, also ends the game.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $this->games->pass($gameId, $p3);
+        $this->games->pass($gameId, $p2);
+        $this->games->pass($gameId, $p4);
+
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['game_wins']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u2)['game_wins']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u3)['game_losses']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u4)['game_losses']);
+    }
+
+    public function testResignationCompletionRecordsLifetimeGameWinAndLoss(): void
+    {
+        $u1 = $this->insertUser('statsresign-p1');
+        $u2 = $this->insertUser('statsresign-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->resignGame($gameId, $p1);
+
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['game_losses']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u2)['game_wins']);
+    }
+
+    /**
+     * A completed best-of-three draft match records BOTH game-level stats
+     * (once per game) AND match-level stats (once, when the match itself
+     * finishes) -- these are independent counters, not derived from one
+     * another.
+     */
+    public function testDraftMatchCompletionRecordsLifetimeMatchWinAndLossOnTopOfPerGameStats(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+        // Game 1 alone must not yet count as a match win/loss -- the match
+        // itself isn't decided until a second game is won.
+        self::assertSame(1, $this->games->lifetimeStatsFor($winnerUserId)['game_wins']);
+        self::assertSame(0, $this->games->lifetimeStatsFor($winnerUserId)['match_wins']);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+        $this->completeQuickDraftGameByPassing($nextGameId);
+
+        $winnerStats = $this->games->lifetimeStatsFor($winnerUserId);
+        $loserStats = $this->games->lifetimeStatsFor($loserUserId);
+        self::assertSame(2, $winnerStats['game_wins'], 'both games of the match were won by the same player');
+        self::assertSame(1, $winnerStats['match_wins']);
+        self::assertSame(2, $loserStats['game_losses']);
+        self::assertSame(1, $loserStats['match_losses']);
+    }
+
+    /** Winston Draft's under-12-cards auto-loss completes the MATCH without game 1 ever completing -- see finalizeWinstonDraft(). Must still count as a match win/loss even though there's no game_wins/game_losses to go with it. */
+    public function testWinstonDraftAutoLossRecordsLifetimeMatchStatsButNotGameStats(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Same deterministic setup as testWinstonDraftAutoLosesPlayerWithFewerThanTwelveDraftedCards()
+        // -- seed a lopsided split (u1 short of WINSTON_MIN_DECK_SIZE) and
+        // force the next pick to empty the deck/piles simultaneously,
+        // triggering finalizeWinstonDraft()'s auto-loss branch.
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode(range(1, 5)), 'match_id' => $draftMatchId, 'user_id' => $u1]);
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode(range(6, 45)), 'match_id' => $draftMatchId, 'user_id' => $u2]);
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->pdo->prepare(
+            'UPDATE draft_winston_state
+             SET remaining_deck_card_ids = :deck, pile_1_card_ids = :pile1, pile_2_card_ids = :pile2, pile_3_card_ids = :pile3, current_pile_number = 1
+             WHERE draft_match_id = :match_id'
+        )->execute([
+            'deck' => json_encode([]),
+            'pile1' => json_encode([50]),
+            'pile2' => json_encode([]),
+            'pile3' => json_encode([]),
+            'match_id' => $draftMatchId,
+        ]);
+
+        $result = $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'take');
+        self::assertTrue($result['draft_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        $winnerUserId = (int) $match['winner_user_id'];
+        self::assertSame($u2, $winnerUserId);
+
+        self::assertSame(0, $this->games->lifetimeStatsFor($winnerUserId)['game_wins'], 'game 1 never completed, only the match did');
+        self::assertSame(1, $this->games->lifetimeStatsFor($winnerUserId)['match_wins']);
+        self::assertSame(0, $this->games->lifetimeStatsFor($u1)['game_losses']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['match_losses']);
+    }
+
+    public function testLifetimeStatsForReturnsAllZerosForAUserWithNoHistory(): void
+    {
+        $u1 = $this->insertUser('statsfresh');
+
+        self::assertSame(
+            ['game_wins' => 0, 'game_losses' => 0, 'match_wins' => 0, 'match_losses' => 0],
+            $this->games->lifetimeStatsFor($u1)
+        );
     }
 }

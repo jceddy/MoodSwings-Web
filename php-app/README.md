@@ -80,6 +80,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress`, you've already resigned, or a decision is pending. Gives up instead of playing the game out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
+| GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "match_wins", "match_losses"}}` -- your own lifetime totals only (issue #106), all-zero for a user with no completed games/matches yet. See "Lifetime stats" below. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -2568,6 +2569,53 @@ live participant in every other sense a card effect can reach:
   `getState()`'s response, so a resigned player never even appears as a
   selectable option client-side -- purely a UI convenience layered on top
   of the server-side enforcement above, which is what actually matters.
+
+### Lifetime stats
+
+Issue #106: a running per-user total of game wins/losses (every format)
+and match wins/losses (`quick_draft`/`winston_draft`/`grid_draft` best-of-
+three matches -- the only "match" grouping that exists yet; non-draft
+best-of-three (#90) and tournament standings (#91) both stay out of scope
+until those exist), backed by a new `user_lifetime_stats` table
+(migration `0042`) rather than a query re-aggregating `games`/
+`draft_matches` on every read. That distinction matters specifically
+because old game history is expected to get cleaned up eventually --
+once it is, a live aggregate would silently start under-reporting, while
+an incrementally-maintained counter keeps whatever total it already
+accumulated. The table itself is backfilled once, by the migration's own
+`INSERT ... SELECT` against existing history; every game/match completed
+afterward increments it going forward via the two methods below, never
+re-derives it.
+
+`GameService::recordGameCompletionStats(int $gameId, int
+$winnerGamePlayerId, ?int $winnerTeamId)` runs from every code path that
+sets `games.status = 'completed'`
+(`completeGameByResignation()`, the non-team and team round-scoring
+completions in `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()`)
+-- for a team-format win it credits *every* seat sharing `$winnerTeamId`,
+not just the one representative `$winnerGamePlayerId` (see "Open Team
+Play" for why that representative is never itself the authoritative
+record of who won). `GameService::recordMatchCompletionStats(int
+$draftMatchId, int $winnerUserId)` runs from both places a draft
+match's own status becomes `'completed'`: `advanceDraftMatch()`'s
+ordinary 2-0 finish, and `finalizeWinstonDraft()`'s under-12-cards
+auto-loss branch -- the latter completes the *match* without game 1 ever
+completing, so it contributes to `match_wins`/`match_losses` but not
+`game_wins`/`game_losses` for that pairing. Both private methods funnel
+through `bumpLifetimeStats(array $userIds, string $column)`, a single
+`INSERT ... ON DUPLICATE KEY UPDATE ... = ... + 1` per user id -- there's
+no row at all for a user nothing has ever happened to; `GameService::
+lifetimeStatsFor(int $userId): array{game_wins, game_losses, match_wins,
+match_losses}` (backing `GET /user/stats`) reads that back as all-zero
+rather than requiring a row to exist first.
+
+The frontend surfaces this on a new dedicated page,
+`web-static/user/index.html`/`user.js` (a "User info" link sits next to
+Friends/Decks/Log out on the lobby page) -- see "User info" in
+`web-static/README.md`. Deliberately its own page rather than a dialog:
+the issue explicitly asks for a page that can grow (tournament
+standings once #91 lands, per-format breakdowns, etc.), and lifetime
+stats are the first section on it, not the only thing it will ever show.
 
 ### Duel: separate per-player decks
 

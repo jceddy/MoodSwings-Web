@@ -152,6 +152,15 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
+/* #user-info-link is a real page (../user/), not an in-page dialog like
+   Friends/Decks -- an <a>, not a <button> -- but sits in the same button
+   row, so it needs the same vertical spacing/alignment those get for
+   free from being buttons. */
+#user-info-link {
+    display: inline-block;
+    margin-bottom: 0.5rem;
+}
+
 /* A small notification dot on #friends-button while the user has at
    least one incoming friend request they haven't yet accepted/declined
    -- see checkFriendRequestNotification()/refreshFriendsData() in
@@ -1393,4 +1402,22 @@ dialog#deck-builder-dialog[open] {
    every <ul>, nested or not. */
 .lobby-match-games {
     margin: 0.5rem 0 0 1rem;
+}
+
+/* User info page (issue #106) -- lifetime stats table. */
+#user-lifetime-stats-table {
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+}
+
+#user-lifetime-stats-table th,
+#user-lifetime-stats-table td {
+    padding: 0.3rem 1rem 0.3rem 0;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+#user-stats-match-note {
+    font-size: 0.85rem;
+    color: var(--color-muted);
 }

@@ -377,11 +377,14 @@ too, proportional to the smaller card width.
   redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
-  "Friends" button (see below), a "Decks" button (see below), and the game
-  lobby/board itself. The "Friends"/"Decks"/"Log out" buttons carry their
-  own `margin-bottom` so they don't touch whichever of the lobby or board
-  view is showing directly beneath them (most noticeably the board view's
-  own "Back to your games" button).
+  "Friends" button (see below), a "Decks" button (see below), a "User
+  info" link (`#user-info-link`, to `user/index.html` below), and the
+  game lobby/board itself. The "Friends"/"Decks"/"Log out" buttons carry
+  their own `margin-bottom` so they don't touch whichever of the lobby or
+  board view is showing directly beneath them (most noticeably the board
+  view's own "Back to your games" button); `#user-info-link` is a real
+  `<a>` (an actual page, not an in-page dialog like Friends/Decks), styled
+  with the same spacing so it still lines up in that row.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via
@@ -1773,6 +1776,24 @@ too, proportional to the smaller card width.
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
 [`../php-app/README.md`](../php-app/README.md) for the API itself.
+
+- `user/index.html` (`/user/`, issue #106) — A small "User info" page,
+  reached via the lobby's own `#user-info-link` (see above) and linking
+  back with its own "Back to your games" anchor to `/game/`. Redirects to
+  `/` if there's no active session, same as `game/index.html`. Currently
+  just one section, `#user-lifetime-stats-section` -- a "Games" row
+  (lifetime wins-losses, every format) and a "Matches" row (lifetime
+  wins-losses, `quick_draft`/`winston_draft`/`grid_draft` best-of-three
+  results only, with a small note under the table saying so, since
+  best-of-three doesn't exist yet for any other format) -- via
+  `GET /user/stats` (`js/user.js`). Deliberately its own page rather than
+  a dialog like Friends/Decks: the issue asks for something that can grow
+  (tournament standings once issue #91's tournament system exists,
+  per-format breakdowns, etc.), and each addition is meant to be its own
+  `<section>` alongside this one rather than one flat list -- see
+  "Lifetime stats" in `../php-app/README.md`. Shares the same footer
+  (version indicator, Resources link/dialog, theme select) every other
+  page already has.
 
 ## Layout
 

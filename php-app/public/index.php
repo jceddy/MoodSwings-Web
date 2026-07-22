@@ -496,6 +496,19 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 $gameRegistry = DefaultEffectRegistry::build();
 $games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists);
 
+// Lifetime game/match wins-losses (issue #106) -- see
+// GameService::lifetimeStatsFor()/recordGameCompletionStats()/
+// recordMatchCompletionStats(). Self only for now; no per-friend lookup
+// yet.
+if ($path === '/user/stats' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, [
+        'status' => 'ok',
+        'username' => $currentUser['username'],
+        'stats' => $games->lifetimeStatsFor((int) $currentUser['id']),
+    ]);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't
