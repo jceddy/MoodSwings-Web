@@ -2806,9 +2806,12 @@
         // GameService::resignGame()) -- shown whenever the game is still
         // in_progress and the viewer hasn't already resigned, hidden
         // entirely once the game's over or they have (a resigned player
-        // has nothing left to resign from).
+        // has nothing left to resign from). A spectator has nothing of
+        // their own to resign from either -- state.you is just the
+        // synthesized stub (never .resigned), so this needs its own
+        // explicit isSpectating check rather than relying on that.
         const resignButton = document.getElementById('resign-button');
-        resignButton.hidden = state.game.status !== 'in_progress' || Boolean(you && you.resigned);
+        resignButton.hidden = isSpectating || state.game.status !== 'in_progress' || Boolean(you && you.resigned);
         resignButton.disabled = Boolean(pendingDecision);
 
         // "View decklist" (issue #197) -- hidden entirely for a deck_type
