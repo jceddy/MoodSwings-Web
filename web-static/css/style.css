@@ -357,13 +357,20 @@ body.game-page {
 }
 
 #lobby-view ul,
-#board-view ul {
+#board-view ul,
+#spectate-friends-games-list {
     list-style: none;
     padding: 0;
     margin: 0 0 1rem;
 }
 
-#lobby-view li {
+/* #spectate-friends-games-list (issue #128) reuses the same .lobby-row
+   markup as #games-list's own rows (see buildFriendGameRow() in
+   spectate.js), but isn't nested under #lobby-view -- without this it'd
+   fall back to the browser's default <ul> indent/no-spacing instead of
+   matching the main lobby list's own left-aligned, breathing-room rows. */
+#lobby-view li,
+#spectate-friends-games-list li {
     padding: 0.4rem 0.5rem;
     border-bottom: 1px solid var(--color-border-subtle);
 }
