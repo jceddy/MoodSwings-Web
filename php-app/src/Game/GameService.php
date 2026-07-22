@@ -2138,6 +2138,14 @@ final class GameService
                 "UPDATE games SET status = 'abandoned' WHERE draft_match_id = :match_id AND match_game_number = 1"
             )->execute(['match_id' => $draftMatchId]);
 
+            // $winnerUserId stays null in the rare case BOTH players ended
+            // up short of WINSTON_MIN_DECK_SIZE -- winner_user_id itself
+            // is already null then too, so there's no winner/loser to
+            // record either.
+            if ($winnerUserId !== null) {
+                $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+            }
+
             return;
         }
 
@@ -2586,6 +2594,7 @@ final class GameService
         Connection::get()->prepare(
             "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = :winner_team, completed_at = NOW() WHERE id = :game_id"
         )->execute(['winner' => $winnerGamePlayerId, 'winner_team' => $winnerTeamId, 'game_id' => $gameId]);
+        $this->recordGameCompletionStats($gameId, $winnerGamePlayerId, $winnerTeamId);
 
         // A no-op for every non-draft game -- see its own docblock.
         $this->advanceDraftMatch($gameId, $winnerGamePlayerId);
@@ -3495,6 +3504,110 @@ final class GameService
     }
 
     /**
+     * Lifetime game-level wins/losses (issue #106) -- called from every
+     * code path that sets games.status = 'completed'
+     * (completeGameByResignation(), the non-team and team round-scoring
+     * completions). $winnerTeamId is null for every non-team format
+     * (winner is just the one $winnerGamePlayerId seat); for 'team'/
+     * 'closed_team' it credits every seat sharing that team_id, not just
+     * $winnerGamePlayerId's own representative seat -- see
+     * finishTeamScoringAndAdvance()'s own docblock on why that's only a
+     * representative, never the authoritative record of who won.
+     */
+    private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId): void
+    {
+        $stmt = Connection::get()->prepare('SELECT id, user_id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $players = $stmt->fetchAll();
+
+        $winningUserIds = [];
+        $losingUserIds = [];
+        foreach ($players as $player) {
+            $isWinner = $winnerTeamId !== null
+                ? (int) $player['team_id'] === $winnerTeamId
+                : (int) $player['id'] === $winnerGamePlayerId;
+            if ($isWinner) {
+                $winningUserIds[] = (int) $player['user_id'];
+            } else {
+                $losingUserIds[] = (int) $player['user_id'];
+            }
+        }
+
+        $this->bumpLifetimeStats($winningUserIds, 'game_wins');
+        $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+    }
+
+    /**
+     * Lifetime (best-of-three draft) match-level wins/losses (issue #106)
+     * -- called from both places a draft match's own status becomes
+     * 'completed': advanceDraftMatch() (the ordinary 2-0 finish) and
+     * finalizeWinstonDraft()'s under-12-cards auto-loss branch, which
+     * completes the match without game 1 ever completing (see the
+     * migration's own comment on why that still counts here even though
+     * recordGameCompletionStats() never ran for it).
+     */
+    private function recordMatchCompletionStats(int $draftMatchId, int $winnerUserId): void
+    {
+        $stmt = Connection::get()->prepare('SELECT user_id FROM draft_match_players WHERE draft_match_id = :match_id');
+        $stmt->execute(['match_id' => $draftMatchId]);
+        $userIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $this->bumpLifetimeStats([$winnerUserId], 'match_wins');
+        $this->bumpLifetimeStats(array_diff($userIds, [$winnerUserId]), 'match_losses');
+    }
+
+    /** @param string $column one of user_lifetime_stats' own counter columns -- never user input, so safe to interpolate directly */
+    private function bumpLifetimeStats(array $userIds, string $column): void
+    {
+        if ($userIds === []) {
+            return;
+        }
+
+        $stmt = Connection::get()->prepare(
+            "INSERT INTO user_lifetime_stats (user_id, {$column}) VALUES (:user_id, 1)
+             ON DUPLICATE KEY UPDATE {$column} = {$column} + 1"
+        );
+        foreach ($userIds as $userId) {
+            $stmt->execute(['user_id' => $userId]);
+        }
+    }
+
+    /** @return array{game_wins:int, game_losses:int, match_wins:int, match_losses:int} all-zero for a user with no row yet (nothing completed for them) */
+    public function lifetimeStatsFor(int $userId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT game_wins, game_losses, match_wins, match_losses FROM user_lifetime_stats WHERE user_id = :user_id'
+        );
+        $stmt->execute(['user_id' => $userId]);
+        $row = $stmt->fetch();
+
+        $gameWins = $row !== false ? (int) $row['game_wins'] : 0;
+        $gameLosses = $row !== false ? (int) $row['game_losses'] : 0;
+        $matchWins = $row !== false ? (int) $row['match_wins'] : 0;
+        $matchLosses = $row !== false ? (int) $row['match_losses'] : 0;
+
+        return [
+            'game_wins' => $gameWins,
+            'game_losses' => $gameLosses,
+            // Rounded to the nearest whole percent; null (rather than a
+            // divide-by-zero 0%) until at least one game/match has
+            // actually completed -- 0% would misleadingly read as "you've
+            // lost every game" for a user who simply hasn't played yet.
+            'game_win_percentage' => self::winPercentage($gameWins, $gameLosses),
+            'match_wins' => $matchWins,
+            'match_losses' => $matchLosses,
+            'match_win_percentage' => self::winPercentage($matchWins, $matchLosses),
+        ];
+    }
+
+    private static function winPercentage(int $wins, int $losses): ?int
+    {
+        $total = $wins + $losses;
+
+        return $total > 0 ? (int) round($wins / $total * 100) : null;
+    }
+
+    /**
      * $state is the same instance the triggering play/pass already
      * loaded (and, if it was a play, already saved game_cards for) --
      * reused here rather than reloaded, since a round-wide flag like
@@ -3667,6 +3780,7 @@ final class GameService
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id"
             );
             $completeGame->execute(['winner' => $winnerId, 'game_id' => $gameId]);
+            $this->recordGameCompletionStats($gameId, $winnerId, null);
 
             // A no-op for every non-quick_draft game (games.draft_match_id
             // is only ever set for that deck_type) -- see its own docblock.
@@ -3743,6 +3857,7 @@ final class GameService
             $pdo->prepare(
                 "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
             )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
+            $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
 
             return;
         }
@@ -3873,6 +3988,7 @@ final class GameService
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = :winner_team, completed_at = NOW() WHERE id = :game_id"
             );
             $completeGame->execute(['winner' => $winnerRepresentative, 'winner_team' => $winningTeamId, 'game_id' => $gameId]);
+            $this->recordGameCompletionStats($gameId, $winnerRepresentative, $winningTeamId);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
         }

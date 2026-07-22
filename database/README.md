@@ -333,3 +333,14 @@ half-migrated schema.
   one particular game within the match, the same way `match_game_number`
   itself already is. See "Quick Draft"/"Winston Draft"/"Grid Draft" in
   `php-app/README.md`.
+- **Lifetime user stats** (`0042`, issue #106): adds
+  `user_lifetime_stats` (`user_id` PK/FK to `users`, `game_wins`,
+  `game_losses`, `match_wins`, `match_losses`, all `INT UNSIGNED NOT
+  NULL DEFAULT 0`) — one row per user who's ever finished a game,
+  created lazily rather than up front. Backfilled once, right in this
+  migration, by aggregating existing `games`/`draft_matches` history;
+  every game/match completed after this runs instead increments the
+  counters directly (see `GameService::recordGameCompletionStats()`/
+  `recordMatchCompletionStats()`), since old game history is expected to
+  be cleaned up eventually and a live re-aggregation would then silently
+  under-report. See "Lifetime stats" in `php-app/README.md`.

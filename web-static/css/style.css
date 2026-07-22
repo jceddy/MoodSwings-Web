@@ -146,8 +146,11 @@ dialog#resources-dialog #resources-close-button {
 /* #friends-button/#logout-button sit directly above whichever of
    #lobby-view/#board-view is currently visible -- without this they'd
    touch it with no gap, most noticeably #board-view's own
-   #back-to-lobby-button immediately below. */
+   #back-to-lobby-button immediately below. #user-info-button (a real
+   page, ../user/, not an in-page dialog like Friends/Decks) sits in the
+   same row and needs the same spacing. */
 #friends-button,
+#user-info-button,
 #logout-button {
     margin-bottom: 0.5rem;
 }
@@ -1393,4 +1396,22 @@ dialog#deck-builder-dialog[open] {
    every <ul>, nested or not. */
 .lobby-match-games {
     margin: 0.5rem 0 0 1rem;
+}
+
+/* User info page (issue #106) -- lifetime stats table. */
+#user-lifetime-stats-table {
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+}
+
+#user-lifetime-stats-table th,
+#user-lifetime-stats-table td {
+    padding: 0.3rem 1rem 0.3rem 0;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+#user-stats-match-note {
+    font-size: 0.85rem;
+    color: var(--color-muted);
 }
