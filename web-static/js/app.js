@@ -287,8 +287,14 @@ function getGameState(gameId) {
 }
 
 // The entire game log (issue #98) -- see GameService::fullEventLog().
-function getGameLog(gameId) {
-    return apiRequest('/games/log?game_id=' + encodeURIComponent(gameId));
+// code is only ever passed while spectating (issue #128) via a share code
+// rather than friendship -- see openGameLog() in game.js.
+function getGameLog(gameId, code) {
+    let path = '/games/log?game_id=' + encodeURIComponent(gameId);
+    if (code) {
+        path += '&code=' + encodeURIComponent(code);
+    }
+    return apiRequest(path);
 }
 
 // A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().

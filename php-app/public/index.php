@@ -722,13 +722,18 @@ if ($path === '/games/spectate/state' && $method === 'GET') {
 
 // The entire game log (issue #98) -- unlike GET /games/state, no
 // per-viewer customization at all (see GameService::fullEventLog()'s own
-// docblock), so this doesn't need $currentUser beyond requireGamePlayer()'s
-// seated-player check.
+// docblock), so a spectator (issue #128) can read it just as well as a
+// seated player -- same canSpectateGame() authorization GET /games/deck
+// uses for the same reason.
 if ($path === '/games/log' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $gameId = (int) ($_GET['game_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
 
-    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    $isSeated = $games->gamePlayerIdFor($gameId, (int) $currentUser['id']) !== null;
+    if (!$isSeated && !canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
+    }
     respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
 }
 
