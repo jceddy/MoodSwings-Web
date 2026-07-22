@@ -2209,7 +2209,7 @@
         gameLogDialog.dataset.gameId = gameId;
         gameLogDialog.showModal();
 
-        const { ok, body } = await getGameLog(gameId);
+        const { ok, body } = await getGameLog(gameId, isSpectating ? spectateCode : null);
         currentGameLogEvents = ok ? body.events : [];
 
         renderList(listEl, emptyEl, currentGameLogEvents, (event) => {
