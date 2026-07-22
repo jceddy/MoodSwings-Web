@@ -377,11 +377,39 @@ too, proportional to the smaller card width.
   redirect.
 - `game/index.html` (`/game/`) — Redirects to `/` if there's no active
   session; otherwise shows the logged-in username, a logout button, a
-  "Friends" button (see below), a "Decks" button (see below), and the game
-  lobby/board itself. The "Friends"/"Decks"/"Log out" buttons carry their
+  "Friends" button (see below), a "Decks" button (see below), a "User
+  info" button (`#user-info-button`, navigates to `user/index.html`
+  below), a "Spectate" button (`#spectate-button`, navigates to
+  `spectate/index.html` below), and the game lobby/board itself. The
+  "Friends"/"Decks"/"User info"/"Spectate"/"Log out" buttons carry their
   own `margin-bottom` so they don't touch whichever of the lobby or board
-  view is showing directly beneath them (most noticeably the board view's
-  own "Back to your games" button).
+  view is showing directly beneath them (most noticeably the board
+  view's own "Back to your games" button); `#user-info-button`/
+  `#spectate-button` are plain `<button>`s whose click handlers do a real
+  navigation (`window.location.href = '../user/'` /`'../spectate/'`)
+  rather than opening a dialog, since they lead to actual separate
+  pages, not an in-page overlay like Friends/Decks.
+  - **Spectator mode** (issue #128): if the URL carries a
+    `?spectate_game_id=` param (as `spectate/index.html` navigates with,
+    see below), `js/game.js` skips the normal lobby entirely and shows
+    the board read-only via `showSpectatorBoard()` — a module-level
+    `isSpectating` flag and a synthesized `state.you = {game_player_id:
+    null, hand: [], is_your_turn: false}` stub make the existing
+    `renderBoard()` degrade correctly (Play/Pass/resign controls hidden,
+    the turn indicator naming the actual current-turn player instead of
+    "your turn," the first-player choice panel hidden outright). A
+    `&spectate_code=` param, present only for a code-entry visit (not a
+    friend's-game visit, where friendship alone authorizes it), is
+    re-sent on every poll to `GET /games/spectate/state`. A completed
+    game additionally reveals every seated player's hand
+    (`players[].hand`) instead of the viewer's own (which a spectator
+    has none of) — rendered in `#spectator-final-hands-section`,
+    grouped one `<h3>` + card-thumb list per player, in place of
+    `#your-hand-section`. A seated player (not spectating) sees a
+    "Share spectate code" button (`#spectate-share-button`, hidden while
+    `waiting`) opening a small dialog with the game's code
+    (`POST /games/spectate/code`) and a copy-to-clipboard button. See
+    "Spectator mode" in `../php-app/README.md`.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via
@@ -868,7 +896,14 @@ too, proportional to the smaller card width.
       saving a personal copy of the in-progress build under its own name
       without submitting it, ending the deck-building step, or being
       visible to the opponent. See "Saved decklists" in
-      `php-app/README.md`. Pool/pack/drafted cards are all
+      `php-app/README.md`.
+    - **Who goes first** used to live in the deck-building screen as a
+      checkbox, but per a rules clarification the previous game's loser
+      doesn't have to decide until they can see their own opening hand --
+      so it's no longer part of deck-building at all. See
+      `#first-player-decision-panel` below (alongside `scoring_effects`/
+      `board_effects`), which renders once game 2/3 has actually started
+      with round 1 still frozen. Pool/pack/drafted cards are all
       served by a catalog-only card shape (`GameService::serializeCatalogCards()`)
       rather than the usual in-play `serializeCard()` result, but with the
       exact same field names `buildCardThumb()`/`openCardDetail()` already
@@ -1247,6 +1282,28 @@ too, proportional to the smaller card width.
     `container.hidden = entries.length === 0` pattern) whenever there's
     nothing to say, so an ordinary board with neither in play shows
     neither heading.
+
+    `state.first_player_decision` (non-null only for game 2/3 of a
+    best-of-three draft match, while round 1 is still frozen -- see
+    "Who goes first" in `php-app/README.md`) drives
+    `#first-player-decision-panel`, rendered as the first child of
+    `#in-progress-area` so it's the first thing either player sees once
+    the game's actually started (`renderFirstPlayerDecision()`, called
+    from `renderBoard()` alongside `renderScoringEffects()`/
+    `renderBoardEffects()`). Both players see a status line; only the
+    previous game's loser also sees two buttons,
+    `#first-player-decision-self-button` ("I'll go first") and
+    `#first-player-decision-opponent-button` (labeled with the
+    opponent's own username, e.g. "Let Alice go first"), each calling
+    `setPlayFirstNextMatchGame(gameId, true/false)` (`POST
+    /games/draft/first-player-choice`) and then `refreshBoard()`. There's
+    no third "still deciding" state to render beyond that -- the panel
+    itself disappears (`first_player_decision` goes back to `null`) the
+    instant either button resolves it, at which point the board's own
+    ordinary `canAct`/turn logic takes back over. This replaced an
+    earlier checkbox that lived in the deck-building screen instead (see
+    "Who goes first" in `php-app/README.md` for why the decision moved
+    to after the game starts).
 
     A "Recent plays" list at the bottom of the board shows the last 15
     plays/passes/rounds-scored for the game as plain sentences (e.g. "Alice
@@ -1745,8 +1802,54 @@ All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
 [`../php-app/README.md`](../php-app/README.md) for the API itself.
 
+- `user/index.html` (`/user/`, issue #106) — A small "User info" page,
+  reached via the lobby's own `#user-info-button` (see above) and linking
+  back with its own "Back to your games" button (`#user-back-to-lobby-button`,
+  a real `<button>` matching the rest of the app's buttons rather than an
+  anchor, with a click handler that navigates to `/game/`). Redirects to
+  `/` if there's no active session, same as `game/index.html`. Currently
+  just one section, `#user-lifetime-stats-section` -- a "Games" row
+  (lifetime wins-losses, every format) and a "Matches" row (lifetime
+  wins-losses, `quick_draft`/`winston_draft`/`grid_draft` best-of-three
+  results only, with a small note under the table saying so, since
+  best-of-three doesn't exist yet for any other format) -- via
+  `GET /user/stats` (`js/user.js`). Each row appends a win percentage in
+  parentheses once at least one game/match has completed (e.g.
+  `"3-1 (75%)"`); `js/user.js`'s `recordFormatted()` leaves it off
+  entirely while the percentage is `null`, rather than showing a
+  misleading `"0%"` for a user who's never played. Deliberately its own
+  page rather than a dialog like Friends/Decks: the issue asks for something that can grow
+  (tournament standings once issue #91's tournament system exists,
+  per-format breakdowns, etc.), and each addition is meant to be its own
+  `<section>` alongside this one rather than one flat list -- see
+  "Lifetime stats" in `../php-app/README.md`. Shares the same footer
+  (version indicator, Resources link/dialog, theme select) every other
+  page already has.
+- `spectate/index.html` (`/spectate/`, issue #128) — Reached via the
+  lobby's own `#spectate-button` (see above), with its own "Back to your
+  games" button navigating to `/game/`. Redirects to `/` if there's no
+  active session, same as the other pages. Two sections: a
+  `#spectate-code-section` form that resolves a share code
+  (`POST /games/spectate/resolve`, `js/spectate.js`) to a game id and
+  navigates to `../game/?spectate_game_id=<id>&spectate_code=<code>`;
+  and `#spectate-friends-section`, listing any friend's game currently
+  `in_progress` that you aren't seated in yourself
+  (`GET /games/spectatable`), each row getting an eye-icon
+  `iconActionButton('view', 'Spectate', ...)` (the shared icon-button
+  helper, moved to `app.js` — see below) that navigates to
+  `../game/?spectate_game_id=<id>` with no code, since friendship alone
+  authorizes it. Shares the same footer every other page has.
+
 ## Layout
 
 - `css/` — Stylesheets.
 - `js/` — Client-side scripts (`app.js` holds shared API helpers; each page
-  has its own small script wiring up that page's behavior).
+  has its own small script wiring up that page's behavior). `app.js` is a
+  plain script (not an IIFE), loaded before every page's own script, so
+  its top-level declarations are callable globally from any page —
+  `renderList()`/`actionButton()`/`iconActionButton()`/
+  `ACTION_ICON_PATHS`/`humanizeStatus()`/`formatLabel()`/
+  `deckTypeLabel()` moved here from `game.js` (issue #128) specifically
+  so `js/spectate.js` could reuse them without duplicating the code;
+  `game.js` itself is unaffected since it still calls them by the same
+  names, just resolved globally instead of from its own IIFE.

@@ -496,6 +496,19 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 $gameRegistry = DefaultEffectRegistry::build();
 $games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists);
 
+// Lifetime game/match wins-losses (issue #106) -- see
+// GameService::lifetimeStatsFor()/recordGameCompletionStats()/
+// recordMatchCompletionStats(). Self only for now; no per-friend lookup
+// yet.
+if ($path === '/user/stats' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, [
+        'status' => 'ok',
+        'username' => $currentUser['username'],
+        'stats' => $games->lifetimeStatsFor((int) $currentUser['id']),
+    ]);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't
@@ -509,6 +522,25 @@ function requireGamePlayer(GameService $games, int $gameId, int $userId): int
     }
 
     return $gamePlayerId;
+}
+
+// Spectator mode (issue #128): the same "friends with a seated player OR
+// holds the game's own code" rule GET /games/spectate/state enforces
+// inline, factored out so GET /games/deck (below) can reuse it verbatim
+// rather than re-deriving it -- a spectator viewing a shared-deck game's
+// board should be able to open its decklist too, not just seated players.
+function canSpectateGame(GameService $games, FriendshipService $friendships, int $gameId, int $userId, ?string $code): bool
+{
+    if ($code !== null && $code !== '' && $games->spectateCodeFor($gameId) === $code) {
+        return true;
+    }
+    foreach ($games->seatedUserIdsFor($gameId) as $seatedUserId) {
+        if ($friendships->areFriends($userId, $seatedUserId)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 if ($path === '/games' && $method === 'POST') {
@@ -612,15 +644,96 @@ if ($path === '/games/state' && $method === 'GET') {
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
+// Spectator mode (issue #128): every currently-in_progress game any of
+// the caller's friends is seated in, that the caller isn't -- the
+// code-entry field on the "Spectate" page's other feature (below) covers
+// games spectatable by code instead, friend or not.
+if ($path === '/games/spectatable' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $friendUserIds = array_map(
+        fn (array $friend): int => (int) $friend['friend_id'],
+        $friendships->listFriends((int) $currentUser['id']),
+    );
+    respond(200, [
+        'status' => 'ok',
+        'games' => $games->listFriendsInProgressGames((int) $currentUser['id'], $friendUserIds),
+    ]);
+}
+
+// Get-or-create the calling player's own game's spectate code (issue
+// #128), to show/copy for sharing -- only a seated player may mint or
+// reveal it (requireGamePlayer(), same as every other game_id-taking
+// route that mutates/reveals something about one specific game).
+if ($path === '/games/spectate/code' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    try {
+        respond(200, ['status' => 'ok', 'code' => $games->getOrCreateSpectateCode($gameId)]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Resolves a spectate code (issue #128) typed into the "Spectate" page's
+// code-entry field to the game_id it belongs to, for the frontend to then
+// navigate to. Deliberately no requireGamePlayer()/friendship check here
+// -- holding the code is itself the authorization (see "Spectator mode"
+// in php-app/README.md) -- only requireAuth(), since every page in this
+// app requires an account.
+if ($path === '/games/spectate/resolve' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $code = trim((string) ($body['code'] ?? ''));
+
+    try {
+        respond(200, ['status' => 'ok', 'game_id' => $games->resolveSpectateCode($code)]);
+    } catch (GameStateException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// The spectator-mode equivalent of GET /games/state -- deliberately the
+// first route in this app that accepts a bare game_id with no
+// requireGamePlayer() seat check (a spectator is by definition not
+// seated). Authorized instead by either being friends with at least one
+// seated player, or supplying the game's own spectate_code as a query
+// param -- either one is sufficient, matching how the "Spectate" page
+// offers both a friends' list and a code-entry field as independent
+// paths to the same board. See GameService::getSpectatorState() for
+// exactly what a spectator does/doesn't see.
+if ($path === '/games/spectate/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
+
+    if (!canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to spectate this game.']);
+    }
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->getSpectatorState($gameId)]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 // The entire game log (issue #98) -- unlike GET /games/state, no
 // per-viewer customization at all (see GameService::fullEventLog()'s own
-// docblock), so this doesn't need $currentUser beyond requireGamePlayer()'s
-// seated-player check.
+// docblock), so a spectator (issue #128) can read it just as well as a
+// seated player -- same canSpectateGame() authorization GET /games/deck
+// uses for the same reason.
 if ($path === '/games/log' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $gameId = (int) ($_GET['game_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
 
-    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    $isSeated = $games->gamePlayerIdFor($gameId, (int) $currentUser['id']) !== null;
+    if (!$isSeated && !canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
+    }
     respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
 }
 
@@ -628,12 +741,19 @@ if ($path === '/games/log' && $method === 'GET') {
 // "/games/deck" rather than "/games/decklist" to avoid colliding with the
 // existing POST /games/decklist (custom_duel's own per-player deck
 // submission, a completely different thing). Same no-per-viewer-filtering
-// reasoning as GET /games/log immediately above.
+// reasoning as GET /games/log immediately above -- viewSharedDeck() itself
+// takes no viewer at all, so a spectator (issue #128) is just as able to
+// open a shared-deck game's own "View decklist" as a seated player, via
+// the same canSpectateGame() authorization GET /games/spectate/state uses.
 if ($path === '/games/deck' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $gameId = (int) ($_GET['game_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
 
-    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    $isSeated = $games->gamePlayerIdFor($gameId, (int) $currentUser['id']) !== null;
+    if (!$isSeated && !canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
+    }
 
     try {
         respond(200, ['status' => 'ok', 'cards' => $games->viewSharedDeck($gameId)]);
@@ -796,6 +916,28 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
 
     try {
         $games->submitDraftDeck($gameId, (int) $currentUser['id'], $cardIds);
+        respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// Lets the loser of a best-of-three draft match's game N opt to go first
+// themselves in game N+1 -- see GameService::setPlayFirstNextMatchGame().
+// Only callable once game N+1 has actually started (per the game's own
+// rules, the loser doesn't have to decide until they can see their
+// opening hand) -- round 1 stays frozen (nobody may play) until this
+// resolves, one answer either way.
+if ($path === '/games/draft/first-player-choice' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $playFirst = (bool) ($body['play_first'] ?? false);
+
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->setPlayFirstNextMatchGame($gameId, (int) $currentUser['id'], $playFirst);
         respond(200, ['status' => 'ok']);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

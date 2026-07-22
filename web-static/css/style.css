@@ -146,8 +146,13 @@ dialog#resources-dialog #resources-close-button {
 /* #friends-button/#logout-button sit directly above whichever of
    #lobby-view/#board-view is currently visible -- without this they'd
    touch it with no gap, most noticeably #board-view's own
-   #back-to-lobby-button immediately below. */
+   #back-to-lobby-button immediately below. #user-info-button/
+   #spectate-button (real pages, ../user/ and ../spectate/, not in-page
+   dialogs like Friends/Decks) sit in the same row and need the same
+   spacing. */
 #friends-button,
+#user-info-button,
+#spectate-button,
 #logout-button {
     margin-bottom: 0.5rem;
 }
@@ -352,13 +357,20 @@ body.game-page {
 }
 
 #lobby-view ul,
-#board-view ul {
+#board-view ul,
+#spectate-friends-games-list {
     list-style: none;
     padding: 0;
     margin: 0 0 1rem;
 }
 
-#lobby-view li {
+/* #spectate-friends-games-list (issue #128) reuses the same .lobby-row
+   markup as #games-list's own rows (see buildFriendGameRow() in
+   spectate.js), but isn't nested under #lobby-view -- without this it'd
+   fall back to the browser's default <ul> indent/no-spacing instead of
+   matching the main lobby list's own left-aligned, breathing-room rows. */
+#lobby-view li,
+#spectate-friends-games-list li {
     padding: 0.4rem 0.5rem;
     border-bottom: 1px solid var(--color-border-subtle);
 }
@@ -442,7 +454,8 @@ body.game-page {
 #deck-view-cards,
 #deck-view-sideboard-cards,
 #shared-deck-cards,
-.deck-builder-card-grid {
+.deck-builder-card-grid,
+.spectator-final-hand ul {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -455,8 +468,18 @@ body.game-page {
 #winston-draft-drafted-so-far li,
 #grid-draft-drafted-so-far li,
 #grid-draft-opponent-drafted-so-far li,
-.in-play-zone__list li {
+.in-play-zone__list li,
+.spectator-final-hand ul li {
     list-style: none;
+}
+
+/* Spectator mode (issue #128): one of these per seated player once a
+   spectated game is 'completed' and every hand is revealed -- see
+   renderSpectatorFinalHands() in game.js. Stacked with a bit of breathing
+   room between each player's group, same as the section headings around
+   it. */
+.spectator-final-hand {
+    margin-bottom: 1rem;
 }
 
 /* Grid Draft's own 3x3 grid, laid out in the same row-major order
@@ -1393,4 +1416,22 @@ dialog#deck-builder-dialog[open] {
    every <ul>, nested or not. */
 .lobby-match-games {
     margin: 0.5rem 0 0 1rem;
+}
+
+/* User info page (issue #106) -- lifetime stats table. */
+#user-lifetime-stats-table {
+    border-collapse: collapse;
+    margin-top: 0.5rem;
+}
+
+#user-lifetime-stats-table th,
+#user-lifetime-stats-table td {
+    padding: 0.3rem 1rem 0.3rem 0;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+#user-stats-match-note {
+    font-size: 0.85rem;
+    color: var(--color-muted);
 }

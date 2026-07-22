@@ -16,75 +16,24 @@
         window.location.replace('/');
     });
 
+    // Lifetime stats (issue #106) -- a real page (../user/), not an
+    // in-page dialog like Friends/Decks, so this is a plain navigation
+    // rather than opening a dialog.
+    document.getElementById('user-info-button').addEventListener('click', () => {
+        window.location.href = '../user/';
+    });
+
+    // Spectator mode (issue #128) -- same real-page-navigation pattern as
+    // #user-info-button above.
+    document.getElementById('spectate-button').addEventListener('click', () => {
+        window.location.href = '../spectate/';
+    });
+
     const friendsDialog = document.getElementById('friends-dialog');
     const friendInviteForm = document.getElementById('friend-invite-form');
     const friendInviteInput = document.getElementById('friend-invite-input');
     const friendInviteError = document.getElementById('friend-invite-error');
     const friendInviteSuccess = document.getElementById('friend-invite-success');
-
-    function renderList(listEl, emptyEl, items, buildItem) {
-        listEl.innerHTML = '';
-        emptyEl.hidden = items.length > 0;
-        for (const item of items) {
-            listEl.appendChild(buildItem(item));
-        }
-    }
-
-    function actionButton(label, onClick) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.textContent = label;
-        button.addEventListener('click', onClick);
-        return button;
-    }
-
-    // Icon set for the Decks dialog's per-row View/Edit/Duplicate/
-    // Download/Delete buttons (issue #92 follow-ups) -- separate from
-    // PLAYER_STAT_ICON_PATHS below since these live inside an actual
-    // <button> rather than the players list's own icon+badge convention,
-    // and don't need a badge overlay. Standard Material Design glyphs
-    // (Apache-2.0), reused verbatim since "an eye"/"a pencil"/"two
-    // overlapping sheets"/"a tray with a down arrow"/"a trash can" are
-    // about as generic as icons get.
-    const ACTION_ICON_PATHS = {
-        view: '<path fill-rule="evenodd" d="M12,4.5C7,4.5,2.73,7.61,1,12c1.73,4.39,6,7.5,11,7.5s9.27-3.11,11-7.5' +
-            'C21.27,7.61,17,4.5,12,4.5z M12,17c-2.76,0-5-2.24-5-5s2.24-5,5-5s5,2.24,5,5S14.76,17,12,17z ' +
-            'M12,9c-1.66,0-3,1.34-3,3s1.34,3,3,3s3-1.34,3-3S13.66,9,12,9z"/>',
-        edit: '<path d="M3,17.25V21h3.75L17.81,9.94l-3.75-3.75L3,17.25z M20.71,7.04c0.39-0.39,0.39-1.02,0-1.41' +
-            'l-2.34-2.34c-0.39-0.39-1.02-0.39-1.41,0l-1.83,1.83l3.75,3.75L20.71,7.04z"/>',
-        duplicate: '<path fill-rule="evenodd" d="M16,1H4C2.9,1,2,1.9,2,3v14h2V3h12V1z ' +
-            'M19,5H8C6.9,5,6,5.9,6,7v14c0,1.1,0.9,2,2,2h11c1.1,0,2-0.9,2-2V7C21,5.9,20.1,5,19,5z ' +
-            'M19,21H8V7h11V21z"/>',
-        download: '<path d="M19,9h-4V3H9v6H5l7,7L19,9z M5,18v2h14v-2H5z"/>',
-        delete: '<path d="M6,7h12l-1.06,13.19C16.85,21.19,16,22,15,22H9c-1,0-1.85-0.81-1.94-1.81L6,7z ' +
-            'M9.5,4h5l1,2h4v2H4V6h4L9.5,4z"/>',
-        // The deck builder (issue #93)'s own "Build a new deck"/per-row
-        // "Build" buttons -- a wrench, Material Design's own generic
-        // "build/construct something" glyph.
-        build: '<path d="M22.7,19l-9.1-9.1c0.9-2.3,0.4-5-1.5-6.9c-2-2-5-2.4-7.4-1.3L9,6L6,9L1.6,4.7C0.4,7.1,0.9,10.1,2.9,12.1' +
-            'c1.9,1.9,4.6,2.4,6.9,1.5l9.1,9.1c0.4,0.4,1,0.4,1.4,0l2.3-2.3C23.1,20.1,23.1,19.4,22.7,19z"/>',
-    };
-
-    function buildActionIcon(kind) {
-        const template = document.createElement('template');
-        template.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true">' + ACTION_ICON_PATHS[kind] + '</svg>';
-        return template.content.firstChild;
-    }
-
-    // Same icon+tooltip/aria-label treatment as buildPlayerFlag() (title
-    // AND aria-label both carry the full word, so a screen reader or a
-    // sighted user hovering the button still gets "View"/"Edit"/"Delete"
-    // even though the button's own visible label is now just an icon).
-    function iconActionButton(kind, label, onClick) {
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'icon-action-button icon-action-button--' + kind;
-        button.title = label;
-        button.setAttribute('aria-label', label);
-        button.appendChild(buildActionIcon(kind));
-        button.addEventListener('click', onClick);
-        return button;
-    }
 
     // Populates a "use a saved deck" <select> (issue #92) with an
     // <optgroup> for "My decks" and one per friend who has 1+
@@ -849,6 +798,17 @@
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
+    // Spectator mode (issue #128) -- true for the rest of this page's
+    // lifetime once a ?spectate_game_id= URL param is detected at
+    // bootstrap (see the very bottom of this file); never toggled back to
+    // false, since a spectator never becomes a player without a fresh page
+    // load. spectateCode is the code that got them here (null if they
+    // arrived via the friends' list instead, which authorizes by
+    // friendship alone) -- resent on every poll, not just the first
+    // fetch, since GET /games/spectate/state re-checks authorization on
+    // every single request.
+    let isSpectating = false;
+    let spectateCode = null;
     // Reset in showBoard() so the saved-deck dropdown is re-fetched fresh
     // for each newly-viewed custom_duel game, but not on every 4-second
     // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
@@ -917,44 +877,30 @@
         }, 4000);
     }
 
-    // Turns a raw snake_case status value ('in_progress', 'waiting', ...)
-    // into a human-friendly one ('In Progress', 'Waiting') -- generic
-    // rather than a fixed lookup table, so any future status value reads
-    // reasonably without this needing to be updated too.
-    function humanizeStatus(status) {
-        return status
-            .split('_')
-            .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-            .join(' ');
-    }
-
-    // The 'standard' format's own display name is "Traditional" -- the
-    // underlying value stays 'standard' (it's the API/DB enum value, used
-    // as the <option>'s own value and everywhere on the backend), so this
-    // only overrides how it's *labeled* here; every other format falls
-    // back to humanizeStatus()'s generic capitalization.
-    function formatLabel(format) {
-        return format === 'standard' ? 'Traditional' : humanizeStatus(format);
-    }
-
-    // deck_type's own display names -- matching the <option> labels in the
-    // New Game dialog -- don't fit humanizeStatus()'s generic
-    // underscore-splitting capitalization ("one_of_each" would become "One
-    // Of Each", capitalizing "Of"), so this is a fixed lookup instead.
-    const DECK_TYPE_LABELS = {
-        structure: 'Structure',
-        power: 'Power',
-        jceddys_75: 'jceddy\'s 75 Card',
-        custom: 'Custom Decklist',
-        custom_duel: 'Custom Decklists (Duel)',
-        quick_draft: 'Quick Draft',
-        winston_draft: 'Winston Draft',
-        grid_draft: 'Grid Draft',
-        one_of_each: 'One of Each Card',
-    };
-
-    function deckTypeLabel(deckType) {
-        return DECK_TYPE_LABELS[deckType] || deckType;
+    // Spectator mode (issue #128) -- the read-only counterpart to
+    // showBoard() above, for a visitor who isn't seated in this game at
+    // all. Reuses the exact same #board-view/renderBoard() rather than a
+    // separate renderer (see refreshBoard()'s own isSpectating branch,
+    // which fetches via getSpectatorGameState() and synthesizes a stub
+    // state.you before rendering) -- see "Spectator mode" in
+    // web-static/README.md for why that's safe.
+    function showSpectatorBoard(gameId, code) {
+        currentGameId = gameId;
+        isSpectating = true;
+        spectateCode = code || null;
+        document.getElementById('back-to-lobby-button').textContent = '← Back to spectate list';
+        lobbyView.hidden = true;
+        boardView.hidden = false;
+        boardMessage.hidden = true;
+        refreshBoard();
+        if (pollTimer) {
+            clearInterval(pollTimer);
+        }
+        pollTimer = setInterval(() => {
+            if (choicesPanel.hidden && pendingDecisionPanel.hidden) {
+                refreshBoard();
+            }
+        }, 4000);
     }
 
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
@@ -1466,7 +1412,16 @@
         renderList(gamesList, document.getElementById('games-empty'), entries, (buildEntry) => buildEntry());
     }
 
-    document.getElementById('back-to-lobby-button').addEventListener('click', showLobby);
+    document.getElementById('back-to-lobby-button').addEventListener('click', () => {
+        // Spectator mode (issue #128) -- a spectator has no lobby of their
+        // own to go "back" to; sends them back to the Spectate page
+        // instead (see showSpectatorBoard()'s own button-text swap).
+        if (isSpectating) {
+            window.location.href = '../spectate/';
+            return;
+        }
+        showLobby();
+    });
 
     // -- New game dialog ---------------------------------------------------
 
@@ -1978,7 +1933,14 @@
     function inPlayZoneAssignments(state) {
         const players = state.players;
         const zoneOrder = IN_PLAY_ZONE_ORDER_BY_PLAYER_COUNT[players.length];
-        const viewer = players.find((p) => p.game_player_id === state.you.game_player_id);
+        // A spectator (issue #128) has no seat of their own to anchor
+        // "south" on -- falls back to whichever player has seat_order 0
+        // (or, failing that, just the first seated player), giving every
+        // spectator a stable, deterministic layout. Never applies to a
+        // real player, who always matches the first branch.
+        const viewer = players.find((p) => p.game_player_id === state.you.game_player_id)
+            || players.find((p) => p.seat_order === 0)
+            || players[0];
 
         const zoneByGamePlayerId = {};
         for (const player of players) {
@@ -2247,7 +2209,7 @@
         gameLogDialog.dataset.gameId = gameId;
         gameLogDialog.showModal();
 
-        const { ok, body } = await getGameLog(gameId);
+        const { ok, body } = await getGameLog(gameId, isSpectating ? spectateCode : null);
         currentGameLogEvents = ok ? body.events : [];
 
         renderList(listEl, emptyEl, currentGameLogEvents, (event) => {
@@ -2286,6 +2248,38 @@
         );
     });
 
+    // Spectator mode (issue #128) -- lets a seated player mint/reveal
+    // their own game's share code. #spectate-share-button's own
+    // visibility is set in renderBoard() (only once the game has actually
+    // started, and never while spectating -- see its own comment there).
+    const spectateCodeDialog = document.getElementById('spectate-code-dialog');
+
+    document.getElementById('spectate-share-button').addEventListener('click', async () => {
+        const { ok, body } = await getOrCreateSpectateCode(currentGameId);
+        if (!ok) {
+            window.alert(body.message || 'Could not get a spectate code for this game.');
+            return;
+        }
+        document.getElementById('spectate-code-value').textContent = body.code;
+        document.getElementById('spectate-code-copy-success').hidden = true;
+        spectateCodeDialog.showModal();
+    });
+
+    document.getElementById('spectate-code-close-button').addEventListener('click', () => {
+        spectateCodeDialog.close();
+    });
+
+    document.getElementById('spectate-code-copy-button').addEventListener('click', async () => {
+        const successEl = document.getElementById('spectate-code-copy-success');
+        try {
+            await navigator.clipboard.writeText(document.getElementById('spectate-code-value').textContent);
+            successEl.hidden = false;
+        } catch (e) {
+            successEl.hidden = true;
+            window.alert('Could not copy the spectate code to your clipboard.');
+        }
+    });
+
     // A shared-deck game's full deck (issue #197) -- GET /games/deck
     // already returns every card sorted white/blue/black/red/green then
     // alphabetically (see GameService::viewSharedDeck()), so this just
@@ -2302,7 +2296,7 @@
         cardsEl.innerHTML = '';
         document.getElementById('shared-deck-dialog').showModal();
 
-        const { ok, body } = await getSharedDeck(gameId);
+        const { ok, body } = await getSharedDeck(gameId, isSpectating ? spectateCode : null);
         if (!ok) {
             return;
         }
@@ -2402,7 +2396,9 @@
 
     async function refreshBoard() {
         const seq = ++boardRequestSeq;
-        const { ok, body } = await getGameState(currentGameId);
+        const { ok, body } = isSpectating
+            ? await getSpectatorGameState(currentGameId, spectateCode)
+            : await getGameState(currentGameId);
         if (seq !== boardRequestSeq) {
             return; // a newer refreshBoard() call has since been issued -- this response is stale, ignore it
         }
@@ -2412,6 +2408,29 @@
             return;
         }
         boardError.hidden = true;
+        if (isSpectating) {
+            // The spectator state route never includes a 'you' key at all
+            // (see GameService::buildGameState()) -- this stub makes every
+            // "===/!== state.you.game_player_id" comparison in
+            // renderBoard() and its sub-functions resolve as "nobody,"
+            // exactly the behavior a spectator needs, without touching
+            // those comparisons individually. hand: [] covers the (rare)
+            // sub-functions that read state.you.hand directly rather than
+            // through a `|| []` fallback.
+            body.you = { game_player_id: null, hand: [], is_your_turn: false };
+            // GameService::buildGameState() deliberately zeroes the
+            // viewer-scoped top-level deck_count for a spectator (there's
+            // no "your deck" to report) and documents players[].deck_count
+            // as the replacement -- for a shared (non-duel/draft) deck,
+            // every player's own count is the same single pool, so any one
+            // of them stands in for the "Deck: N cards left" line below.
+            // No single number is meaningful for a duel/draft game's
+            // separate per-player decks, so this is left at 0 there, same
+            // as a real player currently only ever sees their own anyway.
+            if (isSharedDeckType(body.game.deck_type) && body.players.length > 0) {
+                body.deck_count = body.players[0].deck_count;
+            }
+        }
         currentState = body;
         renderBoard(body);
     }
@@ -2458,6 +2477,12 @@
                 : deckTypeLabel(state.game.deck_type) + ' deck';
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
+
+        // Spectator mode (issue #128) -- only a real seated player can
+        // mint/share this game's own code, and only once there's actually
+        // something to spectate (see getSpectatorState()'s own identical
+        // 'waiting' exclusion).
+        document.getElementById('spectate-share-button').hidden = isSpectating || state.game.status === 'waiting';
 
         renderDraftMatchScoreline(state);
 
@@ -2682,9 +2707,21 @@
             document.getElementById('board-round-status').textContent =
                 'Game over — ' + winnerNames + ' won.';
         } else {
+            // Spectator mode (issue #128): there's no "you" to say "your
+            // turn" relative to, so this names whoever's turn it actually
+            // is instead -- current_turn_game_player_id is already public,
+            // always-present information (see GameService::buildGameState()).
+            let turnSuffix = ' — waiting on another player';
+            if (isSpectating) {
+                const currentTurnPlayer = state.players.find(
+                    (p) => p.game_player_id === state.round.current_turn_game_player_id
+                );
+                turnSuffix = currentTurnPlayer ? " — " + currentTurnPlayer.username + "'s turn" : '';
+            } else if (state.you.is_your_turn) {
+                turnSuffix = ' — your turn';
+            }
             document.getElementById('board-round-status').textContent =
-                'Round ' + state.round.round_number +
-                (state.you.is_your_turn ? ' — your turn' : ' — waiting on another player');
+                'Round ' + state.round.round_number + turnSuffix;
         }
 
         const pendingDecision = state.round && state.round.pending_decision;
@@ -2692,13 +2729,18 @@
         renderScoringPreview(state.round && state.round.scoring_preview);
         renderScoringEffects(state.round && state.round.scoring_effects);
         renderBoardEffects(state.round && state.round.board_effects);
+        renderFirstPlayerDecision(state, state.first_player_decision);
 
         renderInPlay(state);
 
         // A pending decision freezes the whole round -- nobody, including
         // the player whose turn it nominally is, can play or pass until
-        // the targeted player has answered it.
-        const canAct = state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
+        // the targeted player has answered it. !isSpectating is made
+        // explicit here (rather than relying incidentally on
+        // state.you.is_your_turn always being false for a spectator) so a
+        // future change to the state.you stub can never silently
+        // re-enable controls for a spectator.
+        const canAct = !isSpectating && state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
 
         document.getElementById('discard-count').textContent = state.discard_pile.length;
         document.getElementById('deck-count').textContent = state.deck_count;
@@ -2743,6 +2785,17 @@
             return li;
         });
 
+        // Spectator mode (issue #128): a spectator has no hand of their
+        // own to show in #your-hand-section (state.you.hand is always
+        // []) -- swap it for #spectator-final-hands-section instead, only
+        // once the game is 'completed' and every seated player's final
+        // hand has actually been revealed (players[].hand is only ever
+        // present then -- see GameService::buildGameState()'s own
+        // $revealAllHands). Still in_progress -- nothing to show either
+        // way, so both stay hidden.
+        document.getElementById('your-hand-section').hidden = isSpectating;
+        renderSpectatorFinalHands(isSpectating ? state : null);
+
         renderTeammateHand(state);
         renderTeamDecision(state.team_decision);
         renderInitialCardPass(state);
@@ -2753,9 +2806,12 @@
         // GameService::resignGame()) -- shown whenever the game is still
         // in_progress and the viewer hasn't already resigned, hidden
         // entirely once the game's over or they have (a resigned player
-        // has nothing left to resign from).
+        // has nothing left to resign from). A spectator has nothing of
+        // their own to resign from either -- state.you is just the
+        // synthesized stub (never .resigned), so this needs its own
+        // explicit isSpectating check rather than relying on that.
         const resignButton = document.getElementById('resign-button');
-        resignButton.hidden = state.game.status !== 'in_progress' || Boolean(you && you.resigned);
+        resignButton.hidden = isSpectating || state.game.status !== 'in_progress' || Boolean(you && you.resigned);
         resignButton.disabled = Boolean(pendingDecision);
 
         // "View decklist" (issue #197) -- hidden entirely for a deck_type
@@ -2817,6 +2873,44 @@
             li.textContent = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ') — ' +
                 team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)';
             return li;
+        });
+    }
+
+    // Spectator mode (issue #128): once a spectated game is 'completed',
+    // GameService::buildGameState()'s $revealAllHands reveals every seated
+    // player's final hand (players[].hand) since nothing competitive
+    // remains to hide -- rendered here as one read-only group per player,
+    // replacing the single #your-hand-section a spectator has no version
+    // of. Still in_progress (or not spectating at all) -- players[].hand
+    // is simply absent from the state, so this stays hidden.
+    function renderSpectatorFinalHands(state) {
+        const section = document.getElementById('spectator-final-hands-section');
+        const players = state && state.players.some((p) => p.hand) ? state.players : null;
+        if (!players) {
+            section.hidden = true;
+            section.textContent = '';
+            return;
+        }
+
+        section.hidden = false;
+        section.textContent = '';
+        players.forEach((player) => {
+            const group = document.createElement('div');
+            group.className = 'spectator-final-hand';
+
+            const heading = document.createElement('h3');
+            heading.textContent = player.username + "'s hand";
+            group.appendChild(heading);
+
+            const list = document.createElement('ul');
+            renderList(list, { hidden: true }, player.hand || [], (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+            group.appendChild(list);
+
+            section.appendChild(group);
         });
     }
 
@@ -4443,6 +4537,65 @@
         });
     }
 
+    // Post-start "who goes first" decision for game 2/3 of a best-of-three
+    // draft match -- per a rules clarification, the previous game's loser
+    // doesn't have to choose until they can see their own opening hand, so
+    // this is decided after the game (and round 1) has already started
+    // rather than during deck-building -- see GameService::
+    // setPlayFirstNextMatchGame()/firstPlayerDecisionStateFor(). Round 1
+    // stays frozen (see canAct in renderBoard()) for both players until
+    // this resolves one way or the other; state.first_player_decision is
+    // null once it has (or for game 1, which has no previous game to base
+    // a choice on), at which point this panel just stays hidden.
+    function renderFirstPlayerDecision(state, decision) {
+        const panel = document.getElementById('first-player-decision-panel');
+        const statusEl = document.getElementById('first-player-decision-status');
+        const actionsEl = document.getElementById('first-player-decision-actions');
+        const opponentButton = document.getElementById('first-player-decision-opponent-button');
+        const errorEl = document.getElementById('first-player-decision-error');
+        errorEl.hidden = true;
+
+        // Spectator mode (issue #128): this panel's own text is written
+        // entirely in first/second person ("You lost the previous
+        // game...") with no clean generalization to a bystander's point
+        // of view, and there's no real "you" to derive it from anyway --
+        // hidden outright for a spectator rather than shown with
+        // misleading content.
+        if (!decision || isSpectating) {
+            panel.hidden = true;
+            return;
+        }
+        panel.hidden = false;
+
+        const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
+        const opponentUsername = opponent ? opponent.username : 'your opponent';
+
+        if (decision.you_are_previous_loser) {
+            statusEl.textContent = 'You lost the previous game -- now that you can see your opening hand, choose who goes first.';
+            actionsEl.hidden = false;
+            opponentButton.textContent = 'Let ' + opponentUsername + ' go first';
+        } else {
+            statusEl.textContent = 'Waiting for ' + opponentUsername +
+                ' to decide who goes first, now that they can see their opening hand.';
+            actionsEl.hidden = true;
+        }
+    }
+
+    async function submitFirstPlayerDecision(playFirst) {
+        const errorEl = document.getElementById('first-player-decision-error');
+        errorEl.hidden = true;
+        const { ok, body } = await setPlayFirstNextMatchGame(currentGameId, playFirst);
+        if (!ok) {
+            errorEl.textContent = body.message || 'Could not record that choice.';
+            errorEl.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
+    document.getElementById('first-player-decision-self-button').addEventListener('click', () => submitFirstPlayerDecision(true));
+    document.getElementById('first-player-decision-opponent-button').addEventListener('click', () => submitFirstPlayerDecision(false));
+
     function updateRespondButtonEnabled() {
         const respondButton = document.getElementById('respond-decision-button');
         if (!activePendingDecision) {
@@ -4746,5 +4899,17 @@
         friendInviteError.hidden = false;
     });
 
-    showLobby();
+    // Spectator mode (issue #128) -- ?spectate_game_id=<id>[&spectate_code=<code>]
+    // bypasses the normal lobby entirely in favor of a read-only board for
+    // a game the visitor isn't seated in. Set by spectate.js's own
+    // friends'-list eye-icon buttons (no code -- friendship alone
+    // authorizes it) and its code-entry form (with a code, re-sent on
+    // every poll -- see refreshBoard()).
+    const spectateGameId = new URLSearchParams(window.location.search).get('spectate_game_id');
+    if (spectateGameId) {
+        const spectateCodeParam = new URLSearchParams(window.location.search).get('spectate_code');
+        showSpectatorBoard(parseInt(spectateGameId, 10), spectateCodeParam);
+    } else {
+        showLobby();
+    }
 })();

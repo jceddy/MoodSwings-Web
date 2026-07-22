@@ -63,6 +63,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE game_players');
         $pdo->exec('TRUNCATE TABLE games');
         $pdo->exec('TRUNCATE TABLE user_decklists');
+        $pdo->exec('TRUNCATE TABLE user_lifetime_stats');
         $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
@@ -7375,9 +7376,247 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullQuickDraftDeck((int) $nextGame['id'], $u1);
             $this->submitFullQuickDraftDeck((int) $nextGame['id'], $u2);
             $this->games->startGame((int) $nextGame['id']);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first (see setPlayFirstNextMatchGame())
+            // -- resolve it to the default (previous winner goes first
+            // again) so completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame((int) $nextGame['id'], $loserUserId, false);
 
             $currentGameId = (int) $nextGame['id'];
         }
+    }
+
+    /** @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int} */
+    private function buildQuickDraftMatchThroughGameOne(): array
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        return [
+            'gameId' => $gameId,
+            'u1' => $u1,
+            'u2' => $u2,
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId,
+            'loserUserId' => $loserUserId,
+        ];
+    }
+
+    /**
+     * buildQuickDraftMatchThroughGameOne() only gets game 2 to 'waiting'
+     * (decks not yet submitted) -- per the rules clarification that the
+     * loser doesn't have to choose who goes first until they can see
+     * their own opening hand, setPlayFirstNextMatchGame() is now only
+     * callable once game 2 has actually started, so every test below
+     * needs it submitted and started first.
+     *
+     * @return array{gameId: int, u1: int, u2: int, nextGameId: int, winnerUserId: int, loserUserId: int}
+     */
+    private function buildQuickDraftMatchAtGameTwoStart(): array
+    {
+        $fixture = $this->buildQuickDraftMatchThroughGameOne();
+        $this->submitFullQuickDraftDeck($fixture['nextGameId'], $fixture['u1']);
+        $this->submitFullQuickDraftDeck($fixture['nextGameId'], $fixture['u2']);
+        $this->games->startGame($fixture['nextGameId']);
+        return $fixture;
+    }
+
+    /**
+     * The heart of the "loser opts to play first" feature (a follow-up to
+     * issue #88/#89's own best-of-three match progression): game 2 starts
+     * with round 1 frozen (nobody can act) until the loser decides, and
+     * choosing to play first themselves sends them out first once
+     * resolved.
+     */
+    public function testLoserOfPreviousGameCanOptToPlayFirstInNextGame(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $frozenRound = $this->fetchRound($nextGameId);
+        self::assertNull($frozenRound['current_turn_game_player_id'], 'round 1 must stay frozen until the loser decides');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($loserUserId, $firstPlayerUserId);
+        self::assertNotSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    /** Choosing to let the previous winner go first again is still a real, round-unfreezing decision -- not a no-op. */
+    public function testLoserCanChooseToLetThePreviousWinnerGoFirstAgain(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+
+        $round = $this->fetchRound($nextGameId);
+        $firstPlayerUserId = (int) $this->pdo->query(
+            'SELECT user_id FROM game_players WHERE id = ' . (int) $round['first_game_player_id']
+        )->fetchColumn();
+        self::assertSame($winnerUserId, $firstPlayerUserId);
+        self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    /** The decision gets its own event-log phrasing rather than falling through describeEvent()'s generic "played a card" default. */
+    public function testFirstPlayerDecisionGetsItsOwnEventLogPhrasing(): void
+    {
+        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        $description = $this->games->getState($nextGameId, $loserUserId)['recent_events'][0]['description'];
+        self::assertSame($this->fetchUsername($loserUserId) . ' will go first this game', $description);
+    }
+
+    /**
+     * Round 1 of game 2+ stays frozen -- not even the acting seat's own
+     * placeholder can pass -- until the loser's decision resolves it,
+     * mirroring closed_team's own frozen-round-1 pattern.
+     */
+    public function testRoundStaysFrozenUntilTheLoserDecides(): void
+    {
+        ['nextGameId' => $nextGameId] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $round = $this->fetchRound($nextGameId);
+        $placeholderGamePlayerId = (int) $round['first_game_player_id'];
+
+        try {
+            $this->games->pass($nextGameId, $placeholderGamePlayerId);
+            self::fail('Expected passing before the first-player decision is made to be rejected');
+        } catch (GameStateException) {
+            // expected
+        }
+    }
+
+    /** Once decided (either way), the choice is permanent -- there is no changing your mind, unlike the old pre-start checkbox. */
+    public function testSetPlayFirstRejectsBeingDecidedTwice(): void
+    {
+        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('already been decided');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+    }
+
+    public function testOnlyTheLoserOfThePreviousGameCanSetWhoGoesFirst(): void
+    {
+        ['nextGameId' => $nextGameId, 'winnerUserId' => $winnerUserId]
+            = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Only the loser');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $winnerUserId, true);
+    }
+
+    public function testSetPlayFirstRejectsGameOneOfAMatch(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture(winsNeeded: 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('no previous game');
+
+        $this->games->setPlayFirstNextMatchGame($gameId, $u1, true);
+    }
+
+    /** Before game 2 has actually started (still deck-building), the loser can't see their opening hand yet, so the choice isn't open yet either. */
+    public function testSetPlayFirstRejectsAGameThatHasNotStartedYet(): void
+    {
+        ['nextGameId' => $nextGameId, 'loserUserId' => $loserUserId] = $this->buildQuickDraftMatchThroughGameOne();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("hasn't started yet");
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+    }
+
+    /** Someone not even seated in the match is rejected the same way a non-loser seated player would be. */
+    public function testSetPlayFirstRejectsAUserNotSeatedInTheMatch(): void
+    {
+        ['nextGameId' => $nextGameId] = $this->buildQuickDraftMatchAtGameTwoStart();
+        $outsider = $this->insertUser('quickdraft-first-player-outsider');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('Only the loser');
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $outsider, true);
+    }
+
+    /**
+     * getState()'s own 'first_player_decision' field -- only populated
+     * once game 2+ has actually started with round 1 still frozen (null
+     * for game 1, which has no previous game to base a choice on, and
+     * null again once the decision resolves, since the round is no
+     * longer frozen at that point).
+     */
+    public function testGetStateExposesFirstPlayerDecisionWhileRoundOneIsFrozen(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+        self::assertNull(
+            $this->games->getState($gameId, $u1)['first_player_decision'],
+            'game 1 of a match has no previous game to base a choice on',
+        );
+
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
+
+        $loserDecision = $this->games->getState($nextGameId, $loserUserId)['first_player_decision'];
+        self::assertTrue($loserDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $loserDecision['default_user_id']);
+
+        $winnerDecision = $this->games->getState($nextGameId, $winnerUserId)['first_player_decision'];
+        self::assertFalse($winnerDecision['you_are_previous_loser']);
+        self::assertSame($winnerUserId, $winnerDecision['default_user_id']);
+
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+
+        self::assertNull(
+            $this->games->getState($nextGameId, $loserUserId)['first_player_decision'],
+            'no longer frozen, so there is nothing left to decide',
+        );
+        self::assertNull($this->games->getState($nextGameId, $winnerUserId)['first_player_decision']);
     }
 
     /**
@@ -7525,6 +7764,11 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullQuickDraftDeck($nextGameId, $u1);
             $this->submitFullQuickDraftDeck($nextGameId, $u2);
             $this->games->startGame($nextGameId);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first -- resolve to the default so
+            // completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
             $currentGameId = $nextGameId;
         }
 
@@ -8072,6 +8316,11 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullWinstonDraftDeck($nextGameId, $u1);
             $this->submitFullWinstonDraftDeck($nextGameId, $u2);
             $this->games->startGame($nextGameId);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first -- resolve to the default so
+            // completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
             $currentGameId = $nextGameId;
         }
 
@@ -8589,6 +8838,11 @@ final class GameServiceIntegrationTest extends TestCase
             $this->submitFullGridDraftDeck($nextGameId, $u1);
             $this->submitFullGridDraftDeck($nextGameId, $u2);
             $this->games->startGame($nextGameId);
+            // Round 1 of game 2+ starts frozen until the previous game's
+            // loser decides who goes first -- resolve to the default so
+            // completeQuickDraftGameByPassing() can proceed.
+            $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+            $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
             $currentGameId = $nextGameId;
         }
 
@@ -8939,5 +9193,396 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('decision still pending');
         $this->games->resignGame($gameId, $p2);
+    }
+
+    /**
+     * Lifetime game/match stats (issue #106) -- recordGameCompletionStats()/
+     * recordMatchCompletionStats() are called from every code path that
+     * completes a game/match, so these exercise each of those paths
+     * rather than the stats-writing logic itself in isolation.
+     */
+    public function testStandardGameCompletionRecordsLifetimeGameWinAndLoss(): void
+    {
+        $u1 = $this->insertUser('statsgame-p1');
+        $u2 = $this->insertUser('statsgame-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed)
+             VALUES ('standard', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p1); // Apathy, value 4
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $apathyId, []);
+        $this->games->pass($gameId, $p2);
+
+        self::assertSame(
+            ['game_wins' => 1, 'game_losses' => 0, 'game_win_percentage' => 100, 'match_wins' => 0, 'match_losses' => 0, 'match_win_percentage' => null],
+            $this->games->lifetimeStatsFor($u1)
+        );
+        self::assertSame(
+            ['game_wins' => 0, 'game_losses' => 1, 'game_win_percentage' => 0, 'match_wins' => 0, 'match_losses' => 0, 'match_win_percentage' => null],
+            $this->games->lifetimeStatsFor($u2)
+        );
+    }
+
+    /** A team win credits BOTH teammates' lifetime game_wins, not just the one representative game_player_id games.winner_game_player_id itself points at. */
+    public function testTeamGameCompletionCreditsBothTeammatesLifetimeGameWins(): void
+    {
+        $u1 = $this->insertUser('statsteam-p1');
+        $u2 = $this->insertUser('statsteam-p2');
+        $u3 = $this->insertUser('statsteam-p3');
+        $u4 = $this->insertUser('statsteam-p4');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('team', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 0);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 1);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // white, value 4
+        $this->insertGameCard($gameId, 44, 'hand', $p2);
+        $this->insertGameCard($gameId, 55, 'hand', $p3);
+        $this->insertGameCard($gameId, 83, 'hand', $p4);
+
+        $roundId = $this->insertTeamGameRound($gameId, 1, $p1);
+        $this->pdo->prepare(
+            'UPDATE game_rounds SET current_turn_game_player_id = :p1, plays_remaining = 1, team_turn_1_game_player_id = :p1, team_turn_2_game_player_id = :p3 WHERE id = :round_id'
+        )->execute(['p1' => $p1, 'p3' => $p3, 'round_id' => $roundId]);
+
+        // Team 0 (p1 + p2) scores 4 to team 1's 0 -- an outright win that,
+        // with wins_needed = 1, also ends the game.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $this->games->pass($gameId, $p3);
+        $this->games->pass($gameId, $p2);
+        $this->games->pass($gameId, $p4);
+
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['game_wins']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u2)['game_wins']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u3)['game_losses']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u4)['game_losses']);
+    }
+
+    public function testResignationCompletionRecordsLifetimeGameWinAndLoss(): void
+    {
+        $u1 = $this->insertUser('statsresign-p1');
+        $u2 = $this->insertUser('statsresign-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->resignGame($gameId, $p1);
+
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['game_losses']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u2)['game_wins']);
+    }
+
+    /**
+     * A completed best-of-three draft match records BOTH game-level stats
+     * (once per game) AND match-level stats (once, when the match itself
+     * finishes) -- these are independent counters, not derived from one
+     * another.
+     */
+    public function testDraftMatchCompletionRecordsLifetimeMatchWinAndLossOnTopOfPerGameStats(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+        // Game 1 alone must not yet count as a match win/loss -- the match
+        // itself isn't decided until a second game is won.
+        self::assertSame(1, $this->games->lifetimeStatsFor($winnerUserId)['game_wins']);
+        self::assertSame(0, $this->games->lifetimeStatsFor($winnerUserId)['match_wins']);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+        $this->completeQuickDraftGameByPassing($nextGameId);
+
+        $winnerStats = $this->games->lifetimeStatsFor($winnerUserId);
+        $loserStats = $this->games->lifetimeStatsFor($loserUserId);
+        self::assertSame(2, $winnerStats['game_wins'], 'both games of the match were won by the same player');
+        self::assertSame(1, $winnerStats['match_wins']);
+        self::assertSame(2, $loserStats['game_losses']);
+        self::assertSame(1, $loserStats['match_losses']);
+    }
+
+    /** Winston Draft's under-12-cards auto-loss completes the MATCH without game 1 ever completing -- see finalizeWinstonDraft(). Must still count as a match win/loss even though there's no game_wins/game_losses to go with it. */
+    public function testWinstonDraftAutoLossRecordsLifetimeMatchStatsButNotGameStats(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Same deterministic setup as testWinstonDraftAutoLosesPlayerWithFewerThanTwelveDraftedCards()
+        // -- seed a lopsided split (u1 short of WINSTON_MIN_DECK_SIZE) and
+        // force the next pick to empty the deck/piles simultaneously,
+        // triggering finalizeWinstonDraft()'s auto-loss branch.
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode(range(1, 5)), 'match_id' => $draftMatchId, 'user_id' => $u1]);
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode(range(6, 45)), 'match_id' => $draftMatchId, 'user_id' => $u2]);
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->pdo->prepare(
+            'UPDATE draft_winston_state
+             SET remaining_deck_card_ids = :deck, pile_1_card_ids = :pile1, pile_2_card_ids = :pile2, pile_3_card_ids = :pile3, current_pile_number = 1
+             WHERE draft_match_id = :match_id'
+        )->execute([
+            'deck' => json_encode([]),
+            'pile1' => json_encode([50]),
+            'pile2' => json_encode([]),
+            'pile3' => json_encode([]),
+            'match_id' => $draftMatchId,
+        ]);
+
+        $result = $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'take');
+        self::assertTrue($result['draft_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        $winnerUserId = (int) $match['winner_user_id'];
+        self::assertSame($u2, $winnerUserId);
+
+        self::assertSame(0, $this->games->lifetimeStatsFor($winnerUserId)['game_wins'], 'game 1 never completed, only the match did');
+        self::assertSame(1, $this->games->lifetimeStatsFor($winnerUserId)['match_wins']);
+        self::assertSame(0, $this->games->lifetimeStatsFor($u1)['game_losses']);
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['match_losses']);
+    }
+
+    public function testLifetimeStatsForReturnsAllZerosForAUserWithNoHistory(): void
+    {
+        $u1 = $this->insertUser('statsfresh');
+
+        self::assertSame(
+            [
+                'game_wins' => 0,
+                'game_losses' => 0,
+                'game_win_percentage' => null,
+                'match_wins' => 0,
+                'match_losses' => 0,
+                'match_win_percentage' => null,
+            ],
+            $this->games->lifetimeStatsFor($u1)
+        );
+    }
+
+    // --- Spectator mode (issue #128) ---
+
+    public function testGetSpectatorStateOmitsYouAndHandContentsForAnInProgressGame(): void
+    {
+        $alice = $this->insertUser('spectate-inprogress-alice');
+        $bob = $this->insertUser('spectate-inprogress-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], deckType: 'one_of_each');
+        $this->games->startGame($gameId);
+
+        $state = $this->games->getSpectatorState($gameId);
+
+        self::assertSame('in_progress', $state['game']['status']);
+        self::assertArrayNotHasKey('you', $state);
+        self::assertNotNull($state['round']);
+        foreach ($state['players'] as $player) {
+            self::assertSame(5, $player['hand_count']);
+            self::assertArrayNotHasKey('hand', $player);
+        }
+        // A shared (non-'duel') deck -- every player's own deck_count
+        // reads the same single remaining pool, not a per-player split.
+        foreach ($state['players'] as $player) {
+            self::assertSame(133 - 5 * 2, $player['deck_count']);
+        }
+        self::assertSame([], $state['in_play']);
+        self::assertSame([], $state['discard_pile']);
+    }
+
+    public function testGetSpectatorStateRejectsAWaitingGame(): void
+    {
+        $alice = $this->insertUser('spectate-waiting-alice');
+        $bob = $this->insertUser('spectate-waiting-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob]);
+
+        $this->expectException(GameStateException::class);
+        $this->games->getSpectatorState($gameId);
+    }
+
+    public function testGetSpectatorStateRejectsAnAbandonedGame(): void
+    {
+        $alice = $this->insertUser('spectate-abandoned-alice');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, wins_needed, created_by_user_id) VALUES ('standard', 'abandoned', 3, :created_by)"
+        );
+        $stmt->execute(['created_by' => $alice]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $this->expectException(GameStateException::class);
+        $this->games->getSpectatorState($gameId);
+    }
+
+    public function testGetSpectatorStateRevealsEveryPlayersHandOnceTheGameIsCompleted(): void
+    {
+        $alice = $this->insertUser('spectate-completed-alice');
+        $bob = $this->insertUser('spectate-completed-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob], deckType: 'one_of_each');
+        $this->games->startGame($gameId);
+        $aliceGamePlayerId = $this->games->gamePlayerIdFor($gameId, $alice);
+        $this->games->resignGame($gameId, $aliceGamePlayerId);
+
+        $state = $this->games->getSpectatorState($gameId);
+
+        self::assertSame('completed', $state['game']['status']);
+        self::assertArrayNotHasKey('you', $state);
+        foreach ($state['players'] as $player) {
+            self::assertArrayHasKey('hand', $player);
+            self::assertCount(5, $player['hand']);
+            foreach ($player['hand'] as $card) {
+                self::assertArrayHasKey('name', $card);
+            }
+        }
+    }
+
+    public function testGetOrCreateSpectateCodeIsIdempotentAndUniqueAcrossGames(): void
+    {
+        $alice = $this->insertUser('spectate-code-alice');
+        $bob = $this->insertUser('spectate-code-bob');
+
+        $gameOneId = $this->games->createGame($alice, [$alice, $bob]);
+        $gameTwoId = $this->games->createGame($alice, [$alice, $bob]);
+
+        $codeOne = $this->games->getOrCreateSpectateCode($gameOneId);
+        $codeOneAgain = $this->games->getOrCreateSpectateCode($gameOneId);
+        $codeTwo = $this->games->getOrCreateSpectateCode($gameTwoId);
+
+        self::assertSame($codeOne, $codeOneAgain);
+        self::assertNotSame($codeOne, $codeTwo);
+        self::assertSame(8, strlen($codeOne));
+        self::assertSame($codeOne, $this->games->spectateCodeFor($gameOneId));
+    }
+
+    public function testResolveSpectateCodeReturnsTheGameId(): void
+    {
+        $alice = $this->insertUser('spectate-resolve-alice');
+        $bob = $this->insertUser('spectate-resolve-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob]);
+        $this->games->startGame($gameId);
+        $code = $this->games->getOrCreateSpectateCode($gameId);
+
+        self::assertSame($gameId, $this->games->resolveSpectateCode($code));
+    }
+
+    public function testResolveSpectateCodeRejectsAnUnknownCode(): void
+    {
+        $this->expectException(GameStateException::class);
+        $this->games->resolveSpectateCode('deadbeef');
+    }
+
+    public function testResolveSpectateCodeRejectsAWaitingGame(): void
+    {
+        $alice = $this->insertUser('spectate-resolve-waiting-alice');
+        $bob = $this->insertUser('spectate-resolve-waiting-bob');
+
+        $gameId = $this->games->createGame($alice, [$alice, $bob]);
+        $code = $this->games->getOrCreateSpectateCode($gameId);
+
+        $this->expectException(GameStateException::class);
+        $this->games->resolveSpectateCode($code);
+    }
+
+    public function testListFriendsInProgressGamesExcludesGamesTheViewerIsSeatedIn(): void
+    {
+        $alice = $this->insertUser('spectate-list-alice');
+        $bob = $this->insertUser('spectate-list-bob');
+        $carol = $this->insertUser('spectate-list-carol');
+
+        // Alice and Bob's own game -- Bob is a friend, but Alice (the
+        // viewer) is seated in it too, so it must never appear here.
+        $ownGameId = $this->games->createGame($alice, [$alice, $bob]);
+        $this->games->startGame($ownGameId);
+
+        // Bob and Carol's game -- Alice isn't seated in this one.
+        $friendsGameId = $this->games->createGame($bob, [$bob, $carol]);
+        $this->games->startGame($friendsGameId);
+
+        $result = $this->games->listFriendsInProgressGames($alice, [$bob, $carol]);
+
+        self::assertCount(1, $result);
+        self::assertSame($friendsGameId, $result[0]['id']);
+    }
+
+    public function testListFriendsInProgressGamesExcludesNonFriendsGames(): void
+    {
+        $alice = $this->insertUser('spectate-nonfriend-alice');
+        $bob = $this->insertUser('spectate-nonfriend-bob');
+        $stranger = $this->insertUser('spectate-nonfriend-stranger');
+
+        $gameId = $this->games->createGame($stranger, [$stranger, $bob]);
+        $this->games->startGame($gameId);
+
+        // $bob is passed as a friend, but the game only involves $stranger
+        // and $bob -- listing friend ids that happen to include a seated
+        // player is exactly how this should surface it (via $bob), so
+        // pass only a truly unrelated friend id to confirm nothing shows.
+        $unrelatedFriend = $this->insertUser('spectate-nonfriend-unrelated');
+        $result = $this->games->listFriendsInProgressGames($alice, [$unrelatedFriend]);
+
+        self::assertSame([], $result);
+    }
+
+    public function testListFriendsInProgressGamesOnlyIncludesInProgressGames(): void
+    {
+        $alice = $this->insertUser('spectate-status-alice');
+        $bob = $this->insertUser('spectate-status-bob');
+        $carol = $this->insertUser('spectate-status-carol');
+
+        $waitingGameId = $this->games->createGame($bob, [$bob, $carol]);
+
+        $completedGameId = $this->games->createGame($bob, [$bob, $carol]);
+        $this->games->startGame($completedGameId);
+        $bobGamePlayerId = $this->games->gamePlayerIdFor($completedGameId, $bob);
+        $this->games->resignGame($completedGameId, $bobGamePlayerId);
+
+        $inProgressGameId = $this->games->createGame($bob, [$bob, $carol]);
+        $this->games->startGame($inProgressGameId);
+
+        $result = $this->games->listFriendsInProgressGames($alice, [$bob, $carol]);
+
+        self::assertCount(1, $result);
+        self::assertSame($inProgressGameId, $result[0]['id']);
+        self::assertNotContains($waitingGameId, array_column($result, 'id'));
+        self::assertNotContains($completedGameId, array_column($result, 'id'));
     }
 }

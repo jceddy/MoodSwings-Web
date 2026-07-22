@@ -31,6 +31,8 @@
         <p>Welcome, <span id="username"></span>.</p>
         <button id="friends-button" type="button">Friends</button>
         <button id="decks-button" type="button">Decks</button>
+        <button id="user-info-button" type="button">User info</button>
+        <button id="spectate-button" type="button">Spectate</button>
         <button id="logout-button">Log out</button>
 
         <section id="lobby-view">
@@ -42,6 +44,13 @@
 
         <section id="board-view" hidden>
             <button id="back-to-lobby-button" type="button">&larr; Back to your games</button>
+            <!-- Spectator mode (issue #128) -- lets a seated player mint/
+                 reveal their own game's share code to hand out; shown only
+                 once the game has actually started (status !== 'waiting',
+                 same "nothing to spectate yet" boundary getSpectatorState()
+                 itself enforces) and never while spectating -- see
+                 renderBoard() in game.js. -->
+            <button id="spectate-share-button" type="button" hidden>Share spectate code</button>
             <h2 id="board-title"></h2>
             <p id="board-round-status"></p>
             <p id="draft-match-scoreline" hidden></p>
@@ -161,6 +170,16 @@
             </dialog>
 
             <div id="in-progress-area" hidden>
+                <div id="first-player-decision-panel" hidden>
+                    <h4>Who goes first?</h4>
+                    <p id="first-player-decision-status"></p>
+                    <div id="first-player-decision-actions" hidden>
+                        <button id="first-player-decision-self-button" type="button">I'll go first</button>
+                        <button id="first-player-decision-opponent-button" type="button"></button>
+                    </div>
+                    <p id="first-player-decision-error" class="error" hidden></p>
+                </div>
+
                 <div id="scoring-effects" hidden>
                     <h4>How scoring will be affected</h4>
                     <ul id="scoring-effects-list"></ul>
@@ -203,8 +222,19 @@
                 <h3>Discard pile (<span id="discard-count">0</span>) &middot; Deck: <span id="deck-count">0</span> cards left</h3>
                 <ul id="discard-list"></ul>
 
-                <h3>Your hand</h3>
-                <ul id="hand-list"></ul>
+                <div id="your-hand-section">
+                    <h3>Your hand</h3>
+                    <ul id="hand-list"></ul>
+                </div>
+
+                <!-- Spectator mode (issue #128): once a spectated game is
+                     'completed', there's nothing left to hide -- every
+                     seated player's final hand is shown here instead of
+                     the single #your-hand-section above (which a
+                     spectator has no version of). See
+                     renderSpectatorFinalHands() in game.js and
+                     GameService::buildGameState()'s own $revealAllHands. -->
+                <div id="spectator-final-hands-section" hidden></div>
 
                 <div id="teammate-hand-section" hidden>
                     <h3 id="teammate-hand-title">Teammate's hand</h3>
@@ -475,6 +505,19 @@
         <ul id="game-log-list"></ul>
         <p id="game-log-empty" hidden>Nothing has happened yet.</p>
         <button id="game-log-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Spectator mode (issue #128) -- shows/copies the current game's own
+         share code, minted on demand via GameService::getOrCreateSpectateCode().
+         See #spectate-share-button above and openSpectateCodeDialog() in
+         game.js. -->
+    <dialog id="spectate-code-dialog">
+        <h2>Share spectate code</h2>
+        <p>Anyone with this code can watch this game (they won't be able to play).</p>
+        <p id="spectate-code-value"></p>
+        <button id="spectate-code-copy-button" type="button">Copy code</button>
+        <p id="spectate-code-copy-success" class="success" hidden>Copied to clipboard.</p>
+        <button id="spectate-code-close-button" type="button">Close</button>
     </dialog>
 
     <!-- A shared-deck game's full deck (issue #197) -- every deck_type

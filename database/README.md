@@ -324,3 +324,29 @@ half-migrated schema.
   follow-ups (repositioned Decks dialog buttons, small-screen card-thumb
   shrink, catalog-panel multi-sort, Save/Close button spacing) never
   touched the schema. See "Deck builder" in `php-app/README.md`.
+- **Draft match first-player choice** (`0041`): adds nullable
+  `games.first_player_choice_user_id` (FK to `users`, `ON DELETE SET
+  NULL`) — lets the loser of a best-of-three draft match's game N choose
+  who goes first in game N+1, entirely optionally (defaults to game N's
+  own winner going first again if the loser never exercises the choice).
+  Scoped to `games` rather than `draft_matches` since it's specific to
+  one particular game within the match, the same way `match_game_number`
+  itself already is. See "Quick Draft"/"Winston Draft"/"Grid Draft" in
+  `php-app/README.md`.
+- **Lifetime user stats** (`0042`, issue #106): adds
+  `user_lifetime_stats` (`user_id` PK/FK to `users`, `game_wins`,
+  `game_losses`, `match_wins`, `match_losses`, all `INT UNSIGNED NOT
+  NULL DEFAULT 0`) — one row per user who's ever finished a game,
+  created lazily rather than up front. Backfilled once, right in this
+  migration, by aggregating existing `games`/`draft_matches` history;
+  every game/match completed after this runs instead increments the
+  counters directly (see `GameService::recordGameCompletionStats()`/
+  `recordMatchCompletionStats()`), since old game history is expected to
+  be cleaned up eventually and a live re-aggregation would then silently
+  under-report. See "Lifetime stats" in `php-app/README.md`.
+- **Spectator mode** (`0043`, issue #128): adds `games.spectate_code`
+  (`CHAR(8) DEFAULT NULL UNIQUE`) — a casually-shareable, plaintext
+  (not hashed) code letting anyone with it spectate that one game,
+  generated lazily the first time a seated player asks to share it (see
+  `GameService::getOrCreateSpectateCode()`) rather than populated for
+  every game up front. See "Spectator mode" in `php-app/README.md`.

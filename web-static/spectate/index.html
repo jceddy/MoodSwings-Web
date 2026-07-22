@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    // Sets the theme before first paint so an explicit light/dark preference
+    // (see "Dark mode" in web-static/README.md) never flashes the wrong
+    // theme first -- inlined and duplicated per-page rather than an external
+    // script, since an external file would itself add a delay this exists to
+    // avoid. The "system" default needs no JS at all: style.css's own
+    // prefers-color-scheme media query handles it.
+    (function () {
+        try {
+            var theme = localStorage.getItem('themePreference');
+            if (theme === 'light' || theme === 'dark') {
+                document.documentElement.dataset.theme = theme;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls back
+            // to the system default.
+        }
+    })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectate - MoodSwings-Web</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <main id="spectate-main" hidden>
+        <button id="spectate-back-to-lobby-button" type="button">&larr; Back to your games</button>
+        <h1>Spectate</h1>
+
+        <!-- Spectator mode (issue #128) -- a stranger with a game's own
+             share code can spectate it regardless of friendship (see
+             GameService::resolveSpectateCode()); this form is that entry
+             point. -->
+        <section id="spectate-code-section">
+            <h2>Enter a spectate code</h2>
+            <form id="spectate-code-form">
+                <input type="text" id="spectate-code-input" placeholder="Spectate code" autocomplete="off" required>
+                <button type="submit">Spectate</button>
+            </form>
+            <p id="spectate-code-error" hidden></p>
+        </section>
+
+        <!-- The other path in (issue #128): any friend's game currently
+             'in_progress' that the viewer isn't seated in themselves --
+             see GameService::listFriendsInProgressGames(). A friend's
+             completed game isn't listed here (per the issue's own "games
+             any of your friends are currently in" wording), but is still
+             reachable via its own spectate code above. -->
+        <section id="spectate-friends-section">
+            <h2>Friends' games</h2>
+            <ul id="spectate-friends-games-list"></ul>
+            <p id="spectate-friends-games-empty">None of your friends are currently in a game.</p>
+        </section>
+    </main>
+
+    <dialog id="resources-dialog">
+        <button id="resources-close-button" type="button" aria-label="Close">&times;</button>
+        <h2>Resources</h2>
+        <ul id="resources-list">
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-extended-rules" target="_blank" rel="noopener noreferrer">Rules</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/other-ways-to-play-mood-swings" target="_blank" rel="noopener noreferrer">Formats</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-card-notes" target="_blank" rel="noopener noreferrer">Card Specific Rulings</a></li>
+            <li><a href="https://magic.wizards.com/en/news/card-image-gallery/mood-swings" target="_blank" rel="noopener noreferrer">Card Gallery</a></li>
+            <li><a href="https://moodiest.app/" target="_blank" rel="noopener noreferrer">Moodiest (Card Repository)</a></li>
+            <li><a href="https://moodswings.scryfall.com/" target="_blank" rel="noopener noreferrer">Moodfall (another Card Repository)</a></li>
+            <li><a href="https://discord.gg/GgHFEBAd6C" target="_blank" rel="noopener noreferrer">Discord</a></li>
+            <li><a href="https://www.reddit.com/r/moodswingstcg/" target="_blank" rel="noopener noreferrer">Reddit</a></li>
+            <li><a href="https://github.com/jceddy/MoodSwings-Web" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+        </ul>
+        <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="jceddy" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
+    </dialog>
+
+    <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Theme
+        <select id="theme-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+        </select>
+    </label></footer>
+    <script src="../js/app.js"></script>
+    <script src="../js/spectate.js"></script>
+</body>
+</html>

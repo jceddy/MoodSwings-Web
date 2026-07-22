@@ -895,8 +895,10 @@ final class GameService
             // Fair 50/50 between the two teams for a team-format game too --
             // exactly 2 of the 4 seats belong to each team, so an ordinary
             // uniform pick over all 4 already picks a team fairly without
-            // needing its own separate randomization step.
-            $firstPlayerId = $playerIds[array_rand($playerIds)];
+            // needing its own separate randomization step. Games 2/3 of a
+            // best-of-three draft match are the one exception -- see
+            // resolveFirstPlayerId()'s own docblock.
+            $firstPlayerId = $this->resolveFirstPlayerId($game, $playerIds);
 
             if ($game['format'] === 'team') {
                 // Which specific teammate actually takes the real first
@@ -939,6 +941,30 @@ final class GameService
                     'first_player' => $firstPlayerId,
                     'pending_play_grants' => json_encode([]),
                 ]);
+            } elseif (
+                $game['draft_match_id'] !== null
+                && $game['match_game_number'] !== null
+                && (int) $game['match_game_number'] > 1
+            ) {
+                // Games 2/3 of a best-of-three draft match start frozen too
+                // -- same reasoning as closed_team's own pregame freeze
+                // above, but waiting on setPlayFirstNextMatchGame() instead:
+                // per the game's own rules, the previous game's loser isn't
+                // required to decide who goes first until they can see this
+                // game's own opening hand (already dealt above), so nothing
+                // can be fixed yet at game-start time. $firstPlayerId here
+                // is resolveFirstPlayerId()'s own placeholder (the previous
+                // winner) -- overwritten if the loser opts to go first
+                // themselves instead.
+                $insertRound = $pdo->prepare(
+                    "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
+                     VALUES (:game_id, 1, :first_player, NULL, 0, :pending_play_grants, 'in_progress')"
+                );
+                $insertRound->execute([
+                    'game_id' => $gameId,
+                    'first_player' => $firstPlayerId,
+                    'pending_play_grants' => json_encode([]),
+                ]);
             } else {
                 $insertRound = $pdo->prepare(
                     "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -960,6 +986,178 @@ final class GameService
             $pdo->rollBack();
             throw $e;
         }
+    }
+
+    /**
+     * startGame()'s own first-player pick for round/game 1. Every game
+     * still gets a uniform coin flip EXCEPT games 2/3 of a best-of-three
+     * draft match (games.draft_match_id set, match_game_number > 1),
+     * where it's instead the previous game's own winner -- purely a
+     * PLACEHOLDER for that case, though: the round itself starts frozen
+     * (see startGame()'s own 'else' branch) until the previous loser
+     * decides, per the game's own rules, who actually goes first --
+     * they don't have to decide until they can see this game's opening
+     * hand, so nothing is fixed yet at the moment this runs. See
+     * setPlayFirstNextMatchGame() for how (and when) that's resolved.
+     *
+     * @param array<string, mixed> $game
+     * @param int[] $playerIds this game's own seats (game_players.id), seat_order ASC
+     */
+    private function resolveFirstPlayerId(array $game, array $playerIds): int
+    {
+        $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+        if ($game['draft_match_id'] === null || $matchGameNumber === null || $matchGameNumber <= 1) {
+            return $playerIds[array_rand($playerIds)];
+        }
+
+        $winnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+        if ($winnerUserId !== null) {
+            $pdo = Connection::get();
+            $placeholders = implode(',', array_fill(0, count($playerIds), '?'));
+            $userStmt = $pdo->prepare("SELECT id, user_id FROM game_players WHERE id IN ({$placeholders})");
+            $userStmt->execute($playerIds);
+            foreach ($userStmt->fetchAll() as $row) {
+                if ((int) $row['user_id'] === $winnerUserId) {
+                    return (int) $row['id'];
+                }
+            }
+        }
+
+        // Should never happen (both seats always carry over unchanged from
+        // the previous game -- see advanceDraftMatch()) -- a safety net
+        // rather than a hard failure to start the game over it.
+        return $playerIds[array_rand($playerIds)];
+    }
+
+    /**
+     * The user_id of match_game_number $matchGameNumber - 1's own winner
+     * within $draftMatchId, or null if that game can't be found (shouldn't
+     * happen once $matchGameNumber > 1 -- advanceDraftMatch() always
+     * creates the next game before the previous one's own winner is even
+     * returned to the caller). resolveFirstPlayerId()'s own placeholder,
+     * and setPlayFirstNextMatchGame()'s own default when the previous
+     * game's loser opts to let them go first again.
+     */
+    private function previousMatchGameWinnerUserId(int $draftMatchId, int $matchGameNumber): ?int
+    {
+        $pdo = Connection::get();
+        $stmt = $pdo->prepare(
+            'SELECT gp.user_id FROM games g
+             JOIN game_players gp ON gp.id = g.winner_game_player_id
+             WHERE g.draft_match_id = :match_id AND g.match_game_number = :num'
+        );
+        $stmt->execute(['match_id' => $draftMatchId, 'num' => $matchGameNumber - 1]);
+        $userId = $stmt->fetchColumn();
+
+        return $userId !== false ? (int) $userId : null;
+    }
+
+    /**
+     * getState()'s own 'first_player_decision' field -- only populated
+     * while game N+1's own round 1 is still frozen awaiting
+     * setPlayFirstNextMatchGame() (see that method and startGame()'s own
+     * freeze for match games). 'you_are_previous_loser' gates whether
+     * $viewerUserId's own client should offer the decision at all (only
+     * the loser may actually call it); 'default_user_id' is who goes
+     * first if they answer "no" (or never answer) -- the previous game's
+     * own winner, mirroring resolveFirstPlayerId()'s own placeholder.
+     * Both ids are user_ids -- matched against getState()'s own top-level
+     * 'players' list for display.
+     */
+    private function firstPlayerDecisionStateFor(array $game, int $matchGameNumber, int $viewerUserId): array
+    {
+        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+
+        $seatsStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
+        $seatsStmt->execute(['game_id' => $game['id']]);
+        $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $previousLoserUserId = $previousWinnerUserId !== null
+            ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
+            : null;
+
+        return [
+            'you_are_previous_loser' => $previousLoserUserId === $viewerUserId,
+            'default_user_id' => $previousWinnerUserId,
+        ];
+    }
+
+    /**
+     * Resolves the "who goes first" freeze startGame() leaves games 2/3 of
+     * a best-of-three draft match in (Quick Draft/Winston Draft/Grid
+     * Draft) -- per the game's own rules, the previous game's loser isn't
+     * required to decide before this game starts, only before anyone
+     * actually plays, so they get to see this game's own opening hand
+     * (already dealt by the time the round exists to freeze) before
+     * deciding. $playFirst true sends the loser out first themselves;
+     * false lets the previous winner go first again (the same result as
+     * never answering at all -- see resolveFirstPlayerId()'s own
+     * placeholder). Only the loser of the previous game may call this,
+     * and only once -- the round unfreezes for both players the moment
+     * either answer is given, so there's nothing left to change
+     * afterward.
+     */
+    public function setPlayFirstNextMatchGame(int $gameId, int $userId, bool $playFirst): void
+    {
+        $this->withGameLock($gameId, function () use ($gameId, $userId, $playFirst): void {
+            $game = $this->fetchGame($gameId);
+            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true) || $game['draft_match_id'] === null) {
+                throw new GameStateException("Game {$gameId} is not a draft match game");
+            }
+            $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+            if ($matchGameNumber === null || $matchGameNumber <= 1) {
+                throw new GameStateException('The first game of a match has no previous game to base this choice on');
+            }
+            if ($game['status'] !== 'in_progress') {
+                throw new GameStateException("Game {$gameId} hasn't started yet -- who goes first isn't decided until you can see your opening hand");
+            }
+
+            $pdo = Connection::get();
+            $roundStmt = $pdo->prepare("SELECT * FROM game_rounds WHERE game_id = :game_id AND round_number = 1");
+            $roundStmt->execute(['game_id' => $gameId]);
+            $round = $roundStmt->fetch();
+            if ($round === false || $round['current_turn_game_player_id'] !== null) {
+                throw new GameStateException('Who goes first in this game has already been decided');
+            }
+
+            $seatsStmt = $pdo->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
+            $seatsStmt->execute(['game_id' => $gameId]);
+            $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+            $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+            $previousLoserUserId = $previousWinnerUserId !== null
+                ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
+                : null;
+
+            if ($previousLoserUserId === null || $userId !== $previousLoserUserId) {
+                throw new GameStateException('Only the loser of the previous game can choose who goes first next');
+            }
+
+            // $round['first_game_player_id'] already holds resolveFirstPlayerId()'s
+            // own placeholder -- the previous winner's seat in THIS game --
+            // so a "false" answer needs no write there at all; only "true"
+            // overwrites it with the loser's own seat.
+            $chosenGamePlayerId = $playFirst
+                ? $this->gamePlayerIdFor($gameId, $userId)
+                : (int) $round['first_game_player_id'];
+
+            if ($playFirst) {
+                $pdo->prepare('UPDATE game_rounds SET first_game_player_id = :first_player WHERE id = :round_id')
+                    ->execute(['first_player' => $chosenGamePlayerId, 'round_id' => $round['id']]);
+            }
+
+            $pdo->prepare('UPDATE games SET first_player_choice_user_id = :chosen WHERE id = :game_id')
+                ->execute(['chosen' => $playFirst ? $userId : $previousWinnerUserId, 'game_id' => $gameId]);
+
+            $state = $this->boardStates->load($gameId);
+            $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+            $this->boardStates->save($gameId, $state);
+            $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+
+            $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'draft_match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $state);
+        });
+
+        $this->touchLastMoveAt($gameId);
     }
 
     /**
@@ -1940,6 +2138,14 @@ final class GameService
                 "UPDATE games SET status = 'abandoned' WHERE draft_match_id = :match_id AND match_game_number = 1"
             )->execute(['match_id' => $draftMatchId]);
 
+            // $winnerUserId stays null in the rare case BOTH players ended
+            // up short of WINSTON_MIN_DECK_SIZE -- winner_user_id itself
+            // is already null then too, so there's no winner/loser to
+            // record either.
+            if ($winnerUserId !== null) {
+                $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+            }
+
             return;
         }
 
@@ -2388,6 +2594,7 @@ final class GameService
         Connection::get()->prepare(
             "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = :winner_team, completed_at = NOW() WHERE id = :game_id"
         )->execute(['winner' => $winnerGamePlayerId, 'winner_team' => $winnerTeamId, 'game_id' => $gameId]);
+        $this->recordGameCompletionStats($gameId, $winnerGamePlayerId, $winnerTeamId);
 
         // A no-op for every non-draft game -- see its own docblock.
         $this->advanceDraftMatch($gameId, $winnerGamePlayerId);
@@ -2748,7 +2955,7 @@ final class GameService
      *
      * @return ?array{you_submitted: bool, submitted_game_player_ids: int[]}
      */
-    private function pendingInitialCardPass(int $gameId, int $viewerGamePlayerId): ?array
+    private function pendingInitialCardPass(int $gameId, ?int $viewerGamePlayerId): ?array
     {
         $stmt = Connection::get()->prepare(
             'SELECT game_player_id FROM game_initial_card_passes WHERE game_id = :game_id'
@@ -2761,7 +2968,9 @@ final class GameService
         }
 
         return [
-            'you_submitted' => in_array($viewerGamePlayerId, $submittedIds, true),
+            // $viewerGamePlayerId === null for a spectator -- never in
+            // $submittedIds (an int[] of real seats), so correctly false.
+            'you_submitted' => $viewerGamePlayerId !== null && in_array($viewerGamePlayerId, $submittedIds, true),
             'submitted_game_player_ids' => $submittedIds,
         ];
     }
@@ -3297,6 +3506,110 @@ final class GameService
     }
 
     /**
+     * Lifetime game-level wins/losses (issue #106) -- called from every
+     * code path that sets games.status = 'completed'
+     * (completeGameByResignation(), the non-team and team round-scoring
+     * completions). $winnerTeamId is null for every non-team format
+     * (winner is just the one $winnerGamePlayerId seat); for 'team'/
+     * 'closed_team' it credits every seat sharing that team_id, not just
+     * $winnerGamePlayerId's own representative seat -- see
+     * finishTeamScoringAndAdvance()'s own docblock on why that's only a
+     * representative, never the authoritative record of who won.
+     */
+    private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId): void
+    {
+        $stmt = Connection::get()->prepare('SELECT id, user_id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $players = $stmt->fetchAll();
+
+        $winningUserIds = [];
+        $losingUserIds = [];
+        foreach ($players as $player) {
+            $isWinner = $winnerTeamId !== null
+                ? (int) $player['team_id'] === $winnerTeamId
+                : (int) $player['id'] === $winnerGamePlayerId;
+            if ($isWinner) {
+                $winningUserIds[] = (int) $player['user_id'];
+            } else {
+                $losingUserIds[] = (int) $player['user_id'];
+            }
+        }
+
+        $this->bumpLifetimeStats($winningUserIds, 'game_wins');
+        $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+    }
+
+    /**
+     * Lifetime (best-of-three draft) match-level wins/losses (issue #106)
+     * -- called from both places a draft match's own status becomes
+     * 'completed': advanceDraftMatch() (the ordinary 2-0 finish) and
+     * finalizeWinstonDraft()'s under-12-cards auto-loss branch, which
+     * completes the match without game 1 ever completing (see the
+     * migration's own comment on why that still counts here even though
+     * recordGameCompletionStats() never ran for it).
+     */
+    private function recordMatchCompletionStats(int $draftMatchId, int $winnerUserId): void
+    {
+        $stmt = Connection::get()->prepare('SELECT user_id FROM draft_match_players WHERE draft_match_id = :match_id');
+        $stmt->execute(['match_id' => $draftMatchId]);
+        $userIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $this->bumpLifetimeStats([$winnerUserId], 'match_wins');
+        $this->bumpLifetimeStats(array_diff($userIds, [$winnerUserId]), 'match_losses');
+    }
+
+    /** @param string $column one of user_lifetime_stats' own counter columns -- never user input, so safe to interpolate directly */
+    private function bumpLifetimeStats(array $userIds, string $column): void
+    {
+        if ($userIds === []) {
+            return;
+        }
+
+        $stmt = Connection::get()->prepare(
+            "INSERT INTO user_lifetime_stats (user_id, {$column}) VALUES (:user_id, 1)
+             ON DUPLICATE KEY UPDATE {$column} = {$column} + 1"
+        );
+        foreach ($userIds as $userId) {
+            $stmt->execute(['user_id' => $userId]);
+        }
+    }
+
+    /** @return array{game_wins:int, game_losses:int, match_wins:int, match_losses:int} all-zero for a user with no row yet (nothing completed for them) */
+    public function lifetimeStatsFor(int $userId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT game_wins, game_losses, match_wins, match_losses FROM user_lifetime_stats WHERE user_id = :user_id'
+        );
+        $stmt->execute(['user_id' => $userId]);
+        $row = $stmt->fetch();
+
+        $gameWins = $row !== false ? (int) $row['game_wins'] : 0;
+        $gameLosses = $row !== false ? (int) $row['game_losses'] : 0;
+        $matchWins = $row !== false ? (int) $row['match_wins'] : 0;
+        $matchLosses = $row !== false ? (int) $row['match_losses'] : 0;
+
+        return [
+            'game_wins' => $gameWins,
+            'game_losses' => $gameLosses,
+            // Rounded to the nearest whole percent; null (rather than a
+            // divide-by-zero 0%) until at least one game/match has
+            // actually completed -- 0% would misleadingly read as "you've
+            // lost every game" for a user who simply hasn't played yet.
+            'game_win_percentage' => self::winPercentage($gameWins, $gameLosses),
+            'match_wins' => $matchWins,
+            'match_losses' => $matchLosses,
+            'match_win_percentage' => self::winPercentage($matchWins, $matchLosses),
+        ];
+    }
+
+    private static function winPercentage(int $wins, int $losses): ?int
+    {
+        $total = $wins + $losses;
+
+        return $total > 0 ? (int) round($wins / $total * 100) : null;
+    }
+
+    /**
      * $state is the same instance the triggering play/pass already
      * loaded (and, if it was a play, already saved game_cards for) --
      * reused here rather than reloaded, since a round-wide flag like
@@ -3469,6 +3782,7 @@ final class GameService
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id"
             );
             $completeGame->execute(['winner' => $winnerId, 'game_id' => $gameId]);
+            $this->recordGameCompletionStats($gameId, $winnerId, null);
 
             // A no-op for every non-quick_draft game (games.draft_match_id
             // is only ever set for that deck_type) -- see its own docblock.
@@ -3545,6 +3859,7 @@ final class GameService
             $pdo->prepare(
                 "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
             )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
+            $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
 
             return;
         }
@@ -3675,6 +3990,7 @@ final class GameService
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = :winner_team, completed_at = NOW() WHERE id = :game_id"
             );
             $completeGame->execute(['winner' => $winnerRepresentative, 'winner_team' => $winningTeamId, 'game_id' => $gameId]);
+            $this->recordGameCompletionStats($gameId, $winnerRepresentative, $winningTeamId);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
         }
@@ -4185,6 +4501,102 @@ final class GameService
         return $id !== false ? (int) $id : null;
     }
 
+    /** @return int[] every seated player's user_id, in seat order */
+    public function seatedUserIdsFor(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT user_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Spectator mode (issue #128)'s own share code -- null until a seated
+     * player has ever asked for one (see getOrCreateSpectateCode()).
+     */
+    public function spectateCodeFor(int $gameId): ?string
+    {
+        $stmt = Connection::get()->prepare('SELECT spectate_code FROM games WHERE id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        $code = $stmt->fetchColumn();
+
+        return $code !== false && $code !== null ? (string) $code : null;
+    }
+
+    /**
+     * Get-or-create $gameId's own spectate_code (issue #128) -- lazily
+     * generated the first time any seated player asks (see
+     * "Spectator mode" in php-app/README.md for why this isn't
+     * pre-populated for every game). Callers are responsible for their
+     * own authorization (matching this codebase's existing convention --
+     * see requireGamePlayer() in index.php -- of checking seat membership
+     * once at the route boundary rather than re-deriving it inside
+     * GameService for every action).
+     *
+     * A casually-shareable code, not a secret bearer credential (see the
+     * migration's own comment), so a short, directly-stored
+     * bin2hex(random_bytes(4)) (8 hex chars) is plenty -- the retry loop
+     * below only exists for the vanishingly unlikely case two different
+     * games collide on the same 8-char code, not as a security measure.
+     */
+    public function getOrCreateSpectateCode(int $gameId): string
+    {
+        $existing = $this->spectateCodeFor($gameId);
+        if ($existing !== null) {
+            return $existing;
+        }
+
+        $pdo = Connection::get();
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            $code = bin2hex(random_bytes(4));
+            try {
+                $stmt = $pdo->prepare(
+                    'UPDATE games SET spectate_code = :code WHERE id = :game_id AND spectate_code IS NULL'
+                );
+                $stmt->execute(['code' => $code, 'game_id' => $gameId]);
+
+                return $this->spectateCodeFor($gameId) ?? $code;
+            } catch (PDOException $e) {
+                // Unique-constraint collision on spectate_code -- retry
+                // with a freshly generated code. Anything else is a real
+                // problem, not a collision to shrug off.
+                if (!str_contains($e->getMessage(), 'Duplicate entry')) {
+                    throw $e;
+                }
+            }
+        }
+
+        throw new GameStateException("Could not generate a unique spectate code for game {$gameId} after several attempts");
+    }
+
+    /**
+     * Resolves a spectate code (issue #128) to the game_id it belongs to,
+     * for the code-entry form on the new "Spectate" page. No
+     * friendship/seat check here at all -- the whole point of a shared
+     * code is that a stranger who merely holds it may use it (still
+     * requires being logged in, though -- see requireAuth() at this
+     * route). Only ever succeeds for a game that can actually be
+     * spectated right now -- see getSpectatorState()'s own identical
+     * 'waiting'/'abandoned' exclusion.
+     */
+    public function resolveSpectateCode(string $code): int
+    {
+        $stmt = Connection::get()->prepare('SELECT id, status FROM games WHERE spectate_code = :code');
+        $stmt->execute(['code' => $code]);
+        $row = $stmt->fetch();
+
+        if ($row === false) {
+            throw new GameStateException('No game found for that spectate code.');
+        }
+        if ($row['status'] === 'waiting' || $row['status'] === 'abandoned') {
+            throw new GameStateException("Game {$row['id']} can't be spectated right now.");
+        }
+
+        return (int) $row['id'];
+    }
+
     /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
     public function listGamesForUser(int $userId): array
     {
@@ -4208,173 +4620,232 @@ final class GameService
         $gameIdsStmt->execute(['user_id' => $userId]);
         $gameIds = array_map(intval(...), $gameIdsStmt->fetchAll(PDO::FETCH_COLUMN));
 
-        $games = [];
-        foreach ($gameIds as $gameId) {
-            $game = $this->fetchGame($gameId);
+        return array_map(fn (int $gameId) => $this->gameSummaryFor($gameId, $userId), $gameIds);
+    }
 
-            $playersStmt = $pdo->prepare(
-                'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username FROM game_players gp
-                 JOIN users u ON u.id = gp.user_id
-                 WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
-            );
-            $playersStmt->execute(['game_id' => $gameId]);
-            $playerRows = $playersStmt->fetchAll();
+    /**
+     * Spectator mode (issue #128): every currently-'in_progress' game any
+     * of $friendUserIds is seated in, that $viewerUserId is NOT seated in
+     * -- the lobby's own games (listGamesForUser() above) never appear
+     * here, by construction. Deliberately narrower than
+     * listGamesForUser(): 'waiting' games are excluded outright (nothing
+     * dealt yet to spectate -- see getSpectatorState()'s own identical
+     * boundary), and 'completed' ones too (the issue's own "games any of
+     * your friends are currently in" wording, plus a completed game is
+     * always still reachable by its spectate_code for anyone who wants to
+     * review it -- see resolveSpectateCode()). Hydrated via the same
+     * gameSummaryFor() every lobby row uses, but with a null viewer (see
+     * that method's own docblock for why a real, non-participant viewer
+     * id would actually be worse here, not just redundant).
+     *
+     * @param int[] $friendUserIds
+     * @return array<int, array<string, mixed>>
+     */
+    public function listFriendsInProgressGames(int $viewerUserId, array $friendUserIds): array
+    {
+        if ($friendUserIds === []) {
+            return [];
+        }
 
-            $yourGamePlayerId = null;
-            $players = [];
-            foreach ($playerRows as $row) {
-                if ((int) $row['user_id'] === $userId) {
-                    $yourGamePlayerId = (int) $row['id'];
-                }
-                $players[] = [
-                    'user_id' => (int) $row['user_id'],
-                    'username' => $row['username'],
-                    'seat_order' => (int) $row['seat_order'],
-                ];
+        $pdo = Connection::get();
+        $placeholders = implode(',', array_fill(0, count($friendUserIds), '?'));
+        $gameIdsStmt = $pdo->prepare(
+            "SELECT DISTINCT g.id FROM games g
+             JOIN game_players gp ON gp.game_id = g.id
+             WHERE gp.user_id IN ({$placeholders})
+               AND g.status = 'in_progress'
+               AND g.id NOT IN (SELECT game_id FROM game_players WHERE user_id = ?)
+             ORDER BY g.last_move_at DESC, g.id DESC"
+        );
+        $gameIdsStmt->execute([...$friendUserIds, $viewerUserId]);
+        $gameIds = array_map(intval(...), $gameIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        return array_map(fn (int $gameId) => $this->gameSummaryFor($gameId, null), $gameIds);
+    }
+
+    /**
+     * listGamesForUser()'s/listFriendsInProgressGames()'s shared per-game
+     * hydration. $viewerUserId null means "no personalized view at all,"
+     * not just "a viewer who happens not to be seated" -- every
+     * $viewerUserId-dependent field (is_your_turn,
+     * is_awaiting_your_response, and, most importantly,
+     * draftMatchSummaryFor()'s own your_wins/opponent_wins, which would
+     * otherwise misattribute a real-but-non-participant viewer as one of
+     * the match's own two players) simply stays at its unpersonalized
+     * default instead. Every other field here (usernames, status,
+     * winner_usernames, ...) is already public regardless of viewer.
+     *
+     * @return array<string, mixed>
+     */
+    private function gameSummaryFor(int $gameId, ?int $viewerUserId): array
+    {
+        $pdo = Connection::get();
+        $game = $this->fetchGame($gameId);
+
+        $playersStmt = $pdo->prepare(
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username FROM game_players gp
+             JOIN users u ON u.id = gp.user_id
+             WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
+        );
+        $playersStmt->execute(['game_id' => $gameId]);
+        $playerRows = $playersStmt->fetchAll();
+
+        $yourGamePlayerId = null;
+        $players = [];
+        foreach ($playerRows as $row) {
+            if ($viewerUserId !== null && (int) $row['user_id'] === $viewerUserId) {
+                $yourGamePlayerId = (int) $row['id'];
             }
-
-            // Same "credit the whole winning team" logic as getState()'s own
-            // 'winner_usernames' -- both teammates' usernames for a
-            // team-format win, just the one player's otherwise. Empty until
-            // the game actually completes (winner_team_id/winner_game_player_id
-            // are both still null).
-            $winnerUsernames = [];
-            if ($game['winner_team_id'] !== null) {
-                foreach ($playerRows as $row) {
-                    if ($row['team_id'] !== null && (int) $row['team_id'] === (int) $game['winner_team_id']) {
-                        $winnerUsernames[] = $row['username'];
-                    }
-                }
-            } elseif ($game['winner_game_player_id'] !== null) {
-                foreach ($playerRows as $row) {
-                    if ((int) $row['id'] === (int) $game['winner_game_player_id']) {
-                        $winnerUsernames[] = $row['username'];
-                    }
-                }
-            }
-
-            $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
-
-            $currentTurnGamePlayerId = null;
-            $awaitingYourResponse = false;
-            $currentTurnUsername = null;
-            $awaitingResponseUsernames = [];
-            if ($game['status'] === 'in_progress') {
-                $roundStmt = $pdo->prepare(
-                    "SELECT current_turn_game_player_id FROM game_rounds
-                     WHERE game_id = :game_id AND status = 'in_progress'
-                     ORDER BY round_number DESC LIMIT 1"
-                );
-                $roundStmt->execute(['game_id' => $gameId]);
-                $currentTurnGamePlayerId = $roundStmt->fetchColumn();
-                $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
-
-                // One isAwaitingResponseFrom() check per seated player (not
-                // just the viewer) -- lets the lobby flag every player the
-                // game is currently blocked on, not only the viewer
-                // themselves, so a game where your own play opened a
-                // decision targeting someone ELSE (still "your turn" by
-                // current_turn_game_player_id, but not actually actionable)
-                // shows correctly on whichever player's name it's really
-                // waiting on.
-                foreach ($playerRows as $row) {
-                    $rowGamePlayerId = (int) $row['id'];
-                    if ($rowGamePlayerId === $currentTurnGamePlayerId) {
-                        $currentTurnUsername = $row['username'];
-                    }
-                    $rowAwaitingResponse = $this->isAwaitingResponseFrom($gameId, $rowGamePlayerId, $game['format']);
-                    if ($rowAwaitingResponse) {
-                        $awaitingResponseUsernames[] = $row['username'];
-                    }
-                    if ($yourGamePlayerId !== null && $rowGamePlayerId === $yourGamePlayerId) {
-                        $awaitingYourResponse = $rowAwaitingResponse;
-                    }
-                }
-            } elseif ($game['status'] === 'waiting' && $draftMatchId !== null) {
-                // No current_turn_username here -- a still-'waiting' draft
-                // game has no board "turn" concept yet, only who the draft
-                // itself is blocked on (see draftAwaitingResponseUsernames()).
-                $awaitingResponseUsernames = $this->draftAwaitingResponseUsernames($draftMatchId, $game['deck_type'], $playerRows);
-                if ($yourGamePlayerId !== null) {
-                    $yourUsername = null;
-                    foreach ($playerRows as $row) {
-                        if ((int) $row['id'] === $yourGamePlayerId) {
-                            $yourUsername = $row['username'];
-                            break;
-                        }
-                    }
-                    $awaitingYourResponse = $yourUsername !== null && in_array($yourUsername, $awaitingResponseUsernames, true);
-                }
-            }
-
-            $games[] = [
-                'id' => $gameId,
-                'format' => $game['format'],
-                'deck_type' => $game['deck_type'],
-                'custom_deck_name' => $game['custom_deck_name'],
-                'status' => $game['status'],
-                'wins_needed' => (int) $game['wins_needed'],
-                'created_at' => $game['created_at'],
-                'started_at' => $game['started_at'],
-                'last_move_at' => $game['last_move_at'],
-                'completed_at' => $game['completed_at'],
-                'players' => $players,
-                'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
-                // True for a delayed choice that's on you specifically --
-                // distinct from is_your_turn, since none of these ever
-                // require it to actually be your own turn: a card another
-                // player played that targets you (Compulsion-style, see
-                // RequiresOpponentDecision), your own team's turn_order/
-                // draw_recipient decision needing your propose/confirm, or
-                // (closed_team only) your still-unsubmitted pregame blind
-                // card pass. See isAwaitingResponseFrom(). Also true while
-                // the game is still 'waiting' on a draft-based deck_type
-                // (quick_draft/winston_draft/grid_draft) if the draft or
-                // deck-building step itself is specifically blocked on you
-                // -- see draftAwaitingResponseUsernames().
-                'is_awaiting_your_response' => $awaitingYourResponse,
-                // Whichever seated player current_turn_game_player_id
-                // actually belongs to, by username -- lets the lobby show a
-                // play-arrow icon next to that specific player's name (see
-                // buildGameRow()) rather than a row-wide "(your turn)" tag
-                // that only ever named the viewer. Null whenever the game
-                // isn't 'in_progress' or the round is between turns (e.g.
-                // an open team turn_order decision -- see
-                // applyTurnOrderDecision()'s own docblock) -- also null for
-                // a still-'waiting' draft game, which has no board "turn"
-                // concept yet (see awaiting_response_usernames below for
-                // who a drafting/deck-building game is blocked on instead).
-                'current_turn_username' => $currentTurnUsername,
-                // Every seated player isAwaitingResponseFrom() currently
-                // returns true for -- the generalized, all-players version
-                // of is_awaiting_your_response, so the lobby can show a
-                // waiting-hourglass icon next to each one specifically
-                // (there can be more than one at once, e.g. closed_team's
-                // pregame card pass before every player has submitted).
-                // For a still-'waiting' draft-based game, this is instead
-                // draftAwaitingResponseUsernames()'s own view of who the
-                // draft/deck-building step is blocked on -- same field,
-                // same icon, just a pre-game source instead of an
-                // in-progress one.
-                'awaiting_response_usernames' => $awaitingResponseUsernames,
-                'winner_usernames' => $winnerUsernames,
-                // Lets the lobby group any draft-based match's (Quick
-                // Draft or Winston Draft) up-to-3 games together (same
-                // draft_match_id) instead of listing them as unrelated
-                // rows, and show the match's own result once it's done --
-                // see draftMatchSummaryFor(). 'draft_match' is generic
-                // (not 'quick_draft_match') since this shape and its
-                // lobby-rendering code are already 100% deck-type-agnostic
-                // -- unlike getState()'s own per-format 'quick_draft'/
-                // 'winston_draft' fields below, whose 'drafting' sub-shape
-                // genuinely differs between the two variants.
-                'draft_match_id' => $draftMatchId,
-                'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
-                'draft_match' => $draftMatchId !== null ? $this->draftMatchSummaryFor($draftMatchId, $userId) : null,
+            $players[] = [
+                'user_id' => (int) $row['user_id'],
+                'username' => $row['username'],
+                'seat_order' => (int) $row['seat_order'],
             ];
         }
 
-        return $games;
+        // Same "credit the whole winning team" logic as getState()'s own
+        // 'winner_usernames' -- both teammates' usernames for a
+        // team-format win, just the one player's otherwise. Empty until
+        // the game actually completes (winner_team_id/winner_game_player_id
+        // are both still null).
+        $winnerUsernames = [];
+        if ($game['winner_team_id'] !== null) {
+            foreach ($playerRows as $row) {
+                if ($row['team_id'] !== null && (int) $row['team_id'] === (int) $game['winner_team_id']) {
+                    $winnerUsernames[] = $row['username'];
+                }
+            }
+        } elseif ($game['winner_game_player_id'] !== null) {
+            foreach ($playerRows as $row) {
+                if ((int) $row['id'] === (int) $game['winner_game_player_id']) {
+                    $winnerUsernames[] = $row['username'];
+                }
+            }
+        }
+
+        $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+
+        $currentTurnGamePlayerId = null;
+        $awaitingYourResponse = false;
+        $currentTurnUsername = null;
+        $awaitingResponseUsernames = [];
+        if ($game['status'] === 'in_progress') {
+            $roundStmt = $pdo->prepare(
+                "SELECT current_turn_game_player_id FROM game_rounds
+                 WHERE game_id = :game_id AND status = 'in_progress'
+                 ORDER BY round_number DESC LIMIT 1"
+            );
+            $roundStmt->execute(['game_id' => $gameId]);
+            $currentTurnGamePlayerId = $roundStmt->fetchColumn();
+            $currentTurnGamePlayerId = $currentTurnGamePlayerId !== false ? (int) $currentTurnGamePlayerId : null;
+
+            // One isAwaitingResponseFrom() check per seated player (not
+            // just the viewer) -- lets the lobby flag every player the
+            // game is currently blocked on, not only the viewer
+            // themselves, so a game where your own play opened a
+            // decision targeting someone ELSE (still "your turn" by
+            // current_turn_game_player_id, but not actually actionable)
+            // shows correctly on whichever player's name it's really
+            // waiting on.
+            foreach ($playerRows as $row) {
+                $rowGamePlayerId = (int) $row['id'];
+                if ($rowGamePlayerId === $currentTurnGamePlayerId) {
+                    $currentTurnUsername = $row['username'];
+                }
+                $rowAwaitingResponse = $this->isAwaitingResponseFrom($gameId, $rowGamePlayerId, $game['format']);
+                if ($rowAwaitingResponse) {
+                    $awaitingResponseUsernames[] = $row['username'];
+                }
+                if ($yourGamePlayerId !== null && $rowGamePlayerId === $yourGamePlayerId) {
+                    $awaitingYourResponse = $rowAwaitingResponse;
+                }
+            }
+        } elseif ($game['status'] === 'waiting' && $draftMatchId !== null) {
+            // No current_turn_username here -- a still-'waiting' draft
+            // game has no board "turn" concept yet, only who the draft
+            // itself is blocked on (see draftAwaitingResponseUsernames()).
+            $awaitingResponseUsernames = $this->draftAwaitingResponseUsernames($draftMatchId, $game['deck_type'], $playerRows);
+            if ($yourGamePlayerId !== null) {
+                $yourUsername = null;
+                foreach ($playerRows as $row) {
+                    if ((int) $row['id'] === $yourGamePlayerId) {
+                        $yourUsername = $row['username'];
+                        break;
+                    }
+                }
+                $awaitingYourResponse = $yourUsername !== null && in_array($yourUsername, $awaitingResponseUsernames, true);
+            }
+        }
+
+        return [
+            'id' => $gameId,
+            'format' => $game['format'],
+            'deck_type' => $game['deck_type'],
+            'custom_deck_name' => $game['custom_deck_name'],
+            'status' => $game['status'],
+            'wins_needed' => (int) $game['wins_needed'],
+            'created_at' => $game['created_at'],
+            'started_at' => $game['started_at'],
+            'last_move_at' => $game['last_move_at'],
+            'completed_at' => $game['completed_at'],
+            'players' => $players,
+            'is_your_turn' => $yourGamePlayerId !== null && $yourGamePlayerId === $currentTurnGamePlayerId,
+            // True for a delayed choice that's on you specifically --
+            // distinct from is_your_turn, since none of these ever
+            // require it to actually be your own turn: a card another
+            // player played that targets you (Compulsion-style, see
+            // RequiresOpponentDecision), your own team's turn_order/
+            // draw_recipient decision needing your propose/confirm, or
+            // (closed_team only) your still-unsubmitted pregame blind
+            // card pass. See isAwaitingResponseFrom(). Also true while
+            // the game is still 'waiting' on a draft-based deck_type
+            // (quick_draft/winston_draft/grid_draft) if the draft or
+            // deck-building step itself is specifically blocked on you
+            // -- see draftAwaitingResponseUsernames().
+            'is_awaiting_your_response' => $awaitingYourResponse,
+            // Whichever seated player current_turn_game_player_id
+            // actually belongs to, by username -- lets the lobby show a
+            // play-arrow icon next to that specific player's name (see
+            // buildGameRow()) rather than a row-wide "(your turn)" tag
+            // that only ever named the viewer. Null whenever the game
+            // isn't 'in_progress' or the round is between turns (e.g.
+            // an open team turn_order decision -- see
+            // applyTurnOrderDecision()'s own docblock) -- also null for
+            // a still-'waiting' draft game, which has no board "turn"
+            // concept yet (see awaiting_response_usernames below for
+            // who a drafting/deck-building game is blocked on instead).
+            'current_turn_username' => $currentTurnUsername,
+            // Every seated player isAwaitingResponseFrom() currently
+            // returns true for -- the generalized, all-players version
+            // of is_awaiting_your_response, so the lobby can show a
+            // waiting-hourglass icon next to each one specifically
+            // (there can be more than one at once, e.g. closed_team's
+            // pregame card pass before every player has submitted).
+            // For a still-'waiting' draft-based game, this is instead
+            // draftAwaitingResponseUsernames()'s own view of who the
+            // draft/deck-building step is blocked on -- same field,
+            // same icon, just a pre-game source instead of an
+            // in-progress one.
+            'awaiting_response_usernames' => $awaitingResponseUsernames,
+            'winner_usernames' => $winnerUsernames,
+            // Lets the lobby group any draft-based match's (Quick
+            // Draft or Winston Draft) up-to-3 games together (same
+            // draft_match_id) instead of listing them as unrelated
+            // rows, and show the match's own result once it's done --
+            // see draftMatchSummaryFor(). 'draft_match' is generic
+            // (not 'quick_draft_match') since this shape and its
+            // lobby-rendering code are already 100% deck-type-agnostic
+            // -- unlike getState()'s own per-format 'quick_draft'/
+            // 'winston_draft' fields below, whose 'drafting' sub-shape
+            // genuinely differs between the two variants. Null for a
+            // null $viewerUserId -- see this method's own docblock for
+            // why (draftMatchSummaryFor() assumes a real participant).
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            'draft_match' => ($draftMatchId !== null && $viewerUserId !== null)
+                ? $this->draftMatchSummaryFor($draftMatchId, $viewerUserId)
+                : null,
+        ];
     }
 
     /**
@@ -5079,6 +5550,52 @@ final class GameService
             throw new GameStateException("User {$viewerUserId} is not seated in game {$gameId}");
         }
 
+        return $this->buildGameState($gameId, $viewerUserId, $viewerGamePlayerId);
+    }
+
+    /**
+     * Spectator mode (issue #128): the public-information view of a game
+     * nobody watching is actually seated in. buildGameState() below simply
+     * never populates a 'you' key at all for a null viewer -- the same
+     * pattern 'closed_team' already uses to never populate
+     * 'you.teammate_hand' (see "Closed Team Play" in php-app/README.md) --
+     * so no hand contents or a targeted decision's own private 'field'
+     * payload ever leak while the game is still 'in_progress'. Once a game
+     * is 'completed' there's nothing competitive left to conceal, so
+     * $revealAllHands additionally exposes every seated player's final
+     * hand (players[].hand) -- matching how a finished game is customarily
+     * "shown" once it no longer matters. Spectating a still-'waiting' game
+     * (nothing dealt yet) or an 'abandoned' one is rejected outright. See
+     * "Spectator mode" in php-app/README.md, including the deferred
+     * "tournament spectator" mode (full private info, LIVE) this
+     * deliberately does not cover.
+     *
+     * @return array<string, mixed>
+     */
+    public function getSpectatorState(int $gameId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['status'] === 'waiting' || $game['status'] === 'abandoned') {
+            throw new GameStateException("Game {$gameId} can't be spectated right now.");
+        }
+
+        return $this->buildGameState($gameId, null, null, $game['status'] === 'completed');
+    }
+
+    /**
+     * Shared builder behind both getState() (a real seated player --
+     * $viewerUserId/$viewerGamePlayerId always non-null) and
+     * getSpectatorState() (a non-seated spectator -- both null,
+     * $revealAllHands only ever true for a completed game). Every branch
+     * below conditioned on $viewerGamePlayerId/$viewerUserId === null was
+     * deliberately made explicit rather than relying on a null id merely
+     * happening to compare unequal everywhere -- see "Spectator mode" in
+     * php-app/README.md.
+     *
+     * @return array<string, mixed>
+     */
+    private function buildGameState(int $gameId, ?int $viewerUserId, ?int $viewerGamePlayerId, bool $revealAllHands = false): array
+    {
         $game = $this->fetchGame($gameId);
         $pdo = Connection::get();
 
@@ -5123,6 +5640,13 @@ final class GameService
                 // (nothing dealt yet), the one status this function
                 // returns for before ever reaching that point.
                 'total_score' => 0,
+                // Overwritten below with this player's own remaining deck
+                // size once BoardState is loaded (0 here only actually
+                // applies to a 'waiting' game) -- always public, the same
+                // category of information as hand_count above, so a
+                // spectator sees it for every player, not just their own
+                // (see "Spectator mode" in php-app/README.md).
+                'deck_count' => 0,
                 // Only meaningful for deck_type = 'custom_duel' -- each
                 // player's own submitted decklist (see
                 // submitCustomDuelDeck()), null/false for every other
@@ -5193,7 +5717,6 @@ final class GameService
                 'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             ],
             'players' => $players,
-            'you' => ['game_player_id' => $viewerGamePlayerId],
             'round' => null,
             'in_play' => [],
             'discard_pile' => [],
@@ -5209,6 +5732,13 @@ final class GameService
             // see submitInitialCardPass() and "Closed Team Play" in
             // php-app/README.md.
             'initial_card_pass' => null,
+            // Only populated for a best-of-three draft match's own game
+            // 2/3 (Quick Draft/Winston Draft/Grid Draft), and only while
+            // round 1 is still frozen awaiting the previous game's
+            // loser's own "who goes first" decision -- see
+            // setPlayFirstNextMatchGame() and startGame()'s own freeze
+            // for match games above.
+            'first_player_decision' => null,
             // Only populated for deck_type = 'quick_draft' -- unlike every
             // other quick_draft/custom_duel-style pregame field above,
             // this is populated regardless of $game['status'] (a Quick
@@ -5224,12 +5754,21 @@ final class GameService
             'grid_draft' => null,
         ];
 
-        if ($game['deck_type'] === 'quick_draft' && $game['draft_match_id'] !== null) {
-            $response['quick_draft'] = $this->quickDraftStateFor($game, $viewerUserId);
-        } elseif ($game['deck_type'] === 'winston_draft' && $game['draft_match_id'] !== null) {
-            $response['winston_draft'] = $this->winstonDraftStateFor($game, $viewerUserId);
-        } elseif ($game['deck_type'] === 'grid_draft' && $game['draft_match_id'] !== null) {
-            $response['grid_draft'] = $this->gridDraftStateFor($game, $viewerUserId);
+        if ($viewerGamePlayerId !== null) {
+            // Omitted entirely for a spectator (no viewer seat to speak
+            // from) -- mirrors 'closed_team' never populating
+            // 'you.teammate_hand' (see this method's own docblock above).
+            $response['you'] = ['game_player_id' => $viewerGamePlayerId];
+        }
+
+        if ($viewerUserId !== null) {
+            if ($game['deck_type'] === 'quick_draft' && $game['draft_match_id'] !== null) {
+                $response['quick_draft'] = $this->quickDraftStateFor($game, $viewerUserId);
+            } elseif ($game['deck_type'] === 'winston_draft' && $game['draft_match_id'] !== null) {
+                $response['winston_draft'] = $this->winstonDraftStateFor($game, $viewerUserId);
+            } elseif ($game['deck_type'] === 'grid_draft' && $game['draft_match_id'] !== null) {
+                $response['grid_draft'] = $this->gridDraftStateFor($game, $viewerUserId);
+            }
         }
 
         if ($game['status'] !== 'in_progress' && $game['status'] !== 'completed') {
@@ -5242,7 +5781,24 @@ final class GameService
         $roundStmt->execute(['game_id' => $gameId]);
         $roundRow = $roundStmt->fetch();
 
+        if (
+            (int) $roundRow['round_number'] === 1
+            && $roundRow['current_turn_game_player_id'] === null
+            && $game['draft_match_id'] !== null
+            && $game['match_game_number'] !== null
+            && (int) $game['match_game_number'] > 1
+        ) {
+            // A non-null sentinel no real user_id can ever equal --
+            // firstPlayerDecisionStateFor()'s own 'you_are_previous_loser'
+            // comparison then correctly resolves false for a spectator
+            // (who is never the previous game's loser) without widening
+            // its signature just for this one nullable case.
+            $response['first_player_decision'] = $this->firstPlayerDecisionStateFor($game, (int) $game['match_game_number'], $viewerUserId ?? 0);
+        }
+
         $state = $this->boardStates->load($gameId);
+        $names = $this->cardNamesFor($gameId);
+        $playerNames = array_column($players, 'username', 'game_player_id');
 
         // A quality-of-life running total -- how many points a player
         // would score if the round ended and every in-play mood scored at
@@ -5252,14 +5808,27 @@ final class GameService
         // total_wins already exists to summarize at the round-victory
         // level); this is always just a live snapshot of the board as it
         // stands right now, resetting to 0 the moment a round scores and
-        // every mood leaves play.
+        // every mood leaves play. deck_count is likewise always public
+        // (see the players[] entry's own comment above) and always
+        // correct for a 'duel' game's own separate decks.
         foreach ($response['players'] as &$player) {
             $player['total_score'] = $this->boardPointTotalFor($state, $player['game_player_id']);
+            $player['deck_count'] = $state->hasSeparateDecks()
+                ? count($state->deck($player['game_player_id']))
+                : count($state->deck());
+            if ($revealAllHands) {
+                // Every seated player's final hand -- only ever populated
+                // for a completed game (see getSpectatorState() above),
+                // once there's no more competitive reason to hide it.
+                // reactingViewerId: null since no live play is left for
+                // any choice_fields/is_playable simulation to matter.
+                $player['hand'] = array_map(
+                    fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
+                    $state->hand($player['game_player_id'])
+                );
+            }
         }
         unset($player);
-
-        $names = $this->cardNamesFor($gameId);
-        $playerNames = array_column($players, 'username', 'game_player_id');
 
         if ($roundRow !== false) {
             $currentTurnGamePlayerId = $roundRow['current_turn_game_player_id'] !== null ? (int) $roundRow['current_turn_game_player_id'] : null;
@@ -5291,13 +5860,17 @@ final class GameService
                 'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
                 'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
             ];
-            $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
+            if ($viewerGamePlayerId !== null) {
+                $response['you']['is_your_turn'] = $currentTurnGamePlayerId === $viewerGamePlayerId;
+            }
         }
 
-        $response['you']['hand'] = array_map(
-            fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
-            $state->hand($viewerGamePlayerId)
-        );
+        if ($viewerGamePlayerId !== null) {
+            $response['you']['hand'] = array_map(
+                fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
+                $state->hand($viewerGamePlayerId)
+            );
+        }
 
         if (self::isTeamFormat($game['format'])) {
             // Which player is your teammate is common to both team
@@ -5312,7 +5885,8 @@ final class GameService
                 if ($player['team_id'] === null) {
                     continue;
                 }
-                $isTeammate = $player['game_player_id'] !== $viewerGamePlayerId
+                $isTeammate = $viewerGamePlayerId !== null
+                    && $player['game_player_id'] !== $viewerGamePlayerId
                     && $this->teamIdByGamePlayer($gameId)[$viewerGamePlayerId] === $player['team_id'];
                 if ($isTeammate) {
                     $response['you']['teammate_game_player_id'] = $player['game_player_id'];
@@ -5343,7 +5917,7 @@ final class GameService
             if ($decision !== null) {
                 $candidateIds = array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true));
                 $proposerId = $decision['proposer_game_player_id'] !== null ? (int) $decision['proposer_game_player_id'] : null;
-                $isViewerCandidate = in_array($viewerGamePlayerId, $candidateIds, true);
+                $isViewerCandidate = $viewerGamePlayerId !== null && in_array($viewerGamePlayerId, $candidateIds, true);
 
                 $response['team_decision'] = [
                     'decision_type' => $decision['decision_type'],
@@ -5452,8 +6026,10 @@ final class GameService
         // never the same number once either player has drawn a different
         // count of cards); in a shared-deck game every player's own key
         // resolves to the same single pool anyway, so this is unchanged
-        // from before per-player decks existed.
-        $response['deck_count'] = count($state->deck($viewerGamePlayerId));
+        // from before per-player decks existed. Meaningless for a
+        // spectator (no seat of their own) -- players[].deck_count above
+        // is what a spectator reads instead.
+        $response['deck_count'] = $viewerGamePlayerId !== null ? count($state->deck($viewerGamePlayerId)) : 0;
         $response['recent_events'] = $this->recentEvents($gameId, $players);
 
         return $response;
@@ -5693,6 +6269,7 @@ final class GameService
             $row['event_type'] === 'round_scored' => $this->describeRoundScored($details, $playerNames, $teamMembersByTeamId),
             $row['event_type'] === 'team_turn_order_decided' => "{$actor} was chosen by their team to take this turn",
             $row['event_type'] === 'team_draw_recipient_decided' => "The losing team chose {$actor} to draw their shared card",
+            $row['event_type'] === 'draft_match_first_player_decided' => "{$actor} will go first this game",
             default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 
@@ -6645,7 +7222,7 @@ final class GameService
      *
      * @return array<string, mixed>|null
      */
-    private function serializePendingDecision(int $roundId, int $viewerGamePlayerId): ?array
+    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId): ?array
     {
         $batchRow = $this->activePendingBatch($roundId);
         if ($batchRow === null) {
@@ -6658,6 +7235,12 @@ final class GameService
         }
 
         $targetGamePlayerId = (int) $decisionRow['target_game_player_id'];
+        // $viewerGamePlayerId === null for a spectator (see
+        // GameService::buildGameState()) -- correctly never equals a real
+        // target_game_player_id, so 'field' (the decision's own private
+        // choice payload) is never populated below, the same way it's
+        // never populated for a real player who isn't the one being
+        // asked.
         $isYou = $targetGamePlayerId === $viewerGamePlayerId;
         $playedCardId = (int) $batchRow['played_card_id'];
 

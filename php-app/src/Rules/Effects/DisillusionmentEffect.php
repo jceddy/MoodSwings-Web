@@ -44,7 +44,7 @@ final class DisillusionmentEffect extends AbstractMoodEffect implements Requires
                     'type' => 'mode',
                     'options' => self::COLORS,
                     'required' => false,
-                    'label' => 'Choose a color -- every other mood of that color is discarded',
+                    'label' => 'Choose a color -- every other mood of that color is moved from play to discard',
                 ],
             );
         }
