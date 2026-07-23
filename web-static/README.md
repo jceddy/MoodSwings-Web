@@ -1079,12 +1079,16 @@ too, proportional to the smaller card width.
     last_owner_name`), since the shared discard pile has no current
     per-player grouping the way in-play moods do. If a filled-in choice is still
     rejected regardless, the rules engine's own human-readable message
-    explains what's missing. If you have Scorn and/or Validation in play,
-    every other hand card's panel also gets that reaction's field (Scorn's
-    suppress-target, narrowed to moods sharing the card-to-be-played's own
-    color; Validation's extra-play checkbox, only offered when that card's
-    base value is 0 or 1) — both submitted in the same play request,
-    since that's how the rules engine resolves them. Duplicity no longer
+    explains what's missing. If you have Scorn in play, every other hand
+    card's panel also gets its reaction's field (a suppress-target
+    dropdown, narrowed to moods sharing the card-to-be-played's own
+    color) — submitted in the same play request, since that's how the
+    rules engine resolves it. Validation needs no such field: both of its
+    grants (its own unconditional one, and the "while in play" one
+    triggered by a subsequent 0-or-1-valued play) always happen
+    automatically, the same as every other extra-play card — there's
+    nothing to opt into, only whether you later choose to use the
+    granted play. Duplicity no longer
     adds anything to this panel at all: playing any card with its own
     after-playing effect (including a zero-field one like Charity) while
     you have Duplicity in play instead pauses the round afterward and
@@ -1106,9 +1110,8 @@ too, proportional to the smaller card width.
     that mood's own fields (its own "to play" cost, if any, and its own
     after-playing choices — e.g. copying Compulsion adds its
     `target_player_id` field, copying Guile adds both its 2-card discard
-    cost and its `target_mood_id`), plus Scorn's/Validation's own
-    reactions if you have those in play and the copied mood's
-    color/value qualifies — all precomputed
+    cost and its `target_mood_id`), plus Scorn's own reaction if you have
+    it in play and the copied mood's color qualifies — all precomputed
     per candidate server-side (`copy_simulation`, see `php-app/README.md`)
     so switching candidates needs no round trip. If the copied mood has
     its own "to play" cost that can't currently be paid, Play stays
