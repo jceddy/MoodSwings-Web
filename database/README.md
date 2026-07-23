@@ -357,3 +357,11 @@ half-migrated schema.
   itself counts as one more mood in play was never offered or
   accepted. See `GameService::withExtraOutOfRangeValues()` in
   `php-app/README.md`'s own `choice_fields` documentation.
+- **Validation unconditional-reaction fix** (`0045`): another
+  schema-less `UPDATE schema_version`, same rationale as
+  `0024`/`0025`/`0026`/`0037`/`0040`/`0044` — Validation's "while in
+  play" reaction was mistakenly gated behind an opt-in choice field, so
+  a chained reaction (using Validation's own granted play to play a
+  second low-valued mood) silently never re-granted. `ValidationEffect`
+  now grants unconditionally, matching every other extra-play card. See
+  `ValidationEffect` in `php-app/README.md`.
