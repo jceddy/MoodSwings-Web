@@ -1,0 +1,19 @@
+-- No schema change here -- this migration exists purely to keep
+-- schema_version in sync with a VERSION bump for a backend/frontend bug
+-- fix that didn't touch the schema at all: Repentance's suppression
+-- value picker was capped at 0-12 (CardChoiceSchema's own practical
+-- default, not a real rule), so a count-scaling mood's value (e.g.
+-- Euphoria's "+1 per mood in play, including itself") that only
+-- exceeds 12 once Repentance itself counts as one more mood in play
+-- was never offered, and would have been rejected even if submitted
+-- anyway. GameService::withExtraOutOfRangeValues() and
+-- RepentanceEffect's own validation now compute each in-play mood's
+-- value as if Repentance were already played too, and allow/offer any
+-- that legitimately exceed the field's static max. MaintenanceGate
+-- compares the deployed VERSION file against this table on every
+-- request (see migration 0021's own docblock), so a VERSION bump with
+-- no corresponding schema_version update would show maintenance mode
+-- after deploy even though nothing about the schema actually changed
+-- -- this keeps that invariant intact the same way 0024/0025/0026/0037/
+-- 0040 already did for their own schema-less fixes.
+UPDATE schema_version SET version = '0.16.1' WHERE id = 1;

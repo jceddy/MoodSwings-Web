@@ -350,3 +350,10 @@ half-migrated schema.
   generated lazily the first time a seated player asks to share it (see
   `GameService::getOrCreateSpectateCode()`) rather than populated for
   every game up front. See "Spectator mode" in `php-app/README.md`.
+- **Repentance extra-values fix** (`0044`): another schema-less `UPDATE
+  schema_version`, same rationale as `0024`/`0025`/`0026`/`0037`/`0040`
+  — Repentance's suppression value picker was capped at 0-12, so a
+  count-scaling mood's value that only exceeds 12 once Repentance
+  itself counts as one more mood in play was never offered or
+  accepted. See `GameService::withExtraOutOfRangeValues()` in
+  `php-app/README.md`'s own `choice_fields` documentation.

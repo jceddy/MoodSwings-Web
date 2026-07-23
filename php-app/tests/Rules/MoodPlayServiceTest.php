@@ -899,6 +899,46 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 23, new PlayerChoices(['value' => 13]));
     }
 
+    /**
+     * Euphoria's own "+1 per mood in play, including itself" value can
+     * genuinely exceed Repentance's usual 0-12 range once enough moods
+     * are in play -- including Repentance itself, which is already in
+     * play by the time afterPlaying() runs. A value above 12 is legal
+     * exactly when it's not a made-up number: some mood currently in play
+     * actually has it.
+     */
+    public function testRepentanceAcceptsAnAboveRangeValueSomeMoodInPlayActuallyHas(): void
+    {
+        $state = $this->boardState(hands: [1 => [23, 2, 3, 6, 7, 8, 13, 14, 17, 19, 20, 22, 117]]);
+        foreach ([2, 3, 6, 7, 8, 13, 14, 17, 19, 20, 22, 117] as $cardId) {
+            $state->moveHandToInPlay(1, $cardId);
+        }
+        $state->startTurn(1);
+
+        self::assertSame(12, $state->valueOf(117)); // base 0 + 1 per mood, 12 already in play
+
+        $this->plays->playMood($state, 1, 23, new PlayerChoices(['value' => 13]));
+
+        // Repentance is now itself a 13th mood in play, tipping Euphoria's
+        // own count-based value to 13 -- suppressed down to 0.
+        self::assertSame(0, $state->valueOf(117));
+        self::assertTrue($state->isSuppressed(117));
+    }
+
+    public function testRepentanceStillRejectsAnAboveRangeValueNoMoodInPlayActuallyHas(): void
+    {
+        $state = $this->boardState(hands: [1 => [23, 2, 3]]);
+        $state->moveHandToInPlay(1, 2);
+        $state->moveHandToInPlay(1, 3);
+        $state->startTurn(1);
+
+        $this->expectException(InvalidChoiceException::class);
+        // Nothing in play (not even once Repentance counts itself) is
+        // anywhere near value 20 -- still illegal despite the widened
+        // upper bound.
+        $this->plays->playMood($state, 1, 23, new PlayerChoices(['value' => 20]));
+    }
+
     public function testRepentanceDoesNothingWhenDeclined(): void
     {
         $state = $this->boardState(hands: [1 => [23]]);
