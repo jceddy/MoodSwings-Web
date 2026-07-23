@@ -621,22 +621,29 @@ discard-pile card bottoms it onto its *owner's* deck in a duel, so picking
 the wrong physical card among two identical ones sends it to the wrong
 player's deck.
 
-Scorn's and Validation's `reactToAnotherPlay()` choices (`scorn_suppress_target`,
-`validation_extra_play`) don't fit that per-card schema, since they fire
-while playing a *different* card, triggered by a mood the acting player
-already has in play — `CardChoiceSchema::reactionTemplate()` holds their
-field shape, and `GameService::serializeCard()` appends the applicable one
-to each of the *viewer's own* hand cards when `BoardState::playerHasMoodInPlay()`
-says the viewer has that reactor in play, filling in the one detail each
-needs to know about the specific card being offered: Scorn's filter is
-narrowed to that card's own color (mirroring `ScornEffect`'s "shares a
-color with the just-played card" check), and Validation's field is
-included at all only when that card's base value is 0 or 1 (mirroring
-`ValidationEffect`'s own no-op-otherwise check). Every serialized card also
-carries `base_value` and `alt_value` (the printed/dice values, distinct
-from the possibly-different live `value` a card in play might have) for
-exactly this kind of client-side reasoning, and for display in the
-frontend's card detail dialog.
+Scorn's `reactToAnotherPlay()` choice (`scorn_suppress_target`) doesn't fit
+that per-card schema, since it fires while playing a *different* card,
+triggered by a mood the acting player already has in play —
+`CardChoiceSchema::reactionTemplate()` holds its field shape, and
+`GameService::serializeCard()` appends it to each of the *viewer's own*
+hand cards when `BoardState::playerHasMoodInPlay()` says the viewer has
+Scorn in play, narrowing its filter to that card's own color (mirroring
+`ScornEffect`'s "shares a color with the just-played card" check).
+Validation's own `reactToAnotherPlay()` needs no such field at all: both
+of its grants — the unconditional one from its own `afterPlaying()` and
+the "while in play" one triggered by a subsequent 0-or-1-valued play —
+are unconditional, matching every other extra-play card (Charity, Hope,
+Grace, etc.); `ValidationEffect` just calls `grantExtraPlay()` outright
+whenever the played card's base value is 0 or 1, no player choice
+involved (a past version of this reaction was mistakenly gated behind an
+opt-in `validation_extra_play` checkbox, which meant a chained reaction —
+using Validation's own granted play to play a second 0-or-1-valued card —
+silently never re-granted unless that checkbox happened to be checked;
+fixed by making the grant unconditional, the same way its first grant
+already was). Every serialized card also carries `base_value` and
+`alt_value` (the printed/dice values, distinct from the possibly-different
+live `value` a card in play might have) for client-side reasoning and for
+display in the frontend's card detail dialog.
 
 Duplicity's repeat mechanic — after any card's own `afterPlaying()`
 resolves, if the acting player has Duplicity in play, they may have that
@@ -785,9 +792,9 @@ Creativity's own (ability-less) raw catalog row -- the server additionally
 precomputes, per candidate mood currently in play,
 `copy_simulation[$candidateCardId] = {extra_fields, cost_payable}`
 (`GameService::creativityCopySimulation()`), reusing the exact same
-`reactionFields()` (Scorn/Validation) this class already calls for an
+`reactionFields()` (Scorn) this class already calls for an
 ordinary hand card, just parameterized by the *candidate's* own raw
-color/base value/catalog row instead of Creativity's — Duplicity's own
+color/catalog row instead of Creativity's — Duplicity's own
 repeat is no longer part of this precomputed bundle at all, since it's
 now a post-play pause rather than a field on the play itself.
 `cost_payable`
@@ -933,8 +940,8 @@ summarized.
 `GameService::getState()`'s `discard_pile` mapping now passes the viewer's
 own game-player id to `serializeCard()` the same way `hand` already does
 (previously omitted, since nothing in the discard pile was ever a play
-candidate) -- `is_playable`/`choice_fields`/Scorn's and Validation's
-reaction fields are now correctly computed for a discard-pile card too,
+candidate) -- `is_playable`/`choice_fields`/Scorn's reaction field are now
+correctly computed for a discard-pile card too,
 covering the rare case a discard-sourced extra play (Angst/Harmony/Grief)
 or Melancholy's blanket "play from the discard pile as though it were your
 hand" actually makes one playable for the rest of the current turn (see

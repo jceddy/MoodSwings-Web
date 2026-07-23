@@ -76,16 +76,20 @@ namespace MoodSwings\Rules;
  *                            // only ever re-invokes afterPlaying(), never the cost again.
  * }
  *
- * Scorn's and Validation's reactToAnotherPlay() choices don't fit the
- * per-effect_key SCHEMA above -- both fire while playing a *different*
- * card, triggered by a mood the acting player already has in play, as
- * part of the *same* request (see MoodEffect::reactToAnotherPlay()).
- * REACTIONS below holds their fixed field shape; GameService::serializeCard()
- * decides, per hand card, whether to append them -- it knows the viewer's
- * own in-play moods (playerHasMoodInPlay()) and the specific card being
- * offered, which is exactly what's needed to fill in Scorn's color filter
- * (must match *this* card's color) and gate Validation's field on *this*
- * card's base value being 0 or 1.
+ * Scorn's reactToAnotherPlay() choice doesn't fit the per-effect_key
+ * SCHEMA above -- it fires while playing a *different* card, triggered
+ * by a mood the acting player already has in play, as part of the *same*
+ * request (see MoodEffect::reactToAnotherPlay()). REACTIONS below holds
+ * its fixed field shape; GameService::serializeCard() decides, per hand
+ * card, whether to append it -- it knows the viewer's own in-play moods
+ * (playerHasMoodInPlay()) and the specific card being offered, which is
+ * exactly what's needed to fill in Scorn's color filter (must match
+ * *this* card's color). Validation's own reaction needs no such field at
+ * all: like its first grant, it's unconditional (see ValidationEffect's
+ * own docblock for why "you may" doesn't mean "opt into the grant
+ * existing") -- ValidationEffect::reactToAnotherPlay() just calls
+ * grantExtraPlay() outright whenever the played card's base value is 0
+ * or 1, no PlayerChoices input needed.
  *
  * Duplicity's repeat-with-fresh-choices mechanic also doesn't fit the
  * per-effect_key SCHEMA above, but for a different reason: it isn't
@@ -100,8 +104,8 @@ namespace MoodSwings\Rules;
  * card's own effect_key.
  *
  * Creativity's copy_card_id choice (see the 'creativity' entry below)
- * isn't known until its own panel is open, so a Scorn/Validation reaction
- * to a Creativity play can't be precomputed here against Creativity's own
+ * isn't known until its own panel is open, so a Scorn reaction to a
+ * Creativity play can't be precomputed here against Creativity's own
  * (ability-less) row the way this schema handles every other card --
  * GameService::creativityCopySimulation() covers this instead, reusing
  * reactionFields() but parameterized per in-play candidate rather than by
@@ -379,13 +383,15 @@ final class CardChoiceSchema
     ];
 
     /**
-     * Templates for reactToAnotherPlay() fields (Scorn/Validation), for
-     * Duplicity's repeat offer, and for Enthusiasm's/Passion's scoring-time
-     * decisions, keyed by the *reacting* card's effect_key. Scorn's and
-     * Validation's templates are filled in by GameService::serializeCard()
-     * (color filter, value-gated inclusion) before being appended to a
-     * hand card's own choice_fields -- both fire as part of the
-     * *triggering* play's own request. Duplicity's is instead used by
+     * Templates for Scorn's reactToAnotherPlay() field, for Duplicity's
+     * repeat offer, and for Enthusiasm's/Passion's scoring-time decisions,
+     * keyed by the *reacting* card's effect_key. Scorn's template is
+     * filled in by GameService::serializeCard() (color filter, appended
+     * only while Scorn is in play) before being appended to a hand card's
+     * own choice_fields -- it fires as part of the *triggering* play's
+     * own request. Validation has no entry here: its own reaction is
+     * unconditional (see ValidationEffect's own docblock), so there's no
+     * player choice to template. Duplicity's is instead used by
      * MoodPlayService::duplicityRepeatOfferRequest() to label a post-play
      * PendingDecisionRequest offered to the acting player themselves,
      * since a repeat is no longer decided as part of the original play
@@ -406,12 +412,6 @@ final class CardChoiceSchema
             'scope' => 'any',
             'required' => false,
             'label' => "Scorn's reaction: mood to suppress until end of round (must share this card's color)",
-        ],
-        'validation' => [
-            'key' => 'validation_extra_play',
-            'type' => 'bool',
-            'required' => false,
-            'label' => "Validation's reaction: play an additional mood this turn",
         ],
         'duplicity' => [
             'key' => 'duplicity_repeat',

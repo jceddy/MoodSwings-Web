@@ -6715,7 +6715,7 @@ final class GameService
         if ($reactingViewerId !== null) {
             $choiceFields = [
                 ...$choiceFields,
-                ...$this->reactionFields($state, $reactingViewerId, $color, $baseValue),
+                ...$this->reactionFields($state, $reactingViewerId, $color),
             ];
         }
         // Still in hand (not yet played): a value/parity-filtered 'mood'
@@ -7013,8 +7013,8 @@ final class GameService
      * what the choices panel would need to offer if this Creativity ends
      * up copying that mood: the same reactionFields() this class already
      * builds for an ordinary hand card, just parameterized by the
-     * candidate's own raw color/base_value/catalog row (never the
-     * "effective," copy-resolved one -- matches MoodPlayService::
+     * candidate's own raw color/catalog row (never the "effective,"
+     * copy-resolved one -- matches MoodPlayService::
      * playMood()'s own zero-hop $state->catalogRow($copiedCardId)
      * resolution exactly, so copying a copy correctly simulates "blank
      * Creativity," not whatever the copy itself was copying), plus
@@ -7036,7 +7036,7 @@ final class GameService
         foreach ($state->moodsInPlay() as $candidateCardId => $mood) {
             $candidateRow = $state->catalogRow($candidateCardId);
             $simulation[$candidateCardId] = [
-                'extra_fields' => $this->reactionFields($state, $viewerId, $candidateRow['color'], $candidateRow['baseValue']),
+                'extra_fields' => $this->reactionFields($state, $viewerId, $candidateRow['color']),
                 'cost_payable' => $this->plays->canPayCopiedToPlayCost($state, $viewerId, $creativityCardId, $candidateCardId),
             ];
         }
@@ -7045,16 +7045,16 @@ final class GameService
     }
 
     /**
-     * Scorn's and Validation's reactToAnotherPlay() choices, filled in for
-     * *this specific card* (see CardChoiceSchema::reactionTemplate()):
-     * Scorn's suppress-target is narrowed to $color (matching the played
-     * card's color, mirroring ScornEffect's own check); Validation's field
-     * is included at all only when $baseValue is 0 or 1, since
-     * ValidationEffect's reaction is a no-op for any other value.
+     * Scorn's reactToAnotherPlay() choice, filled in for *this specific
+     * card* (see CardChoiceSchema::reactionTemplate()): the suppress-target
+     * is narrowed to $color (matching the played card's color, mirroring
+     * ScornEffect's own check). Validation has no field here at all --
+     * its own reaction is unconditional (see ValidationEffect's own
+     * docblock), so nothing needs offering or submitting for it.
      *
      * @return array<int, array<string, mixed>>
      */
-    private function reactionFields(BoardState $state, int $viewerId, string $color, int $baseValue): array
+    private function reactionFields(BoardState $state, int $viewerId, string $color): array
     {
         $fields = [];
 
@@ -7063,10 +7063,6 @@ final class GameService
                 ...CardChoiceSchema::reactionTemplate('scorn'),
                 'filter' => ['colors' => [$color]],
             ];
-        }
-
-        if (in_array($baseValue, [0, 1], true) && $state->playerHasMoodInPlay($viewerId, 'validation')) {
-            $fields[] = CardChoiceSchema::reactionTemplate('validation');
         }
 
         return $fields;

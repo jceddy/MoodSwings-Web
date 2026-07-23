@@ -1,0 +1,21 @@
+-- No schema change here -- this migration exists purely to keep
+-- schema_version in sync with a VERSION bump for a backend/frontend bug
+-- fix that didn't touch the schema at all: Validation's "while in play"
+-- reaction (each time you play another mood with a 0 or 1 in its top
+-- right corner, you may play an additional mood this turn) was
+-- mistakenly gated behind an opt-in validation_extra_play choice field,
+-- so a chained reaction -- using Validation's own granted play to play
+-- a second low-valued mood -- silently never re-granted unless that
+-- choice happened to be resubmitted. ValidationEffect::
+-- reactToAnotherPlay() now grants unconditionally whenever the played
+-- card's base value is 0 or 1, matching every other extra-play card
+-- (Charity, Hope, Grace, etc.) and Validation's own first grant --
+-- the "may" only ever governed whether a granted play gets used, never
+-- whether it gets created. MaintenanceGate compares the deployed
+-- VERSION file against this table on every request (see migration
+-- 0021's own docblock), so a VERSION bump with no corresponding
+-- schema_version update would show maintenance mode after deploy even
+-- though nothing about the schema actually changed -- this keeps that
+-- invariant intact the same way 0024/0025/0026/0037/0040/0044 already
+-- did for their own schema-less fixes.
+UPDATE schema_version SET version = '0.16.2' WHERE id = 1;
