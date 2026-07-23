@@ -410,6 +410,43 @@ too, proportional to the smaller card width.
     `waiting`) opening a small dialog with the game's code
     (`POST /games/spectate/code`) and a copy-to-clipboard button. See
     "Spectator mode" in `../php-app/README.md`.
+  - **Watch replay** (issue #240): a "Watch replay" button on any
+    `completed` lobby row (`actionButton('Watch replay', () =>
+    showReplayBoard(game.id))`, right alongside "View log") opens the
+    same board in-page, no separate URL param the way spectating uses --
+    `showReplayBoard()` sets a module-level `isReplaying` flag and loads
+    the game's full event list once via the existing `GET /games/log`
+    (`getGameLog()`, already used for the "View log" panel -- no new
+    endpoint needed just for the steppable list), defaulting to the last
+    event (the final board). A new `isReadOnlyView()` helper
+    (`isSpectating || isReplaying`) replaces every interactivity-gating
+    check that used to test `isSpectating` alone (Play/Pass/resign
+    buttons hidden, hand always shown via
+    `renderSpectatorFinalHands()`, pending-decision UI suppressed) --
+    `isReplaying` deliberately does *not* set `isSpectating` itself,
+    since replay has no share-code re-sending and no "Back to spectate
+    list" chrome, only its own "← Exit replay" relabeling of
+    `#back-to-lobby-button`.
+    - **Step controls** (`#replay-controls`, `renderReplayControls()`):
+      "← Previous"/"Next →" buttons (disabled at either end),
+      a `#replay-event-select` dropdown ("Jump to") listing every event's
+      own rendered `description` for direct navigation, and a
+      `#replay-position` readout ("Step N of M — Round R"). Each control
+      just moves a `replayEventIndex` into the already-fetched
+      `replayEvents` array and calls `refreshReplayBoard()`, which fetches
+      `GET /games/replay/state` (`getReplayGameState()`) for that specific
+      event id and re-runs the existing `renderBoard()` -- the same
+      `state.you = {game_player_id: null, ...}` stub spectating already
+      synthesizes covers replay's own `you.game_player_id: null` response
+      too, so no new renderer branch was needed. Unlike the live/spectator
+      board, replay **never arms the 4-second poll timer** -- a completed
+      game's history never changes underneath the viewer, so each step is
+      fetched only on demand.
+    - Exiting (`#back-to-lobby-button`) tears down all replay-only state
+      (`isReplaying`, `replayEvents`, `replayEventIndex`) and hides
+      `#replay-controls`, returning to the ordinary lobby the same way
+      exiting spectator mode does. See "Watch replay" in
+      `../php-app/README.md`.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via

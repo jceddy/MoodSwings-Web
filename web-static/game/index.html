@@ -55,6 +55,21 @@
             <p id="board-round-status"></p>
             <p id="draft-match-scoreline" hidden></p>
             <button id="draft-match-next-game-button" type="button" hidden>Go to next game &rarr;</button>
+
+            <!-- Watch game replay (issue #240) -- step controls for a
+                 completed game's history, shown only while isReplaying is
+                 true. Reuses the same #board-view/renderBoard() as every
+                 other board mode; see showReplayBoard()/refreshReplayBoard()
+                 in game.js. -->
+            <div id="replay-controls" hidden>
+                <button id="replay-prev-button" type="button">&larr; Previous</button>
+                <button id="replay-next-button" type="button">Next &rarr;</button>
+                <label>Jump to
+                    <select id="replay-event-select"></select>
+                </label>
+                <p id="replay-position"></p>
+            </div>
+
             <p id="board-message" class="success" hidden></p>
             <p id="board-error" class="error" hidden></p>
             <p id="pending-decision-banner" hidden></p>

@@ -84,6 +84,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/spectate/code` | `{"game_id"}`                                              | Requires auth; `403` if you're not seated in that game. Returns `{"code"}` -- that game's own share code (an existing one if already minted, else a freshly generated one). See "Spectator mode" below. |
 | POST   | `/games/spectate/resolve` | `{"code"}`                                              | Requires auth. `404` if no game has that code, or it's `waiting`/`abandoned`. Returns `{"game_id"}` for the frontend to navigate with. See "Spectator mode" below. |
 | GET    | `/games/spectate/state` | query params `game_id`, `code`?                        | Requires auth; deliberately does **not** require you to be seated in that game -- see "Spectator mode" below for its own authorization rule. `403` unless you're friends with a seated player or `code` matches the game's own spectate code; `400` if the game is `waiting`/`abandoned`. Same shape as `GET /games/state`, minus `you`, `team_decision`'s propose/confirm affordances, and any draft-match internals -- plus, once the game is `completed`, every player's `hand` is additionally revealed (there's nothing left to hide once the outcome is decided). |
+| GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
@@ -2683,6 +2684,109 @@ and pending-decision internals for a still-`in_progress` game (for
 casting/streaming) -- deliberately not built on top of the plain
 `spectate_code` mechanism above, since that mechanism's entire premise
 is that holding a code never reveals hands before the game ends.
+
+### Watch replay (issue #240)
+
+Step through a *completed* game move-by-move -- the actual board (in-play
+zones, discard, hands, scores) as it looked immediately after any past
+event, not just the final state. The issue left "snapshot vs. replay"
+undecided; this landed on **full forward replay of recorded facts**, not
+re-executed `Effects/*.php` logic and not stored per-event snapshots: for
+"board as of event N," derive the game's *genesis* (round-1 starting
+hands/decks, before any event exists) by walking the whole `game_events`
+log **in reverse** from the final `game_cards` state, undoing every
+recorded fact, then walk **forward** from genesis re-applying those same
+facts up to event N. At this game's scale (rarely more than a few hundred
+events per game -- see "Game log" above) a full reverse-then-forward walk
+per request is cheap enough that no caching/incremental-snapshot
+infrastructure was needed.
+
+`ReplayStateBuilder` (`genesis()`/`stateAsOf()`) does the reconstruction
+and hands back a real `BoardState`; `GameService::replayStateAsOf()` then
+runs it through `serializeReplaySnapshot()`, a private sibling of
+`buildGameState()` that returns the same top-level shape
+`getSpectatorState()` does (`you: {game_player_id: null}`, every hand
+always revealed) but with every live-round-only field
+(`current_turn_game_player_id`, `pending_decision`, `plays_remaining`,
+`play_grants`, team/draft fields) nulled out -- there is no "current
+round" for a specific past event. It reuses `buildGameState()`'s
+stateless building blocks (`serializeCard()`, `scoringEffectEntries()`,
+`boardEffectEntries()`, `boardPointTotalFor()`, `affectingEntries()`,
+`temporaryOwnershipInfo()`) verbatim rather than duplicating them, so
+`renderBoard()` needed zero frontend changes to display a replay
+snapshot. `GET /games/replay/state` authorizes identically to
+`GET /games/log` (seated player OR `canSpectateGame()`, see "Spectator
+mode" above) and rejects a non-`completed` game or an `event_id` from a
+different game with `400`. The frontend's step control reuses the
+existing `GET /games/log` for the steppable event list -- no separate
+endpoint for that part.
+
+**Why genesis needs no new event.** Defined precisely as "state
+immediately before `game_events` row #1," genesis needs no dedicated
+"game started" log entry: `startGame()`'s deal and `closed_team`'s blind
+initial card pass (`submitInitialCardPass()`) both complete strictly
+before any round's first play is ever logged, so a reverse walk lands
+exactly on the right starting point for either format with no special
+casing -- see `ReplayStateBuilder`'s own docblock. Because nothing can be
+in play or discarded before the game's first play is ever logged,
+genesis's own reverse walk only needs to track bare zone membership
+(hand/deck/discard) -- never suppression/effect-state/who-owned-a-mood-
+while-it-was-in-play, all of which are guaranteed already back to "not in
+play at all" once every event has been undone. `stateAsOf()`'s forward
+walk, by contrast, tracks full in-play fidelity (owner, `copiedCardId`,
+suppression, effect-state), since that's exactly what rendering a
+specific point in history needs.
+
+**The one real gap this required fixing**: `BoardState::drawCard()` used
+to record only the drawing player's id, not the card id -- a deliberate
+privacy choice so a live opponent reading `GET /games/log` mid-game can't
+learn what a player privately drew. That made a card sitting untouched in
+a hand at game end ambiguous between "dealt there at genesis" and "drawn
+there later, never played," breaking reverse genesis-derivation. Fixed by
+recording the card id too, but **`fullEventLog()` redacts
+`details.draws[].card_id` for any game that isn't yet `completed`**,
+preserving the existing live-game privacy guarantee exactly while making
+the real card id available to replay (which only ever operates on
+`completed` games, where hands are already fully revealed to spectators
+anyway).
+
+**Suppression and effect-state changes also needed a historical trail.**
+`BoardState::suppress()`/`clearSuppressionsFrom()`/
+`clearEndOfRoundSuppressions()`/`setEffectState()`/`clearEffectState()`
+used to mutate a mood's suppression/effect-state bag with no record
+beyond the final persisted value. Two new queues,
+`$pendingSuppressionChanges`/`consumeSuppressionChanges()` and
+`$pendingEffectStateChanges`/`consumeEffectStateChanges()`, mirror the
+existing `$pendingCardMoves`/`consumeCardMoves()` pattern (a clear that
+was already a no-op emits nothing); `moveHandToInPlay()`/
+`moveDiscardToInPlay()` also queue one effect-state entry per key of a
+freshly-played mood's initial effect-state bag (`playedFromZone`, any
+cost-time staged state like Bliss's `blissColor`). `GameService::
+withCardHistory()` folds both queues into `details` as
+`suppression_changes`/`effect_state_changes`, the same way `card_moves`/
+`ownership_changes` already are.
+
+**A subtlety caught during implementation, not by any test**: a
+Duplicity-triggered repeat re-tags `details['played_from']` on the *same*
+card (read from the mood's own permanently-persisted `playedFromZone`
+effect-state), which would otherwise look like a second "entering play"
+event. `applyEventForward()`'s forward walk guards on
+`!isset($inPlay[$cardId])` -- only the chronologically-first occurrence
+with an empty in-play slot actually triggers entering-play logic; the
+reverse walk uses a precomputed "first `played_from` event id per card"
+map so only that exact event id triggers the "eject from in-play" undo
+step.
+
+Out of scope, documented rather than silently dropped: **draft-phase
+pick-by-pick replay** (`quick_draft`'s `draft_round_picks` table actually
+has enough data for this already; `winston_draft`/`grid_draft` delete
+their own draft-state tables on completion and would need their own
+persisted picks-log first -- a natural, separate follow-up) and
+**team-format propose/reject intermediate steps** (no board-state impact,
+only the final confirmed choice is logged).
+
+The frontend reuses the board renderer entirely -- see "Watch replay" in
+`web-static/README.md` for the step-control UI.
 
 ### Lifetime stats
 

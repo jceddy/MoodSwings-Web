@@ -1359,11 +1359,11 @@ dialog#deck-builder-dialog[open] {
     flex-shrink: 0;
 }
 
-/* Fixed width (wide enough for "View log", the longest of the three
-   possible labels) so every row's buttons line up in a column regardless
-   of which label its own game's status/action picked. */
+/* Fixed width (wide enough for "Watch replay" (issue #240), now the
+   longest of the possible labels) so every row's buttons line up in a
+   column regardless of which label its own game's status/action picked. */
 .lobby-actions button {
-    width: 5.5rem;
+    width: 7rem;
 }
 
 .lobby-format {
@@ -1433,5 +1433,22 @@ dialog#deck-builder-dialog[open] {
 
 #user-stats-match-note {
     font-size: 0.85rem;
+    color: var(--color-muted);
+}
+
+/* Watch game replay (issue #240) -- step controls bar. */
+#replay-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 4px;
+}
+
+#replay-position {
+    margin: 0;
     color: var(--color-muted);
 }

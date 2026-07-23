@@ -218,6 +218,7 @@ final class GameService
         private readonly MoodPlayService $plays,
         private readonly RoundScorer $scorer,
         private readonly UserDecklistService $userDecklists,
+        private readonly ReplayStateBuilder $replay,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
     ) {
     }
@@ -6065,6 +6066,13 @@ final class GameService
     {
         $pdo = Connection::get();
 
+        // Once a game is 'completed', every hand is already fully revealed
+        // to any spectator via getSpectatorState()'s own revealAllHands, so
+        // there's nothing left to hide -- see drawCard()/$pendingDraws' own
+        // docblock for why draws stay anonymous (card_id redacted below)
+        // for every other status.
+        $isCompleted = $this->fetchGame($gameId)['status'] === 'completed';
+
         $playersStmt = $pdo->prepare(
             'SELECT gp.id, gp.team_id, u.username FROM game_players gp
              JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id'
@@ -6093,9 +6101,16 @@ final class GameService
         $stmt->execute(['game_id' => $gameId]);
 
         return array_map(
-            function (array $row) use ($playerNames, $cardNames, $teamMembersByTeamId): array {
+            function (array $row) use ($playerNames, $cardNames, $teamMembersByTeamId, $isCompleted): array {
                 $actingId = $row['acting_game_player_id'] !== null ? (int) $row['acting_game_player_id'] : null;
                 $cardId = $row['card_id'] !== null ? (int) $row['card_id'] : null;
+                $details = $row['details'] !== null ? json_decode((string) $row['details'], true) : [];
+                if (!$isCompleted && isset($details['draws'])) {
+                    $details['draws'] = array_map(
+                        static fn (array $draw): array => ['player_id' => $draw['player_id']],
+                        $details['draws'],
+                    );
+                }
 
                 return [
                     'id' => (int) $row['id'],
@@ -6106,12 +6121,202 @@ final class GameService
                     'acting_username' => $actingId !== null ? ($playerNames[$actingId] ?? null) : null,
                     'card_id' => $cardId,
                     'card_name' => $cardId !== null ? ($cardNames[$cardId] ?? null) : null,
-                    'details' => $row['details'] !== null ? json_decode((string) $row['details'], true) : [],
+                    'details' => $details,
                     'description' => $this->describeEvent($row, $playerNames, $cardNames, $teamMembersByTeamId),
                 ];
             },
             $stmt->fetchAll(),
         );
+    }
+
+    /**
+     * Issue #240 "watch game replay": the board exactly as it looked
+     * immediately after event $eventId finished, for a COMPLETED game only
+     * -- see ReplayStateBuilder's own docblock for how the historical
+     * BoardState itself gets reconstructed (full forward replay of
+     * recorded facts, never re-executed effect code). Authorization
+     * (seated player or canSpectateGame()) is the caller's own job,
+     * identical to fullEventLog()'s -- see the GET /games/replay/state
+     * route.
+     *
+     * @return array<string, mixed>
+     */
+    public function replayStateAsOf(int $gameId, int $eventId): array
+    {
+        $state = $this->replay->stateAsOf($gameId, $eventId);
+
+        return $this->serializeReplaySnapshot($gameId, $eventId, $state);
+    }
+
+    /**
+     * Same top-level shape getSpectatorState()/buildGameState() return
+     * (so renderBoard() needs zero frontend changes to show it), but built
+     * from a ReplayStateBuilder-reconstructed $state instead of the live
+     * BoardStateRepository::load() + a live game_rounds row -- there IS no
+     * "current round" for a specific past event, so every field that only
+     * makes sense for an in-progress turn (current_turn_game_player_id,
+     * pending_decision, plays_remaining, play_grants, team_decision,
+     * initial_card_pass, first_player_decision, quick_draft/winston_draft/
+     * grid_draft) is nulled out here rather than reused from
+     * buildGameState() (confirmed too coupled to those live concepts to
+     * share directly). 'you' always has a null game_player_id, matching
+     * getSpectatorState()'s own "not a seated viewer" shape -- replay never
+     * has a viewer of its own, seated or not. Every hand is always
+     * revealed, same as a completed game's own spectator view.
+     *
+     * @return array<string, mixed>
+     */
+    private function serializeReplaySnapshot(int $gameId, int $eventId, BoardState $state): array
+    {
+        $game = $this->fetchGame($gameId);
+        $pdo = Connection::get();
+
+        $playersStmt = $pdo->prepare(
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username FROM game_players gp
+             JOIN users u ON u.id = gp.user_id
+             WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
+        );
+        $playersStmt->execute(['game_id' => $gameId]);
+        $playerRows = $playersStmt->fetchAll();
+
+        $names = $this->cardNamesFor($gameId);
+
+        $winnerUsernames = [];
+        $players = [];
+        foreach ($playerRows as $row) {
+            $players[] = [
+                'game_player_id' => (int) $row['id'],
+                'user_id' => (int) $row['user_id'],
+                'username' => $row['username'],
+                'seat_order' => (int) $row['seat_order'],
+                'team_id' => $row['team_id'] !== null ? (int) $row['team_id'] : null,
+                'hand_count' => count($state->hand((int) $row['id'])),
+                'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
+                'total_score' => $this->boardPointTotalFor($state, (int) $row['id']),
+                'deck_count' => $state->hasSeparateDecks() ? count($state->deck((int) $row['id'])) : count($state->deck()),
+                'custom_deck_name' => $row['custom_deck_name'],
+                'deck_submitted' => $row['custom_deck_card_ids'] !== null,
+                'resigned' => $row['resigned_at'] !== null,
+                'hand' => array_map(
+                    fn (int $cardId) => $this->serializeCard($state, $cardId, $names, null),
+                    $state->hand((int) $row['id']),
+                ),
+            ];
+            if ($game['winner_team_id'] !== null && (int) $row['team_id'] === (int) $game['winner_team_id']) {
+                $winnerUsernames[] = $row['username'];
+            } elseif ($game['winner_game_player_id'] !== null && (int) $row['id'] === (int) $game['winner_game_player_id']) {
+                $winnerUsernames[] = $row['username'];
+            }
+        }
+        $playerNames = array_column($players, 'username', 'game_player_id');
+
+        $roundNumberStmt = $pdo->prepare(
+            'SELECT r.round_number FROM game_events e LEFT JOIN game_rounds r ON r.id = e.game_round_id WHERE e.id = :event_id'
+        );
+        $roundNumberStmt->execute(['event_id' => $eventId]);
+        $roundNumber = $roundNumberStmt->fetchColumn();
+
+        $teams = null;
+        if (self::isTeamFormat($game['format'])) {
+            $teamTotals = [
+                0 => ['team_id' => 0, 'game_player_ids' => [], 'total_score' => 0, 'total_wins' => $this->totalWinsForTeam($gameId, 0)],
+                1 => ['team_id' => 1, 'game_player_ids' => [], 'total_score' => 0, 'total_wins' => $this->totalWinsForTeam($gameId, 1)],
+            ];
+            foreach ($players as $player) {
+                if ($player['team_id'] === null) {
+                    continue;
+                }
+                $teamTotals[$player['team_id']]['game_player_ids'][] = $player['game_player_id'];
+                $teamTotals[$player['team_id']]['total_score'] += $player['total_score'];
+            }
+            $teams = array_values($teamTotals);
+        }
+
+        return [
+            'game' => [
+                'id' => $gameId,
+                'format' => $game['format'],
+                'deck_type' => $game['deck_type'],
+                'custom_deck_name' => $game['custom_deck_name'],
+                'duel_deck_rules' => $game['deck_type'] === 'custom_duel' ? [
+                    'preset' => $game['custom_duel_rules_preset'],
+                    'min_cards' => (int) $game['custom_duel_min_cards'],
+                    'rarity_limits' => (array) json_decode((string) $game['custom_duel_rarity_limits'], true),
+                    'duplicate_limits' => (array) json_decode((string) $game['custom_duel_duplicate_limits'], true),
+                    'even_color_distribution_rarities' => (array) json_decode((string) $game['custom_duel_even_color_distribution_rarities'], true),
+                ] : null,
+                'status' => $game['status'],
+                'wins_needed' => (int) $game['wins_needed'],
+                'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
+                'winner_usernames' => $winnerUsernames,
+                'winner_team_id' => $game['winner_team_id'] !== null ? (int) $game['winner_team_id'] : null,
+                'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            ],
+            'players' => $players,
+            'you' => ['game_player_id' => null],
+            'round' => [
+                'round_number' => $roundNumber !== false && $roundNumber !== null ? (int) $roundNumber : null,
+                'status' => null,
+                'current_turn_game_player_id' => null,
+                'plays_remaining' => 0,
+                'play_grants' => [],
+                'first_game_player_id' => null,
+                'went_first_game_player_id' => null,
+                'hurt_feelings_game_player_id' => null,
+                'banned_colors' => [],
+                'discarded_this_round' => false,
+                'pending_decision' => null,
+                'scoring_preview' => null,
+                'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
+                'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
+            ],
+            'in_play' => array_map(
+                function (int $cardId) use ($state, $names, $playerNames): array {
+                    $mood = $state->moodsInPlay()[$cardId];
+                    $serialized = $this->serializeCard($state, $cardId, $names, null);
+                    $boosterCardId = $serialized['has_dice_value'] ? $state->diceValueBoosterCardId($cardId) : null;
+
+                    return [
+                        ...$serialized,
+                        'owner_game_player_id' => $mood->ownerId,
+                        'is_suppressed' => $mood->isSuppressed,
+                        'has_unused_play_grant' => false,
+                        'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                        'suppression_expiry' => $mood->suppressionExpiry,
+                        'suppressed_by_card_id' => $mood->suppressionSourceCardId,
+                        'suppressed_by_name' => $mood->suppressionSourceCardId !== null
+                            ? ($names[$mood->suppressionSourceCardId] ?? null)
+                            : null,
+                        'boosted_by_card_id' => $boosterCardId,
+                        'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
+                        'affecting' => $this->affectingEntries($state, $cardId, $names),
+                        'temporary_ownership' => $this->temporaryOwnershipInfo($state, $cardId, $names, $playerNames),
+                        'bliss_discard_color' => $serialized['effect_key'] === 'bliss' ? $state->effectState($cardId, 'blissColor') : null,
+                    ];
+                },
+                array_keys($state->moodsInPlay()),
+            ),
+            'discard_pile' => array_map(
+                function (int $cardId) use ($state, $names, $playerNames): array {
+                    $lastOwnerId = $state->discardOwnerOf($cardId);
+
+                    return [
+                        ...$this->serializeCard($state, $cardId, $names, null),
+                        'last_owner_game_player_id' => $lastOwnerId,
+                        'last_owner_name' => $lastOwnerId !== null ? ($playerNames[$lastOwnerId] ?? null) : null,
+                    ];
+                },
+                $state->discardPile(),
+            ),
+            'deck_count' => 0,
+            'teams' => $teams,
+            'team_decision' => null,
+            'initial_card_pass' => null,
+            'first_player_decision' => null,
+            'quick_draft' => null,
+            'winston_draft' => null,
+            'grid_draft' => null,
+        ];
     }
 
     /**
@@ -6340,7 +6545,7 @@ final class GameService
         // above also list every occurrence individually.
         $draws = $details['draws'] ?? [];
         if ($draws !== []) {
-            $drawParts = array_map(fn (int $playerId) => ($playerNames[$playerId] ?? 'A player') . ' drew a card', $draws);
+            $drawParts = array_map(fn (array $draw) => ($playerNames[$draw['player_id']] ?? 'A player') . ' drew a card', $draws);
             $description .= '; ' . implode('; ', $drawParts);
         }
 
@@ -6509,8 +6714,8 @@ final class GameService
     {
         $parts = [];
         foreach ($details as $key => $value) {
-            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger', 'initiating_game_player_id'], true)) {
-                continue; // already spoken for elsewhere in describeEvent()
+            if (in_array($key, ['revealed_card_ids', 'skipped', 'card_moves', 'ownership_changes', 'played_from', 'draws', 'grants_created', 'grant_used', 'grants_lost', 'scoring_trigger', 'initiating_game_player_id', 'suppression_changes', 'effect_state_changes'], true)) {
+                continue; // issue #240 replay's own two new queues -- not choices a player made, and not rendered in describeEvent() either (no player-facing text needs them; the raw details are enough for ReplayStateBuilder to consume).
             }
 
             $entry = $this->describeChoiceEntry($key, $value, $playerNames, $cardNames);
@@ -7630,6 +7835,16 @@ final class GameService
         $grantsLost = $state->consumeGrantsLost();
         if ($grantsLost !== []) {
             $details['grants_lost'] = $grantsLost;
+        }
+
+        $suppressionChanges = $state->consumeSuppressionChanges();
+        if ($suppressionChanges !== []) {
+            $details['suppression_changes'] = $suppressionChanges;
+        }
+
+        $effectStateChanges = $state->consumeEffectStateChanges();
+        if ($effectStateChanges !== []) {
+            $details['effect_state_changes'] = $effectStateChanges;
         }
 
         return $details;

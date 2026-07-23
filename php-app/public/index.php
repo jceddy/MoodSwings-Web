@@ -26,6 +26,7 @@ use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
+use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Maintenance\MaintenanceGate;
 use MoodSwings\Repository\EmailVerificationRepository;
@@ -494,7 +495,7 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists);
+$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry));
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
@@ -735,6 +736,31 @@ if ($path === '/games/log' && $method === 'GET') {
         respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
     }
     respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
+}
+
+// Issue #240 "watch game replay": the board reconstructed as of one
+// specific past event -- only ever available once a game is 'completed'
+// (see ReplayStateBuilder). Same no-per-viewer-customization reasoning,
+// and the same canSpectateGame() authorization, as GET /games/log
+// immediately above -- the frontend's own step controls reuse that same
+// route for the steppable event list, this one just answers "what did the
+// board look like at event N".
+if ($path === '/games/replay/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $eventId = (int) ($_GET['event_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
+
+    $isSeated = $games->gamePlayerIdFor($gameId, (int) $currentUser['id']) !== null;
+    if (!$isSeated && !canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
+    }
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->replayStateAsOf($gameId, $eventId)]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 // Every card in a shared-deck game's single deck (issue #197) -- named
