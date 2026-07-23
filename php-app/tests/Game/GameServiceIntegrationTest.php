@@ -2423,6 +2423,58 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    /**
+     * Regression test: Euphoria's own "+1 per mood in play, including
+     * itself" value can genuinely exceed Repentance's usual 0-12 picker
+     * range (CardChoiceSchema's own practical default, not a real rule --
+     * see RepentanceEffect's own docblock) once enough moods are in play
+     * -- including Repentance itself, which is about to become one more.
+     * Before this fix, such a value was never offered in the picker
+     * (extra_values) and would have been rejected outright even if
+     * submitted anyway.
+     */
+    public function testRepentancesValuePickerOffersAMoodsValueOnceRepentanceItselfCounts(): void
+    {
+        $u1 = $this->insertUser('repentanceextra1');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+
+        // 11 simple filler moods (no value-affecting "while in play" effect
+        // of their own) plus Euphoria -- 12 moods in play before Repentance
+        // is played, so Euphoria's own count-based value sits at exactly 12
+        // (still within the picker's own static range) until Repentance
+        // becomes the 13th.
+        foreach ([2, 3, 6, 7, 8, 13, 14, 17, 19, 20, 22] as $catalogCardId) {
+            $this->insertGameCard($gameId, $catalogCardId, 'in_play', $p1);
+        }
+        $euphoriaId = $this->insertGameCard($gameId, 117, 'in_play', $p1); // Euphoria, green, base 0, +1 per mood in play
+        $repentanceId = $this->insertGameCard($gameId, 23, 'hand', $p1); // Repentance
+        // 2 plays remaining (not 1) so the round doesn't immediately score
+        // once Repentance is played -- 'end_of_round' suppression is
+        // cleared the moment the round scores (BoardState::
+        // clearEndOfRoundSuppressions()), which would otherwise mask
+        // whether it was ever actually applied in the first place.
+        $this->insertGameRound($gameId, 1, $p1, $p1, 2);
+
+        $stateBeforePlaying = $this->games->getState($gameId, $u1);
+        self::assertSame(12, self::findByCardId($stateBeforePlaying['in_play'], $euphoriaId)['value']);
+
+        $repentanceCard = self::findByCardId($stateBeforePlaying['you']['hand'], $repentanceId);
+        $valueField = self::findFieldByKey($repentanceCard['choice_fields'], 'value');
+        self::assertSame([13], $valueField['extra_values']);
+
+        $this->games->playMood($gameId, $p1, $repentanceId, ['value' => 13]);
+
+        $stateAfterPlaying = $this->games->getState($gameId, $u1);
+        self::assertTrue(self::findByCardId($stateAfterPlaying['in_play'], $euphoriaId)['is_suppressed']);
+    }
+
     public function testGetStateExposesAffectingAndBoostedByReminderTextForDiceValueAndSuppression(): void
     {
         $u1 = $this->insertUser('affectingsrc1');

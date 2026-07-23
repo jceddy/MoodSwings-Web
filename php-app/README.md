@@ -582,6 +582,27 @@ field would otherwise apply (self-exclusion, `own`/`other` scope, a
 `colors` filter if present) so the result is a drop-in, fully correct
 replacement, not just a value re-check.
 
+Repentance's own `type: 'value'` field needs the same as-if-already-in-play
+treatment, for the same underlying reason: its 0-12 range
+(`allow_extra_values`) is only a practical default matching the highest
+printed base value in the catalog, not a rule the card's own "choose a
+number" text actually enforces, and a count-scaling mood (Euphoria's "+1
+per mood in play, including itself," or Vanity/Sloth/Sadness/Envy) can
+genuinely exceed 12 once Repentance itself becomes one more mood in play.
+`GameService::withExtraOutOfRangeValues()` scans every mood currently in
+play, computes each one's `valueOfAsIfAlsoInPlay()` value, and attaches
+any that land above the field's own `max` as `extra_values` — which
+`game.js`'s `buildFieldWidget()` appends to the picker's ordinary
+`min`-`max` range. `RepentanceEffect` itself mirrors this at the actual
+play-time validation: Repentance is already in play by the time
+`afterPlaying()` runs, so a value above 12 is legal exactly when some
+mood currently in play actually has it (computed the same way the
+effect's own suppression loop already does), not an arbitrarily large
+number a client could otherwise submit. Rebellion's own `type: 'value'`
+field is deliberately never widened this way — its 0-3 range comes
+directly from its printed rules text ("choose 0, 1, 2, or 3"), a real
+rule rather than a practical default.
+
 This candidate-embedding is also what makes a
 `'duel' game's two identical catalog cards (see "Card identity" above) a
 real UI problem for `distinct_owners` fields specifically: Pacifism's own
