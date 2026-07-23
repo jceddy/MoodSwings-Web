@@ -160,14 +160,44 @@ final class BoardState
     private array $pendingOwnershipChanges = [];
 
     /**
-     * @var int[] One entry (the drawing player's id) per successful
-     * drawCard() call this play/response/scoring pass -- deliberately just
-     * the player id, never the card itself (see drawCard()'s own docblock
-     * for why revealing which card was drawn would leak hidden hand
-     * information no other recorded move does). Same consume-before-
-     * logging convention as $pendingCardMoves/$pendingOwnershipChanges.
+     * @var array<int, array{player_id: int, card_id: int}> One entry per
+     * successful drawCard() call this play/response/scoring pass. Used to
+     * carry card_id too (not just who drew) so a completed game's replay
+     * (issue #240) can reconstruct exactly which card ended up where --
+     * GameService::fullEventLog() is the one place that still hides the
+     * card id, redacting it from any game that isn't yet 'completed' so a
+     * live opponent can't learn what was privately drawn from the log the
+     * way this field itself used to prevent by omission. Same
+     * consume-before-logging convention as $pendingCardMoves/
+     * $pendingOwnershipChanges.
      */
     private array $pendingDraws = [];
+
+    /**
+     * @var array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
+     * One entry per mood whose suppression actually changed (newly
+     * suppressed via suppress(), or lifted via clearSuppressionsFrom()/
+     * clearEndOfRoundSuppressions()) this play/response/scoring pass --
+     * suppression itself is otherwise tracked only as each MoodInPlay's own
+     * current field, with no historical trail (game_cards persists just the
+     * latest value, overwritten every save), so a completed game's replay
+     * (issue #240) needs this queue to reconstruct when a suppression
+     * started/ended. Same consume-before-logging convention as
+     * $pendingCardMoves/$pendingOwnershipChanges.
+     */
+    private array $pendingSuppressionChanges = [];
+
+    /**
+     * @var array<int, array{card_id: int, key: string, value: mixed, cleared: bool}>
+     * One entry per effectState mutation (setEffectState()/
+     * clearEffectState(), plus one entry per key of a freshly-played mood's
+     * own initial bag from moveHandToInPlay()/moveDiscardToInPlay()) this
+     * play/response/scoring pass -- same rationale and consume-before-
+     * logging convention as $pendingSuppressionChanges immediately above:
+     * effectState is otherwise only ever the current value, with nothing
+     * recording how it got there.
+     */
+    private array $pendingEffectStateChanges = [];
 
     /**
      * @var array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
@@ -487,17 +517,29 @@ final class BoardState
     public function moveHandToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromHand($playerId, $cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'hand', $playerId));
+        $effectState = $this->initialEffectState($cardId, 'hand', $playerId);
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $effectState);
+        $this->recordInitialEffectState($cardId, $effectState);
     }
 
     /** Harmony/Grief/Angst: plays a mood "from the discard pile" instead of from hand -- see BoardState::$playGrants' 'source' key and MoodPlayService. */
     public function moveDiscardToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromDiscard($cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'discard', $playerId));
+        $effectState = $this->initialEffectState($cardId, 'discard', $playerId);
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $effectState);
+        $this->recordInitialEffectState($cardId, $effectState);
         // The card just became $playerId's own in-play mood, no longer a
         // discard-pile card with a "last owner" of its own -- see
         // removeFromDiscard(), which already cleared any stale entry.
+    }
+
+    /** @param array<string, mixed> $effectState */
+    private function recordInitialEffectState(int $cardId, array $effectState): void
+    {
+        foreach ($effectState as $key => $value) {
+            $this->recordEffectStateChange($cardId, $key, $value, false);
+        }
     }
 
     /**
@@ -705,17 +747,17 @@ final class BoardState
             return null;
         }
         $this->hands[$playerId][] = $cardId;
-        $this->pendingDraws[] = $playerId;
+        $this->pendingDraws[] = ['player_id' => $playerId, 'card_id' => $cardId];
 
         return $cardId;
     }
 
     /**
-     * Returns and clears every player id recorded via drawCard() since the
-     * last call -- see $pendingDraws' own docblock. Same consume-before-
-     * logging convention as consumeCardMoves()/consumeOwnershipChanges().
+     * Returns and clears every draw recorded via drawCard() since the last
+     * call -- see $pendingDraws' own docblock. Same consume-before-logging
+     * convention as consumeCardMoves()/consumeOwnershipChanges().
      *
-     * @return int[]
+     * @return array<int, array{player_id: int, card_id: int}>
      */
     public function consumeDraws(): array
     {
@@ -800,6 +842,34 @@ final class BoardState
         $mood->isSuppressed = true;
         $mood->suppressionExpiry = $expiry;
         $mood->suppressionSourceCardId = $sourceCardId;
+        $this->recordSuppressionChange($cardId, true, $expiry, $sourceCardId);
+    }
+
+    private function recordSuppressionChange(int $cardId, bool $isSuppressed, ?string $expiry, ?int $sourceCardId): void
+    {
+        $this->pendingSuppressionChanges[] = [
+            'card_id' => $cardId,
+            'is_suppressed' => $isSuppressed,
+            'suppression_expiry' => $expiry,
+            'suppression_source_card_id' => $sourceCardId,
+        ];
+    }
+
+    /**
+     * Returns and clears every suppression change recorded via suppress()/
+     * clearSuppressionsFrom()/clearEndOfRoundSuppressions() since the last
+     * call -- see $pendingSuppressionChanges' own docblock. Same
+     * consume-before-logging convention as consumeCardMoves()/
+     * consumeOwnershipChanges().
+     *
+     * @return array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
+     */
+    public function consumeSuppressionChanges(): array
+    {
+        $changes = $this->pendingSuppressionChanges;
+        $this->pendingSuppressionChanges = [];
+
+        return $changes;
     }
 
     public function isSuppressed(int $cardId): bool
@@ -912,6 +982,7 @@ final class BoardState
                 $mood->isSuppressed = false;
                 $mood->suppressionExpiry = null;
                 $mood->suppressionSourceCardId = null;
+                $this->recordSuppressionChange($mood->cardId, false, null, null);
             }
         }
     }
@@ -924,6 +995,7 @@ final class BoardState
                 $mood->isSuppressed = false;
                 $mood->suppressionExpiry = null;
                 $mood->suppressionSourceCardId = null;
+                $this->recordSuppressionChange($mood->cardId, false, null, null);
             }
         }
     }
@@ -933,6 +1005,7 @@ final class BoardState
     public function setEffectState(int $cardId, string $key, mixed $value): void
     {
         $this->moodInPlay($cardId)->effectState[$key] = $value;
+        $this->recordEffectStateChange($cardId, $key, $value, false);
     }
 
     public function effectState(int $cardId, string $key): mixed
@@ -943,7 +1016,39 @@ final class BoardState
     /** Unsets a specific effectState key so a one-shot marker (e.g. an after-scoring tag) doesn't reapply next round once it's been resolved. */
     public function clearEffectState(int $cardId, string $key): void
     {
-        unset($this->moodInPlay($cardId)->effectState[$key]);
+        $mood = $this->moodInPlay($cardId);
+        if (array_key_exists($key, $mood->effectState)) {
+            unset($mood->effectState[$key]);
+            $this->recordEffectStateChange($cardId, $key, null, true);
+        }
+    }
+
+    private function recordEffectStateChange(int $cardId, string $key, mixed $value, bool $cleared): void
+    {
+        $this->pendingEffectStateChanges[] = [
+            'card_id' => $cardId,
+            'key' => $key,
+            'value' => $value,
+            'cleared' => $cleared,
+        ];
+    }
+
+    /**
+     * Returns and clears every effectState mutation recorded via
+     * setEffectState()/clearEffectState() (plus each freshly-played mood's
+     * own initial bag from moveHandToInPlay()/moveDiscardToInPlay()) since
+     * the last call -- see $pendingEffectStateChanges' own docblock. Same
+     * consume-before-logging convention as consumeCardMoves()/
+     * consumeSuppressionChanges().
+     *
+     * @return array<int, array{card_id: int, key: string, value: mixed, cleared: bool}>
+     */
+    public function consumeEffectStateChanges(): array
+    {
+        $changes = $this->pendingEffectStateChanges;
+        $this->pendingEffectStateChanges = [];
+
+        return $changes;
     }
 
     /** A one-time score change from an "after playing" effect (e.g. Dignity's "value becomes 5"), as opposed to a continuously recomputed "while in play" value. */

@@ -10,6 +10,7 @@ use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
+use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
@@ -86,6 +87,7 @@ final class GameServiceIntegrationTest extends TestCase
             new MoodPlayService($registry),
             new RoundScorer(),
             $userDecklists,
+            new ReplayStateBuilder($registry),
         );
     }
 
@@ -3112,6 +3114,87 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Issue #240 replay's one real gap: drawCard() now records the drawn
+     * card's own id (not just who drew), but fullEventLog() must still
+     * redact it for a live game -- exactly the privacy BoardState::
+     * $pendingDraws used to provide by omitting the card id outright --
+     * revealing it only once the game is 'completed' (matching
+     * getSpectatorState()'s own $revealAllHands boundary, since a
+     * completed game's hands are already fully public by then).
+     */
+    public function testFullEventLogRedactsDrawnCardIdUntilGameIsCompleted(): void
+    {
+        $u1 = $this->insertUser('drawredact1');
+        $u2 = $this->insertUser('drawredact2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $zealId = $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
+        $benevolenceId = $this->insertGameCard($gameId, 2, 'hand', $p1); // Bottomed as Zeal's own cost
+        $drawnCardId = $this->insertGameCard($gameId, 9, 'deck', null, 0); // What p1 draws in exchange -- shared deck, so owner is null (see BoardStateRepository::load())
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $zealId, ['hand_card_id' => $benevolenceId]);
+
+        $liveDraws = $this->games->fullEventLog($gameId)[0]['details']['draws'];
+        self::assertSame([['player_id' => $p1]], $liveDraws, 'card_id must be redacted while the game is still in_progress');
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $gameId]);
+
+        $completedDraws = $this->games->fullEventLog($gameId)[0]['details']['draws'];
+        self::assertSame([['player_id' => $p1, 'card_id' => $drawnCardId]], $completedDraws, 'card_id must be revealed once the game is completed');
+    }
+
+    /**
+     * Issue #240 replay's other new queues: suppression_changes/
+     * effect_state_changes fold BoardState::consumeSuppressionChanges()/
+     * consumeEffectStateChanges() into the event's own details, the same
+     * way card_moves/ownership_changes already do -- Scorn's mandatory
+     * "after playing, suppress a mood" is a simple, single-event way to
+     * exercise both: the suppression itself, and the newly-entered-play
+     * Scorn's own initial effectState bag (playedFromZone).
+     */
+    public function testFullEventLogIncludesSuppressionAndEffectStateChanges(): void
+    {
+        $u1 = $this->insertUser('suppresslog1');
+        $u2 = $this->insertUser('suppresslog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $scornId = $this->insertGameCard($gameId, 24, 'hand', $p1); // Scorn, white
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity, white -- suppression target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $scornId, ['target_mood_id' => $charityId]);
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+
+        self::assertSame(
+            [['card_id' => $charityId, 'is_suppressed' => true, 'suppression_expiry' => 'end_of_round', 'suppression_source_card_id' => $scornId]],
+            $entry['details']['suppression_changes'],
+        );
+        self::assertContains(
+            ['card_id' => $scornId, 'key' => 'playedFromZone', 'value' => 'hand', 'cleared' => false],
+            $entry['details']['effect_state_changes'],
+        );
+    }
+
+    /**
      * Every seated player sees the exact same full log, the same way
      * recentEvents() itself already applies no per-viewer filtering --
      * confirmed here against a Malice cascade specifically (see
@@ -6034,6 +6117,7 @@ final class GameServiceIntegrationTest extends TestCase
                 new UserDecklistRepository(),
                 new FriendshipService(new UserRepository(), new FriendshipRepository()),
             ),
+            new ReplayStateBuilder($registry),
             1, // seconds -- short so this test doesn't wait out the real 10s default
         );
 

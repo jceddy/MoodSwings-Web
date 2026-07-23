@@ -809,6 +809,18 @@
     // every single request.
     let isSpectating = false;
     let spectateCode = null;
+    // Watch game replay (issue #240) -- the read-only, step-through-history
+    // counterpart to isSpectating above, for a completed game. Unlike
+    // isSpectating, this DOES reset back to false (see showLobby()) since a
+    // replay is opened in-page from this same lobby, not via a separate
+    // page/URL param the way spectating is -- see showReplayBoard().
+    // replayEvents is the full steppable event list (GameService::
+    // fullEventLog(), reused as-is -- no separate endpoint for it) and
+    // replayEventIndex is which one of those is currently shown.
+    let isReplaying = false;
+    let replayCode = null;
+    let replayEvents = [];
+    let replayEventIndex = 0;
     // Reset in showBoard() so the saved-deck dropdown is re-fetched fresh
     // for each newly-viewed custom_duel game, but not on every 4-second
     // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
@@ -826,6 +838,32 @@
     // issued call's response is ever actually rendered.
     let boardRequestSeq = 0;
 
+    // Whether the current view is read-only for the same underlying reason
+    // spectating is (no seat of the viewer's own to act from) -- covers
+    // both isSpectating and isReplaying (issue #240). Used to sweep the
+    // interactivity-gating checks that both share (canAct, resign/share
+    // buttons, "your hand" section); spectator-specific chrome (code
+    // re-sending on poll, the "Back to spectate list" label) stays keyed
+    // on isSpectating alone -- see showReplayBoard()'s own docblock.
+    function isReadOnlyView() {
+        return isSpectating || isReplaying;
+    }
+
+    // The share code (if any) authorizing the current read-only view --
+    // whichever of spectateCode/replayCode is actually active, or null for
+    // a normal seated player. Used by openGameLog()/openSharedDeckView()
+    // so those keep working the same way whether reached via spectating or
+    // replaying.
+    function activeShareCode() {
+        if (isSpectating) {
+            return spectateCode;
+        }
+        if (isReplaying) {
+            return replayCode;
+        }
+        return null;
+    }
+
     function showLobby() {
         currentGameId = null;
         currentState = null;
@@ -833,6 +871,17 @@
             clearInterval(pollTimer);
             pollTimer = null;
         }
+        // Watch game replay (issue #240) -- unlike isSpectating (never
+        // reset; a spectator leaves this page entirely instead), a replay
+        // session ends back at this same in-page lobby, so its own state
+        // needs to be explicitly cleared here rather than lingering into
+        // whatever's opened next.
+        isReplaying = false;
+        replayCode = null;
+        replayEvents = [];
+        replayEventIndex = 0;
+        document.getElementById('back-to-lobby-button').textContent = '← Back to your games';
+        document.getElementById('replay-controls').hidden = true;
         boardView.hidden = true;
         lobbyView.hidden = false;
         refreshLobby();
@@ -901,6 +950,101 @@
                 refreshBoard();
             }
         }, 4000);
+    }
+
+    // Watch game replay (issue #240) -- another read-only counterpart to
+    // showBoard(), for stepping through a COMPLETED game's own history
+    // move-by-move rather than watching it live. Reuses the same
+    // #board-view/renderBoard() as showSpectatorBoard() above (see
+    // refreshReplayBoard()'s own state.you stub, the same shape
+    // refreshBoard()'s isSpectating branch already builds), but never arms
+    // pollTimer at all -- a completed game's history never changes
+    // underneath the viewer, so there's nothing to poll for. Opened
+    // in-page from this same lobby's own "Watch replay" button (see
+    // buildGameRow()), unlike spectating's separate ?spectate_game_id= URL
+    // entry point, since a replay session always starts from -- and always
+    // returns to -- this same lobby.
+    async function showReplayBoard(gameId, code) {
+        currentGameId = gameId;
+        isReplaying = true;
+        replayCode = code || null;
+        document.getElementById('back-to-lobby-button').textContent = '← Exit replay';
+        lobbyView.hidden = true;
+        boardView.hidden = false;
+        boardMessage.hidden = true;
+        boardError.hidden = true;
+        document.getElementById('replay-controls').hidden = false;
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+
+        const { ok, body } = await getGameLog(gameId, replayCode);
+        replayEvents = ok ? body.events : [];
+        replayEventIndex = replayEvents.length > 0 ? replayEvents.length - 1 : 0;
+
+        if (replayEvents.length === 0) {
+            boardError.textContent = 'This game has no history to replay.';
+            boardError.hidden = false;
+            return;
+        }
+
+        await refreshReplayBoard();
+    }
+
+    async function refreshReplayBoard() {
+        const seq = ++boardRequestSeq;
+        const eventId = replayEvents[replayEventIndex].id;
+        const { ok, body } = await getReplayGameState(currentGameId, eventId, replayCode);
+        if (seq !== boardRequestSeq) {
+            return; // a newer refreshBoard()/refreshReplayBoard() call has since been issued -- stale, ignore it
+        }
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not load this point in the game.';
+            boardError.hidden = false;
+            return;
+        }
+        boardError.hidden = true;
+        // Same synthesized 'you' stub refreshBoard()'s own isSpectating
+        // branch builds -- see its own comment for why every field is
+        // needed, not just game_player_id.
+        body.you = { game_player_id: null, hand: [], is_your_turn: false };
+        if (isSharedDeckType(body.game.deck_type) && body.players.length > 0) {
+            body.deck_count = body.players[0].deck_count;
+        }
+        currentState = body;
+        renderBoard(body);
+        renderReplayControls();
+    }
+
+    // Keeps #replay-event-select/#replay-position/the prev/next buttons in
+    // sync with replayEventIndex -- called after every refreshReplayBoard()
+    // render, plus once from showReplayBoard() indirectly via that same
+    // call.
+    function renderReplayControls() {
+        const select = document.getElementById('replay-event-select');
+        const position = document.getElementById('replay-position');
+
+        if (select.dataset.gameId !== String(currentGameId)) {
+            select.innerHTML = '';
+            replayEvents.forEach((event, index) => {
+                const option = document.createElement('option');
+                option.value = String(index);
+                option.textContent = 'Step ' + (index + 1)
+                    + (event.round_number ? ' (Round ' + event.round_number + ')' : '')
+                    + ': ' + event.description;
+                select.appendChild(option);
+            });
+            select.dataset.gameId = String(currentGameId);
+        }
+        select.value = String(replayEventIndex);
+
+        const current = replayEvents[replayEventIndex];
+        position.textContent = 'Step ' + (replayEventIndex + 1) + ' of ' + replayEvents.length
+            + (current.round_number ? ' — Round ' + current.round_number : '');
+
+        document.getElementById('replay-prev-button').disabled = replayEventIndex <= 0;
+        document.getElementById('replay-next-button').disabled = replayEventIndex >= replayEvents.length - 1;
     }
 
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
@@ -1293,6 +1437,14 @@
         const canPlay = game.status === 'waiting' || game.status === 'in_progress';
         actionsEl.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
         actionsEl.appendChild(actionButton('View log', () => openGameLog(game.id)));
+        // Watch game replay (issue #240) -- only once a game is actually
+        // 'completed' (see GameService::replayStateAsOf()'s own identical
+        // requirement); a still-in-progress game has nothing finished to
+        // step back through yet, and 'waiting'/'abandoned' never dealt a
+        // board worth replaying at all.
+        if (game.status === 'completed') {
+            actionsEl.appendChild(actionButton('Watch replay', () => showReplayBoard(game.id)));
+        }
         // Same "no single shared deck"/"nothing dealt yet" conditions as
         // the board's own #view-shared-deck-button (issue #197) -- a
         // still-'waiting' game (including a match's own compact sub-rows,
@@ -1421,6 +1573,26 @@
             return;
         }
         showLobby();
+    });
+
+    // Watch game replay (issue #240) -- step controls, see
+    // renderReplayControls() for the disabled-at-either-end logic these
+    // rely on.
+    document.getElementById('replay-prev-button').addEventListener('click', () => {
+        if (replayEventIndex > 0) {
+            replayEventIndex -= 1;
+            refreshReplayBoard();
+        }
+    });
+    document.getElementById('replay-next-button').addEventListener('click', () => {
+        if (replayEventIndex < replayEvents.length - 1) {
+            replayEventIndex += 1;
+            refreshReplayBoard();
+        }
+    });
+    document.getElementById('replay-event-select').addEventListener('change', (e) => {
+        replayEventIndex = parseInt(e.target.value, 10);
+        refreshReplayBoard();
     });
 
     // -- New game dialog ---------------------------------------------------
@@ -2209,7 +2381,7 @@
         gameLogDialog.dataset.gameId = gameId;
         gameLogDialog.showModal();
 
-        const { ok, body } = await getGameLog(gameId, isSpectating ? spectateCode : null);
+        const { ok, body } = await getGameLog(gameId, activeShareCode());
         currentGameLogEvents = ok ? body.events : [];
 
         renderList(listEl, emptyEl, currentGameLogEvents, (event) => {
@@ -2296,7 +2468,7 @@
         cardsEl.innerHTML = '';
         document.getElementById('shared-deck-dialog').showModal();
 
-        const { ok, body } = await getSharedDeck(gameId, isSpectating ? spectateCode : null);
+        const { ok, body } = await getSharedDeck(gameId, activeShareCode());
         if (!ok) {
             return;
         }
@@ -2478,11 +2650,11 @@
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
 
-        // Spectator mode (issue #128) -- only a real seated player can
-        // mint/share this game's own code, and only once there's actually
-        // something to spectate (see getSpectatorState()'s own identical
-        // 'waiting' exclusion).
-        document.getElementById('spectate-share-button').hidden = isSpectating || state.game.status === 'waiting';
+        // Spectator mode (issue #128)/Watch game replay (issue #240) --
+        // only a real seated player can mint/share this game's own code,
+        // and only once there's actually something to spectate (see
+        // getSpectatorState()'s own identical 'waiting' exclusion).
+        document.getElementById('spectate-share-button').hidden = isReadOnlyView() || state.game.status === 'waiting';
 
         renderDraftMatchScoreline(state);
 
@@ -2735,12 +2907,12 @@
 
         // A pending decision freezes the whole round -- nobody, including
         // the player whose turn it nominally is, can play or pass until
-        // the targeted player has answered it. !isSpectating is made
+        // the targeted player has answered it. !isReadOnlyView() is made
         // explicit here (rather than relying incidentally on
-        // state.you.is_your_turn always being false for a spectator) so a
-        // future change to the state.you stub can never silently
-        // re-enable controls for a spectator.
-        const canAct = !isSpectating && state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
+        // state.you.is_your_turn always being false for a spectator/replay
+        // viewer) so a future change to the state.you stub can never
+        // silently re-enable controls for either read-only view.
+        const canAct = !isReadOnlyView() && state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
 
         document.getElementById('discard-count').textContent = state.discard_pile.length;
         document.getElementById('deck-count').textContent = state.deck_count;
@@ -2785,16 +2957,18 @@
             return li;
         });
 
-        // Spectator mode (issue #128): a spectator has no hand of their
-        // own to show in #your-hand-section (state.you.hand is always
-        // []) -- swap it for #spectator-final-hands-section instead, only
-        // once the game is 'completed' and every seated player's final
-        // hand has actually been revealed (players[].hand is only ever
-        // present then -- see GameService::buildGameState()'s own
-        // $revealAllHands). Still in_progress -- nothing to show either
-        // way, so both stay hidden.
-        document.getElementById('your-hand-section').hidden = isSpectating;
-        renderSpectatorFinalHands(isSpectating ? state : null);
+        // Spectator mode (issue #128)/Watch game replay (issue #240): a
+        // spectator or replay viewer has no hand of their own to show in
+        // #your-hand-section (state.you.hand is always []) -- swap it for
+        // #spectator-final-hands-section instead, only once the game is
+        // 'completed' and every seated player's final hand has actually
+        // been revealed (players[].hand is only ever present then -- see
+        // GameService::buildGameState()'s own $revealAllHands, and
+        // serializeReplaySnapshot()'s identical always-revealed shape).
+        // Still in_progress -- nothing to show either way, so both stay
+        // hidden.
+        document.getElementById('your-hand-section').hidden = isReadOnlyView();
+        renderSpectatorFinalHands(isReadOnlyView() ? state : null);
 
         renderTeammateHand(state);
         renderTeamDecision(state.team_decision);
@@ -2806,12 +2980,12 @@
         // GameService::resignGame()) -- shown whenever the game is still
         // in_progress and the viewer hasn't already resigned, hidden
         // entirely once the game's over or they have (a resigned player
-        // has nothing left to resign from). A spectator has nothing of
-        // their own to resign from either -- state.you is just the
-        // synthesized stub (never .resigned), so this needs its own
-        // explicit isSpectating check rather than relying on that.
+        // has nothing left to resign from). A spectator/replay viewer has
+        // nothing of their own to resign from either -- state.you is just
+        // the synthesized stub (never .resigned), so this needs its own
+        // explicit isReadOnlyView() check rather than relying on that.
         const resignButton = document.getElementById('resign-button');
-        resignButton.hidden = isSpectating || state.game.status !== 'in_progress' || Boolean(you && you.resigned);
+        resignButton.hidden = isReadOnlyView() || state.game.status !== 'in_progress' || Boolean(you && you.resigned);
         resignButton.disabled = Boolean(pendingDecision);
 
         // "View decklist" (issue #197) -- hidden entirely for a deck_type
@@ -4564,13 +4738,13 @@
         const errorEl = document.getElementById('first-player-decision-error');
         errorEl.hidden = true;
 
-        // Spectator mode (issue #128): this panel's own text is written
-        // entirely in first/second person ("You lost the previous
-        // game...") with no clean generalization to a bystander's point
-        // of view, and there's no real "you" to derive it from anyway --
-        // hidden outright for a spectator rather than shown with
-        // misleading content.
-        if (!decision || isSpectating) {
+        // Spectator mode (issue #128)/Watch game replay (issue #240): this
+        // panel's own text is written entirely in first/second person
+        // ("You lost the previous game...") with no clean generalization
+        // to a bystander's point of view, and there's no real "you" to
+        // derive it from anyway -- hidden outright for a spectator/replay
+        // viewer rather than shown with misleading content.
+        if (!decision || isReadOnlyView()) {
             panel.hidden = true;
             return;
         }

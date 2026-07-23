@@ -325,6 +325,111 @@ final class BoardStateTest extends TestCase
         self::assertFalse($state->isSuppressed(56));
     }
 
+    /**
+     * issue #240 replay needs a historical trail of suppression changes --
+     * consumeSuppressionChanges() is the queue that provides it. Consumed
+     * once here (draining the entry suppress() itself queued) before
+     * clearEndOfRoundSuppressions() runs, so its own newly-queued entry
+     * is the only one left to assert on afterward.
+     */
+    public function testConsumeSuppressionChangesRecordsSuppressAndClear(): void
+    {
+        $state = $this->boardState(hands: [1 => [56]]);
+        $state->moveHandToInPlay(1, 56);
+
+        $state->suppress(56, 'end_of_round', sourceCardId: 42);
+
+        self::assertSame(
+            [['card_id' => 56, 'is_suppressed' => true, 'suppression_expiry' => 'end_of_round', 'suppression_source_card_id' => 42]],
+            $state->consumeSuppressionChanges(),
+        );
+
+        $state->clearEndOfRoundSuppressions();
+
+        self::assertSame(
+            [['card_id' => 56, 'is_suppressed' => false, 'suppression_expiry' => null, 'suppression_source_card_id' => null]],
+            $state->consumeSuppressionChanges(),
+        );
+    }
+
+    public function testConsumeSuppressionChangesRecordsClearSuppressionsFrom(): void
+    {
+        $state = $this->boardState(hands: [1 => [56]]);
+        $state->moveHandToInPlay(1, 56);
+        $state->suppress(56, 'while_source_in_play', sourceCardId: 42);
+        $state->consumeSuppressionChanges();
+
+        $state->clearSuppressionsFrom(42);
+
+        self::assertSame(
+            [['card_id' => 56, 'is_suppressed' => false, 'suppression_expiry' => null, 'suppression_source_card_id' => null]],
+            $state->consumeSuppressionChanges(),
+        );
+    }
+
+    /** A clear that changes nothing (no suppression matches) mustn't emit an empty entry -- see $pendingSuppressionChanges' own docblock. */
+    public function testConsumeSuppressionChangesEmptyForANoOpClear(): void
+    {
+        $state = $this->boardState(hands: [1 => [56]]);
+        $state->moveHandToInPlay(1, 56);
+
+        $state->clearSuppressionsFrom(42);
+        $state->clearEndOfRoundSuppressions();
+
+        self::assertSame([], $state->consumeSuppressionChanges());
+    }
+
+    /**
+     * issue #240 replay's other new queue: every effectState mutation,
+     * including the initial bag moveHandToInPlay()/moveDiscardToInPlay()
+     * stamp on (playedFromZone here -- playedInRoundTag() contributes
+     * nothing extra since no round is set on this bare test BoardState).
+     */
+    public function testConsumeEffectStateChangesRecordsTheInitialBagOnEnteringPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [56]]);
+
+        $state->moveHandToInPlay(1, 56);
+
+        self::assertSame(
+            [['card_id' => 56, 'key' => 'playedFromZone', 'value' => 'hand', 'cleared' => false]],
+            $state->consumeEffectStateChanges(),
+        );
+    }
+
+    public function testConsumeEffectStateChangesRecordsSetAndClear(): void
+    {
+        $state = $this->boardState(hands: [1 => [56]]);
+        $state->moveHandToInPlay(1, 56);
+        $state->consumeEffectStateChanges();
+
+        $state->setEffectState(56, 'blissColor', 'red');
+
+        self::assertSame(
+            [['card_id' => 56, 'key' => 'blissColor', 'value' => 'red', 'cleared' => false]],
+            $state->consumeEffectStateChanges(),
+        );
+
+        $state->clearEffectState(56, 'blissColor');
+
+        self::assertSame(
+            [['card_id' => 56, 'key' => 'blissColor', 'value' => null, 'cleared' => true]],
+            $state->consumeEffectStateChanges(),
+        );
+    }
+
+    /** Clearing a key that was never set mustn't emit an empty entry -- see $pendingEffectStateChanges' own docblock. */
+    public function testConsumeEffectStateChangesEmptyForANoOpClear(): void
+    {
+        $state = $this->boardState(hands: [1 => [56]]);
+        $state->moveHandToInPlay(1, 56);
+        $state->consumeEffectStateChanges();
+
+        $state->clearEffectState(56, 'neverSet');
+
+        self::assertSame([], $state->consumeEffectStateChanges());
+    }
+
     public function testColorOfWithoutImaginationReturnsCatalogColor(): void
     {
         $state = $this->boardState(hands: [1 => [56]]);
@@ -393,15 +498,19 @@ final class BoardStateTest extends TestCase
         self::assertSame(2, $state->playsRemaining());
     }
 
-    public function testDrawCardRecordsTheDrawingPlayerNotTheCard(): void
+    public function testDrawCardRecordsTheDrawingPlayerAndCard(): void
     {
-        // Unlike every other zone move, drawing is only ever recorded as
-        // "who drew", never "what" -- see $pendingDraws' own docblock.
+        // Unlike every other zone move, this is also recorded with the
+        // card id -- issue #240's replay needs it to reconstruct which
+        // card ended up where -- but GameService::fullEventLog() still
+        // redacts it for any game that isn't yet 'completed', preserving
+        // the same live-game privacy $pendingDraws used to provide by
+        // omitting the card id entirely. See $pendingDraws' own docblock.
         $state = $this->boardState(deck: [10]);
 
         $state->drawCard(1);
 
-        self::assertSame([1], $state->consumeDraws());
+        self::assertSame([['player_id' => 1, 'card_id' => 10]], $state->consumeDraws());
     }
 
     public function testDrawCardFromAnEmptyDeckDoesNotRecordADraw(): void
@@ -420,7 +529,10 @@ final class BoardStateTest extends TestCase
         $state->drawCard(1);
         $state->drawCard(2);
 
-        self::assertSame([1, 2], $state->consumeDraws());
+        self::assertSame(
+            [['player_id' => 1, 'card_id' => 10], ['player_id' => 2, 'card_id' => 20]],
+            $state->consumeDraws(),
+        );
         self::assertSame([], $state->consumeDraws());
     }
 

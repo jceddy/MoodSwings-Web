@@ -297,6 +297,20 @@ function getGameLog(gameId, code) {
     return apiRequest(path);
 }
 
+// Watch game replay (issue #240): the board reconstructed as of one
+// specific past event -- see GameService::replayStateAsOf(). code is only
+// ever passed while replaying via a share code rather than friendship,
+// same as getGameLog() above -- see showReplayBoard() in game.js. The
+// steppable event list itself is just getGameLog() reused as-is, no
+// separate endpoint needed for that part.
+function getReplayGameState(gameId, eventId, code) {
+    let path = '/games/replay/state?game_id=' + encodeURIComponent(gameId) + '&event_id=' + encodeURIComponent(eventId);
+    if (code) {
+        path += '&code=' + encodeURIComponent(code);
+    }
+    return apiRequest(path);
+}
+
 // A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().
 // code is only ever passed while spectating (issue #128) via a share code
 // rather than friendship -- see openSharedDeckView() in game.js.
