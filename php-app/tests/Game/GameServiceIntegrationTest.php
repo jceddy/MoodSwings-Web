@@ -1647,8 +1647,13 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(['blue'], $anxietyReaction['filter']['colors']);
     }
 
-    public function testGetStateAppendsValidationsReactionFieldOnlyForZeroOrOneValueCards(): void
+    public function testGetStateNeverAppendsAValidationReactionFieldSinceItsGrantIsUnconditional(): void
     {
+        // Validation's reaction has no player choice to expose at all --
+        // both of its grants are unconditional (see ValidationEffect's own
+        // docblock) -- so no card's choice_fields should ever carry a
+        // 'validation_extra_play' entry, regardless of whether Validation
+        // is in play or the card being offered qualifies (base value 0/1).
         $u1 = $this->insertUser('validationreact1');
         $u2 = $this->insertUser('validationreact2');
 
@@ -1662,8 +1667,8 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGamePlayer($gameId, $u2, 1);
 
         $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation
-        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1 -- qualifies
-        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, base value 3 -- doesn't qualify
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, base value 3
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
@@ -1672,7 +1677,7 @@ final class GameServiceIntegrationTest extends TestCase
             $byCardId[$card['card_id']] = $card;
         }
 
-        self::assertNotNull(self::findFieldByKey($byCardId[$charityId]['choice_fields'], 'validation_extra_play'));
+        self::assertNull(self::findFieldByKey($byCardId[$charityId]['choice_fields'], 'validation_extra_play'));
         self::assertNull(self::findFieldByKey($byCardId[$dignityId]['choice_fields'], 'validation_extra_play'));
     }
 
@@ -1690,13 +1695,12 @@ final class GameServiceIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
 
-        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1 -- would qualify for Validation's reaction, but no reactor is in play
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, base value 1
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
 
         self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'scorn_suppress_target'));
-        self::assertNull(self::findFieldByKey($hand[0]['choice_fields'], 'validation_extra_play'));
     }
 
     /**
@@ -1879,7 +1883,7 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(['white'], $scornField['filter']['colors']);
     }
 
-    public function testCopySimulationOffersValidationsReactionOnlyForZeroOrOneValueCandidates(): void
+    public function testCopySimulationNeverOffersAValidationReactionSinceItsGrantIsUnconditional(): void
     {
         $u1 = $this->insertUser('copysimvalid1');
         $u2 = $this->insertUser('copysimvalid2');
@@ -1895,14 +1899,14 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation, owned by the viewer
         $creativityId = $this->insertGameCard($gameId, 32, 'hand', $p1); // Creativity
-        $guileId = $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile, base value 0 -- qualifies
-        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3 -- doesn't qualify
+        $guileId = $this->insertGameCard($gameId, 40, 'in_play', $p2); // Guile, base value 0
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $hand = $this->games->getState($gameId, $u1)['you']['hand'];
         $creativity = self::findByCardId($hand, $creativityId);
 
-        self::assertNotNull(self::findFieldByKey($creativity['copy_simulation'][$guileId]['extra_fields'], 'validation_extra_play'));
+        self::assertNull(self::findFieldByKey($creativity['copy_simulation'][$guileId]['extra_fields'], 'validation_extra_play'));
         self::assertNull(self::findFieldByKey($creativity['copy_simulation'][$dignityId]['extra_fields'], 'validation_extra_play'));
     }
 

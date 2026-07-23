@@ -3924,16 +3924,39 @@ final class MoodPlayServiceTest extends TestCase
 
     public function testValidationReactsToALowValuedSubsequentPlay(): void
     {
+        // Validation's reaction is unconditional (see ValidationEffect's
+        // own docblock) -- no 'validation_extra_play' choice is needed or
+        // even offered; a low-valued play always chains into another
+        // granted play on its own.
         $state = $this->boardState(hands: [1 => [26, 20, 5]]); // Validation, Pacifism (value 1), Complacency
         $state->startTurn(1);
 
         $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // grants 1 extra play
-        $this->plays->playMood($state, 1, 20, new PlayerChoices(['validation_extra_play' => true])); // Pacifism, value 1
+        $this->plays->playMood($state, 1, 20, new PlayerChoices([])); // Pacifism, value 1
         self::assertSame(1, $state->playsRemaining());
 
         $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
 
         self::assertSame(0, $state->playsRemaining());
+    }
+
+    public function testValidationReactsToASubsequentPlayMadeWithItsOwnGrantedExtraPlay(): void
+    {
+        // Regression test for a reported bug: Validation's reaction used
+        // to require an opt-in 'validation_extra_play' choice, which meant
+        // using Validation's own granted play to play a second low-valued
+        // mood (Hate, base value 0) silently never chained into a THIRD
+        // granted play unless that choice happened to be resubmitted.
+        // Since the reaction is now unconditional, this just works.
+        $state = $this->boardState(hands: [1 => [26, 66]]); // Validation, Hate
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // grants 1 extra play
+        self::assertSame(1, $state->playsRemaining());
+
+        $this->plays->playMood($state, 1, 66, new PlayerChoices([])); // Hate, using that grant
+
+        self::assertSame(1, $state->playsRemaining());
     }
 
     public function testValidationDoesNotReactToAHighValuedSubsequentPlay(): void
@@ -3942,7 +3965,7 @@ final class MoodPlayServiceTest extends TestCase
         $state->startTurn(1);
 
         $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // grants 1 extra play
-        $this->plays->playMood($state, 1, 5, new PlayerChoices(['validation_extra_play' => true]));
+        $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
 
         self::assertSame(0, $state->playsRemaining());
     }
@@ -3961,7 +3984,7 @@ final class MoodPlayServiceTest extends TestCase
 
         $state->startTurn(1);
         $this->plays->playMood($state, 1, 26, new PlayerChoices([])); // Validation, grants 1 extra play
-        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 9, 'validation_extra_play' => true])); // Creativity copying Discipline
+        $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 9])); // Creativity copying Discipline
 
         self::assertSame(0, $state->playsRemaining());
     }

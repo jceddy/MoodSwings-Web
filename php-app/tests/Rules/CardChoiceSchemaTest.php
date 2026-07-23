@@ -166,8 +166,10 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertCount(1, $scorn);
         self::assertSame('target_mood_id', $scorn[0]['key']);
 
-        // Validation's afterPlaying grant needs no choice at all; its
-        // reaction (validation_extra_play) is the same kind of gap.
+        // Validation's afterPlaying grant needs no choice at all, and
+        // neither does its reaction -- both are unconditional (see
+        // ValidationEffect's own docblock), so there's no field to expose
+        // for either one.
         self::assertSame([], CardChoiceSchema::forEffectKey('validation'));
     }
 
@@ -379,13 +381,13 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertArrayNotHasKey('filter', $template);
     }
 
-    public function testReactionTemplateForValidationMatchesValidationEffectsOwnKey(): void
+    public function testReactionTemplateIsNullForValidationSinceItsReactionIsUnconditional(): void
     {
-        $template = CardChoiceSchema::reactionTemplate('validation');
-
-        self::assertSame('validation_extra_play', $template['key']);
-        self::assertSame('bool', $template['type']);
-        self::assertFalse($template['required']);
+        // Unlike Scorn's, Validation's reaction needs no player choice at
+        // all -- both of its grants are unconditional (see
+        // ValidationEffect's own docblock) -- so REACTIONS has no entry
+        // for it.
+        self::assertNull(CardChoiceSchema::reactionTemplate('validation'));
     }
 
     public function testReactionTemplateIsNullForAnyOtherEffectKey(): void
