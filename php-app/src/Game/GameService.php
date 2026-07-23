@@ -6728,6 +6728,14 @@ final class GameService
                 $choiceFields
             );
 
+            // Repentance's own 'value' field ('allow_extra_values') needs the
+            // same as-if-already-in-play treatment -- see
+            // withExtraOutOfRangeValues()'s own docblock.
+            $choiceFields = array_map(
+                fn (array $field) => $this->withExtraOutOfRangeValues($state, $field, $cardId, $reactingViewerId),
+                $choiceFields
+            );
+
             // 'grant_source_card_id' -- present only when 2+ distinct
             // outstanding grants would each independently allow playing
             // this card (BoardState::usableGrants()), letting the player
@@ -6843,6 +6851,43 @@ final class GameService
         }
 
         $field['candidate_card_ids'] = $candidates;
+
+        return $field;
+    }
+
+    /**
+     * Adds extra_values to a 'value'-type field marked 'allow_extra_values'
+     * (Repentance's own -- see CardChoiceSchema's own docblock for why this
+     * is opt-in rather than every 'value' field, e.g. Rebellion's own 0-3
+     * range must never be widened) -- a no-op for every other field.
+     * Repentance's printed text is just "choose a number," with no upper
+     * bound of its own; CardChoiceSchema's 0-12 range is only a practical
+     * default matching the highest printed base value in the catalog, not
+     * a real rule. A mood whose own value scales with some count (Euphoria's
+     * "+1 per mood in play, including itself," Vanity/Sloth/Sadness/Envy,
+     * etc.) can genuinely exceed 12 given enough moods/hand/discard cards --
+     * and since Repentance is itself about to become one more mood in play,
+     * such a target's value has to be computed via
+     * BoardState::valueOfAsIfAlsoInPlay() (same reasoning as
+     * withSimulatedMoodCandidates() above), not each mood's current
+     * (pre-play) value, or a value that only crosses 12 once Repentance
+     * itself counts would never be offered.
+     */
+    private function withExtraOutOfRangeValues(BoardState $state, array $field, int $cardId, int $ownerId): array
+    {
+        if ($field['type'] !== 'value' || !($field['allow_extra_values'] ?? false)) {
+            return $field;
+        }
+
+        $extraValues = [];
+        foreach ($state->moodsInPlay() as $inPlayCardId => $mood) {
+            $value = $state->valueOfAsIfAlsoInPlay($inPlayCardId, $cardId, $ownerId);
+            if ($value > $field['max'] && !in_array($value, $extraValues, true)) {
+                $extraValues[] = $value;
+            }
+        }
+        sort($extraValues);
+        $field['extra_values'] = $extraValues;
 
         return $field;
     }

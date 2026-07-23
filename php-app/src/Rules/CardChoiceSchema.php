@@ -25,6 +25,15 @@ namespace MoodSwings\Rules;
  *     scope?: string,       // player: any|other -- mood: own|other|any
  *     options?: string[],   // mode only
  *     min?: int, max?: int, // value only
+ *     allow_extra_values?: bool, // value only: this field's own max is a practical default (the highest
+ *                           // printed base value in the catalog), not a rule the effect itself enforces --
+ *                           // when set, GameService::withExtraOutOfRangeValues() appends any actually
+ *                           // achievable value above max (from a mood currently in play, as if this card
+ *                           // were already played too) as this field's own extra_values, since a picker
+ *                           // capped at max would otherwise never offer a legitimately reachable choice.
+ *                           // Repentance's own field is the only one set this way -- Rebellion's field is
+ *                           // also 'value'-typed but its 0-3 range comes directly from its own printed
+ *                           // rules text ("choose 0, 1, 2, or 3"), a real rule that must never be widened.
  *     fields?: array,       // nested only: this field's own sub-fields, same shape as this array --
  *                           // one level deep only (see Duplicity below)
  *     filter?: array{       // narrows a dropdown to choices the effect will actually accept,
@@ -156,7 +165,7 @@ final class CardChoiceSchema
             ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to suppress (up to 2, one per player)', 'count' => ['max' => 2], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'repentance' => [
-            ['key' => 'value', 'type' => 'value', 'required' => false, 'min' => 0, 'max' => 12, 'label' => 'Value to suppress (every mood showing it)'],
+            ['key' => 'value', 'type' => 'value', 'required' => false, 'min' => 0, 'max' => 12, 'allow_extra_values' => true, 'label' => 'Value to suppress (every mood showing it)'],
         ],
         'hate' => [
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to move to the bottom of the deck'],

@@ -4117,6 +4117,15 @@
             for (let value = field.min; value <= field.max; value++) {
                 select.appendChild(new Option(String(value), String(value)));
             }
+            // Repentance's own field ('allow_extra_values', see
+            // CardChoiceSchema.php) -- extra_values is a server-computed
+            // list of values some mood currently in play actually has
+            // (as if this card were already played too) once that value
+            // falls above the field's own static max -- see
+            // GameService::withExtraOutOfRangeValues().
+            for (const value of field.extra_values || []) {
+                select.appendChild(new Option(String(value), String(value)));
+            }
             return select;
         }
 

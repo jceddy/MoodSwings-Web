@@ -109,6 +109,19 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertSame(12, $repentance['max']);
     }
 
+    public function testOnlyRepentancesValueFieldAllowsExtraOutOfRangeValues(): void
+    {
+        $rebellion = CardChoiceSchema::forEffectKey('rebellion')[0];
+        $repentance = CardChoiceSchema::forEffectKey('repentance')[0];
+
+        // Rebellion's own 0-3 range comes straight from its printed rules
+        // text ("choose 0, 1, 2, or 3") -- a real rule, not a practical
+        // default, so it must never be widened by GameService::
+        // withExtraOutOfRangeValues() the way Repentance's field is.
+        self::assertTrue($repentance['allow_extra_values']);
+        self::assertFalse($rebellion['allow_extra_values'] ?? false);
+    }
+
     public function testBoolFieldForRage(): void
     {
         $fields = CardChoiceSchema::forEffectKey('rage');
