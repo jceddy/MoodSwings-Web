@@ -126,6 +126,16 @@ rather than assuming the first sign of change is already the final state.
    - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
      `SMTP_ENCRYPTION` (`tls` or `ssl`), `SMTP_FROM_ADDRESS`,
      `SMTP_FROM_NAME` — from step 2, used to send verification emails.
+   - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` — for browser
+     push notifications. Generate a keypair with `php -r 'require
+     "vendor/autoload.php"; print_r((new
+     Minishlink\WebPush\VAPID)::createVapidKeys());'` from `php-app/`, or
+     the `web-push` npm CLI; `VAPID_SUBJECT` is a `mailto:`/`https://` URL
+     identifying you, e.g. `mailto:you@example.com`. See "Browser push
+     notifications" in `php-app/README.md` for details. Without these set,
+     `GET /notifications/vapid-public-key` returns an empty key and the
+     frontend shows "Push notifications are not configured on the server
+     yet."
 4. Optionally add these **variables** (same Settings page, "Variables" tab):
    - `FTP_SERVER_DIR` — remote path to deploy into. Defaults to
      `/public_html/` if unset.

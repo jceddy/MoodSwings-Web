@@ -49,6 +49,9 @@ jobs:
           SMTP_ENCRYPTION: ${{ secrets.SMTP_ENCRYPTION }}
           SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
           SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
         run: |
           set -euo pipefail
           rm -rf dist
@@ -107,6 +110,9 @@ jobs:
           write_env_var SMTP_ENCRYPTION "$SMTP_ENCRYPTION"
           write_env_var SMTP_FROM_ADDRESS "$SMTP_FROM_ADDRESS"
           write_env_var SMTP_FROM_NAME "$SMTP_FROM_NAME"
+          write_env_var VAPID_PUBLIC_KEY "$VAPID_PUBLIC_KEY"
+          write_env_var VAPID_PRIVATE_KEY "$VAPID_PRIVATE_KEY"
+          write_env_var VAPID_SUBJECT "$VAPID_SUBJECT"
 
           # dist/, vendor/, and src/ all end up under the shared document
           # root (no Bluehost document-root change required), so block
