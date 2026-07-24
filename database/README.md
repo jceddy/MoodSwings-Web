@@ -413,7 +413,10 @@ half-migrated schema.
   can run past reasonable index key-length limits) and
   `notification_preferences` (one row per user, three boolean columns --
   `notify_your_turn`/`notify_friend_request`/`notify_game_finished` --
-  created lazily the first time a user changes a setting; no row yet
-  means all-`true` defaults). `VERSION` bumps to `1.1.0` (a genuine new
+  plus `last_notified_at`, backing a global 5-minute per-user notification
+  cooldown regardless of event type or game; a row is created lazily the
+  first time a user either changes a setting or is actually sent a
+  notification, and no row at all means all-`true` preference defaults
+  with no cooldown in effect). `VERSION` bumps to `1.1.0` (a genuine new
   feature, not a breaking change like `0047`'s `1.0.0`). See "Browser
   push notifications" in `php-app/README.md`.

@@ -30,19 +30,28 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
 -- reasoning as sessions.token_hash/email_verifications.token_hash above,
 -- just for length rather than secrecy.
 
--- One row per user, created lazily the first time they enable push
--- notifications (see PushNotificationService::preferencesFor(), which
--- returns the all-true defaults below without an INSERT until the user
--- actually changes something). Three independent toggles for this pass's
--- three event types; a per-channel column (rather than a generic
--- event_type/channel pair table) is deliberately simple since there's only
--- one channel (browser push) today -- Discord notifications, when they
--- land, get their own columns here rather than a redesign.
+-- One row per user, created lazily the first time they either change a
+-- preference (NotificationPreferenceRepository::save()) or actually get
+-- sent a notification (PushNotificationService::notify(), to record
+-- last_notified_at below) -- forUser() still returns the all-true
+-- defaults without a row existing at all. Three independent toggles for
+-- this pass's three event types; a per-channel column (rather than a
+-- generic event_type/channel pair table) is deliberately simple since
+-- there's only one channel (browser push) today -- Discord notifications,
+-- when they land, get their own columns here rather than a redesign.
+--
+-- last_notified_at backs a global 5-minute per-user cooldown
+-- (PushNotificationService::notify()) -- regardless of event type or
+-- which game it's about, a user who was already sent a push within the
+-- last 5 minutes doesn't get another one, so someone actively playing
+-- through several turns/decisions in a row isn't spammed with one
+-- notification per event.
 CREATE TABLE IF NOT EXISTS notification_preferences (
     user_id INT UNSIGNED NOT NULL,
     notify_your_turn TINYINT(1) NOT NULL DEFAULT 1,
     notify_friend_request TINYINT(1) NOT NULL DEFAULT 1,
     notify_game_finished TINYINT(1) NOT NULL DEFAULT 1,
+    last_notified_at TIMESTAMP NULL DEFAULT NULL,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id),
     CONSTRAINT fk_notification_preferences_user_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE

@@ -199,4 +199,65 @@ final class NotificationsIntegrationTest extends TestCase
 
         self::addToAssertionCount(1);
     }
+
+    // -- Five-minute per-user notification cooldown -------------------------
+
+    public function testWasNotifiedRecentlyIsFalseUntilMarkNotified(): void
+    {
+        $userId = $this->insertUser('cooldown-user');
+
+        self::assertFalse($this->preferences->wasNotifiedRecently($userId, 300));
+
+        $this->preferences->markNotified($userId);
+
+        self::assertTrue($this->preferences->wasNotifiedRecently($userId, 300));
+    }
+
+    public function testWasNotifiedRecentlyStopsMatchingOnceTheWindowPasses(): void
+    {
+        $userId = $this->insertUser('cooldown-expired');
+        $this->preferences->markNotified($userId);
+
+        // A 0-second window can never still be "within" it -- the
+        // equivalent of the 5-minute cooldown already having elapsed.
+        self::assertFalse($this->preferences->wasNotifiedRecently($userId, 0));
+    }
+
+    public function testMarkNotifiedDoesNotClobberExistingPreferences(): void
+    {
+        $userId = $this->insertUser('cooldown-preserves-prefs');
+        $this->preferences->save($userId, false, false, true);
+
+        $this->preferences->markNotified($userId);
+
+        self::assertSame(
+            ['notify_your_turn' => false, 'notify_friend_request' => false, 'notify_game_finished' => true],
+            $this->preferences->forUser($userId)
+        );
+    }
+
+    // PushNotificationService::notify() checks the cooldown before ever
+    // looking at subscriptions or building a WebPush client -- pre-marking
+    // it here means a still-configured, still-subscribed user's second
+    // notification returns immediately without ever attempting the (slow,
+    // unreachable-in-this-test) network call a real send would make. The
+    // tight time assertion is exactly what distinguishes "skipped" from
+    // "attempted and failed" -- a real send attempt against an
+    // unreachable/fake endpoint takes measurably longer than this.
+    public function testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecently(): void
+    {
+        $userId = $this->insertUser('cooldown-skips-send');
+        $this->subscriptions->save($userId, 'https://push.example.com/cooldown', 'p', 'a');
+        $this->preferences->markNotified($userId);
+        putenv('VAPID_PUBLIC_KEY=some-public-key');
+        putenv('VAPID_PRIVATE_KEY=some-private-key');
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences);
+
+        $start = microtime(true);
+        $service->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
+        $elapsed = microtime(true) - $start;
+
+        self::assertLessThan(1.0, $elapsed, 'a cooldown-suppressed notify() should return immediately, never attempting a real send');
+    }
 }

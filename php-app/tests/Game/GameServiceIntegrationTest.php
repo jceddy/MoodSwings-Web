@@ -7749,6 +7749,48 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
     }
 
+    /**
+     * The lobby's own "waiting on you" hourglass (is_awaiting_your_response/
+     * awaiting_response_usernames) was previously blind to this freeze --
+     * isAwaitingResponseFrom() had no case for it at all, so a player whose
+     * best-of-three match was frozen on their own first-player choice saw
+     * no indication of that in their lobby. Only the loser is flagged; the
+     * winner (who has nothing to do) is not.
+     */
+    public function testLobbyFlagsTheLoserAsAwaitingTheirFirstPlayerChoice(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $loserRow = $this->findGameRowForUser($nextGameId, $loserUserId);
+        self::assertTrue($loserRow['is_awaiting_your_response']);
+        self::assertContains($this->fetchUsername($loserUserId), $loserRow['awaiting_response_usernames']);
+
+        $winnerRow = $this->findGameRowForUser($nextGameId, $winnerUserId);
+        self::assertFalse($winnerRow['is_awaiting_your_response']);
+        self::assertNotContains($this->fetchUsername($winnerUserId), $winnerRow['awaiting_response_usernames']);
+
+        // Deciding resolves the freeze -- nobody is left "awaiting" once
+        // the round has unfrozen (same as any other resolved decision).
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+        $loserRowAfter = $this->findGameRowForUser($nextGameId, $loserUserId);
+        self::assertFalse($loserRowAfter['is_awaiting_your_response']);
+    }
+
+    /** @return array<string, mixed> */
+    private function findGameRowForUser(int $gameId, int $userId): array
+    {
+        foreach ($this->games->listGamesForUser($userId) as $row) {
+            if ($row['id'] === $gameId) {
+                return $row;
+            }
+        }
+
+        self::fail("Game {$gameId} not found in listGamesForUser({$userId})");
+    }
+
     /** Choosing to let the previous winner go first again is still a real, round-unfreezing decision -- not a no-op. */
     public function testLoserCanChooseToLetThePreviousWinnerGoFirstAgain(): void
     {

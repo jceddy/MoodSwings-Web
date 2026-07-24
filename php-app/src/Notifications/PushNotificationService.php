@@ -22,22 +22,38 @@ use MoodSwings\Repository\PushSubscriptionRepository;
  * not being configured (e.g. a local dev environment) must never fail the
  * request that triggered it (sending an invite, finishing a game, taking a
  * turn) -- so every failure is swallowed here rather than thrown.
+ *
+ * notify() also enforces a global per-user cooldown (COOLDOWN_SECONDS,
+ * see NotificationPreferenceRepository::wasNotifiedRecently()/
+ * markNotified()) -- regardless of event type or which game it's about,
+ * so a player actively working through several turns/decisions in a row
+ * isn't sent one push per event.
  */
 final class PushNotificationService
 {
+    private const COOLDOWN_SECONDS = 300;
+
     public function __construct(
         private readonly PushSubscriptionRepository $subscriptions,
         private readonly NotificationPreferenceRepository $preferences,
     ) {
     }
 
-    public function notifyYourTurn(int $userId, int $gameId, string $body): void
+    /**
+     * $tag distinguishes GameService's several "waiting on you" cases for
+     * the same game (an ordinary turn advance, a Compulsion-style pending
+     * decision, a team turn_order/draw_recipient decision, closed_team's
+     * pregame card pass, a draft match's first-player-choice freeze) so
+     * the OS never collapses two different ones into a single
+     * notification -- see GameService::notifyGamePlayersItsYourTurn().
+     */
+    public function notifyYourTurn(int $userId, int $gameId, string $body, string $tag = 'turn'): void
     {
         $this->notify($userId, 'notify_your_turn', [
             'title' => "It's your turn",
             'body' => $body,
             'url' => "/game/?id={$gameId}",
-            'tag' => "game-{$gameId}-turn",
+            'tag' => "game-{$gameId}-{$tag}",
         ]);
     }
 
@@ -70,6 +86,10 @@ final class PushNotificationService
             return;
         }
 
+        if ($this->preferences->wasNotifiedRecently($userId, self::COOLDOWN_SECONDS)) {
+            return;
+        }
+
         $subscriptions = $this->subscriptions->listForUser($userId);
         if ($subscriptions === []) {
             return;
@@ -79,6 +99,8 @@ final class PushNotificationService
         if ($webPush === null) {
             return;
         }
+
+        $this->preferences->markNotified($userId);
 
         $encodedPayload = json_encode($payload);
 
