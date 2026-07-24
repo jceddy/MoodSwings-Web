@@ -5,22 +5,26 @@ declare(strict_types=1);
 namespace MoodSwings\Repository;
 
 use MoodSwings\Database\Connection;
+use MoodSwings\Notifications\NotificationScope;
 
 final class QueuedNotificationRepository
 {
     /**
-     * Upserts $userId's one queued notification -- replacing whatever was
-     * previously queued for them, if anything (see migration 0048's own
-     * docblock on why this is a one-row-per-user replace-on-arrival queue
-     * rather than an accumulating list).
+     * Upserts $userId's one queued notification for this specific
+     * $scope -- replacing whatever was previously queued for that same
+     * (user, scope) pair, if anything (see migration 0049's own docblock
+     * on why this is a one-row-per-(user, scope) replace-on-arrival queue
+     * rather than an accumulating list). A notification queued for a
+     * different scope -- another game, or a friend request -- is a
+     * separate row entirely and is left untouched.
      *
      * @param array{title: string, body: string, url: string, tag: string} $payload
      */
-    public function enqueue(int $userId, string $preferenceKey, array $payload): void
+    public function enqueue(int $userId, string $scope, string $preferenceKey, array $payload): void
     {
         Connection::get()->prepare(
-            'INSERT INTO queued_notifications (user_id, preference_key, title, body, url, tag, queued_at)
-             VALUES (:user_id, :preference_key, :title, :body, :url, :tag, NOW())
+            'INSERT INTO queued_notifications (user_id, scope, preference_key, title, body, url, tag, queued_at)
+             VALUES (:user_id, :scope, :preference_key, :title, :body, :url, :tag, NOW())
              ON DUPLICATE KEY UPDATE
                 preference_key = VALUES(preference_key),
                 title = VALUES(title),
@@ -30,6 +34,7 @@ final class QueuedNotificationRepository
                 queued_at = VALUES(queued_at)'
         )->execute([
             'user_id' => $userId,
+            'scope' => $scope,
             'preference_key' => $preferenceKey,
             'title' => $payload['title'],
             'body' => $payload['body'],
@@ -44,12 +49,12 @@ final class QueuedNotificationRepository
      * dueForFlush() instead, which only returns rows old enough to
      * actually flush.
      *
-     * @return array<int, array{user_id: int, preference_key: string, title: string, body: string, url: string, tag: string}>
+     * @return array<int, array{user_id: int, scope: string, preference_key: string, title: string, body: string, url: string, tag: string}>
      */
     public function all(): array
     {
         $rows = Connection::get()
-            ->query('SELECT user_id, preference_key, title, body, url, tag FROM queued_notifications')
+            ->query('SELECT user_id, scope, preference_key, title, body, url, tag FROM queued_notifications')
             ->fetchAll();
 
         return self::mapRows($rows);
@@ -70,12 +75,12 @@ final class QueuedNotificationRepository
      * to clear it before the cron ever sees it, instead of it going out
      * moments after being queued.
      *
-     * @return array<int, array{user_id: int, preference_key: string, title: string, body: string, url: string, tag: string}>
+     * @return array<int, array{user_id: int, scope: string, preference_key: string, title: string, body: string, url: string, tag: string}>
      */
     public function dueForFlush(int $minAgeSeconds): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT user_id, preference_key, title, body, url, tag
+            'SELECT user_id, scope, preference_key, title, body, url, tag
              FROM queued_notifications
              WHERE queued_at <= DATE_SUB(NOW(), INTERVAL :min_age_seconds SECOND)'
         );
@@ -86,13 +91,14 @@ final class QueuedNotificationRepository
 
     /**
      * @param array<int, array<string, mixed>> $rows
-     * @return array<int, array{user_id: int, preference_key: string, title: string, body: string, url: string, tag: string}>
+     * @return array<int, array{user_id: int, scope: string, preference_key: string, title: string, body: string, url: string, tag: string}>
      */
     private static function mapRows(array $rows): array
     {
         return array_map(
             static fn (array $row): array => [
                 'user_id' => (int) $row['user_id'],
+                'scope' => $row['scope'],
                 'preference_key' => $row['preference_key'],
                 'title' => $row['title'],
                 'body' => $row['body'],
@@ -103,35 +109,31 @@ final class QueuedNotificationRepository
         );
     }
 
-    public function deleteForUser(int $userId): void
+    /** Deletes $userId's queued notification for this specific $scope only, if any. */
+    public function delete(int $userId, string $scope): void
     {
-        Connection::get()->prepare('DELETE FROM queued_notifications WHERE user_id = :user_id')->execute(['user_id' => $userId]);
+        Connection::get()->prepare(
+            'DELETE FROM queued_notifications WHERE user_id = :user_id AND scope = :scope'
+        )->execute(['user_id' => $userId, 'scope' => $scope]);
     }
 
     /**
-     * Clears $userId's queued notification only if it's tagged for
-     * $gameId specifically -- called when that player takes the action a
-     * "waiting on you" reminder for this game would have been about (see
+     * Clears $userId's queued notification for $gameId specifically --
+     * called when that player takes the action a "waiting on you"
+     * reminder for this game would have been about (see
      * GameService::clearQueuedNotificationForGamePlayer()), so they never
      * get a stale nudge for something they've already done. A queued
-     * notification about a different game, or a friend request, is left
-     * untouched. Tags are always literally "game-{id}-{suffix}" (see
-     * PushNotificationService::notifyYourTurn()), so anchoring the LIKE
-     * pattern immediately after the id can't cross-match a different
-     * game id sharing the same prefix (e.g. game-4 vs game-42).
+     * notification for a different game, or a friend request, is a
+     * different (user, scope) row entirely and is left untouched.
      */
     public function clearForGameIfMatches(int $userId, int $gameId): void
     {
-        Connection::get()->prepare(
-            'DELETE FROM queued_notifications WHERE user_id = :user_id AND tag LIKE :tag_prefix'
-        )->execute(['user_id' => $userId, 'tag_prefix' => "game-{$gameId}-%"]);
+        $this->delete($userId, NotificationScope::forGame($gameId));
     }
 
-    /** Same idea as clearForGameIfMatches(), for the one non-game-scoped tag ('friend-request'). */
+    /** Same idea as clearForGameIfMatches(), for the one non-game scope. */
     public function clearFriendRequestForUser(int $userId): void
     {
-        Connection::get()->prepare(
-            "DELETE FROM queued_notifications WHERE user_id = :user_id AND tag = 'friend-request'"
-        )->execute(['user_id' => $userId]);
+        $this->delete($userId, NotificationScope::FRIEND_REQUEST);
     }
 }

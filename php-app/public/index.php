@@ -32,6 +32,7 @@ use MoodSwings\Maintenance\MaintenanceGate;
 use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
 use MoodSwings\Repository\QueuedNotificationRepository;
@@ -344,7 +345,8 @@ if ($path === '/me' && $method === 'GET') {
 $pushSubscriptions = new PushSubscriptionRepository();
 $notificationPreferences = new NotificationPreferenceRepository();
 $queuedNotifications = new QueuedNotificationRepository();
-$pushNotifications = new PushNotificationService($pushSubscriptions, $notificationPreferences, $queuedNotifications);
+$notificationCooldowns = new NotificationCooldownRepository();
+$pushNotifications = new PushNotificationService($pushSubscriptions, $notificationPreferences, $queuedNotifications, $notificationCooldowns);
 
 $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
 

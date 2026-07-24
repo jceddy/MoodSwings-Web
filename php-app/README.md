@@ -2866,29 +2866,39 @@ Discord notifications are explicitly out of scope for this pass -- issue
 #108 itself calls them out as needing more planning/design work, so
 they're a separate follow-up.
 
-**Global 5-minute per-user cooldown, with a queue-and-replace fallback**:
-regardless of event type or which game it's about,
+**5-minute cooldown per (user, game), with a queue-and-replace fallback**:
 `PushNotificationService::notify()` checks whether that user was already
-sent a push within the last 5 minutes
-(`NotificationPreferenceRepository::wasNotifiedRecently()`/
-`markNotified()`, backed by `notification_preferences.last_notified_at`)
+sent a push about this specific *scope* within the last 5 minutes
+(`NotificationCooldownRepository::wasNotifiedRecently()`/`markNotified()`,
+backed by the `notification_cooldowns` table added in migration `0049`)
 -- otherwise a player actively working through several turns/decisions in
-a row would get one notification per event. The cooldown is stamped
-forward *before* the actual send is attempted (right after confirming
-there's a subscription and VAPID keys to send with), not after, so it
-also protects against piling up retries against an unreachable push
-service.
+a row would get one notification per event. `NotificationScope` defines
+what a scope is: `forGame($gameId)` for any it's-your-turn/game-finished
+notification (regardless of which of the several tag suffixes triggered
+it -- an ordinary turn, a Compulsion-style decision, a team decision,
+etc. all share one scope per game), or the constant `FRIEND_REQUEST` for
+friend requests, which aren't tied to any game. Scoping this way (rather
+than one cooldown per user covering every game at once) means a player
+active in several games simultaneously can still get more than one push
+within 5 minutes overall, but never more than one within 5 minutes about
+any *one* specific game. The cooldown is stamped forward *before* the
+actual send is attempted (right after confirming there's a subscription
+and VAPID keys to send with), not after, so it also protects against
+piling up retries against an unreachable push service.
 
-Rather than simply dropping a notification that arrives during another's
-cooldown, it's queued instead (`QueuedNotificationRepository`, backed by
-the `queued_notifications` table added in migration `0048`) and delivered
-later by a cron flush. `queued_notifications` has `user_id` itself as its
-primary key -- one row per user -- so `enqueue()`'s `INSERT ... ON
-DUPLICATE KEY UPDATE` naturally *replaces* whatever was queued before
-rather than accumulating a backlog: a player who was busy for 20 minutes
-ends up with exactly one queued notification reflecting whatever was
-truly last, never everything that happened in between. `bin/send_queued_
-notifications.php` (meant to run every ~15 minutes via cron) calls
+Rather than simply dropping a notification that arrives during its
+scope's cooldown, it's queued instead (`QueuedNotificationRepository`,
+backed by the `queued_notifications` table added in migration `0048` and
+re-keyed by migration `0049`) and delivered later by a cron flush.
+`queued_notifications`' primary key is `(user_id, scope)` -- one row per
+user *per scope* -- so `enqueue()`'s `INSERT ... ON DUPLICATE KEY UPDATE`
+naturally *replaces* whatever was queued for that same scope before,
+without touching a different scope's own queued row: a player busy in
+game A for 20 minutes ends up with exactly one queued notification for
+game A reflecting whatever was truly last there, while a notification
+that arrived for game B in the meantime is queued separately and
+delivered on its own. `bin/send_queued_notifications.php` (meant to run
+every ~15 minutes via cron) calls
 `PushNotificationService::flushQueuedNotifications()`, which walks every
 queued row *at least as old as the same 5-minute `COOLDOWN_SECONDS`*
 (`QueuedNotificationRepository::dueForFlush()`) -- a row queued more
@@ -2898,10 +2908,10 @@ fair chance to clear it themselves (see below) -- re-checks that user's
 preference at flush time (they may have turned it off since queueing --
 this is why the rendered payload's `preference_key` is stored alongside
 it), sends if still eligible, and clears the row either way. A live
-(non-queued) send also clears any leftover queued row for that same user
-first, since a fresher notification
-just went out and an older queued reminder would otherwise still arrive
-stale on top of it.
+(non-queued) send also clears any leftover queued row for that same
+(user, scope) first, since a fresher notification about that same game
+(or the same friend-request scope) just went out and an older queued
+reminder would otherwise still arrive stale on top of it.
 
 Separately, `GameService::clearQueuedNotificationForGamePlayer()` (called
 from `playMood()`, `pass()`, `resignGame()`, `respondToDecision()`,
@@ -2910,11 +2920,11 @@ and `setPlayFirstNextMatchGame()`) and the `/friends/respond` route handler
 (`PushNotificationService::clearQueuedFriendRequest()`) clear a queued
 notification early, the moment the player actually takes the action it
 would have reminded them about -- so the cron flush never delivers a
-stale "it's your turn" for a turn already taken. Tags are always literally
-`game-{id}-{suffix}` or the constant `friend-request`
-(`QueuedNotificationRepository::clearForGameIfMatches()`/
-`clearFriendRequestForUser()`), so clearing one game's queued reminder can
-never cross-match a different game's.
+stale "it's your turn" for a turn already taken.
+`QueuedNotificationRepository::clearForGameIfMatches()`/
+`clearFriendRequestForUser()` delete by exact scope match (`game:{id}` or
+`friend_request`), so clearing one game's queued reminder can never touch
+a different game's, or a friend request's.
 
 **Architecture**: the standard three-part Web Push stack -- Push API
 (`PushManager.subscribe()`) + Notifications API (`ServiceWorkerRegistration
@@ -2933,18 +2943,21 @@ rather than thrown. A subscription the push service reports as
 gone-for-good (HTTP 404/410 -- `MessageSentReport::isSubscriptionExpired()`)
 is pruned from `push_subscriptions` automatically on the next send attempt.
 
-**Storage** (migration `0048_add_push_notifications.sql`): `push_subscriptions`
+**Storage** (migrations `0048_add_push_notifications.sql` and
+`0049_scope_notification_cooldown_and_queue_by_game.sql`): `push_subscriptions`
 (one row per subscribed browser/device per user -- `endpoint`/`p256dh_key`/
 `auth_key`, exactly what `PushSubscription.toJSON()` returns; uniqueness is
 enforced on a SHA-256 `endpoint_hash` rather than the raw `endpoint` column,
 since push-service endpoint URLs can run past reasonable index key-length
-limits) and `notification_preferences` (one row per user, three boolean
+limits); `notification_preferences` (one row per user, three boolean
 columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`
 -- created lazily the first time a user changes a setting; a user with no
-row yet gets all-`true` defaults from `NotificationPreferenceRepository::forUser()`)
-and `queued_notifications` (one row per user, holding the rendered
-title/body/url/tag and originating `preference_key` for whatever
-notification is currently delayed by the cooldown -- see above).
+row yet gets all-`true` defaults from `NotificationPreferenceRepository::forUser()`);
+`notification_cooldowns` (one row per `(user_id, scope)` pair, `last_notified_at`
+-- see `NotificationCooldownRepository`); and `queued_notifications` (one
+row per `(user_id, scope)` pair, holding the rendered title/body/url/tag
+and originating `preference_key` for whatever notification about that
+scope is currently delayed by the cooldown -- see above).
 
 **Config**: `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` in `.env`
 (see `.env.example`), read via the same `Config::get()` pattern `Mailer.php`

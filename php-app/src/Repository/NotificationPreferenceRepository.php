@@ -52,39 +52,4 @@ final class NotificationPreferenceRepository
             'game_finished' => $notifyGameFinished ? 1 : 0,
         ]);
     }
-
-    /**
-     * PushNotificationService's global per-user cooldown -- true if
-     * $userId was already sent a push (any event type, any game) within
-     * the last $withinSeconds. A user with no row at all has obviously
-     * never been notified.
-     */
-    public function wasNotifiedRecently(int $userId, int $withinSeconds): bool
-    {
-        $stmt = Connection::get()->prepare(
-            'SELECT 1 FROM notification_preferences
-             WHERE user_id = :user_id
-               AND last_notified_at IS NOT NULL
-               AND last_notified_at > (NOW() - INTERVAL :within_seconds SECOND)'
-        );
-        $stmt->execute(['user_id' => $userId, 'within_seconds' => $withinSeconds]);
-
-        return $stmt->fetchColumn() !== false;
-    }
-
-    /**
-     * Stamps $userId's cooldown window forward to now -- an upsert so the
-     * very first notification ever sent to a user (who may never have
-     * touched their preferences) still creates the row, with the
-     * notify_* columns falling back to their schema defaults (all true)
-     * rather than this write clobbering preferences that were never set.
-     */
-    public function markNotified(int $userId): void
-    {
-        Connection::get()->prepare(
-            'INSERT INTO notification_preferences (user_id, last_notified_at)
-             VALUES (:user_id, NOW())
-             ON DUPLICATE KEY UPDATE last_notified_at = NOW()'
-        )->execute(['user_id' => $userId]);
-    }
 }

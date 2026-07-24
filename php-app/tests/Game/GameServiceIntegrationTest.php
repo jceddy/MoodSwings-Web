@@ -11,8 +11,10 @@ use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
+use MoodSwings\Notifications\NotificationScope;
 use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
 use MoodSwings\Repository\QueuedNotificationRepository;
@@ -229,7 +231,7 @@ final class GameServiceIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
-            notifications: new PushNotificationService(new PushSubscriptionRepository(), new NotificationPreferenceRepository(), new QueuedNotificationRepository()),
+            notifications: new PushNotificationService(new PushSubscriptionRepository(), new NotificationPreferenceRepository(), new QueuedNotificationRepository(), new NotificationCooldownRepository()),
         );
     }
 
@@ -3607,17 +3609,17 @@ final class GameServiceIntegrationTest extends TestCase
     // taking their action clears any reminder that was queued for THEM
     // about THIS game (see PushNotificationService::notify()'s cooldown
     // queue), so the eventual cron flush doesn't nag them about a turn
-    // they already took. clearForGameIfMatches()'s own tag-anchoring
-    // (game-4 can't cross-match game-42) is covered directly in
-    // NotificationsIntegrationTest -- this only needs to confirm
-    // GameService actually resolves the acting player's user_id and
-    // calls through to it.
+    // they already took. clearForGameIfMatches()'s own scope-exactness
+    // (game 4's clear can't cross-match game 42's queued row) is covered
+    // directly in NotificationsIntegrationTest -- this only needs to
+    // confirm GameService actually resolves the acting player's user_id
+    // and calls through to it.
     public function testPlayMoodClearsAQueuedNotificationForTheActingPlayer(): void
     {
         ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
 
         $queuedNotifications = new QueuedNotificationRepository();
-        $queuedNotifications->enqueue($u1, 'notify_your_turn', [
+        $queuedNotifications->enqueue($u1, NotificationScope::forGame($gameId), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'stale reminder', 'url' => "/game/?id={$gameId}", 'tag' => "game-{$gameId}-turn",
         ]);
 
