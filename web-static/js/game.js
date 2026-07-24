@@ -981,7 +981,7 @@
 
         const { ok, body } = await getGameLog(gameId, replayCode);
         replayEvents = ok ? body.events : [];
-        replayEventIndex = replayEvents.length > 0 ? replayEvents.length - 1 : 0;
+        replayEventIndex = 0;
 
         if (replayEvents.length === 0) {
             boardError.textContent = 'This game has no history to replay.';
@@ -1030,9 +1030,10 @@
             replayEvents.forEach((event, index) => {
                 const option = document.createElement('option');
                 option.value = String(index);
-                option.textContent = 'Step ' + (index + 1)
+                const label = 'Step ' + (index + 1)
                     + (event.round_number ? ' (Round ' + event.round_number + ')' : '')
                     + ': ' + event.description;
+                option.textContent = label.length > 53 ? label.slice(0, 50) + '...' : label;
                 select.appendChild(option);
             });
             select.dataset.gameId = String(currentGameId);
