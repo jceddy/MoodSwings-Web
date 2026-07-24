@@ -1448,6 +1448,19 @@ dialog#deck-builder-dialog[open] {
     border-radius: 4px;
 }
 
+/* #replay-controls' own `display: flex` above otherwise beats the
+   browser's default `[hidden] { display: none }` UA-stylesheet rule (an
+   author rule always wins over the UA stylesheet, regardless of selector
+   specificity -- see #in-play-board[hidden]/.in-play-zone[hidden] above
+   for the same fix) -- without this, showBoard()'s live-game view left
+   the prev/next/jump-to controls visible even though nothing ever sets
+   `#replay-controls.hidden = false` for a live game; only showLobby()/
+   showReplayBoard() ever toggle it, and the `hidden` attribute alone did
+   nothing to actually hide it. */
+#replay-controls[hidden] {
+    display: none;
+}
+
 #replay-position {
     margin: 0;
     color: var(--color-muted);
