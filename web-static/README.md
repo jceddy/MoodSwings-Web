@@ -410,21 +410,43 @@ too, proportional to the smaller card width.
     `waiting`) opening a small dialog with the game's code
     (`POST /games/spectate/code`) and a copy-to-clipboard button. See
     "Spectator mode" in `../php-app/README.md`.
+    - **Spectating a `completed` game hands off into replay's own step
+      controls** (see "Watch replay" immediately below) rather than
+      showing just the live board's single final-state snapshot --
+      `refreshBoard()`'s own `isSpectating` branch checks
+      `body.game.status === 'completed'` on every fetch (not only the
+      first one) and, the moment it sees it, calls the same
+      `loadReplayEventsAndShow()` helper `showReplayBoard()` itself uses,
+      with `{ defaultToLastStep: true }` -- a spectator arriving at (or
+      watching a friend's game reach) a finished game wants to see the
+      outcome first, so this starts at the *last* step rather than
+      genesis the way a seated player's own "Watch replay" button does.
+      `isSpectating` stays `true` throughout (never flips to
+      `isReplaying`) -- `activeShareCode()` already resolves to
+      `spectateCode` in that case, so `GET /games/log`/
+      `GET /games/replay/state` authorize exactly the same way a live
+      spectator's own `GET /games/spectate/state` calls already did, and
+      every existing `isSpectating`-gated affordance (the "← Back to
+      spectate list" button text/navigation, the hidden "Share spectate
+      code" button, etc.) keeps working unchanged.
   - **Watch replay** (issue #240): a "Watch replay" button on any
     `completed` lobby row (`actionButton('Watch replay', () =>
     showReplayBoard(game.id))`, right alongside "View log") opens the
     same board in-page, no separate URL param the way spectating uses --
-    `showReplayBoard()` sets a module-level `isReplaying` flag and loads
-    the game's full event list once via the existing `GET /games/log`
-    (`getGameLog()`, already used for the "View log" panel -- no new
-    endpoint needed just for the steppable list), prepending a synthetic
-    genesis "event" (`id: 0`, `GameService::replayStateAsOf()`'s own
-    sentinel for round-1's dealt hands before any real event exists -- see
+    `showReplayBoard()` sets a module-level `isReplaying` flag, then hands
+    off to the shared `loadReplayEventsAndShow()` helper (also used by
+    spectating a completed game, see above), which loads the game's full
+    event list once via the existing `GET /games/log` (`getGameLog()`,
+    already used for the "View log" panel -- no new endpoint needed just
+    for the steppable list), prepending a synthetic genesis "event"
+    (`id: 0`, `GameService::replayStateAsOf()`'s own sentinel for
+    round-1's dealt hands before any real event exists -- see
     "Watch replay" in `../php-app/README.md`) so Step 1 always shows both
-    players' opening hands with nothing yet played, defaulting to that
-    step -- watching a replay starts from the true beginning of the
-    game's history, the same way a video starts at 0:00 rather than the
-    end. A new `isReadOnlyView()` helper
+    players' opening hands with nothing yet played. This entry point
+    defaults to that genesis step (`defaultToLastStep` left `false`) --
+    watching your own completed game starts from the true beginning of
+    its history, the same way a video starts at 0:00 rather than the end.
+    A new `isReadOnlyView()` helper
     (`isSpectating || isReplaying`) replaces every interactivity-gating
     check that used to test `isSpectating` alone (Play/Pass/resign
     buttons hidden, hand always shown via

@@ -972,6 +972,29 @@
         lobbyView.hidden = true;
         boardView.hidden = false;
         boardMessage.hidden = true;
+        // Starts at genesis (Step 1) -- a seated player opening their own
+        // "Watch replay" button wants to step through from the beginning,
+        // unlike a spectator arriving at an already-finished game (see
+        // loadReplayEventsAndShow()'s own defaultToLastStep, used instead
+        // wherever spectating hands off into replay controls below).
+        await loadReplayEventsAndShow();
+    }
+
+    // Shared by showReplayBoard() above and spectator mode watching a
+    // COMPLETED game (issue #128 + #240, see refreshBoard()'s own
+    // isSpectating branch below) -- both end up showing the exact same
+    // step-controlled board, just entered differently and defaulting to a
+    // different starting step. Loads the full steppable event list via
+    // GET /games/log (activeShareCode() resolves to whichever of
+    // spectateCode/replayCode is actually active, so this needs no
+    // isSpectating/isReplaying branch of its own -- see its own docblock),
+    // prepends the synthetic genesis "Step 1" entry (round-1's dealt
+    // hands, before any real event exists -- id 0 is
+    // GameService::replayStateAsOf()'s own sentinel for genesis; real
+    // game_events ids are auto-increment starting at 1, so 0 can never
+    // collide with an actual event), and shows the requested end of that
+    // list.
+    async function loadReplayEventsAndShow({ defaultToLastStep = false } = {}) {
         boardError.hidden = true;
         document.getElementById('replay-controls').hidden = false;
         if (pollTimer) {
@@ -979,16 +1002,9 @@
             pollTimer = null;
         }
 
-        const { ok, body } = await getGameLog(gameId, replayCode);
-        // Prepend a synthetic genesis "event" -- round-1's dealt hands,
-        // before any real event exists -- so stepping through a replay
-        // always starts at the true beginning (both hands visible, nothing
-        // played yet) rather than jumping straight to the first play. Its
-        // id of 0 is GameService::replayStateAsOf()'s own sentinel for
-        // genesis; real game_events ids are auto-increment starting at 1,
-        // so 0 can never collide with an actual event.
+        const { ok, body } = await getGameLog(currentGameId, activeShareCode());
         replayEvents = ok ? [{ id: 0, round_number: null, description: 'Game start (hands dealt, nothing played yet)' }, ...body.events] : [];
-        replayEventIndex = 0;
+        replayEventIndex = defaultToLastStep && replayEvents.length > 0 ? replayEvents.length - 1 : 0;
 
         if (replayEvents.length === 0) {
             boardError.textContent = 'This game has no history to replay.';
@@ -1002,7 +1018,7 @@
     async function refreshReplayBoard() {
         const seq = ++boardRequestSeq;
         const eventId = replayEvents[replayEventIndex].id;
-        const { ok, body } = await getReplayGameState(currentGameId, eventId, replayCode);
+        const { ok, body } = await getReplayGameState(currentGameId, eventId, activeShareCode());
         if (seq !== boardRequestSeq) {
             return; // a newer refreshBoard()/refreshReplayBoard() call has since been issued -- stale, ignore it
         }
@@ -2588,6 +2604,24 @@
             return;
         }
         boardError.hidden = true;
+
+        // Spectator mode watching a COMPLETED game (issue #128 + #240)
+        // reuses replay's own step controls instead of this function's
+        // live single-snapshot rendering below -- a spectator arriving at
+        // (or watching a friend's game reach) a finished game gets to
+        // step through its history, not just stare at the end. Checked
+        // here rather than only in showSpectatorBoard() itself, so a game
+        // that completes WHILE being spectated live transitions into
+        // replay controls on its very next poll too, not just on initial
+        // load. defaultToLastStep: true (unlike showReplayBoard()'s own
+        // genesis default) -- a spectator arriving at an already-finished
+        // game wants to see the outcome first, the same default the live
+        // spectator view itself always showed.
+        if (isSpectating && body.game.status === 'completed') {
+            await loadReplayEventsAndShow({ defaultToLastStep: true });
+            return;
+        }
+
         if (isSpectating) {
             // The spectator state route never includes a 'you' key at all
             // (see GameService::buildGameState()) -- this stub makes every
