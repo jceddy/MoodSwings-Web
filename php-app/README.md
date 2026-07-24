@@ -2685,6 +2685,13 @@ casting/streaming) -- deliberately not built on top of the plain
 `spectate_code` mechanism above, since that mechanism's entire premise
 is that holding a code never reveals hands before the game ends.
 
+Once a spectated game reaches `completed`, the frontend hands off from
+this live single-snapshot view into "Watch replay"'s own step controls
+(see below) -- no server-side change needed, since `GET /games/log` and
+`GET /games/replay/state` already authorize a spectator the same way
+`GET /games/spectate/state` does. See "Spectator mode" in
+`web-static/README.md` for the client-side switch.
+
 ### Watch replay (issue #240)
 
 Step through a *completed* game move-by-move -- the actual board (in-play
