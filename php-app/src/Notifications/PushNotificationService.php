@@ -135,23 +135,30 @@ final class PushNotificationService
             $userId = $row['user_id'];
             $scope = $row['scope'];
 
-            if ($this->preferences->forUser($userId)[$row['preference_key']]) {
-                $subscriptions = $this->subscriptions->listForUser($userId);
-                $webPush = $subscriptions !== [] ? $this->webPush() : null;
+            // One row throwing (e.g. a stale WebPush call, a DB hiccup)
+            // must not abort the flush for every other queued row behind
+            // it in this same cron run.
+            try {
+                if ($this->preferences->forUser($userId)[$row['preference_key']]) {
+                    $subscriptions = $this->subscriptions->listForUser($userId);
+                    $webPush = $subscriptions !== [] ? $this->webPush() : null;
 
-                if ($webPush !== null) {
-                    $this->cooldowns->markNotified($userId, $scope);
-                    $this->sendNow($webPush, $subscriptions, [
-                        'title' => $row['title'],
-                        'body' => $row['body'],
-                        'url' => $row['url'],
-                        'tag' => $row['tag'],
-                    ]);
-                    $sent++;
+                    if ($webPush !== null) {
+                        $this->cooldowns->markNotified($userId, $scope);
+                        $this->sendNow($webPush, $subscriptions, [
+                            'title' => $row['title'],
+                            'body' => $row['body'],
+                            'url' => $row['url'],
+                            'tag' => $row['tag'],
+                        ]);
+                        $sent++;
+                    }
                 }
-            }
 
-            $this->queuedNotifications->delete($userId, $scope);
+                $this->queuedNotifications->delete($userId, $scope);
+            } catch (\Throwable $e) {
+                $this->logError("Failed to flush queued notification (user {$userId}, scope {$scope}): " . $e->getMessage());
+            }
         }
 
         return $sent;
@@ -162,35 +169,47 @@ final class PushNotificationService
      */
     private function notify(int $userId, string $scope, string $preferenceKey, array $payload): void
     {
-        if (!$this->preferences->forUser($userId)[$preferenceKey]) {
-            return;
+        // The class docblock above promises every failure here is
+        // swallowed, not thrown -- but nothing below actually enforced
+        // that (a missing/out-of-date notification_* table, or a WebPush
+        // library exception, would otherwise propagate straight out of
+        // notifyFriendRequest()/notifyYourTurn()/notifyGameFinished() and
+        // fail the request that triggered it, e.g. sending a friend
+        // invite). Catching here is what actually makes the guarantee
+        // true.
+        try {
+            if (!$this->preferences->forUser($userId)[$preferenceKey]) {
+                return;
+            }
+
+            if ($this->cooldowns->wasNotifiedRecently($userId, $scope, self::COOLDOWN_SECONDS)) {
+                $this->queuedNotifications->enqueue($userId, $scope, $preferenceKey, $payload);
+                return;
+            }
+
+            $subscriptions = $this->subscriptions->listForUser($userId);
+            if ($subscriptions === []) {
+                return;
+            }
+
+            $webPush = $this->webPush();
+            if ($webPush === null) {
+                return;
+            }
+
+            $this->cooldowns->markNotified($userId, $scope);
+
+            // A live send supersedes anything still sitting in the queue
+            // for this same scope from earlier in its cooldown window --
+            // without this, a stale queued reminder could still go out
+            // later even though the user was just notified with something
+            // more current about the same game.
+            $this->queuedNotifications->delete($userId, $scope);
+
+            $this->sendNow($webPush, $subscriptions, $payload);
+        } catch (\Throwable $e) {
+            $this->logError("Failed to send notification (user {$userId}, scope {$scope}): " . $e->getMessage());
         }
-
-        if ($this->cooldowns->wasNotifiedRecently($userId, $scope, self::COOLDOWN_SECONDS)) {
-            $this->queuedNotifications->enqueue($userId, $scope, $preferenceKey, $payload);
-            return;
-        }
-
-        $subscriptions = $this->subscriptions->listForUser($userId);
-        if ($subscriptions === []) {
-            return;
-        }
-
-        $webPush = $this->webPush();
-        if ($webPush === null) {
-            return;
-        }
-
-        $this->cooldowns->markNotified($userId, $scope);
-
-        // A live send supersedes anything still sitting in the queue for
-        // this same scope from earlier in its cooldown window -- without
-        // this, a stale queued reminder could still go out later even
-        // though the user was just notified with something more current
-        // about the same game.
-        $this->queuedNotifications->delete($userId, $scope);
-
-        $this->sendNow($webPush, $subscriptions, $payload);
     }
 
     /**
@@ -226,6 +245,13 @@ final class PushNotificationService
                 return;
             }
         }
+    }
+
+    /** Same convention as index.php's logMailError() -- a dedicated log file rather than the general PHP error log, so a noisy push failure (e.g. every subscription for a since-deactivated browser expiring at once) doesn't drown out unrelated errors. */
+    private function logError(string $message): void
+    {
+        $line = '[' . date('Y-m-d H:i:s') . "] {$message}\n";
+        error_log($line, 3, dirname(__DIR__) . '/notification-errors.log');
     }
 
     private function webPush(): ?WebPush
