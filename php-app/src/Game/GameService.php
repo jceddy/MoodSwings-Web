@@ -2453,7 +2453,7 @@ final class GameService
 
             $this->logEvent($gameId, $roundId, $gamePlayerId, 'mood_played', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
-            return $this->finishPlay($gameId, $round, $gamePlayerId, $state);
+            return $this->finishPlay($gameId, $round, $gamePlayerId, $state, $gamePlayerId);
         });
 
         $this->touchLastMoveAt($gameId);
@@ -2475,7 +2475,7 @@ final class GameService
 
             $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'turn_passed', null, []);
 
-            return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
+            return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId), $gamePlayerId);
         });
 
         $this->touchLastMoveAt($gameId);
@@ -2631,7 +2631,7 @@ final class GameService
         Connection::get()->prepare(
             "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = :winner_team, completed_at = NOW() WHERE id = :game_id"
         )->execute(['winner' => $winnerGamePlayerId, 'winner_team' => $winnerTeamId, 'game_id' => $gameId]);
-        $this->recordGameCompletionStats($gameId, $winnerGamePlayerId, $winnerTeamId);
+        $this->recordGameCompletionStats($gameId, $winnerGamePlayerId, $winnerTeamId, $resigningGamePlayerId);
 
         // A no-op for every non-draft game -- see its own docblock.
         $this->advanceDraftMatch($gameId, $winnerGamePlayerId);
@@ -2658,7 +2658,7 @@ final class GameService
 
         $this->logEvent($gameId, (int) $round['id'], $resigningGamePlayerId, 'turn_passed', null, ['resigned' => true]);
 
-        return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId));
+        return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId), $resigningGamePlayerId);
     }
 
     /** @return int[] game_players.id for every seat that hasn't resigned, seat_order ASC */
@@ -2755,7 +2755,7 @@ final class GameService
                     }
 
                     $scoringDecisions = $this->resolvedScoringDecisionBonuses($state, $roundId);
-                    $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions);
+                    $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $gamePlayerId);
                     $pdo->commit();
 
                     return $result;
@@ -2854,7 +2854,7 @@ final class GameService
             // this point is reached, so a second 'mood_played' entry here
             // would only ever repeat "played {$cardName} ({$choiceSummary})",
             // a second time, with nothing new to say.
-            return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state);
+            return $this->finishPlay($gameId, $round, $initiatingPlayerId, $state, $gamePlayerId);
         });
 
         $this->touchLastMoveAt($gameId);
@@ -3336,9 +3336,17 @@ final class GameService
      * actually made the play (the original initiator for a resumed
      * pending decision, not the responder who just answered it).
      *
+     * $requestingGamePlayerId is whoever's own HTTP-level action this is --
+     * playMood()'s own $gamePlayerId, or (unlike $actingGamePlayerId, which
+     * stays the ORIGINAL player mid-Duplicity-chain/pending-decision)
+     * respondToDecision()'s own responder, not $initiatingPlayerId. Only
+     * ever used to skip THAT one player's own "game finished" push if this
+     * exact call is what ends the game -- see
+     * recordGameCompletionStats()'s own docblock on why.
+     *
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
      */
-    private function finishPlay(int $gameId, array $round, int $actingGamePlayerId, BoardState $state): array
+    private function finishPlay(int $gameId, array $round, int $actingGamePlayerId, BoardState $state, int $requestingGamePlayerId): array
     {
         $this->boardStates->save($gameId, $state);
 
@@ -3348,14 +3356,14 @@ final class GameService
             return ['round_scored' => false, 'game_completed' => false];
         }
 
-        return $this->advanceTurn($gameId, $round, $state);
+        return $this->advanceTurn($gameId, $round, $state, $requestingGamePlayerId);
     }
 
     /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
-    private function advanceTurn(int $gameId, array $round, BoardState $state): array
+    private function advanceTurn(int $gameId, array $round, BoardState $state, int $requestingGamePlayerId): array
     {
         if ($this->fetchGame($gameId)['format'] === 'team') {
-            return $this->advanceTeamTurn($gameId, $round, $state);
+            return $this->advanceTeamTurn($gameId, $round, $state, $requestingGamePlayerId);
         }
 
         // Positioned against the FULL (unfiltered) seat rotation, not just
@@ -3385,7 +3393,7 @@ final class GameService
         if ($nextPlayerId === null) {
             $activeTurnOrder = array_values(array_filter($fullOrder, static fn (int $id): bool => in_array($id, $activeIds, true)));
 
-            return $this->scoreRoundAndAdvance($gameId, $round, $activeTurnOrder, $state);
+            return $this->scoreRoundAndAdvance($gameId, $round, $activeTurnOrder, $state, $requestingGamePlayerId);
         }
 
         $hurtFeelingsHolder = $round['hurt_feelings_game_player_id'] !== null ? (int) $round['hurt_feelings_game_player_id'] : null;
@@ -3420,7 +3428,7 @@ final class GameService
      * to them instead of freezing on a decision that no longer exists to
      * unfreeze it.
      */
-    private function advanceTeamTurn(int $gameId, array $round, BoardState $state): array
+    private function advanceTeamTurn(int $gameId, array $round, BoardState $state, int $requestingGamePlayerId): array
     {
         $roundId = (int) $round['id'];
         $currentPlayerId = (int) $round['current_turn_game_player_id'];
@@ -3451,7 +3459,7 @@ final class GameService
         } else {
             // Turn 4 (team 2's forced remaining member) just finished --
             // score the round.
-            return $this->scoreRoundAndAdvance($gameId, $round, $this->turnOrderForRound($gameId, $round), $state);
+            return $this->scoreRoundAndAdvance($gameId, $round, $this->turnOrderForRound($gameId, $round), $state, $requestingGamePlayerId);
         }
 
         $this->unfreezeRoundForTeamPlayer($gameId, $roundId, $nextPlayerId, $state);
@@ -3562,16 +3570,28 @@ final class GameService
      * $winnerGamePlayerId's own representative seat -- see
      * finishTeamScoringAndAdvance()'s own docblock on why that's only a
      * representative, never the authoritative record of who won.
+     *
+     * $excludeGamePlayerId is whoever's own move/response/resignation this
+     * completion resulted from -- their lifetime stats are still bumped
+     * like everyone else's, but they don't get a "game finished" push:
+     * they're the one still looking at the board right now, watching the
+     * game end in front of them, so a push notification about it would
+     * just be telling them something they already know.
      */
-    private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId): void
+    private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId, ?int $excludeGamePlayerId = null): void
     {
         $stmt = Connection::get()->prepare('SELECT id, user_id, team_id FROM game_players WHERE game_id = :game_id');
         $stmt->execute(['game_id' => $gameId]);
         $players = $stmt->fetchAll();
 
+        $excludeUserId = null;
         $winningUserIds = [];
         $losingUserIds = [];
         foreach ($players as $player) {
+            if ($excludeGamePlayerId !== null && (int) $player['id'] === $excludeGamePlayerId) {
+                $excludeUserId = (int) $player['user_id'];
+            }
+
             $isWinner = $winnerTeamId !== null
                 ? (int) $player['team_id'] === $winnerTeamId
                 : (int) $player['id'] === $winnerGamePlayerId;
@@ -3586,9 +3606,15 @@ final class GameService
         $this->bumpLifetimeStats($losingUserIds, 'game_losses');
 
         foreach ($winningUserIds as $userId) {
+            if ($userId === $excludeUserId) {
+                continue;
+            }
             $this->notifications?->notifyGameFinished($userId, $gameId, "Game #{$gameId} is over -- you won!");
         }
         foreach ($losingUserIds as $userId) {
+            if ($userId === $excludeUserId) {
+                continue;
+            }
             $this->notifications?->notifyGameFinished($userId, $gameId, "Game #{$gameId} is over -- you lost.");
         }
     }
@@ -3684,7 +3710,7 @@ final class GameService
      * @param int[] $turnOrder the order players took their turns this round, earliest first
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
-    private function scoreRoundAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state): array
+    private function scoreRoundAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state, int $requestingGamePlayerId): array
     {
         $roundId = (int) $round['id'];
 
@@ -3717,7 +3743,7 @@ final class GameService
         $pdo->beginTransaction();
 
         try {
-            $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions);
+            $result = $this->finishScoringAndAdvance($gameId, $round, $turnOrder, $state, $scoringDecisions, $requestingGamePlayerId);
             $pdo->commit();
         } catch (Throwable $e) {
             $pdo->rollBack();
@@ -3739,7 +3765,7 @@ final class GameService
      * @param array<int, int> $scoringDecisions cardId => resolved bonus, see RoundScorer::score()
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
      */
-    private function finishScoringAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state, array $scoringDecisions): array
+    private function finishScoringAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state, array $scoringDecisions, int $requestingGamePlayerId): array
     {
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
@@ -3757,7 +3783,7 @@ final class GameService
         $state->clearEndOfRoundSuppressions();
 
         if (self::isTeamFormat($this->fetchGame($gameId)['format'])) {
-            return $this->finishTeamScoringAndAdvance($gameId, $round, $state, $scores);
+            return $this->finishTeamScoringAndAdvance($gameId, $round, $state, $scores, $requestingGamePlayerId);
         }
 
         // $scores covers every seated player (BoardState has no notion of
@@ -3836,7 +3862,7 @@ final class GameService
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, completed_at = NOW() WHERE id = :game_id"
             );
             $completeGame->execute(['winner' => $winnerId, 'game_id' => $gameId]);
-            $this->recordGameCompletionStats($gameId, $winnerId, null);
+            $this->recordGameCompletionStats($gameId, $winnerId, null, $requestingGamePlayerId);
 
             // A no-op for every non-quick_draft game (games.draft_match_id
             // is only ever set for that deck_type) -- see its own docblock.
@@ -3984,7 +4010,7 @@ final class GameService
      * @param array<int,int> $scores game_player_id => score
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
-    private function finishTeamScoringAndAdvance(int $gameId, array $round, BoardState $state, array $scores): array
+    private function finishTeamScoringAndAdvance(int $gameId, array $round, BoardState $state, array $scores, int $requestingGamePlayerId): array
     {
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
@@ -4052,7 +4078,7 @@ final class GameService
                 "UPDATE games SET status = 'completed', winner_game_player_id = :winner, winner_team_id = :winner_team, completed_at = NOW() WHERE id = :game_id"
             );
             $completeGame->execute(['winner' => $winnerRepresentative, 'winner_team' => $winningTeamId, 'game_id' => $gameId]);
-            $this->recordGameCompletionStats($gameId, $winnerRepresentative, $winningTeamId);
+            $this->recordGameCompletionStats($gameId, $winnerRepresentative, $winningTeamId, $requestingGamePlayerId);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
         }
