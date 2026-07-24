@@ -6134,10 +6134,12 @@ final class GameService
      * immediately after event $eventId finished, for a COMPLETED game only
      * -- see ReplayStateBuilder's own docblock for how the historical
      * BoardState itself gets reconstructed (full forward replay of
-     * recorded facts, never re-executed effect code). Authorization
-     * (seated player or canSpectateGame()) is the caller's own job,
-     * identical to fullEventLog()'s -- see the GET /games/replay/state
-     * route.
+     * recorded facts, never re-executed effect code). $eventId of 0 is
+     * genesis -- round-1's dealt hands, before any event exists -- see
+     * ReplayStateBuilder::stateAsOf()'s own docblock for that sentinel.
+     * Authorization (seated player or canSpectateGame()) is the caller's
+     * own job, identical to fullEventLog()'s -- see the GET
+     * /games/replay/state route.
      *
      * @return array<string, mixed>
      */
@@ -6309,6 +6311,7 @@ final class GameService
                 $state->discardPile(),
             ),
             'deck_count' => 0,
+            'recent_events' => $this->recentEvents($gameId, $players, 15, $eventId),
             'teams' => $teams,
             'team_decision' => null,
             'initial_card_pass' => null,
@@ -6391,13 +6394,29 @@ final class GameService
      * @param array<int, array{game_player_id:int, username:string}> $players
      * @return array<int, array{id:int, created_at:string, description:string}>
      */
-    private function recentEvents(int $gameId, array $players, int $limit = 15): array
+    /**
+     * $upToEventId (issue #240 replay) caps this to the events a viewer
+     * would actually have seen up through that specific point in history,
+     * rather than the game's own most-recent 15 overall -- so a replay
+     * step's own "Recent plays" section matches exactly what a live player
+     * would have seen at that moment, not spoilers from later in the game.
+     * Genesis's sentinel event id of 0 (see ReplayStateBuilder::stateAsOf())
+     * naturally yields no rows here (`id <= 0` matches nothing), correctly
+     * showing nothing has happened yet.
+     */
+    private function recentEvents(int $gameId, array $players, int $limit = 15, ?int $upToEventId = null): array
     {
-        $stmt = Connection::get()->prepare(
-            'SELECT id, event_type, acting_game_player_id, card_id, details, created_at
-             FROM game_events WHERE game_id = :game_id ORDER BY id DESC LIMIT :limit'
-        );
+        $sql = 'SELECT id, event_type, acting_game_player_id, card_id, details, created_at
+                 FROM game_events WHERE game_id = :game_id';
+        if ($upToEventId !== null) {
+            $sql .= ' AND id <= :up_to_event_id';
+        }
+        $sql .= ' ORDER BY id DESC LIMIT :limit';
+        $stmt = Connection::get()->prepare($sql);
         $stmt->bindValue('game_id', $gameId, PDO::PARAM_INT);
+        if ($upToEventId !== null) {
+            $stmt->bindValue('up_to_event_id', $upToEventId, PDO::PARAM_INT);
+        }
         $stmt->bindValue('limit', $limit, PDO::PARAM_INT);
         $stmt->execute();
 

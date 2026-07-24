@@ -980,7 +980,14 @@
         }
 
         const { ok, body } = await getGameLog(gameId, replayCode);
-        replayEvents = ok ? body.events : [];
+        // Prepend a synthetic genesis "event" -- round-1's dealt hands,
+        // before any real event exists -- so stepping through a replay
+        // always starts at the true beginning (both hands visible, nothing
+        // played yet) rather than jumping straight to the first play. Its
+        // id of 0 is GameService::replayStateAsOf()'s own sentinel for
+        // genesis; real game_events ids are auto-increment starting at 1,
+        // so 0 can never collide with an actual event.
+        replayEvents = ok ? [{ id: 0, round_number: null, description: 'Game start (hands dealt, nothing played yet)' }, ...body.events] : [];
         replayEventIndex = 0;
 
         if (replayEvents.length === 0) {
