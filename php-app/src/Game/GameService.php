@@ -1185,6 +1185,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->notifications?->clearQueuedForGame($userId, $gameId);
     }
 
     /**
@@ -2450,6 +2451,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2471,6 +2473,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2543,6 +2546,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2848,6 +2852,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2948,6 +2953,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -3045,6 +3051,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $actingGamePlayerId);
 
         return $result;
     }
@@ -3099,6 +3106,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $actingGamePlayerId);
 
         return $result;
     }
@@ -7570,6 +7578,30 @@ final class GameService
 
         $gameId = (int) $row['game_id'];
         $this->notifications->notifyYourTurn((int) $row['user_id'], $gameId, "Game #{$gameId} is waiting on your move.");
+    }
+
+    /**
+     * Called at every point a player's action successfully resolves
+     * something they might have been reminded about -- clears any
+     * queued-but-not-yet-delivered "waiting on you" notification for this
+     * game before the cron flush (bin/send_queued_notifications.php) ever
+     * gets to it, so they never get a stale nudge for a turn/decision
+     * they've already handled. A no-op if nothing was queued, or if it
+     * was queued for a different game or for something other than this
+     * game (see QueuedNotificationRepository::clearForGameIfMatches()).
+     */
+    private function clearQueuedNotificationForGamePlayer(int $gameId, int $gamePlayerId): void
+    {
+        if ($this->notifications === null) {
+            return;
+        }
+
+        $stmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+        $userId = $stmt->fetchColumn();
+        if ($userId !== false) {
+            $this->notifications->clearQueuedForGame((int) $userId, $gameId);
+        }
     }
 
     private function assertNoPendingDecision(int $roundId): void

@@ -7,6 +7,7 @@ namespace MoodSwings\Tests;
 use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
+use MoodSwings\Repository\QueuedNotificationRepository;
 use PDO;
 use PDOException;
 use PHPUnit\Framework\TestCase;
@@ -16,6 +17,7 @@ final class NotificationsIntegrationTest extends TestCase
     private PDO $pdo;
     private PushSubscriptionRepository $subscriptions;
     private NotificationPreferenceRepository $preferences;
+    private QueuedNotificationRepository $queuedNotifications;
 
     protected function setUp(): void
     {
@@ -39,6 +41,7 @@ final class NotificationsIntegrationTest extends TestCase
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE push_subscriptions');
         $pdo->exec('TRUNCATE TABLE notification_preferences');
+        $pdo->exec('TRUNCATE TABLE queued_notifications');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -51,6 +54,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->pdo = $pdo;
         $this->subscriptions = new PushSubscriptionRepository();
         $this->preferences = new NotificationPreferenceRepository();
+        $this->queuedNotifications = new QueuedNotificationRepository();
     }
 
     protected function tearDown(): void
@@ -165,7 +169,7 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PUBLIC_KEY=some-public-key');
         putenv('VAPID_PRIVATE_KEY=some-private-key');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences);
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
         $service->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
 
         self::addToAssertionCount(1); // reaching this line without throwing is the assertion
@@ -179,7 +183,7 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PUBLIC_KEY=some-public-key');
         putenv('VAPID_PRIVATE_KEY=some-private-key');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences);
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
         // notify_your_turn is off -- even though a subscription exists,
         // this must return before ever touching the network.
         $service->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
@@ -194,7 +198,7 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PUBLIC_KEY=');
         putenv('VAPID_PRIVATE_KEY=');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences);
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
         $service->notifyGameFinished($userId, 1, 'Game #1 is over -- you won!');
 
         self::addToAssertionCount(1);
@@ -252,12 +256,154 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PUBLIC_KEY=some-public-key');
         putenv('VAPID_PRIVATE_KEY=some-private-key');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences);
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
 
         $start = microtime(true);
         $service->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
         $elapsed = microtime(true) - $start;
 
         self::assertLessThan(1.0, $elapsed, 'a cooldown-suppressed notify() should return immediately, never attempting a real send');
+    }
+
+    // -- Cooldown queue: replace-on-arrival, cron flush, clear-on-action ----
+
+    // A second notification arriving before the first was ever delivered
+    // must not accumulate a backlog -- it replaces the still-queued one, so
+    // the user's eventual cron-flushed notification is the last one that
+    // was actually true when it flushes, not a stale intermediate.
+    public function testEnqueueReplacesPreviousQueuedNotificationForSameUser(): void
+    {
+        $userId = $this->insertUser('queue-replace');
+
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'first', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'second', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+
+        $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+
+        self::assertCount(1, $rows);
+        self::assertSame('second', $rows[0]['body']);
+    }
+
+    // notify() checks the cooldown before ever looking at subscriptions or
+    // VAPID configuration, so queueing during the cooldown needs neither --
+    // this mirrors testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecently()
+    // but asserts what now happens instead of a silent drop.
+    public function testNotifyQueuesInsteadOfDroppingDuringCooldownAndReplacesOnASecondArrival(): void
+    {
+        $userId = $this->insertUser('queue-on-cooldown');
+        $this->preferences->markNotified($userId);
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+        $service->notifyYourTurn($userId, 7, 'Game #7 is waiting on your move.', 'turn');
+        $service->notifyYourTurn($userId, 7, 'Game #7 is waiting on your move (again).', 'turn');
+
+        $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+
+        self::assertCount(1, $rows);
+        self::assertSame('Game #7 is waiting on your move (again).', $rows[0]['body']);
+        self::assertSame('game-7-turn', $rows[0]['tag']);
+    }
+
+    public function testFlushQueuedNotificationsIsANoOpWhenNothingIsQueued(): void
+    {
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+
+        self::assertSame(0, $service->flushQueuedNotifications());
+    }
+
+    // The queue is cleared as flushQueuedNotifications() walks it regardless
+    // of whether the preference is still on -- re-checking at flush time
+    // (not just at the original queue time) matters because the user may
+    // have turned the preference off in the interim.
+    public function testFlushQueuedNotificationsClearsTheQueueEvenWhenThePreferenceWasDisabledSinceQueueing(): void
+    {
+        $userId = $this->insertUser('flush-pref-disabled');
+        $this->subscriptions->save($userId, 'https://push.example.com/flush-disabled', 'p', 'a');
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+        $this->preferences->save($userId, false, true, true);
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+
+        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+    }
+
+    public function testFlushQueuedNotificationsClearsTheQueueEvenWithNoSubscriptions(): void
+    {
+        $userId = $this->insertUser('flush-no-subs');
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+
+        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+    }
+
+    public function testFlushQueuedNotificationsClearsTheQueueWhenVapidIsNotConfigured(): void
+    {
+        $userId = $this->insertUser('flush-no-vapid');
+        $this->subscriptions->save($userId, 'https://push.example.com/flush-no-vapid', 'p', 'a');
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+        putenv('VAPID_PUBLIC_KEY=');
+        putenv('VAPID_PRIVATE_KEY=');
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+
+        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+    }
+
+    // GameService::clearQueuedNotificationForGamePlayer()'s own passthrough
+    // -- a queued reminder about a DIFFERENT game must survive untouched.
+    public function testClearQueuedForGameOnlyClearsTheMatchingGame(): void
+    {
+        $userId = $this->insertUser('clear-for-game');
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'game 4', 'url' => '/game/?id=4', 'tag' => 'game-4-turn',
+        ]);
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+
+        // Game 42's own clear must not cross-match game 4's queued row --
+        // the whole point of anchoring the LIKE pattern right after the id.
+        $service->clearQueuedForGame($userId, 42);
+        self::assertCount(1, array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+
+        $service->clearQueuedForGame($userId, 4);
+        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+    }
+
+    public function testClearQueuedFriendRequestOnlyClearsTheFriendRequestTag(): void
+    {
+        $userId = $this->insertUser('clear-friend-request');
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'still queued', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+        $service->clearQueuedFriendRequest($userId);
+
+        $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+        self::assertCount(1, $rows);
+        self::assertSame('still queued', $rows[0]['body']);
+
+        $this->queuedNotifications->enqueue($userId, 'notify_friend_request', [
+            'title' => 'Friend request', 'body' => 'wants to be your friend', 'url' => '/friends/', 'tag' => 'friend-request',
+        ]);
+        $service->clearQueuedFriendRequest($userId);
+
+        // The game-1 row was already replaced by the friend-request
+        // enqueue() above (one row per user), so nothing is left at all.
+        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
     }
 }

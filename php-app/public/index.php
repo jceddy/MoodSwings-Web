@@ -34,6 +34,7 @@ use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
+use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
@@ -342,7 +343,8 @@ if ($path === '/me' && $method === 'GET') {
 
 $pushSubscriptions = new PushSubscriptionRepository();
 $notificationPreferences = new NotificationPreferenceRepository();
-$pushNotifications = new PushNotificationService($pushSubscriptions, $notificationPreferences);
+$queuedNotifications = new QueuedNotificationRepository();
+$pushNotifications = new PushNotificationService($pushSubscriptions, $notificationPreferences, $queuedNotifications);
 
 $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
 
@@ -386,6 +388,7 @@ if ($path === '/friends/respond' && $method === 'POST') {
 
     try {
         $friendships->respondToInvite((int) $currentUser['id'], (int) ($body['user_id'] ?? 0), $action);
+        $pushNotifications->clearQueuedFriendRequest((int) $currentUser['id']);
         respond(200, ['status' => 'ok', 'message' => match ($action) {
             'accept' => 'Friend request accepted.',
             'decline' => 'Friend request declined.',

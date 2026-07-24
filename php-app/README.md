@@ -2866,9 +2866,10 @@ Discord notifications are explicitly out of scope for this pass -- issue
 #108 itself calls them out as needing more planning/design work, so
 they're a separate follow-up.
 
-**Global 5-minute per-user cooldown**: regardless of event type or which
-game it's about, `PushNotificationService::notify()` skips sending if
-that user was already sent a push within the last 5 minutes
+**Global 5-minute per-user cooldown, with a queue-and-replace fallback**:
+regardless of event type or which game it's about,
+`PushNotificationService::notify()` checks whether that user was already
+sent a push within the last 5 minutes
 (`NotificationPreferenceRepository::wasNotifiedRecently()`/
 `markNotified()`, backed by `notification_preferences.last_notified_at`)
 -- otherwise a player actively working through several turns/decisions in
@@ -2877,6 +2878,38 @@ forward *before* the actual send is attempted (right after confirming
 there's a subscription and VAPID keys to send with), not after, so it
 also protects against piling up retries against an unreachable push
 service.
+
+Rather than simply dropping a notification that arrives during another's
+cooldown, it's queued instead (`QueuedNotificationRepository`, backed by
+the `queued_notifications` table added in migration `0048`) and delivered
+later by a cron flush. `queued_notifications` has `user_id` itself as its
+primary key -- one row per user -- so `enqueue()`'s `INSERT ... ON
+DUPLICATE KEY UPDATE` naturally *replaces* whatever was queued before
+rather than accumulating a backlog: a player who was busy for 20 minutes
+ends up with exactly one queued notification reflecting whatever was
+truly last, never everything that happened in between. `bin/send_queued_
+notifications.php` (meant to run every ~15 minutes via cron) calls
+`PushNotificationService::flushQueuedNotifications()`, which walks every
+queued row, re-checks that user's preference at flush time (they may have
+turned it off since queueing -- this is why the rendered payload's
+`preference_key` is stored alongside it), sends if still eligible, and
+clears the row either way. A live (non-queued) send also clears any
+leftover queued row for that same user first, since a fresher notification
+just went out and an older queued reminder would otherwise still arrive
+stale on top of it.
+
+Separately, `GameService::clearQueuedNotificationForGamePlayer()` (called
+from `playMood()`, `pass()`, `resignGame()`, `respondToDecision()`,
+`submitInitialCardPass()`, `proposeTeamDecision()`, `confirmTeamDecision()`,
+and `setPlayFirstNextMatchGame()`) and the `/friends/respond` route handler
+(`PushNotificationService::clearQueuedFriendRequest()`) clear a queued
+notification early, the moment the player actually takes the action it
+would have reminded them about -- so the cron flush never delivers a
+stale "it's your turn" for a turn already taken. Tags are always literally
+`game-{id}-{suffix}` or the constant `friend-request`
+(`QueuedNotificationRepository::clearForGameIfMatches()`/
+`clearFriendRequestForUser()`), so clearing one game's queued reminder can
+never cross-match a different game's.
 
 **Architecture**: the standard three-part Web Push stack -- Push API
 (`PushManager.subscribe()`) + Notifications API (`ServiceWorkerRegistration
@@ -2903,7 +2936,10 @@ since push-service endpoint URLs can run past reasonable index key-length
 limits) and `notification_preferences` (one row per user, three boolean
 columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`
 -- created lazily the first time a user changes a setting; a user with no
-row yet gets all-`true` defaults from `NotificationPreferenceRepository::forUser()`).
+row yet gets all-`true` defaults from `NotificationPreferenceRepository::forUser()`)
+and `queued_notifications` (one row per user, holding the rendered
+title/body/url/tag and originating `preference_key` for whatever
+notification is currently delayed by the cooldown -- see above).
 
 **Config**: `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` in `.env`
 (see `.env.example`), read via the same `Config::get()` pattern `Mailer.php`

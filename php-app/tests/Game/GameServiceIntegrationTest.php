@@ -15,6 +15,7 @@ use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
+use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
@@ -228,7 +229,7 @@ final class GameServiceIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
-            notifications: new PushNotificationService(new PushSubscriptionRepository(), new NotificationPreferenceRepository()),
+            notifications: new PushNotificationService(new PushSubscriptionRepository(), new NotificationPreferenceRepository(), new QueuedNotificationRepository()),
         );
     }
 
@@ -3600,6 +3601,30 @@ final class GameServiceIntegrationTest extends TestCase
 
         $round = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+    }
+
+    // GameService::clearQueuedNotificationForGamePlayer() -- a player
+    // taking their action clears any reminder that was queued for THEM
+    // about THIS game (see PushNotificationService::notify()'s cooldown
+    // queue), so the eventual cron flush doesn't nag them about a turn
+    // they already took. clearForGameIfMatches()'s own tag-anchoring
+    // (game-4 can't cross-match game-42) is covered directly in
+    // NotificationsIntegrationTest -- this only needs to confirm
+    // GameService actually resolves the acting player's user_id and
+    // calls through to it.
+    public function testPlayMoodClearsAQueuedNotificationForTheActingPlayer(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $queuedNotifications = new QueuedNotificationRepository();
+        $queuedNotifications->enqueue($u1, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'stale reminder', 'url' => "/game/?id={$gameId}", 'tag' => "game-{$gameId}-turn",
+        ]);
+
+        $games = $this->gamesWithNotificationsWired();
+        $games->playMood($gameId, $p1, $apathyId, []);
+
+        self::assertSame([], array_filter($queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $u1));
     }
 
     public function testFullRoundCycleAssignsHurtFeelingsDrawsForLosersAndCompletesGame(): void

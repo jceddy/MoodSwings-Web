@@ -57,4 +57,36 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
     CONSTRAINT fk_notification_preferences_user_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Backs the cooldown's "queue and replace" behavior
+-- (PushNotificationService::notify()): rather than simply dropping a
+-- notification that arrives during another one's 5-minute cooldown, it's
+-- queued here instead -- at most one row per user, so a second (or
+-- third, or tenth) notification arriving before the queued one is ever
+-- delivered just overwrites it in place (ON DUPLICATE KEY UPDATE), same
+-- reasoning as push_subscriptions' own upsert-by-endpoint. The result:
+-- once bin/send_queued_notifications.php's cron flush (~every 15
+-- minutes) gets around to it, a user who was busy gets exactly one
+-- notification reflecting whatever was truly last, never a backlog of
+-- everything that happened in between.
+--
+-- preference_key is stored alongside the rendered title/body/url/tag so
+-- flushQueuedNotifications() can re-check that preference at flush time
+-- (the user may have turned it off between queueing and delivery) without
+-- needing to know which specific notifyXxx() call produced this row.
+-- GameService::clearQueuedNotificationForGamePlayer()/
+-- PushNotificationService::clearQueuedForGame()/clearQueuedFriendRequest()
+-- delete a queued row early if the player takes the action it would have
+-- reminded them about before the cron flush ever runs.
+CREATE TABLE IF NOT EXISTS queued_notifications (
+    user_id INT UNSIGNED NOT NULL,
+    preference_key VARCHAR(32) NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    body VARCHAR(500) NOT NULL,
+    url VARCHAR(255) NOT NULL,
+    tag VARCHAR(64) NOT NULL,
+    queued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id),
+    CONSTRAINT fk_queued_notifications_user_id FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 UPDATE schema_version SET version = '1.1.0' WHERE id = 1;

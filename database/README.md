@@ -405,18 +405,32 @@ half-migrated schema.
   foreign keys the ordinary way, so correctly ordering the statements
   works regardless of the server's own replication topology. See the
   migration file's own docblock for the full explanation.
-- **Browser push notifications** (`0048`, issue #108): two new tables --
+- **Browser push notifications** (`0048`, issue #108): three tables --
   `push_subscriptions` (one row per subscribed browser/device per user:
   `endpoint`/`p256dh_key`/`auth_key`, exactly what `PushSubscription
   .toJSON()` returns; uniqueness is enforced on a SHA-256 `endpoint_hash`
   rather than the raw `endpoint` column, since push-service endpoint URLs
-  can run past reasonable index key-length limits) and
-  `notification_preferences` (one row per user, three boolean columns --
+  can run past reasonable index key-length limits), `notification_preferences`
+  (one row per user, three boolean columns --
   `notify_your_turn`/`notify_friend_request`/`notify_game_finished` --
   plus `last_notified_at`, backing a global 5-minute per-user notification
   cooldown regardless of event type or game; a row is created lazily the
   first time a user either changes a setting or is actually sent a
   notification, and no row at all means all-`true` preference defaults
-  with no cooldown in effect). `VERSION` bumps to `1.1.0` (a genuine new
-  feature, not a breaking change like `0047`'s `1.0.0`). See "Browser
-  push notifications" in `php-app/README.md`.
+  with no cooldown in effect), and `queued_notifications` (`user_id`
+  itself as the primary key -- one row per user -- holding the rendered
+  title/body/url/tag plus the originating `preference_key` for whatever
+  notification is currently delayed by the cooldown; `INSERT ... ON
+  DUPLICATE KEY UPDATE` in `QueuedNotificationRepository::enqueue()` makes
+  a second notification arriving before the first was ever delivered
+  *replace* it rather than accumulate a backlog, so a busy player's
+  eventual delayed notification is only ever the last one that was true,
+  never everything in between; `bin/send_queued_notifications.php`, run
+  every ~15 minutes via cron, delivers and clears whatever's queued). This
+  migration file has been extended in place twice as this same still-
+  unmerged `1.1.0` feature grew (first `last_notified_at`, then this whole
+  table) rather than splitting into separate migrations -- safe only
+  because no shipped environment has applied `0048` yet; once a migration
+  has actually shipped it must never be edited in place again. `VERSION`
+  bumps to `1.1.0` (a genuine new feature, not a breaking change like
+  `0047`'s `1.0.0`). See "Browser push notifications" in `php-app/README.md`.
