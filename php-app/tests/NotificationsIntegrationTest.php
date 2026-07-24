@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests;
 
+use MoodSwings\Notifications\NotificationScope;
 use MoodSwings\Notifications\PushNotificationService;
+use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
 use MoodSwings\Repository\QueuedNotificationRepository;
@@ -18,6 +20,7 @@ final class NotificationsIntegrationTest extends TestCase
     private PushSubscriptionRepository $subscriptions;
     private NotificationPreferenceRepository $preferences;
     private QueuedNotificationRepository $queuedNotifications;
+    private NotificationCooldownRepository $cooldowns;
 
     protected function setUp(): void
     {
@@ -41,6 +44,7 @@ final class NotificationsIntegrationTest extends TestCase
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE push_subscriptions');
         $pdo->exec('TRUNCATE TABLE notification_preferences');
+        $pdo->exec('TRUNCATE TABLE notification_cooldowns');
         $pdo->exec('TRUNCATE TABLE queued_notifications');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
@@ -55,6 +59,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->subscriptions = new PushSubscriptionRepository();
         $this->preferences = new NotificationPreferenceRepository();
         $this->queuedNotifications = new QueuedNotificationRepository();
+        $this->cooldowns = new NotificationCooldownRepository();
     }
 
     protected function tearDown(): void
@@ -67,16 +72,21 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PRIVATE_KEY');
     }
 
+    private function service(): PushNotificationService
+    {
+        return new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications, $this->cooldowns);
+    }
+
     // enqueue() always stamps queued_at = NOW(), so tests that need a row
     // old enough for dueForFlush()/flushQueuedNotifications() to actually
     // pick it up must backdate it afterward -- this is exactly what
     // "having sat in the queue a while" looks like in a fast-running test.
-    private function backdateQueuedNotification(int $userId, int $secondsAgo): void
+    private function backdateQueuedNotification(int $userId, string $scope, int $secondsAgo): void
     {
         $stmt = $this->pdo->prepare(
-            'UPDATE queued_notifications SET queued_at = DATE_SUB(NOW(), INTERVAL :seconds_ago SECOND) WHERE user_id = :user_id'
+            'UPDATE queued_notifications SET queued_at = DATE_SUB(NOW(), INTERVAL :seconds_ago SECOND) WHERE user_id = :user_id AND scope = :scope'
         );
-        $stmt->execute(['seconds_ago' => $secondsAgo, 'user_id' => $userId]);
+        $stmt->execute(['seconds_ago' => $secondsAgo, 'user_id' => $userId, 'scope' => $scope]);
     }
 
     private function insertUser(string $username): int
@@ -181,8 +191,7 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PUBLIC_KEY=some-public-key');
         putenv('VAPID_PRIVATE_KEY=some-private-key');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-        $service->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
+        $this->service()->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
 
         self::addToAssertionCount(1); // reaching this line without throwing is the assertion
     }
@@ -195,10 +204,9 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PUBLIC_KEY=some-public-key');
         putenv('VAPID_PRIVATE_KEY=some-private-key');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
         // notify_your_turn is off -- even though a subscription exists,
         // this must return before ever touching the network.
-        $service->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
+        $this->service()->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
 
         self::addToAssertionCount(1);
     }
@@ -210,87 +218,111 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PUBLIC_KEY=');
         putenv('VAPID_PRIVATE_KEY=');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-        $service->notifyGameFinished($userId, 1, 'Game #1 is over -- you won!');
+        $this->service()->notifyGameFinished($userId, 1, 'Game #1 is over -- you won!');
 
         self::addToAssertionCount(1);
     }
 
-    // -- Five-minute per-user notification cooldown -------------------------
+    // -- Five-minute cooldown, scoped per (user, game) -----------------------
 
     public function testWasNotifiedRecentlyIsFalseUntilMarkNotified(): void
     {
         $userId = $this->insertUser('cooldown-user');
+        $scope = NotificationScope::forGame(1);
 
-        self::assertFalse($this->preferences->wasNotifiedRecently($userId, 300));
+        self::assertFalse($this->cooldowns->wasNotifiedRecently($userId, $scope, 300));
 
-        $this->preferences->markNotified($userId);
+        $this->cooldowns->markNotified($userId, $scope);
 
-        self::assertTrue($this->preferences->wasNotifiedRecently($userId, 300));
+        self::assertTrue($this->cooldowns->wasNotifiedRecently($userId, $scope, 300));
     }
 
     public function testWasNotifiedRecentlyStopsMatchingOnceTheWindowPasses(): void
     {
         $userId = $this->insertUser('cooldown-expired');
-        $this->preferences->markNotified($userId);
+        $scope = NotificationScope::forGame(1);
+        $this->cooldowns->markNotified($userId, $scope);
 
         // A 0-second window can never still be "within" it -- the
         // equivalent of the 5-minute cooldown already having elapsed.
-        self::assertFalse($this->preferences->wasNotifiedRecently($userId, 0));
+        self::assertFalse($this->cooldowns->wasNotifiedRecently($userId, $scope, 0));
     }
 
-    public function testMarkNotifiedDoesNotClobberExistingPreferences(): void
+    // The whole point of scoping the cooldown per (user, game) rather than
+    // globally per user: being notified about one game must never start
+    // (or extend) another game's own cooldown.
+    public function testMarkNotifiedForOneGameDoesNotAffectAnotherGamesCooldown(): void
     {
-        $userId = $this->insertUser('cooldown-preserves-prefs');
-        $this->preferences->save($userId, false, false, true);
+        $userId = $this->insertUser('cooldown-per-game');
+        $this->cooldowns->markNotified($userId, NotificationScope::forGame(1));
 
-        $this->preferences->markNotified($userId);
-
-        self::assertSame(
-            ['notify_your_turn' => false, 'notify_friend_request' => false, 'notify_game_finished' => true],
-            $this->preferences->forUser($userId)
-        );
+        self::assertTrue($this->cooldowns->wasNotifiedRecently($userId, NotificationScope::forGame(1), 300));
+        self::assertFalse($this->cooldowns->wasNotifiedRecently($userId, NotificationScope::forGame(2), 300));
     }
 
     // PushNotificationService::notify() checks the cooldown before ever
     // looking at subscriptions or building a WebPush client -- pre-marking
     // it here means a still-configured, still-subscribed user's second
-    // notification returns immediately without ever attempting the (slow,
-    // unreachable-in-this-test) network call a real send would make. The
-    // tight time assertion is exactly what distinguishes "skipped" from
-    // "attempted and failed" -- a real send attempt against an
-    // unreachable/fake endpoint takes measurably longer than this.
-    public function testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecently(): void
+    // notification for the SAME game returns immediately without ever
+    // attempting the (slow, unreachable-in-this-test) network call a real
+    // send would make. The tight time assertion is exactly what
+    // distinguishes "skipped" from "attempted and failed" -- a real send
+    // attempt against an unreachable/fake endpoint takes measurably longer
+    // than this.
+    public function testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecentlyAboutTheSameGame(): void
     {
         $userId = $this->insertUser('cooldown-skips-send');
         $this->subscriptions->save($userId, 'https://push.example.com/cooldown', 'p', 'a');
-        $this->preferences->markNotified($userId);
+        $this->cooldowns->markNotified($userId, NotificationScope::forGame(1));
         putenv('VAPID_PUBLIC_KEY=some-public-key');
         putenv('VAPID_PRIVATE_KEY=some-private-key');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-
         $start = microtime(true);
-        $service->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
+        $this->service()->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
         $elapsed = microtime(true) - $start;
 
         self::assertLessThan(1.0, $elapsed, 'a cooldown-suppressed notify() should return immediately, never attempting a real send');
     }
 
-    // -- Cooldown queue: replace-on-arrival, cron flush, clear-on-action ----
+    // The other half of scoping by game: a user already in game 1's
+    // cooldown must still be sent a live notification about a DIFFERENT
+    // game -- playing several games at once can still mean more than one
+    // push within 5 minutes overall, just never more than one about any
+    // one specific game. No subscriptions exist here, so this stays a
+    // fast, network-free no-op assertion (see the "no subscriptions"
+    // group above) while still proving the *cooldown itself* didn't block
+    // it -- if it had, this would behave identically either way, so what
+    // actually distinguishes this test is timing: it returns just as fast
+    // as the "no subscriptions" case, never hitting the queue path a
+    // blocked cooldown would take.
+    public function testNotifyStillSendsForADifferentGameDespiteAnotherGamesCooldown(): void
+    {
+        $userId = $this->insertUser('cooldown-different-game');
+        $this->cooldowns->markNotified($userId, NotificationScope::forGame(1));
+
+        $this->service()->notifyYourTurn($userId, 2, 'Game #2 is waiting on your move.');
+
+        // Not queued -- notify() only queues when THIS game's own scope is
+        // within cooldown, which game 2's never was.
+        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+    }
+
+    // -- Cooldown queue: replace-on-arrival PER SCOPE, cron flush, clear-on-action
 
     // A second notification arriving before the first was ever delivered
-    // must not accumulate a backlog -- it replaces the still-queued one, so
-    // the user's eventual cron-flushed notification is the last one that
-    // was actually true when it flushes, not a stale intermediate.
-    public function testEnqueueReplacesPreviousQueuedNotificationForSameUser(): void
+    // must not accumulate a backlog -- it replaces the still-queued one
+    // for that SAME scope, so the user's eventual cron-flushed notification
+    // is the last one that was actually true when it flushes, not a stale
+    // intermediate.
+    public function testEnqueueReplacesPreviousQueuedNotificationForTheSameScope(): void
     {
         $userId = $this->insertUser('queue-replace');
+        $scope = NotificationScope::forGame(1);
 
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, $scope, 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'first', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, $scope, 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'second', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
 
@@ -300,18 +332,42 @@ final class NotificationsIntegrationTest extends TestCase
         self::assertSame('second', $rows[0]['body']);
     }
 
+    // The central behavior this whole per-scope redesign is for: queueing
+    // a notification for one game must never bump (replace, or be
+    // replaced by) one already queued for a DIFFERENT game -- a player in
+    // several games at once can end up with several simultaneously
+    // queued rows, one per game.
+    public function testEnqueueForOneGameDoesNotBumpAQueuedNotificationForAnotherGame(): void
+    {
+        $userId = $this->insertUser('queue-per-game');
+
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(1), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'game 1', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(2), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'game 2', 'url' => '/game/?id=2', 'tag' => 'game-2-turn',
+        ]);
+
+        $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+        usort($rows, static fn (array $a, array $b) => $a['body'] <=> $b['body']);
+
+        self::assertCount(2, $rows, 'a game 2 notification must not replace a still-queued game 1 one');
+        self::assertSame('game 1', $rows[0]['body']);
+        self::assertSame('game 2', $rows[1]['body']);
+    }
+
     public function testDueForFlushOnlyReturnsRowsAtLeastThatManySecondsOld(): void
     {
         $freshUserId = $this->insertUser('due-for-flush-fresh');
-        $this->queuedNotifications->enqueue($freshUserId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($freshUserId, NotificationScope::forGame(1), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'fresh', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
 
         $staleUserId = $this->insertUser('due-for-flush-stale');
-        $this->queuedNotifications->enqueue($staleUserId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($staleUserId, NotificationScope::forGame(2), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'stale', 'url' => '/game/?id=2', 'tag' => 'game-2-turn',
         ]);
-        $this->backdateQueuedNotification($staleUserId, 600);
+        $this->backdateQueuedNotification($staleUserId, NotificationScope::forGame(2), 600);
 
         $due = array_column($this->queuedNotifications->dueForFlush(300), 'user_id');
 
@@ -321,14 +377,14 @@ final class NotificationsIntegrationTest extends TestCase
 
     // notify() checks the cooldown before ever looking at subscriptions or
     // VAPID configuration, so queueing during the cooldown needs neither --
-    // this mirrors testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecently()
+    // this mirrors testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecentlyAboutTheSameGame()
     // but asserts what now happens instead of a silent drop.
     public function testNotifyQueuesInsteadOfDroppingDuringCooldownAndReplacesOnASecondArrival(): void
     {
         $userId = $this->insertUser('queue-on-cooldown');
-        $this->preferences->markNotified($userId);
+        $this->cooldowns->markNotified($userId, NotificationScope::forGame(7));
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+        $service = $this->service();
         $service->notifyYourTurn($userId, 7, 'Game #7 is waiting on your move.', 'turn');
         $service->notifyYourTurn($userId, 7, 'Game #7 is waiting on your move (again).', 'turn');
 
@@ -341,9 +397,7 @@ final class NotificationsIntegrationTest extends TestCase
 
     public function testFlushQueuedNotificationsIsANoOpWhenNothingIsQueued(): void
     {
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-
-        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame(0, $this->service()->flushQueuedNotifications());
     }
 
     // A notification that's only just landed in the queue must NOT be
@@ -356,15 +410,13 @@ final class NotificationsIntegrationTest extends TestCase
     {
         $userId = $this->insertUser('flush-too-fresh');
         $this->subscriptions->save($userId, 'https://push.example.com/flush-too-fresh', 'p', 'a');
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(1), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
         putenv('VAPID_PUBLIC_KEY=some-public-key');
         putenv('VAPID_PRIVATE_KEY=some-private-key');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-
-        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame(0, $this->service()->flushQueuedNotifications());
 
         $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
         self::assertCount(1, $rows, 'a freshly-queued row must still be queued, not delivered or dropped');
@@ -378,29 +430,25 @@ final class NotificationsIntegrationTest extends TestCase
     {
         $userId = $this->insertUser('flush-pref-disabled');
         $this->subscriptions->save($userId, 'https://push.example.com/flush-disabled', 'p', 'a');
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(1), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
-        $this->backdateQueuedNotification($userId, 600);
+        $this->backdateQueuedNotification($userId, NotificationScope::forGame(1), 600);
         $this->preferences->save($userId, false, true, true);
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-
-        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame(0, $this->service()->flushQueuedNotifications());
         self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
     }
 
     public function testFlushQueuedNotificationsClearsTheQueueEvenWithNoSubscriptions(): void
     {
         $userId = $this->insertUser('flush-no-subs');
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(1), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
-        $this->backdateQueuedNotification($userId, 600);
+        $this->backdateQueuedNotification($userId, NotificationScope::forGame(1), 600);
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-
-        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame(0, $this->service()->flushQueuedNotifications());
         self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
     }
 
@@ -408,17 +456,36 @@ final class NotificationsIntegrationTest extends TestCase
     {
         $userId = $this->insertUser('flush-no-vapid');
         $this->subscriptions->save($userId, 'https://push.example.com/flush-no-vapid', 'p', 'a');
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(1), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
-        $this->backdateQueuedNotification($userId, 600);
+        $this->backdateQueuedNotification($userId, NotificationScope::forGame(1), 600);
         putenv('VAPID_PUBLIC_KEY=');
         putenv('VAPID_PRIVATE_KEY=');
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-
-        self::assertSame(0, $service->flushQueuedNotifications());
+        self::assertSame(0, $this->service()->flushQueuedNotifications());
         self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+    }
+
+    // Flushing one user's due game-1 row must leave another user's (or the
+    // same user's) still-fresh game-2 row alone -- dueForFlush() is scoped
+    // per row, not per user.
+    public function testFlushQueuedNotificationsOnlyClearsTheDueRowNotOtherScopesForTheSameUser(): void
+    {
+        $userId = $this->insertUser('flush-per-scope');
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(1), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'due', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+        $this->backdateQueuedNotification($userId, NotificationScope::forGame(1), 600);
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(2), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'still fresh', 'url' => '/game/?id=2', 'tag' => 'game-2-turn',
+        ]);
+
+        $this->service()->flushQueuedNotifications();
+
+        $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+        self::assertCount(1, $rows);
+        self::assertSame('still fresh', $rows[0]['body']);
     }
 
     // GameService::clearQueuedNotificationForGamePlayer()'s own passthrough
@@ -426,14 +493,13 @@ final class NotificationsIntegrationTest extends TestCase
     public function testClearQueuedForGameOnlyClearsTheMatchingGame(): void
     {
         $userId = $this->insertUser('clear-for-game');
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(4), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'game 4', 'url' => '/game/?id=4', 'tag' => 'game-4-turn',
         ]);
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+        $service = $this->service();
 
-        // Game 42's own clear must not cross-match game 4's queued row --
-        // the whole point of anchoring the LIKE pattern right after the id.
+        // Game 42's own clear must not cross-match game 4's queued row.
         $service->clearQueuedForGame($userId, 42);
         self::assertCount(1, array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
 
@@ -441,27 +507,24 @@ final class NotificationsIntegrationTest extends TestCase
         self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
     }
 
-    public function testClearQueuedFriendRequestOnlyClearsTheFriendRequestTag(): void
+    public function testClearQueuedFriendRequestOnlyClearsTheFriendRequestScope(): void
     {
         $userId = $this->insertUser('clear-friend-request');
-        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+        $this->queuedNotifications->enqueue($userId, NotificationScope::forGame(1), 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'still queued', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
+        $this->queuedNotifications->enqueue($userId, NotificationScope::FRIEND_REQUEST, 'notify_friend_request', [
+            'title' => 'Friend request', 'body' => 'wants to be your friend', 'url' => '/friends/', 'tag' => 'friend-request',
+        ]);
 
-        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
-        $service->clearQueuedFriendRequest($userId);
+        // Different scopes, so both rows coexist rather than one
+        // replacing the other.
+        self::assertCount(2, array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+
+        $this->service()->clearQueuedFriendRequest($userId);
 
         $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
         self::assertCount(1, $rows);
         self::assertSame('still queued', $rows[0]['body']);
-
-        $this->queuedNotifications->enqueue($userId, 'notify_friend_request', [
-            'title' => 'Friend request', 'body' => 'wants to be your friend', 'url' => '/friends/', 'tag' => 'friend-request',
-        ]);
-        $service->clearQueuedFriendRequest($userId);
-
-        // The game-1 row was already replaced by the friend-request
-        // enqueue() above (one row per user), so nothing is left at all.
-        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
     }
 }

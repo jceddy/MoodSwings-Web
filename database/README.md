@@ -405,32 +405,45 @@ half-migrated schema.
   foreign keys the ordinary way, so correctly ordering the statements
   works regardless of the server's own replication topology. See the
   migration file's own docblock for the full explanation.
-- **Browser push notifications** (`0048`, issue #108): three tables --
-  `push_subscriptions` (one row per subscribed browser/device per user:
-  `endpoint`/`p256dh_key`/`auth_key`, exactly what `PushSubscription
-  .toJSON()` returns; uniqueness is enforced on a SHA-256 `endpoint_hash`
-  rather than the raw `endpoint` column, since push-service endpoint URLs
-  can run past reasonable index key-length limits), `notification_preferences`
-  (one row per user, three boolean columns --
-  `notify_your_turn`/`notify_friend_request`/`notify_game_finished` --
-  plus `last_notified_at`, backing a global 5-minute per-user notification
-  cooldown regardless of event type or game; a row is created lazily the
-  first time a user either changes a setting or is actually sent a
-  notification, and no row at all means all-`true` preference defaults
-  with no cooldown in effect), and `queued_notifications` (`user_id`
-  itself as the primary key -- one row per user -- holding the rendered
-  title/body/url/tag plus the originating `preference_key` for whatever
-  notification is currently delayed by the cooldown; `INSERT ... ON
-  DUPLICATE KEY UPDATE` in `QueuedNotificationRepository::enqueue()` makes
-  a second notification arriving before the first was ever delivered
-  *replace* it rather than accumulate a backlog, so a busy player's
-  eventual delayed notification is only ever the last one that was true,
-  never everything in between; `bin/send_queued_notifications.php`, run
-  every ~15 minutes via cron, delivers and clears whatever's queued). This
-  migration file has been extended in place twice as this same still-
-  unmerged `1.1.0` feature grew (first `last_notified_at`, then this whole
-  table) rather than splitting into separate migrations -- safe only
-  because no shipped environment has applied `0048` yet; once a migration
-  has actually shipped it must never be edited in place again. `VERSION`
-  bumps to `1.1.0` (a genuine new feature, not a breaking change like
-  `0047`'s `1.0.0`). See "Browser push notifications" in `php-app/README.md`.
+- **Browser push notifications** (`0048`/`0049`, issue #108): `0048` adds
+  three tables -- `push_subscriptions` (one row per subscribed
+  browser/device per user: `endpoint`/`p256dh_key`/`auth_key`, exactly
+  what `PushSubscription.toJSON()` returns; uniqueness is enforced on a
+  SHA-256 `endpoint_hash` rather than the raw `endpoint` column, since
+  push-service endpoint URLs can run past reasonable index key-length
+  limits), `notification_preferences` (one row per user, three boolean
+  columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`
+  -- a row is created lazily the first time a user changes a setting, and
+  no row at all means all-`true` preference defaults), and
+  `queued_notifications` (originally `user_id` alone as the primary key --
+  one row per user -- holding the rendered title/body/url/tag plus the
+  originating `preference_key` for whatever notification is currently
+  delayed by the cooldown; `INSERT ... ON DUPLICATE KEY UPDATE` in
+  `QueuedNotificationRepository::enqueue()` makes a second notification
+  arriving before the first was ever delivered *replace* it rather than
+  accumulate a backlog; `bin/send_queued_notifications.php`, run every
+  ~15 minutes via cron, delivers and clears whatever's queued). `0048`
+  was extended in place twice while still unmerged (first adding
+  `notification_preferences.last_notified_at` for a global per-user
+  cooldown, then the whole `queued_notifications` table) -- safe only
+  because no shipped environment had applied it yet.
+
+  `0049` (issue #108 follow-up: the cooldown/queue needed to be scoped per
+  *game*, not globally per user, or a player active in several games at
+  once could get bumped/starved by unrelated games) is a genuinely
+  separate migration rather than another in-place edit of `0048`, because
+  by the time this need surfaced `0048` had already merged and shipped.
+  It adds `notification_cooldowns` (`user_id`, `scope`, `last_notified_at`,
+  `PRIMARY KEY (user_id, scope)`) to replace
+  `notification_preferences.last_notified_at`'s single per-user timestamp
+  (dropped by this same migration), and re-keys `queued_notifications`
+  from `user_id` alone to `(user_id, scope)` (a new `scope` column, PK
+  changed to match) so a notification queued for one game can never
+  replace (or be replaced by) one already queued for a different game.
+  `scope` is either `game:{id}` (every it's-your-turn/game-finished
+  notification about that game shares one scope, regardless of which
+  tag/event type triggered it) or the constant `friend_request` (not
+  tied to any game) -- see `NotificationScope`. `VERSION` bumps to
+  `1.1.1` (a PATCH-level correction of `0048`'s own not-yet-shipped-when-
+  written behavior, not a new feature in its own right). See "Browser
+  push notifications" in `php-app/README.md`.
