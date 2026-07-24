@@ -377,6 +377,51 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 108]));
     }
 
+    /**
+     * Per a rules judge ruling, Creativity's "an exact copy of that
+     * printed card" resolves through the WHOLE chain: a Creativity
+     * copying another Creativity that's itself copying Paranoia is a
+     * copy of Paranoia -- color, value, and its after-playing ability all
+     * included -- not "a blank blue 0" copy of literal Creativity. 2001
+     * and 2002 are two distinct physical copies of catalog card 32
+     * (Creativity), the same catalogCardIdFor setup
+     * testAngerTreatsTwoPhysicalCardsSharingACatalogIdAsDistinctTargets()
+     * above uses for two physical copies of the same design.
+     */
+    public function testCreativityCopyingACreativityCopyResolvesTransitivelyToTheOriginal(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [2001, 5], 2 => [71, 2002]], // Creativity, Complacency (filler); Paranoia, Creativity
+            deck: [6], // so Paranoia's own draw doesn't just re-draw the card it bottomed
+            catalogCardIdFor: [2001 => 32, 2002 => 32],
+        );
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 71, new PlayerChoices([])); // Paranoia, now in play
+
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 2001, new PlayerChoices(['copy_card_id' => 71])); // Creativity copying Paranoia
+        self::assertSame(71, $state->effectiveCardId(2001));
+
+        $state->startTurn(2);
+        self::assertSame(1, count($state->hand(1))); // just Complacency (5) left
+        $this->plays->playMood($state, 2, 2002, new PlayerChoices([
+            'copy_card_id' => 2001, // copying the OTHER Creativity, itself copying Paranoia
+            'target_player_id' => 1,
+        ]));
+
+        self::assertSame(71, $state->effectiveCardId(2002));
+        self::assertSame('black', $state->colorOf(2002));
+        self::assertSame(2, $state->valueOf(2002));
+        // Paranoia's after-playing effect (choose a player, reveal+bottom a
+        // random hand card, then draw) fired transitively too -- player 1's
+        // last hand card (Complacency) is gone.
+        self::assertSame(0, count($state->hand(1)));
+        self::assertContains(5, $state->deck());
+    }
+
     public function testBenevolenceAllowsABonusPlayOfADifferentColor(): void
     {
         $state = $this->boardState(hands: [1 => [2, 106]]); // Benevolence (white), Zeal (red)
