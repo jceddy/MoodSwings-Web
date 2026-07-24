@@ -2969,10 +2969,23 @@ notifications" in `web-static/README.md` for the frontend half.
 `WebPush` client. Every `notifyXxx()` method is a deliberate best-effort,
 fire-and-forget call -- a stale/expired subscription, an unreachable push
 service, or VAPID keys not being configured at all (e.g. local dev) must
-never fail the request that triggered it, so every failure is swallowed
-rather than thrown. A subscription the push service reports as
-gone-for-good (HTTP 404/410 -- `MessageSentReport::isSubscriptionExpired()`)
-is pruned from `push_subscriptions` automatically on the next send attempt.
+never fail the request that triggered it, so `notify()`'s whole body (and
+each row of `flushQueuedNotifications()`'s loop individually) is wrapped
+in `try`/`catch (\Throwable)`, logging to `src/notification-errors.log`
+(same convention as `logMailError()`/`MaintenanceGate`'s own error logs)
+rather than letting anything propagate. A subscription the push service
+reports as gone-for-good (HTTP 404/410 --
+`MessageSentReport::isSubscriptionExpired()`) is pruned from
+`push_subscriptions` automatically on the next send attempt.
+
+`minishlink/web-push` itself only declares `psr/http-client` as an
+interface dependency, not a concrete implementation -- `composer.json`
+also requires `guzzlehttp/guzzle` + `php-http/guzzle7-adapter` (the exact
+pair the library's own test suite uses) so `php-http/discovery` actually
+finds a PSR-18 client at runtime. Without one of these, every send throws
+`Http\Discovery\Exception\NotFoundException` ("No PSR-18 clients
+found..."), which is exactly the kind of failure the `try`/`catch` above
+now keeps from ever reaching the triggering request.
 
 **Storage** (migrations `0048_add_push_notifications.sql` and
 `0049_scope_notification_cooldown_and_queue_by_game.sql`): `push_subscriptions`
