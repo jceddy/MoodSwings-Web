@@ -509,7 +509,13 @@ too, proportional to the smaller card width.
     (the user blocked notifications for this site at the browser level),
     `#notifications-blocked` is shown instead of erroring. See "Browser
     push notifications" in `../php-app/README.md` for what actually gets
-    sent and when.
+    sent and when. A friend-request notification's own click-through URL
+    (`/game/?open_friends=1` -- there's no standalone `/friends/` page,
+    just `#friends-dialog` on this same lobby) is handled by the startup
+    IIFE at the bottom of `js/game.js`: after `showLobby()`, an
+    `open_friends=1` query param opens that dialog directly, the same
+    `?spectate_game_id` deep-links straight into spectator mode just
+    above it.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via

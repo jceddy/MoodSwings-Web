@@ -5279,5 +5279,18 @@
         showSpectatorBoard(parseInt(spectateGameId, 10), spectateCodeParam);
     } else {
         showLobby();
+
+        // A friend-request push notification's own deep link
+        // (PushNotificationService::notifyFriendRequest()) -- there's no
+        // standalone /friends/ page to send it to, since the friends UI
+        // is just a dialog on this same lobby, so it asks the lobby to
+        // open that dialog itself instead. Same open-then-load pattern
+        // the #friends-button click handler above already uses.
+        if (new URLSearchParams(window.location.search).get('open_friends') === '1') {
+            friendInviteError.hidden = true;
+            friendInviteSuccess.hidden = true;
+            friendsDialog.showModal();
+            refreshFriendsData();
+        }
     }
 })();

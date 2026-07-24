@@ -2904,7 +2904,12 @@ for three event types --
   collapses two different "your turn" reasons for the same game into one
   notification -- see `GameService::notifyGamePlayersItsYourTurn()`.
 - **"Friend request received"** -- sent from the `POST /friends/invite`
-  route handler once `FriendshipService::sendInvite()` succeeds.
+  route handler once `FriendshipService::sendInvite()` succeeds. Its own
+  click-through `url` is `/game/?open_friends=1`, not `/friends/` (there's
+  no standalone friends page -- the friends UI is a `<dialog>` on the
+  lobby itself) -- `game.js`'s startup IIFE opens that dialog when it
+  sees `open_friends=1`, the same way `?spectate_game_id` already jumps
+  straight into spectator mode.
 - **"A game you're in just finished"** -- sent to every winning and losing
   user from `GameService::recordGameCompletionStats()`, the single method
   already called from every code path that completes a game (see its own
