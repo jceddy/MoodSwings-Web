@@ -389,6 +389,38 @@ function respondToDecision(gameId, choices) {
     });
 }
 
+// Browser push notifications (issue #108) -- see initNotifications() in
+// game.js for the Service Worker registration + subscribe/unsubscribe flow
+// these back, and PushNotificationService.php for what actually gets sent.
+function getVapidPublicKey() {
+    return apiRequest('/notifications/vapid-public-key');
+}
+
+function subscribeToPush(subscription) {
+    return apiRequest('/notifications/subscribe', {
+        method: 'POST',
+        body: JSON.stringify(subscription.toJSON()),
+    });
+}
+
+function unsubscribeFromPush(endpoint) {
+    return apiRequest('/notifications/unsubscribe', {
+        method: 'POST',
+        body: JSON.stringify({ endpoint }),
+    });
+}
+
+function getNotificationPreferences() {
+    return apiRequest('/notifications/preferences');
+}
+
+function saveNotificationPreferences(preferences) {
+    return apiRequest('/notifications/preferences', {
+        method: 'POST',
+        body: JSON.stringify(preferences),
+    });
+}
+
 // --- Shared list/label rendering helpers ------------------------------
 //
 // Originally game.js-local; moved here (issue #128) once spectate.js

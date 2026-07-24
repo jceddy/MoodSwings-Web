@@ -29,8 +29,11 @@ use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Maintenance\MaintenanceGate;
+use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\NotificationPreferenceRepository;
+use MoodSwings\Repository\PushSubscriptionRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
@@ -337,6 +340,10 @@ if ($path === '/me' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'user' => $result['user']]);
 }
 
+$pushSubscriptions = new PushSubscriptionRepository();
+$notificationPreferences = new NotificationPreferenceRepository();
+$pushNotifications = new PushNotificationService($pushSubscriptions, $notificationPreferences);
+
 $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
 
 if ($path === '/friends' && $method === 'GET') {
@@ -359,6 +366,7 @@ if ($path === '/friends/invite' && $method === 'POST') {
 
     try {
         $target = $friendships->sendInvite((int) $currentUser['id'], (string) ($body['username_or_email'] ?? ''));
+        $pushNotifications->notifyFriendRequest((int) $target['id'], (string) $currentUser['username']);
         respond(201, [
             'status' => 'ok',
             'message' => 'Friend request sent.',
@@ -403,6 +411,54 @@ if ($path === '/friends/remove' && $method === 'POST') {
     } catch (FriendshipNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     }
+}
+
+// Browser push notifications (issue #108). The public key is handed to
+// PushManager.subscribe() client-side; it isn't secret (it's the whole
+// point of asymmetric VAPID auth) so no auth is required to read it, same
+// reasoning as /cards/catalog being public knowledge.
+if ($path === '/notifications/vapid-public-key' && $method === 'GET') {
+    respond(200, ['status' => 'ok', 'public_key' => Config::get('VAPID_PUBLIC_KEY', '')]);
+}
+
+if ($path === '/notifications/subscribe' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $endpoint = (string) ($body['endpoint'] ?? '');
+    $keys = is_array($body['keys'] ?? null) ? $body['keys'] : [];
+
+    if ($endpoint === '' || !is_string($keys['p256dh'] ?? null) || !is_string($keys['auth'] ?? null)) {
+        respond(400, ['status' => 'error', 'message' => 'A subscription endpoint and keys.p256dh/keys.auth are required.']);
+    }
+
+    $pushSubscriptions->save((int) $currentUser['id'], $endpoint, $keys['p256dh'], $keys['auth']);
+    respond(201, ['status' => 'ok', 'message' => 'Subscribed to push notifications.']);
+}
+
+if ($path === '/notifications/unsubscribe' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    $pushSubscriptions->deleteByEndpoint((int) $currentUser['id'], (string) ($body['endpoint'] ?? ''));
+    respond(200, ['status' => 'ok', 'message' => 'Unsubscribed from push notifications.']);
+}
+
+if ($path === '/notifications/preferences' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
+}
+
+if ($path === '/notifications/preferences' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    $notificationPreferences->save(
+        (int) $currentUser['id'],
+        (bool) ($body['notify_your_turn'] ?? true),
+        (bool) ($body['notify_friend_request'] ?? true),
+        (bool) ($body['notify_game_finished'] ?? true)
+    );
+    respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }
 
 $userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships);
@@ -495,7 +551,7 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry));
+$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $pushNotifications);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/

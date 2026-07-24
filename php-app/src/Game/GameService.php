@@ -7,6 +7,7 @@ namespace MoodSwings\Game;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
+use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
@@ -220,6 +221,7 @@ final class GameService
         private readonly UserDecklistService $userDecklists,
         private readonly ReplayStateBuilder $replay,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
+        private readonly ?PushNotificationService $notifications = null,
     ) {
     }
 
@@ -3538,6 +3540,13 @@ final class GameService
 
         $this->bumpLifetimeStats($winningUserIds, 'game_wins');
         $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+
+        foreach ($winningUserIds as $userId) {
+            $this->notifications?->notifyGameFinished($userId, $gameId, "Game #{$gameId} is over -- you won!");
+        }
+        foreach ($losingUserIds as $userId) {
+            $this->notifications?->notifyGameFinished($userId, $gameId, "Game #{$gameId} is over -- you lost.");
+        }
     }
 
     /**
@@ -7419,10 +7428,27 @@ final class GameService
         return array_merge(array_slice($playerIds, $startIndex), array_slice($playerIds, 0, $startIndex));
     }
 
-    /** @param array<int, ?array{type: string, values?: int[]}> $playGrants */
+    /**
+     * @param array<int, ?array{type: string, values?: int[]}> $playGrants
+     *
+     * "It's your turn" push notifications (issue #108) fire from here: this
+     * is the one place $playerId (whose turn it now is) is set, so
+     * comparing against the round's previous value before overwriting it
+     * tells us exactly when the turn actually changed hands -- without
+     * that check, a same-player extra play (a banked Generosity/Joy grant,
+     * a Duplicity repeat) would re-notify the player already mid-turn for
+     * no reason.
+     */
     private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound): void
     {
-        $stmt = Connection::get()->prepare(
+        $pdo = Connection::get();
+
+        $previousStmt = $pdo->prepare('SELECT current_turn_game_player_id FROM game_rounds WHERE id = :round_id');
+        $previousStmt->execute(['round_id' => $roundId]);
+        $previousPlayerId = $previousStmt->fetchColumn();
+        $previousPlayerId = $previousPlayerId !== false ? (int) $previousPlayerId : null;
+
+        $stmt = $pdo->prepare(
             'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round WHERE id = :round_id'
         );
         $stmt->execute([
@@ -7432,6 +7458,32 @@ final class GameService
             'discarded_this_round' => $discardedThisRound ? 1 : 0,
             'round_id' => $roundId,
         ]);
+
+        if ($previousPlayerId !== $playerId) {
+            $this->notifyItsYourTurn($roundId, $playerId);
+        }
+    }
+
+    private function notifyItsYourTurn(int $roundId, int $gamePlayerId): void
+    {
+        if ($this->notifications === null) {
+            return;
+        }
+
+        $stmt = Connection::get()->prepare(
+            'SELECT gr.game_id, gp.user_id
+             FROM game_rounds gr
+             JOIN game_players gp ON gp.id = :game_player_id
+             WHERE gr.id = :round_id'
+        );
+        $stmt->execute(['game_player_id' => $gamePlayerId, 'round_id' => $roundId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return;
+        }
+
+        $gameId = (int) $row['game_id'];
+        $this->notifications->notifyYourTurn((int) $row['user_id'], $gameId, "Game #{$gameId} is waiting on your move.");
     }
 
     private function assertNoPendingDecision(int $roundId): void
@@ -7783,6 +7835,7 @@ final class GameService
             'INSERT INTO game_pending_decisions (batch_id, step_index, target_game_player_id, decision_type, field)
              VALUES (:batch_id, :step_index, :target_player_id, :decision_type, :field)'
         );
+        $targetPlayerIds = [];
         foreach ($result->pendingDecisions as $stepIndex => $decision) {
             $insertDecision->execute([
                 'batch_id' => $batchId,
@@ -7791,6 +7844,33 @@ final class GameService
                 'decision_type' => $decision->decisionType,
                 'field' => json_encode($decision->field),
             ]);
+            $targetPlayerIds[$decision->targetPlayerId] = true;
+        }
+
+        $this->notifyPendingDecisionTargets($gameId, array_keys($targetPlayerIds));
+    }
+
+    /**
+     * "It's your turn" push notification (issue #108) for whoever a fresh
+     * pending-decision batch is waiting on -- e.g. Compulsion asking an
+     * opponent which card to give up. Deduplicated by the caller (one
+     * notification per targeted player per batch, even if they're asked
+     * more than one question in it).
+     *
+     * @param int[] $gamePlayerIds
+     */
+    private function notifyPendingDecisionTargets(int $gameId, array $gamePlayerIds): void
+    {
+        if ($this->notifications === null || $gamePlayerIds === []) {
+            return;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($gamePlayerIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT user_id FROM game_players WHERE id IN ({$placeholders})");
+        $stmt->execute($gamePlayerIds);
+
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $userId) {
+            $this->notifications->notifyYourTurn((int) $userId, $gameId, "Game #{$gameId} needs your decision.");
         }
     }
 

@@ -33,6 +33,7 @@
         <button id="decks-button" type="button">Decks</button>
         <button id="user-info-button" type="button">User info</button>
         <button id="spectate-button" type="button">Spectate</button>
+        <button id="notifications-button" type="button">Notifications</button>
         <button id="logout-button">Log out</button>
 
         <section id="lobby-view">
@@ -546,6 +547,27 @@
         <p id="shared-deck-meta"></p>
         <div id="shared-deck-cards"></div>
         <button id="shared-deck-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Browser push notifications (issue #108) -- see initNotifications()
+         in game.js and PushNotificationService.php. Discord notifications
+         are a later, separate effort -- this dialog is push-only. -->
+    <dialog id="notifications-dialog">
+        <h2>Notifications</h2>
+        <p id="notifications-unsupported" hidden>Your browser doesn't support push notifications.</p>
+        <p id="notifications-blocked" hidden>Notifications are blocked for this site in your browser settings.</p>
+        <div id="notifications-controls">
+            <button id="notifications-enable-button" type="button">Enable push notifications</button>
+            <button id="notifications-disable-button" type="button" hidden>Disable push notifications</button>
+            <fieldset id="notifications-preferences" disabled>
+                <legend>Notify me when...</legend>
+                <label><input type="checkbox" id="notify-your-turn-checkbox"> It's my turn</label>
+                <label><input type="checkbox" id="notify-friend-request-checkbox"> I receive a friend request</label>
+                <label><input type="checkbox" id="notify-game-finished-checkbox"> One of my games finishes</label>
+            </fieldset>
+        </div>
+        <p id="notifications-error" class="error" hidden></p>
+        <button id="notifications-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="friends-dialog">

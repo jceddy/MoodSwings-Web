@@ -10,6 +10,7 @@
     startVersionWatcher();
     checkFriendRequestNotification();
     setInterval(checkFriendRequestNotification, 15000);
+    initNotifications();
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
@@ -94,6 +95,148 @@
         if (ok) {
             setFriendRequestNotification(body.incoming.length > 0);
         }
+    }
+
+    // Browser push notifications (issue #108): Push API + Notifications API
+    // via a Service Worker (see web-static/service-worker.js). Registration
+    // happens unconditionally on page load (cheap, and needed before
+    // pushManager.getSubscription() can report anything); actually asking
+    // for permission and subscribing only happens when the user opens this
+    // dialog and clicks "Enable."
+    //
+    // applicationServerKey needs raw bytes, but the server hands back the
+    // VAPID public key as the URL-safe base64 string PushManager.subscribe()
+    // itself can't consume directly -- this is the standard conversion (see
+    // the Web Push protocol's own recommended snippet).
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; i++) {
+            outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+    }
+
+    async function initNotifications() {
+        const dialog = document.getElementById('notifications-dialog');
+        const unsupportedEl = document.getElementById('notifications-unsupported');
+        const blockedEl = document.getElementById('notifications-blocked');
+        const controlsEl = document.getElementById('notifications-controls');
+        const enableButton = document.getElementById('notifications-enable-button');
+        const disableButton = document.getElementById('notifications-disable-button');
+        const preferencesFieldset = document.getElementById('notifications-preferences');
+        const errorEl = document.getElementById('notifications-error');
+        const yourTurnCheckbox = document.getElementById('notify-your-turn-checkbox');
+        const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
+        const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
+
+        const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+        unsupportedEl.hidden = supported;
+        controlsEl.hidden = !supported;
+        blockedEl.hidden = true;
+
+        // Declared here (before the click listeners below close over it),
+        // and stays null for the rest of this function whenever push isn't
+        // usable -- unsupported entirely, or registration itself failed --
+        // so refreshSubscriptionState() is only ever called once there's an
+        // actual registration to ask.
+        let registration = null;
+
+        async function refreshSubscriptionState() {
+            blockedEl.hidden = Notification.permission !== 'denied';
+            const subscription = await registration.pushManager.getSubscription();
+            enableButton.hidden = subscription !== null;
+            disableButton.hidden = subscription === null;
+            preferencesFieldset.disabled = subscription === null;
+            if (subscription !== null) {
+                const { ok, body } = await getNotificationPreferences();
+                if (ok) {
+                    yourTurnCheckbox.checked = body.preferences.notify_your_turn;
+                    friendRequestCheckbox.checked = body.preferences.notify_friend_request;
+                    gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
+                }
+            }
+        }
+
+        // The dialog itself (and its "not supported" message) must still be
+        // reachable even when push isn't supported at all -- otherwise
+        // clicking "Notifications" would silently do nothing instead of
+        // explaining why. Only the enable/disable/preferences wiring below
+        // is skipped in that case.
+        document.getElementById('notifications-button').addEventListener('click', async () => {
+            errorEl.hidden = true;
+            dialog.showModal();
+            if (registration !== null) {
+                await refreshSubscriptionState();
+            }
+        });
+
+        document.getElementById('notifications-close-button').addEventListener('click', () => {
+            dialog.close();
+        });
+
+        if (!supported) {
+            return;
+        }
+
+        try {
+            registration = await navigator.serviceWorker.register('/service-worker.js');
+        } catch (e) {
+            unsupportedEl.hidden = false;
+            controlsEl.hidden = true;
+            return;
+        }
+
+        enableButton.addEventListener('click', async () => {
+            errorEl.hidden = true;
+            try {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    blockedEl.hidden = permission !== 'denied';
+                    return;
+                }
+
+                const { ok, body } = await getVapidPublicKey();
+                if (!ok || !body.public_key) {
+                    errorEl.textContent = 'Push notifications are not configured on the server yet.';
+                    errorEl.hidden = false;
+                    return;
+                }
+
+                const subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(body.public_key),
+                });
+                await subscribeToPush(subscription);
+                await refreshSubscriptionState();
+            } catch (e) {
+                errorEl.textContent = 'Could not enable push notifications.';
+                errorEl.hidden = false;
+            }
+        });
+
+        disableButton.addEventListener('click', async () => {
+            errorEl.hidden = true;
+            const subscription = await registration.pushManager.getSubscription();
+            if (subscription !== null) {
+                await unsubscribeFromPush(subscription.endpoint);
+                await subscription.unsubscribe();
+            }
+            await refreshSubscriptionState();
+        });
+
+        async function savePreferences() {
+            await saveNotificationPreferences({
+                notify_your_turn: yourTurnCheckbox.checked,
+                notify_friend_request: friendRequestCheckbox.checked,
+                notify_game_finished: gameFinishedCheckbox.checked,
+            });
+        }
+        yourTurnCheckbox.addEventListener('change', savePreferences);
+        friendRequestCheckbox.addEventListener('change', savePreferences);
+        gameFinishedCheckbox.addEventListener('change', savePreferences);
     }
 
     async function refreshFriendsData() {

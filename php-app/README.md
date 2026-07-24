@@ -86,6 +86,11 @@ maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/spectate/state` | query params `game_id`, `code`?                        | Requires auth; deliberately does **not** require you to be seated in that game -- see "Spectator mode" below for its own authorization rule. `403` unless you're friends with a seated player or `code` matches the game's own spectate code; `400` if the game is `waiting`/`abandoned`. Same shape as `GET /games/state`, minus `you`, `team_decision`'s propose/confirm affordances, and any draft-match internals -- plus, once the game is `completed`, every player's `hand` is additionally revealed (there's nothing left to hide once the outcome is decided). |
 | GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
+| GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
+| POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
+| POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
+| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished"}}`, all `true` for a user who's never changed them. |
+| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?}` | Requires auth. Upserts the current user's preferences (each field defaults to `true` if omitted); returns the saved `{"preferences"}`. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -102,9 +107,9 @@ authenticated request.
 Verification links are single-use and expire after 24 hours; email is sent
 via SMTP (PHPMailer) using the `SMTP_*` variables in `.env` (see
 `.env.example`). `APP_URL` (no trailing slash) is used to build the link,
-e.g. `https://example.com/app` if deployed under `/app`. Phone numbers and
-verified email are captured for future notification use but nothing sends
-notifications yet.
+e.g. `https://example.com/app` if deployed under `/app`. Phone numbers are
+still captured but nothing sends SMS -- see "Browser push notifications"
+below for what does send notifications today (issue #108).
 
 If a verification email fails to send, the real error (e.g. the SMTP
 error PHPMailer raised) is appended to `src/mail-errors.log` — a fixed,
@@ -2816,6 +2821,65 @@ only the final confirmed choice is logged).
 
 The frontend reuses the board renderer entirely -- see "Watch replay" in
 `web-static/README.md` for the step-control UI.
+
+### Browser push notifications (issue #108)
+
+First pass at issue #108's notification system: real-time browser push
+for three event types --
+
+- **"It's your turn"** -- whenever `game_rounds.current_turn_game_player_id`
+  actually changes to a new player (see `GameService::updateRoundTurnState()`'s
+  own docblock -- a same-player extra play from a banked grant or a
+  Duplicity repeat is deliberately *not* re-notified), and separately
+  whenever a fresh pending-decision batch targets a player (e.g. Compulsion
+  asking an opponent which card to give up -- see
+  `GameService::writePendingBatch()`/`notifyPendingDecisionTargets()`).
+- **"Friend request received"** -- sent from the `POST /friends/invite`
+  route handler once `FriendshipService::sendInvite()` succeeds.
+- **"A game you're in just finished"** -- sent to every winning and losing
+  user from `GameService::recordGameCompletionStats()`, the single method
+  already called from every code path that completes a game (see its own
+  docblock).
+
+Discord notifications are explicitly out of scope for this pass -- issue
+#108 itself calls them out as needing more planning/design work, so
+they're a separate follow-up.
+
+**Architecture**: the standard three-part Web Push stack -- Push API
+(`PushManager.subscribe()`) + Notifications API (`ServiceWorkerRegistration
+.showNotification()`) + a Service Worker (`web-static/service-worker.js`,
+registered at the site root so it can show/handle a notification
+regardless of which page happens to be open). See "Browser push
+notifications" in `web-static/README.md` for the frontend half.
+
+**Backend** (`minishlink/web-push`, added via Composer):
+`src/Notifications/PushNotificationService.php` wraps the library's
+`WebPush` client. Every `notifyXxx()` method is a deliberate best-effort,
+fire-and-forget call -- a stale/expired subscription, an unreachable push
+service, or VAPID keys not being configured at all (e.g. local dev) must
+never fail the request that triggered it, so every failure is swallowed
+rather than thrown. A subscription the push service reports as
+gone-for-good (HTTP 404/410 -- `MessageSentReport::isSubscriptionExpired()`)
+is pruned from `push_subscriptions` automatically on the next send attempt.
+
+**Storage** (migration `0048_add_push_notifications.sql`): `push_subscriptions`
+(one row per subscribed browser/device per user -- `endpoint`/`p256dh_key`/
+`auth_key`, exactly what `PushSubscription.toJSON()` returns; uniqueness is
+enforced on a SHA-256 `endpoint_hash` rather than the raw `endpoint` column,
+since push-service endpoint URLs can run past reasonable index key-length
+limits) and `notification_preferences` (one row per user, three boolean
+columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`
+-- created lazily the first time a user changes a setting; a user with no
+row yet gets all-`true` defaults from `NotificationPreferenceRepository::forUser()`).
+
+**Config**: `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` in `.env`
+(see `.env.example`), read via the same `Config::get()` pattern `Mailer.php`
+uses for `SMTP_*`. `VAPID_SUBJECT` is a `mailto:`/`https://` URL identifying
+the sender, per the Web Push protocol. Generate a key pair with the
+`web-push` npm CLI or `minishlink/web-push`'s own `VAPID::createVapidKeys()`.
+`GET /notifications/vapid-public-key` hands the public half to the
+frontend; if the server has no keys configured, `PushNotificationService`
+silently no-ops every send rather than erroring.
 
 ### Lifetime stats
 
