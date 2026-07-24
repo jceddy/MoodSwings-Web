@@ -51,8 +51,20 @@ final class ReplayStateBuilder
     {
     }
 
+    /**
+     * $eventId of 0 is the sentinel for genesis (round-1 starting hands,
+     * before any event exists) -- real game_events rows are auto-increment
+     * ids starting at 1, so 0 can never collide with a genuine event.
+     * Lets the frontend treat "the beginning" as just another step in the
+     * same replayEvents list/getReplayGameState() call, rather than a
+     * special case of its own.
+     */
     public function stateAsOf(int $gameId, int $eventId): BoardState
     {
+        if ($eventId === 0) {
+            return $this->genesis($gameId);
+        }
+
         $context = $this->loadContext($gameId);
         $events = $context['events'];
 

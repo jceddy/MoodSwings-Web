@@ -3195,6 +3195,101 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Issue #240 replay: event_id 0 is the frontend's own "Step 1" --
+     * genesis, before any real event exists -- so both players' original
+     * dealt hands must show in full, and recent_events (nothing has
+     * happened yet) must come back empty rather than the game's actual
+     * most-recent 15 events.
+     */
+    public function testReplayStateAsOfGenesisShowsBothHandsWithNoRecentEvents(): void
+    {
+        $u1 = $this->insertUser('replaygenesissnap1');
+        $u2 = $this->insertUser('replaygenesissnap2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $this->insertGameCard($gameId, 9, 'hand', $p2); // Discipline
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $charityId, []);
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $gameId]);
+
+        $snapshot = $this->games->replayStateAsOf($gameId, 0);
+
+        $p1Snapshot = array_values(array_filter($snapshot['players'], fn (array $p) => $p['game_player_id'] === $p1))[0];
+        $p2Snapshot = array_values(array_filter($snapshot['players'], fn (array $p) => $p['game_player_id'] === $p2))[0];
+        self::assertSame([$charityId], array_column($p1Snapshot['hand'], 'card_id'), 'genesis shows p1\'s original dealt hand, not the post-play one');
+        self::assertSame([], $snapshot['in_play'], 'nothing is in play at genesis');
+        self::assertSame('Discipline', $p2Snapshot['hand'][0]['name'] ?? null);
+        self::assertSame([], $snapshot['recent_events'], 'genesis has no history behind it');
+        self::assertNull($snapshot['round']['round_number']);
+    }
+
+    /**
+     * Issue #240 replay: recent_events must reflect only what a viewer
+     * would have actually seen by the step being displayed, not the
+     * game's own most-recent-15-overall the way GET /games/state's live
+     * recent_events does -- otherwise an early replay step would spoil
+     * events from later in the game.
+     */
+    public function testReplayStateAsOfRecentEventsAreCappedToTheStepBeingViewed(): void
+    {
+        $u1 = $this->insertUser('replaycapsnap1');
+        $u2 = $this->insertUser('replaycapsnap2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, round 1's play
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency -- "No ability," round 2's play, so p1's turn ends normally after it (no extra-play grant to account for)
+        $this->insertGameCard($gameId, 9, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Round 1: p1 plays, p2 passes -- both plays used, so the round
+        // auto-scores and round 2 begins with p1's turn again (p1 won
+        // round 1, and the round's own winner always goes first next).
+        $this->games->playMood($gameId, $p1, $dignityId, []);
+        $this->games->pass($gameId, $p2);
+        // Round 2.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $this->games->pass($gameId, $p2);
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $gameId]);
+
+        $events = $this->games->fullEventLog($gameId);
+        self::assertGreaterThanOrEqual(4, count($events));
+        $dignityEventId = $events[0]['id'];
+
+        $earlySnapshot = $this->games->replayStateAsOf($gameId, $dignityEventId);
+        self::assertSame([$dignityEventId], array_column($earlySnapshot['recent_events'], 'id'), 'only the one event at/before this step -- nothing from later in the game');
+
+        $finalEventId = $events[count($events) - 1]['id'];
+        $finalSnapshot = $this->games->replayStateAsOf($gameId, $finalEventId);
+        self::assertSame(
+            array_reverse(array_column($events, 'id')),
+            array_column($finalSnapshot['recent_events'], 'id'),
+            'by the last step every event is included, newest first, matching fullEventLog() reversed',
+        );
+    }
+
+    /**
      * Every seated player sees the exact same full log, the same way
      * recentEvents() itself already applies no per-viewer filtering --
      * confirmed here against a Malice cascade specifically (see

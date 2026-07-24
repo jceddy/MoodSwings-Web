@@ -2721,6 +2721,28 @@ different game with `400`. The frontend's step control reuses the
 existing `GET /games/log` for the steppable event list -- no separate
 endpoint for that part.
 
+**The frontend's first step is genesis itself, not the first play.**
+`replayStateAsOf(int $gameId, int $eventId)` treats `$eventId === 0` as a
+sentinel for genesis -- real `game_events` rows are auto-increment ids
+starting at 1, so 0 can never collide with a genuine event --
+`ReplayStateBuilder::stateAsOf()` short-circuits straight to `genesis()`
+in that case. This lets the frontend's steppable event list simply
+prepend a synthetic "Step 1" entry with `id: 0` ahead of the real events
+(see "Watch replay" in `web-static/README.md`), so opening a replay
+always starts at round-1's dealt hands -- both players' opening hand
+visible, nothing yet played -- rather than jumping straight to the first
+recorded play.
+
+`serializeReplaySnapshot()`'s `recent_events` field (the same "Recent
+plays" data `GET /games/state` exposes) is capped to events at or before
+the step being viewed (`recentEvents($gameId, $players, 15, $eventId)`'s
+new `$upToEventId` parameter, folded into a plain `id <= :up_to_event_id`
+SQL filter) rather than the game's own most-recent 15 overall -- so each
+replay step's "Recent plays" section shows exactly what a live player
+would have seen at that specific moment, never events from later in the
+game. Genesis's `$eventId` of 0 naturally yields zero rows here (`id <=
+0` matches nothing), correctly showing nothing has happened yet.
+
 **Why genesis needs no new event.** Defined precisely as "state
 immediately before `game_events` row #1," genesis needs no dedicated
 "game started" log entry: `startGame()`'s deal and `closed_team`'s blind

@@ -290,6 +290,36 @@ final class ReplayStateBuilderTest extends TestCase
         self::assertSame([$p2Hand], $genesis->hand($p2));
     }
 
+    /**
+     * Issue #240: event id 0 is stateAsOf()'s own sentinel for genesis --
+     * the frontend's "Step 1" (round-1's dealt hands, before any real
+     * event exists), letting the same replayEvents/getReplayGameState()
+     * plumbing show it without a separate code path.
+     */
+    public function testStateAsOfWithEventIdZeroReturnsGenesis(): void
+    {
+        $u1 = $this->insertUser('replaysentinel1');
+        $u2 = $this->insertUser('replaysentinel2');
+        $gameId = $this->insertGame('standard', 'in_progress', $u1);
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $dignityId, []);
+        $this->markCompleted($gameId);
+
+        $viaSentinel = $this->replay->stateAsOf($gameId, 0);
+        $viaGenesis = $this->replay->genesis($gameId);
+
+        self::assertSame([$dignityId], $viaSentinel->hand($p1), 'event id 0 shows the original dealt hand, not the post-play one');
+        self::assertSame($viaGenesis->hand($p1), $viaSentinel->hand($p1));
+        self::assertSame($viaGenesis->deck(), $viaSentinel->deck());
+        self::assertSame([], $viaSentinel->moodsInPlay());
+    }
+
     public function testStateAsOfRejectsANonCompletedGame(): void
     {
         $u1 = $this->insertUser('replayreject1');
