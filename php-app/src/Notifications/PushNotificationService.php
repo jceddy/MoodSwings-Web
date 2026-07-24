@@ -179,21 +179,25 @@ final class PushNotificationService
         // true.
         try {
             if (!$this->preferences->forUser($userId)[$preferenceKey]) {
+                $this->logError("Not sending notification (user {$userId}, scope {$scope}): preference '{$preferenceKey}' is off");
                 return;
             }
 
             if ($this->cooldowns->wasNotifiedRecently($userId, $scope, self::COOLDOWN_SECONDS)) {
                 $this->queuedNotifications->enqueue($userId, $scope, $preferenceKey, $payload);
+                $this->logError("Queued notification instead of sending (user {$userId}, scope {$scope}): within the cooldown window");
                 return;
             }
 
             $subscriptions = $this->subscriptions->listForUser($userId);
             if ($subscriptions === []) {
+                $this->logError("Not sending notification (user {$userId}, scope {$scope}): no push subscriptions on file");
                 return;
             }
 
             $webPush = $this->webPush();
             if ($webPush === null) {
+                $this->logError("Not sending notification (user {$userId}, scope {$scope}): VAPID keys are not configured");
                 return;
             }
 
@@ -233,9 +237,31 @@ final class PushNotificationService
         }
 
         foreach ($webPush->flush() as $report) {
-            if (!$report->isSuccess() && $report->isSubscriptionExpired()) {
-                $this->pruneExpired($subscriptions, $report->getEndpoint());
+            if ($report->isSuccess()) {
+                continue;
             }
+
+            if ($report->isSubscriptionExpired()) {
+                $this->pruneExpired($subscriptions, $report->getEndpoint());
+                continue;
+            }
+
+            // Anything else (a VAPID key mismatch, an auth error, a
+            // malformed payload, the push service itself erroring) was
+            // previously dropped here with no trace at all -- the report
+            // isn't a PHP exception (WebPush::flush() never throws per
+            // message), so nothing upstream ever saw it, and the send
+            // looked identical to a quiet success. Logging every
+            // non-expired failure is what actually makes a bad send
+            // diagnosable instead of just silently not happening.
+            $status = $report->getResponse()?->getStatusCode();
+            $this->logError(sprintf(
+                'Push send failed for endpoint %s: %s (HTTP %s) %s',
+                $report->getEndpoint(),
+                $report->getReason(),
+                $status ?? 'n/a',
+                $report->getResponseContent() ?? '',
+            ));
         }
     }
 
