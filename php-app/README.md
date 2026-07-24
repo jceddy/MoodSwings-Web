@@ -285,10 +285,16 @@ the round number, since "you played it this round" means whoever
 Instability/Betrayal/Recklessness/Arrogance/Avoidance/Chaos'
 `giveInPlayToPlayer()` no longer qualifies for its new owner even though
 it's the same round, and the bonus resumes if it's ever handed back to
-whoever actually played it), a variable-count
-extra-play grant sized to close a mood-count gap with a chosen opponent,
-computed once the acting player's own deferred choice of who to target is
-answered (Pride — see `RequiresOpponentDecision` below), a widening of which zone a
+whoever actually played it), a single self-renewing extra-play permission
+that stays active for the rest of the turn for as long as a chosen
+opponent has more moods in play than the acting player — re-checked live
+before every subsequent play rather than pre-counted as a fixed gap, so a
+play that itself closes the gap (e.g. Hate reducing that opponent's mood
+count) is still allowed as long as the gap was open going into it, and the
+permission survives even if the card that granted it later leaves play,
+since it's an "after playing this card" effect rather than a "while in
+play" one (Pride — `'requiresBehindPlayer'` in `BoardState::grantIsActive()`,
+see `RequiresOpponentDecision` below for how the opponent is chosen), a widening of which zone a
 player's *normal* plays (not just bonus ones) can draw from, special-
 cased by `effect_key` inside `BoardState::grantAllows()` the same way
 `colorOf()` special-cases Imagination (Melancholy), and a color ban
@@ -1250,6 +1256,31 @@ does, so once granted, it persists for that turn even if Stubbornness
 itself is later discarded. Neither the base allowance nor a banked
 Generosity/Joy grant carry this tag either, both unaffected by the
 distinction.
+
+Pride's own grant carries a different tag, `'requiresBehindPlayer' =>`
+the chosen opponent's player id, and is the deliberate opposite of
+`'requiresSourceInPlay'` in exactly the respect that matters: per
+published rulings, Pride is an "after playing this card" effect, not a
+"while in play" one, so its grant must persist even if Pride itself later
+leaves play (e.g. discarded as a cost to Infatuation), unlike Hope/Grace
+above. What it depends on instead is a live comparison of mood counts --
+`grantIsActive()` returns `false` for it the moment the chosen opponent no
+longer has strictly more moods in play than whoever's turn it currently is
+(`BoardState::currentPlayerId()`; `$playGrants` is reset every turn, so
+this is always the player Pride's own grant belongs to) -- re-run fresh on
+every `playsRemaining()`/`hasUsablePlayGrant()`/`useGrantFor()` call rather
+than decided once when Pride resolved. `useGrantFor()` also never removes
+this particular grant from `$playGrants` on use, the one exception to its
+otherwise-unconditional "spend it" behavior, since it isn't a one-shot
+extra play at all but a standing permission that keeps re-qualifying
+itself. Because eligibility is checked going into a play, not after that
+play resolves, a play that itself closes the gap (e.g. Hate, "put a card
+on the bottom of the deck", played against the chosen opponent) is still
+allowed to happen -- `MoodPlayService::playMood()` already checks and
+consumes the relevant grant before moving the card into play or resolving
+its own effect either way, matching the ruling that you may play such a
+card as long as the opponent was still ahead at the moment you committed
+to it, even though it doesn't stay ahead once that same card resolves.
 
 Losing a grant this way is silent from `playsRemaining()`'s own
 perspective -- it just reads one lower, with nothing to say why -- so

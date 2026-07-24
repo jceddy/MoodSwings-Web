@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Notifications;
 
+use Minishlink\WebPush\ContentEncoding;
 use Minishlink\WebPush\Subscription;
 use Minishlink\WebPush\WebPush;
 use MoodSwings\Config;
@@ -202,7 +203,7 @@ final class PushNotificationService
 
         foreach ($subscriptions as $subscription) {
             $webPush->queueNotification(
-                new Subscription($subscription['endpoint'], $subscription['p256dh_key'], $subscription['auth_key'], 'aes128gcm'),
+                new Subscription($subscription['endpoint'], $subscription['p256dh_key'], $subscription['auth_key'], ContentEncoding::aes128gcm),
                 $encodedPayload
             );
         }

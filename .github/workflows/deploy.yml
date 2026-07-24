@@ -11,10 +11,10 @@ on:
     branches: [main]
 
 env:
-  # Must be >= the "php": ">=8.1" requirement in php-app/composer.json, and
+  # Must be >= the "php": ">=8.2" requirement in php-app/composer.json, and
   # should match the PHP version set for your domain in cPanel's MultiPHP
   # Manager so the deployed code actually runs the way it was built.
-  PHP_VERSION: '8.1'
+  PHP_VERSION: '8.3'
 
 jobs:
   deploy:
