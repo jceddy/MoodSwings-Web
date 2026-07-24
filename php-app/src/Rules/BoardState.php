@@ -1302,10 +1302,11 @@ final class BoardState
      * "does a grant exist at all" test, and startTurn()'s own base
      * allowance is never granted through this method at all. A
      * restriction may also carry 'requiresSourceInPlay' => true (Hope's
-     * and Grace's own same-turn bonus) -- see grantIsActive()'s own
-     * docblock for what that does.
+     * and Grace's own same-turn bonus) or 'requiresBehindPlayer' => int
+     * (Pride's own bonus) -- see grantIsActive()'s own docblock for what
+     * those do.
      *
-     * @param ?array{type?: string, values?: int[], source?: string, requiresSourceInPlay?: bool} $restriction
+     * @param ?array{type?: string, values?: int[], source?: string, requiresSourceInPlay?: bool, requiresBehindPlayer?: int} $restriction
      */
     public function grantExtraPlay(int $count = 1, ?array $restriction = null, ?int $sourceCardId = null): void
     {
@@ -1405,8 +1406,16 @@ final class BoardState
                 continue;
             }
             if ($this->grantAllows($restriction, $cardId, $playerId)) {
-                unset($this->playGrants[$index]);
-                $this->playGrants = array_values($this->playGrants);
+                // Pride's own grant ('requiresBehindPlayer') is never
+                // removed on use -- it isn't a one-shot extra play at all,
+                // but a standing permission that keeps re-qualifying itself
+                // (via grantIsActive()) for as long as the chosen player
+                // stays ahead, so it has to remain in $playGrants for the
+                // next play to find again.
+                if (!isset($restriction['requiresBehindPlayer'])) {
+                    unset($this->playGrants[$index]);
+                    $this->playGrants = array_values($this->playGrants);
+                }
 
                 if ($restriction !== null) {
                     $this->pendingGrantUsed = $restriction;
@@ -1457,28 +1466,68 @@ final class BoardState
 
     /**
      * Whether $restriction (an entry in $playGrants) still actually
-     * counts. True for every ordinary grant, but a grant tagged
-     * 'requiresSourceInPlay' -- Hope's and Grace's own bonus, both the
-     * same-turn one (grantExtraPlay(), the moment either card is played)
-     * and every future turn's perpetual one
-     * (GameService::computeFreshGrants()) -- only counts while its own
-     * 'sourceCardId' is still actually in play. If that specific Hope or
-     * Grace is discarded, returned to hand, or otherwise leaves play
-     * before the player gets around to using the play it granted, the
-     * grant is lost, not merely un-attributed. Stubbornness's own
-     * perpetual grant is deliberately never tagged this way -- once
-     * computeFreshGrants() grants it at the start of a turn, it persists
-     * for that turn even if Stubbornness itself later leaves play, unlike
-     * Hope/Grace. Neither is the base allowance (always null) or a banked
-     * Generosity/Joy grant, both unaffected by this distinction.
+     * counts. True for every ordinary grant, but two tags make a grant
+     * conditional on live board state, re-checked fresh on every call
+     * rather than decided once when the grant was created:
+     *
+     * - 'requiresSourceInPlay' -- Hope's and Grace's own bonus, both the
+     *   same-turn one (grantExtraPlay(), the moment either card is played)
+     *   and every future turn's perpetual one
+     *   (GameService::computeFreshGrants()) -- only counts while its own
+     *   'sourceCardId' is still actually in play. If that specific Hope or
+     *   Grace is discarded, returned to hand, or otherwise leaves play
+     *   before the player gets around to using the play it granted, the
+     *   grant is lost, not merely un-attributed. Stubbornness's own
+     *   perpetual grant is deliberately never tagged this way -- once
+     *   computeFreshGrants() grants it at the start of a turn, it persists
+     *   for that turn even if Stubbornness itself later leaves play,
+     *   unlike Hope/Grace.
+     * - 'requiresBehindPlayer' => that opponent's player id -- Pride's own
+     *   bonus. Unlike every other restriction here, this isn't evaluated
+     *   against whether some *card* is still in play; it's a live
+     *   comparison of mood counts, re-run every time this method is
+     *   called (playsRemaining(), useGrantFor(), etc.), which is what
+     *   makes the grant self-renewing for the rest of the turn: it stays
+     *   active for as long as the chosen player has strictly more moods in
+     *   play than the current turn's player (see currentPlayerId() --
+     *   $playGrants is reset every turn, so whoever's turn it currently is
+     *   is always the player Pride's own grant belongs to), including
+     *   surviving Pride itself later leaving play (e.g. sacrificed to
+     *   Infatuation) -- Pride is an "after playing this card" effect, not
+     *   a "while in play" one, so it's deliberately never tagged
+     *   'requiresSourceInPlay' the way Hope/Grace are. Because this is
+     *   re-checked before each individual play (see MoodPlayService::
+     *   playMood(), which checks hasUsablePlayGrant()/useGrantFor()
+     *   before moving the card into play or resolving its own effect), a
+     *   play that itself closes the gap to zero (e.g. Hate reducing the
+     *   chosen player's mood count) is still allowed to happen -- the
+     *   check only has to hold at the moment the player commits to that
+     *   play, not after it resolves.
+     *
+     * Neither is the base allowance (always null) or a banked
+     * Generosity/Joy grant, both unaffected by either distinction.
      */
     private function grantIsActive(?array $restriction): bool
     {
-        if ($restriction === null || !($restriction['requiresSourceInPlay'] ?? false)) {
+        if ($restriction === null) {
             return true;
         }
 
-        return $this->isInPlay($restriction['sourceCardId']);
+        if (($restriction['requiresSourceInPlay'] ?? false) && !$this->isInPlay($restriction['sourceCardId'])) {
+            return false;
+        }
+
+        if (isset($restriction['requiresBehindPlayer'])) {
+            $currentPlayerId = $this->currentPlayerId();
+            if ($currentPlayerId === null) {
+                return false;
+            }
+            if (count($this->moodsOwnedBy($restriction['requiresBehindPlayer'])) <= count($this->moodsOwnedBy($currentPlayerId))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
