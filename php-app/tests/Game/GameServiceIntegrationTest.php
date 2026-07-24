@@ -11,7 +11,11 @@ use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
+use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\NotificationPreferenceRepository;
+use MoodSwings\Repository\PushSubscriptionRepository;
+use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
@@ -48,6 +52,8 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+        $pdo->exec('TRUNCATE TABLE push_subscriptions');
+        $pdo->exec('TRUNCATE TABLE notification_preferences');
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE draft_round_picks');
         $pdo->exec('TRUNCATE TABLE draft_winston_state');
@@ -199,6 +205,32 @@ final class GameServiceIntegrationTest extends TestCase
         $stmt->execute(['game_id' => $gameId]);
 
         return $stmt->fetch();
+    }
+
+    /**
+     * A second GameService instance, identical to $this->games except with
+     * a real PushNotificationService wired in -- used only by the handful
+     * of tests confirming issue #108's notification hooks don't disturb
+     * the game flow they're attached to. Deliberately not the default
+     * $this->games every other test uses, so the other ~900 tests in this
+     * file stay unaffected by push-notification wiring.
+     */
+    private function gamesWithNotificationsWired(): GameService
+    {
+        $registry = DefaultEffectRegistry::build();
+        $userDecklists = new UserDecklistService(
+            new UserDecklistRepository(),
+            new FriendshipService(new UserRepository(), new FriendshipRepository()),
+        );
+
+        return new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            $userDecklists,
+            new ReplayStateBuilder($registry),
+            notifications: new PushNotificationService(new PushSubscriptionRepository(), new NotificationPreferenceRepository(), new QueuedNotificationRepository()),
+        );
     }
 
     public function testCreateGameAndStartGameDealsCardsAndBeginsFirstRound(): void
@@ -3549,6 +3581,50 @@ final class GameServiceIntegrationTest extends TestCase
         $round = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
         self::assertSame(1, (int) $round['plays_remaining']);
+    }
+
+    // Issue #108's "it's your turn" push notification hooks into the same
+    // updateRoundTurnState() this test above already exercises -- this
+    // confirms wiring a real PushNotificationService in doesn't break the
+    // turn advance itself. No push_subscriptions rows exist for either
+    // user, so notify() returns before ever touching the network (see
+    // NotificationsIntegrationTest for that guarantee in isolation).
+    public function testPlayMoodStillAdvancesTurnWhenPushNotificationsAreWired(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $games = $this->gamesWithNotificationsWired();
+        $result = $games->playMood($gameId, $p1, $apathyId, []);
+
+        self::assertFalse($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+    }
+
+    // GameService::clearQueuedNotificationForGamePlayer() -- a player
+    // taking their action clears any reminder that was queued for THEM
+    // about THIS game (see PushNotificationService::notify()'s cooldown
+    // queue), so the eventual cron flush doesn't nag them about a turn
+    // they already took. clearForGameIfMatches()'s own tag-anchoring
+    // (game-4 can't cross-match game-42) is covered directly in
+    // NotificationsIntegrationTest -- this only needs to confirm
+    // GameService actually resolves the acting player's user_id and
+    // calls through to it.
+    public function testPlayMoodClearsAQueuedNotificationForTheActingPlayer(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $queuedNotifications = new QueuedNotificationRepository();
+        $queuedNotifications->enqueue($u1, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'stale reminder', 'url' => "/game/?id={$gameId}", 'tag' => "game-{$gameId}-turn",
+        ]);
+
+        $games = $this->gamesWithNotificationsWired();
+        $games->playMood($gameId, $p1, $apathyId, []);
+
+        self::assertSame([], array_filter($queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $u1));
     }
 
     public function testFullRoundCycleAssignsHurtFeelingsDrawsForLosersAndCompletesGame(): void
@@ -7698,6 +7774,48 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
     }
 
+    /**
+     * The lobby's own "waiting on you" hourglass (is_awaiting_your_response/
+     * awaiting_response_usernames) was previously blind to this freeze --
+     * isAwaitingResponseFrom() had no case for it at all, so a player whose
+     * best-of-three match was frozen on their own first-player choice saw
+     * no indication of that in their lobby. Only the loser is flagged; the
+     * winner (who has nothing to do) is not.
+     */
+    public function testLobbyFlagsTheLoserAsAwaitingTheirFirstPlayerChoice(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $loserRow = $this->findGameRowForUser($nextGameId, $loserUserId);
+        self::assertTrue($loserRow['is_awaiting_your_response']);
+        self::assertContains($this->fetchUsername($loserUserId), $loserRow['awaiting_response_usernames']);
+
+        $winnerRow = $this->findGameRowForUser($nextGameId, $winnerUserId);
+        self::assertFalse($winnerRow['is_awaiting_your_response']);
+        self::assertNotContains($this->fetchUsername($winnerUserId), $winnerRow['awaiting_response_usernames']);
+
+        // Deciding resolves the freeze -- nobody is left "awaiting" once
+        // the round has unfrozen (same as any other resolved decision).
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+        $loserRowAfter = $this->findGameRowForUser($nextGameId, $loserUserId);
+        self::assertFalse($loserRowAfter['is_awaiting_your_response']);
+    }
+
+    /** @return array<string, mixed> */
+    private function findGameRowForUser(int $gameId, int $userId): array
+    {
+        foreach ($this->games->listGamesForUser($userId) as $row) {
+            if ($row['id'] === $gameId) {
+                return $row;
+            }
+        }
+
+        self::fail("Game {$gameId} not found in listGamesForUser({$userId})");
+    }
+
     /** Choosing to let the previous winner go first again is still a real, round-unfreezing decision -- not a no-op. */
     public function testLoserCanChooseToLetThePreviousWinnerGoFirstAgain(): void
     {
@@ -9195,6 +9313,33 @@ final class GameServiceIntegrationTest extends TestCase
         // nothing can be played against it anymore.
         $this->expectException(GameStateException::class);
         $this->games->pass($gameId, $p2);
+    }
+
+    // Issue #108's "game finished" push notification hooks into
+    // recordGameCompletionStats(), called from this same resignation path.
+    // As above, no push_subscriptions rows exist, so this only confirms
+    // the wiring doesn't disturb resignGame()'s own completion behavior.
+    public function testResigningStillCompletesTheGameWhenPushNotificationsAreWired(): void
+    {
+        $u1 = $this->insertUser('resign-notify-p1');
+        $u2 = $this->insertUser('resign-notify-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $games = $this->gamesWithNotificationsWired();
+        $result = $games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p2, $result['winner_game_player_id']);
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
     }
 
     public function testResignInTeamFormatCreditsTheOpposingTeam(): void

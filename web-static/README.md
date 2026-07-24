@@ -480,6 +480,36 @@ too, proportional to the smaller card width.
       `#replay-controls`, returning to the ordinary lobby the same way
       exiting spectator mode does. See "Watch replay" in
       `../php-app/README.md`.
+  - **Browser push notifications** (issue #108): a "Notifications" button
+    (`#notifications-button`) opens `#notifications-dialog`.
+    `service-worker.js` (a site-root file, not under `js/`, registered as
+    `navigator.serviceWorker.register('/service-worker.js')` so its
+    default scope covers every page regardless of which one happens to be
+    open) is the actual Service Worker; `initNotifications()` in
+    `js/game.js` does everything else. If `serviceWorker`/`PushManager`/`Notification` aren't
+    all present (or registration itself throws), the dialog shows
+    `#notifications-unsupported` and hides the controls -- nothing else
+    below runs. Otherwise, opening the dialog calls `pushManager
+    .getSubscription()` to decide which of `#notifications-enable-button`/
+    `#notifications-disable-button` to show, and -- only once subscribed
+    -- fetches `GET /notifications/preferences` to populate the three
+    `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
+    `notify-friend-request-checkbox`/`notify-game-finished-checkbox`,
+    disabled via the `<fieldset>` until a subscription exists). "Enable"
+    calls `Notification.requestPermission()`, then `GET
+    /notifications/vapid-public-key` for the server's public key (converted
+    from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs
+    via `urlBase64ToUint8Array()`), then `pushManager.subscribe()` itself,
+    then `POST /notifications/subscribe` with the resulting
+    `PushSubscription.toJSON()`. "Disable" does the reverse (`POST
+    /notifications/unsubscribe` with the subscription's own `endpoint`,
+    then `subscription.unsubscribe()`). Each checkbox's own `change` event
+    calls `POST /notifications/preferences` directly -- no separate "Save"
+    button. If `Notification.requestPermission()` comes back `'denied'`
+    (the user blocked notifications for this site at the browser level),
+    `#notifications-blocked` is shown instead of erroring. See "Browser
+    push notifications" in `../php-app/README.md` for what actually gets
+    sent and when.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via

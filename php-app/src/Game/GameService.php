@@ -7,6 +7,7 @@ namespace MoodSwings\Game;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
+use MoodSwings\Notifications\PushNotificationService;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
@@ -220,6 +221,7 @@ final class GameService
         private readonly UserDecklistService $userDecklists,
         private readonly ReplayStateBuilder $replay,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
+        private readonly ?PushNotificationService $notifications = null,
     ) {
     }
 
@@ -942,6 +944,13 @@ final class GameService
                     'first_player' => $firstPlayerId,
                     'pending_play_grants' => json_encode([]),
                 ]);
+
+                // "It's your turn" push notification (issue #108) for all
+                // 4 players at once -- this pregame pass is required from
+                // every seat before the round can unfreeze (see
+                // submitInitialCardPass()), unlike the other frozen-round
+                // cases below, which each wait on one specific player.
+                $this->notifyGamePlayersItsYourTurn($gameId, $playerIds, "Game #{$gameId} needs your card pass before it can start.", 'initial-pass');
             } elseif (
                 $game['draft_match_id'] !== null
                 && $game['match_game_number'] !== null
@@ -966,6 +975,23 @@ final class GameService
                     'first_player' => $firstPlayerId,
                     'pending_play_grants' => json_encode([]),
                 ]);
+
+                // "It's your turn" push notification (issue #108) for
+                // whichever seat is the previous game's loser -- the only
+                // player setPlayFirstNextMatchGame() actually lets act
+                // (see that method's own docblock and
+                // isAwaitingFirstPlayerChoiceFrom()).
+                $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], (int) $game['match_game_number']);
+                if ($previousWinnerUserId !== null) {
+                    $placeholders = implode(',', array_fill(0, count($playerIds), '?'));
+                    $seatsStmt = $pdo->prepare("SELECT id, user_id FROM game_players WHERE id IN ({$placeholders})");
+                    $seatsStmt->execute($playerIds);
+                    foreach ($seatsStmt->fetchAll() as $seatRow) {
+                        if ((int) $seatRow['user_id'] !== $previousWinnerUserId) {
+                            $this->notifyGamePlayersItsYourTurn($gameId, [(int) $seatRow['id']], "Game #{$gameId} needs you to choose who goes first.", 'first-player-choice');
+                        }
+                    }
+                }
             } else {
                 $insertRound = $pdo->prepare(
                     "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -1159,6 +1185,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->notifications?->clearQueuedForGame($userId, $gameId);
     }
 
     /**
@@ -2424,6 +2451,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2445,6 +2473,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2517,6 +2546,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2822,6 +2852,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -2922,6 +2953,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
     }
@@ -3019,6 +3051,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $actingGamePlayerId);
 
         return $result;
     }
@@ -3073,6 +3106,7 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $actingGamePlayerId);
 
         return $result;
     }
@@ -3243,6 +3277,12 @@ final class GameService
             'decision_type' => $decisionType,
             'candidates' => json_encode(array_values($candidateGamePlayerIds)),
         ]);
+
+        // "It's your turn" push notification (issue #108) for every
+        // candidate -- either one may propose, so all of them are
+        // genuinely "awaiting" this the same way isAwaitingResponseFrom()
+        // already treats it for the lobby's own hourglass icon.
+        $this->notifyGamePlayersItsYourTurn($gameId, $candidateGamePlayerIds, "Game #{$gameId} needs your team's decision.", 'team-decision');
     }
 
     /**
@@ -3538,6 +3578,13 @@ final class GameService
 
         $this->bumpLifetimeStats($winningUserIds, 'game_wins');
         $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+
+        foreach ($winningUserIds as $userId) {
+            $this->notifications?->notifyGameFinished($userId, $gameId, "Game #{$gameId} is over -- you won!");
+        }
+        foreach ($losingUserIds as $userId) {
+            $this->notifications?->notifyGameFinished($userId, $gameId, "Game #{$gameId} is over -- you lost.");
+        }
     }
 
     /**
@@ -4859,12 +4906,18 @@ final class GameService
      *    submitted yet -- see submitInitialCardPass()/"Closed Team Play"
      *    in php-app/README.md. Checked first and returns early since this
      *    blocks everything else in the game.
-     * 2. (team/closed_team) your team has an open turn_order/draw_recipient
+     * 2. (format 'draft', match_game_number > 1 only) round 1 is still
+     *    frozen (current_turn_game_player_id NULL) awaiting your own
+     *    setPlayFirstNextMatchGame() call -- only true for the previous
+     *    game's loser, the one setPlayFirstNextMatchGame() actually lets
+     *    act; see that method's own docblock and "Quick Draft"/"Winston
+     *    Draft"/"Grid Draft" in php-app/README.md.
+     * 3. (team/closed_team) your team has an open turn_order/draw_recipient
      *    decision (activeTeamDecision()) and you're one of its candidates
      *    -- either phase 'propose' (any candidate may act) or phase
      *    'confirm' where you're specifically the non-proposing teammate
      *    (see confirmTeamDecision()'s own "the OTHER teammate" rule).
-     * 3. Any format: the current round has an outstanding pending
+     * 4. Any format: the current round has an outstanding pending
      *    decision (Compulsion-style, or an Enthusiasm/Passion scoring
      *    decision -- see RequiresOpponentDecision) whose active step
      *    targets you. Reuses activePendingBatch()/activePendingDecision()
@@ -4881,6 +4934,10 @@ final class GameService
             if ($submittedStmt->fetchColumn() === false) {
                 return true;
             }
+        }
+
+        if ($format === 'draft' && $this->isAwaitingFirstPlayerChoiceFrom($gameId, $gamePlayerId)) {
+            return true;
         }
 
         if (self::isTeamFormat($format)) {
@@ -4915,6 +4972,52 @@ final class GameService
         $decisionRow = $this->activePendingDecision((int) $batch['id']);
 
         return $decisionRow !== null && (int) $decisionRow['target_game_player_id'] === $gamePlayerId;
+    }
+
+    /**
+     * isAwaitingResponseFrom()'s own case 2 -- true only for $gamePlayerId
+     * if this is game 2/3 of a best-of-three draft match, its round 1 is
+     * still frozen (current_turn_game_player_id NULL, see startGame()'s
+     * own freeze), and $gamePlayerId belongs to the previous game's
+     * loser -- the only player setPlayFirstNextMatchGame() actually lets
+     * act. False for game 1 (nothing to freeze on) and once the choice
+     * has been made (round unfrozen).
+     */
+    private function isAwaitingFirstPlayerChoiceFrom(int $gameId, int $gamePlayerId): bool
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT g.draft_match_id, g.match_game_number, gr.current_turn_game_player_id
+             FROM games g
+             JOIN game_rounds gr ON gr.game_id = g.id AND gr.round_number = 1
+             WHERE g.id = :game_id'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+        $row = $stmt->fetch();
+
+        if (
+            $row === false
+            || $row['current_turn_game_player_id'] !== null
+            || $row['draft_match_id'] === null
+            || $row['match_game_number'] === null
+            || (int) $row['match_game_number'] <= 1
+        ) {
+            return false;
+        }
+
+        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $row['draft_match_id'], (int) $row['match_game_number']);
+        if ($previousWinnerUserId === null) {
+            return false;
+        }
+
+        $seatsStmt = Connection::get()->prepare('SELECT id, user_id FROM game_players WHERE game_id = :game_id');
+        $seatsStmt->execute(['game_id' => $gameId]);
+        foreach ($seatsStmt->fetchAll() as $seatRow) {
+            if ((int) $seatRow['id'] === $gamePlayerId) {
+                return (int) $seatRow['user_id'] !== $previousWinnerUserId;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -7419,10 +7522,27 @@ final class GameService
         return array_merge(array_slice($playerIds, $startIndex), array_slice($playerIds, 0, $startIndex));
     }
 
-    /** @param array<int, ?array{type: string, values?: int[]}> $playGrants */
+    /**
+     * @param array<int, ?array{type: string, values?: int[]}> $playGrants
+     *
+     * "It's your turn" push notifications (issue #108) fire from here: this
+     * is the one place $playerId (whose turn it now is) is set, so
+     * comparing against the round's previous value before overwriting it
+     * tells us exactly when the turn actually changed hands -- without
+     * that check, a same-player extra play (a banked Generosity/Joy grant,
+     * a Duplicity repeat) would re-notify the player already mid-turn for
+     * no reason.
+     */
     private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound): void
     {
-        $stmt = Connection::get()->prepare(
+        $pdo = Connection::get();
+
+        $previousStmt = $pdo->prepare('SELECT current_turn_game_player_id FROM game_rounds WHERE id = :round_id');
+        $previousStmt->execute(['round_id' => $roundId]);
+        $previousPlayerId = $previousStmt->fetchColumn();
+        $previousPlayerId = $previousPlayerId !== false ? (int) $previousPlayerId : null;
+
+        $stmt = $pdo->prepare(
             'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round WHERE id = :round_id'
         );
         $stmt->execute([
@@ -7432,6 +7552,56 @@ final class GameService
             'discarded_this_round' => $discardedThisRound ? 1 : 0,
             'round_id' => $roundId,
         ]);
+
+        if ($previousPlayerId !== $playerId) {
+            $this->notifyItsYourTurn($roundId, $playerId);
+        }
+    }
+
+    private function notifyItsYourTurn(int $roundId, int $gamePlayerId): void
+    {
+        if ($this->notifications === null) {
+            return;
+        }
+
+        $stmt = Connection::get()->prepare(
+            'SELECT gr.game_id, gp.user_id
+             FROM game_rounds gr
+             JOIN game_players gp ON gp.id = :game_player_id
+             WHERE gr.id = :round_id'
+        );
+        $stmt->execute(['game_player_id' => $gamePlayerId, 'round_id' => $roundId]);
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return;
+        }
+
+        $gameId = (int) $row['game_id'];
+        $this->notifications->notifyYourTurn((int) $row['user_id'], $gameId, "Game #{$gameId} is waiting on your move.");
+    }
+
+    /**
+     * Called at every point a player's action successfully resolves
+     * something they might have been reminded about -- clears any
+     * queued-but-not-yet-delivered "waiting on you" notification for this
+     * game before the cron flush (bin/send_queued_notifications.php) ever
+     * gets to it, so they never get a stale nudge for a turn/decision
+     * they've already handled. A no-op if nothing was queued, or if it
+     * was queued for a different game or for something other than this
+     * game (see QueuedNotificationRepository::clearForGameIfMatches()).
+     */
+    private function clearQueuedNotificationForGamePlayer(int $gameId, int $gamePlayerId): void
+    {
+        if ($this->notifications === null) {
+            return;
+        }
+
+        $stmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $gamePlayerId]);
+        $userId = $stmt->fetchColumn();
+        if ($userId !== false) {
+            $this->notifications->clearQueuedForGame((int) $userId, $gameId);
+        }
     }
 
     private function assertNoPendingDecision(int $roundId): void
@@ -7783,6 +7953,7 @@ final class GameService
             'INSERT INTO game_pending_decisions (batch_id, step_index, target_game_player_id, decision_type, field)
              VALUES (:batch_id, :step_index, :target_player_id, :decision_type, :field)'
         );
+        $targetPlayerIds = [];
         foreach ($result->pendingDecisions as $stepIndex => $decision) {
             $insertDecision->execute([
                 'batch_id' => $batchId,
@@ -7791,6 +7962,53 @@ final class GameService
                 'decision_type' => $decision->decisionType,
                 'field' => json_encode($decision->field),
             ]);
+            $targetPlayerIds[$decision->targetPlayerId] = true;
+        }
+
+        $this->notifyPendingDecisionTargets($gameId, array_keys($targetPlayerIds));
+    }
+
+    /**
+     * "It's your turn" push notification (issue #108) for whoever a fresh
+     * pending-decision batch is waiting on -- e.g. Compulsion asking an
+     * opponent which card to give up. Deduplicated by the caller (one
+     * notification per targeted player per batch, even if they're asked
+     * more than one question in it).
+     *
+     * @param int[] $gamePlayerIds
+     */
+    private function notifyPendingDecisionTargets(int $gameId, array $gamePlayerIds): void
+    {
+        $this->notifyGamePlayersItsYourTurn($gameId, $gamePlayerIds, "Game #{$gameId} needs your decision.", 'decision');
+    }
+
+    /**
+     * Shared "it's your turn" push notification (issue #108) fan-out for
+     * every non-turn "waiting on you" state the lobby's own
+     * isAwaitingResponseFrom()/draftAwaitingResponseUsernames() already
+     * recognize -- a Compulsion-style pending decision
+     * (notifyPendingDecisionTargets()), a fresh team turn_order/
+     * draw_recipient decision (createTeamDecision()), closed_team's
+     * pregame card pass, and a draft match's first-player-choice freeze
+     * (both from startGame()). $tag is per-caller so each of these gets
+     * its own notification (never collapsed/deduped against a different
+     * kind of "your turn" for the same game) -- see
+     * PushNotificationService::notifyYourTurn()'s own tag parameter.
+     *
+     * @param int[] $gamePlayerIds
+     */
+    private function notifyGamePlayersItsYourTurn(int $gameId, array $gamePlayerIds, string $message, string $tag): void
+    {
+        if ($this->notifications === null || $gamePlayerIds === []) {
+            return;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($gamePlayerIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT user_id FROM game_players WHERE id IN ({$placeholders})");
+        $stmt->execute($gamePlayerIds);
+
+        foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $userId) {
+            $this->notifications->notifyYourTurn((int) $userId, $gameId, $message, $tag);
         }
     }
 

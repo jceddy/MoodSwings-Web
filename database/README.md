@@ -372,7 +372,7 @@ half-migrated schema.
   (full forward replay of recorded facts, never re-executed effect
   code), so nothing new is persisted. See "Watch replay" in
   `php-app/README.md`.
-- **Clean slate for 1.0.0** (`0047`): a one-time `TRUNCATE` of every
+- **Clean slate for 1.0.0** (`0047`): a one-time cleanup of every
   game-related table (`games`, `game_players`, `game_rounds`,
   `game_cards`, `game_events`, `game_round_scores`,
   `game_pending_decisions`/`game_pending_decision_batches`,
@@ -391,4 +391,46 @@ half-migrated schema.
   own docblock: "the whole point of 'lifetime' is that it must survive
   old game data being cleaned up later." `users`/`sessions`/
   `email_verifications`/`friendships`/`user_decklists` are untouched
-  too, since none of them are game data.
+  too, since none of them are game data. Uses plain `DELETE FROM`
+  statements in explicit leaf-to-root foreign-key order (with two
+  `UPDATE`s up front nulling out the three circular-reference columns —
+  `games.winner_game_player_id`/`games.draft_match_id`/
+  `game_cards.copied_card_id`/`suppression_source_game_card_id`) rather
+  than `TRUNCATE TABLE` — `TRUNCATE` is refused outright on any table a
+  foreign key still references (MySQL error 1701), and on at least one
+  production deployment `SET FOREIGN_KEY_CHECKS = 0` didn't actually
+  suppress that for `TRUNCATE` (some clustered/replicated MySQL setups
+  replicate `TRUNCATE` as DDL via their own total-order isolation,
+  bypassing session-level variables entirely). Plain `DELETE` respects
+  foreign keys the ordinary way, so correctly ordering the statements
+  works regardless of the server's own replication topology. See the
+  migration file's own docblock for the full explanation.
+- **Browser push notifications** (`0048`, issue #108): three tables --
+  `push_subscriptions` (one row per subscribed browser/device per user:
+  `endpoint`/`p256dh_key`/`auth_key`, exactly what `PushSubscription
+  .toJSON()` returns; uniqueness is enforced on a SHA-256 `endpoint_hash`
+  rather than the raw `endpoint` column, since push-service endpoint URLs
+  can run past reasonable index key-length limits), `notification_preferences`
+  (one row per user, three boolean columns --
+  `notify_your_turn`/`notify_friend_request`/`notify_game_finished` --
+  plus `last_notified_at`, backing a global 5-minute per-user notification
+  cooldown regardless of event type or game; a row is created lazily the
+  first time a user either changes a setting or is actually sent a
+  notification, and no row at all means all-`true` preference defaults
+  with no cooldown in effect), and `queued_notifications` (`user_id`
+  itself as the primary key -- one row per user -- holding the rendered
+  title/body/url/tag plus the originating `preference_key` for whatever
+  notification is currently delayed by the cooldown; `INSERT ... ON
+  DUPLICATE KEY UPDATE` in `QueuedNotificationRepository::enqueue()` makes
+  a second notification arriving before the first was ever delivered
+  *replace* it rather than accumulate a backlog, so a busy player's
+  eventual delayed notification is only ever the last one that was true,
+  never everything in between; `bin/send_queued_notifications.php`, run
+  every ~15 minutes via cron, delivers and clears whatever's queued). This
+  migration file has been extended in place twice as this same still-
+  unmerged `1.1.0` feature grew (first `last_notified_at`, then this whole
+  table) rather than splitting into separate migrations -- safe only
+  because no shipped environment has applied `0048` yet; once a migration
+  has actually shipped it must never be edited in place again. `VERSION`
+  bumps to `1.1.0` (a genuine new feature, not a breaking change like
+  `0047`'s `1.0.0`). See "Browser push notifications" in `php-app/README.md`.

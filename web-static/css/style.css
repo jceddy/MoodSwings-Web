@@ -237,7 +237,8 @@ dialog#resources-dialog #resources-close-button {
 
 dialog#friends-dialog,
 dialog#decks-dialog,
-dialog#deck-view-dialog {
+dialog#deck-view-dialog,
+dialog#notifications-dialog {
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
@@ -275,6 +276,21 @@ dialog#friends-dialog li button {
 
 dialog#friends-dialog li button + button {
     margin-left: 0.25rem;
+}
+
+dialog#notifications-dialog #notifications-preferences {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.25rem;
+}
+
+dialog#notifications-dialog #notifications-preferences label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
 /* A Decks dialog row (issue #92 follow-up) is exactly two direct
