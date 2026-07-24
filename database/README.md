@@ -365,3 +365,30 @@ half-migrated schema.
   second low-valued mood) silently never re-granted. `ValidationEffect`
   now grants unconditionally, matching every other extra-play card. See
   `ValidationEffect` in `php-app/README.md`.
+- **Watch replay** (`0046`, issue #240): another schema-less `UPDATE
+  schema_version`, same rationale as `0024`/`0025`/`0026`/`0037`/`0040`/
+  `0044`/`0045` — reconstructing a completed game's board at any point in
+  its history is computed on demand from the existing `game_events` log
+  (full forward replay of recorded facts, never re-executed effect
+  code), so nothing new is persisted. See "Watch replay" in
+  `php-app/README.md`.
+- **Clean slate for 1.0.0** (`0047`): a one-time `TRUNCATE` of every
+  game-related table (`games`, `game_players`, `game_rounds`,
+  `game_cards`, `game_events`, `game_round_scores`,
+  `game_pending_decisions`/`game_pending_decision_batches`,
+  `game_team_decisions`, `game_initial_card_passes`, `draft_matches`/
+  `draft_match_players`/`draft_round_picks`/`draft_winston_state`/
+  `draft_grid_state`) rather than a schema change — every game logged
+  before `0046`'s replay reconstruction landed is missing data that
+  now-required (`drawCard()` didn't record which card was drawn;
+  suppression/effect-state changes were never logged as their own
+  events at all), so a pre-existing game can't be replayed correctly,
+  and one still `waiting`/`in_progress` from before this release can't
+  be continued either. Accepted as an explicit one-time break rather
+  than something to migrate around, which is why `VERSION` jumps all
+  the way to `1.0.0` here instead of another patch/minor bump.
+  `user_lifetime_stats` is deliberately left untouched — see `0042`'s
+  own docblock: "the whole point of 'lifetime' is that it must survive
+  old game data being cleaned up later." `users`/`sessions`/
+  `email_verifications`/`friendships`/`user_decklists` are untouched
+  too, since none of them are game data.
