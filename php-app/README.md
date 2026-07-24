@@ -2923,7 +2923,17 @@ for three event types --
 - **"A game you're in just finished"** -- sent to every winning and losing
   user from `GameService::recordGameCompletionStats()`, the single method
   already called from every code path that completes a game (see its own
-  docblock).
+  docblock) -- **except** whichever player's own move/response/resignation
+  is what just completed it. That player is still credited a lifetime
+  win/loss like everyone else; they just don't get a push telling them
+  something they're already looking at on screen. Every completion path
+  threads its own caller's `game_player_id` down to
+  `recordGameCompletionStats()`'s `$excludeGamePlayerId` for this --
+  `playMood()`/`pass()`/`respondToDecision()`'s own `$gamePlayerId`, or
+  `resignGame()`'s own resigning player -- through `finishPlay()`/
+  `advanceTurn()`/`advanceTeamTurn()`/`scoreRoundAndAdvance()`/
+  `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()`, none of
+  which otherwise cared who was asking.
 
 Discord notifications are explicitly out of scope for this pass -- issue
 #108 itself calls them out as needing more planning/design work, so
