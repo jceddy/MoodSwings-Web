@@ -421,6 +421,18 @@ function saveNotificationPreferences(preferences) {
     });
 }
 
+// Discord account linking (issue #232) -- getDiscordStatus() is the only
+// GET; connecting itself is a plain page navigation to /discord/oauth/start
+// (Discord's own OAuth2 consent screen redirects back through
+// /discord/oauth/callback), not an apiRequest() call.
+function getDiscordStatus() {
+    return apiRequest('/discord/status');
+}
+
+function disconnectDiscord() {
+    return apiRequest('/discord/unlink', { method: 'POST' });
+}
+
 // --- Shared list/label rendering helpers ------------------------------
 //
 // Originally game.js-local; moved here (issue #128) once spectate.js

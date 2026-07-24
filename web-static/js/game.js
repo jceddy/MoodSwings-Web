@@ -160,6 +160,26 @@
             }
         }
 
+        // Discord account linking (issue #232) -- independent of whether
+        // browser push is supported at all, so this is wired up outside
+        // the `if (!supported)` early-return below.
+        const discordStatusText = document.getElementById('discord-status-text');
+        const discordConnectLink = document.getElementById('discord-connect-link');
+        const discordDisconnectButton = document.getElementById('discord-disconnect-button');
+
+        async function refreshDiscordStatus() {
+            const { ok, body } = await getDiscordStatus();
+            const linked = ok && body.linked;
+            discordStatusText.textContent = linked ? `connected as ${body.discord_username}` : 'not connected';
+            discordConnectLink.hidden = linked;
+            discordDisconnectButton.hidden = !linked;
+        }
+
+        discordDisconnectButton.addEventListener('click', async () => {
+            await disconnectDiscord();
+            await refreshDiscordStatus();
+        });
+
         // The dialog itself (and its "not supported" message) must still be
         // reachable even when push isn't supported at all -- otherwise
         // clicking "Notifications" would silently do nothing instead of
@@ -171,6 +191,7 @@
             if (registration !== null) {
                 await refreshSubscriptionState();
             }
+            await refreshDiscordStatus();
         });
 
         document.getElementById('notifications-close-button').addEventListener('click', () => {
@@ -5291,6 +5312,25 @@
             friendInviteSuccess.hidden = true;
             friendsDialog.showModal();
             refreshFriendsData();
+        }
+
+        // /discord/oauth/callback's own redirect back here once "Connect
+        // Discord" finishes (or fails) -- see index.php. Reuses the
+        // notifications button's own click handler (which already opens
+        // the dialog and refreshes Discord's linked status) rather than
+        // duplicating that logic; the query params are stripped right
+        // after so refreshing the page doesn't reopen the dialog or
+        // re-show a stale error.
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('discord_linked') || params.has('discord_link_error')) {
+            const linkError = params.get('discord_link_error');
+            history.replaceState(null, '', window.location.pathname);
+            document.getElementById('notifications-button').click();
+            if (linkError) {
+                const errorEl = document.getElementById('notifications-error');
+                errorEl.textContent = linkError;
+                errorEl.hidden = false;
+            }
         }
     }
 })();

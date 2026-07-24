@@ -136,6 +136,18 @@ rather than assuming the first sign of change is already the final state.
      `GET /notifications/vapid-public-key` returns an empty key and the
      frontend shows "Push notifications are not configured on the server
      yet."
+   - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_PUBLIC_KEY`,
+     `DISCORD_BOT_TOKEN` — for Discord account linking/notifications (issue
+     #232), **production's own Discord Application** (dev gets a second,
+     separate one — see "Development environment setup" below, and
+     "Discord" in `php-app/README.md` for why one Application can't serve
+     both). From the [Discord Developer Portal](https://discord.com/developers/applications)'s
+     General Information (Application ID, Public Key), Bot (Token), and
+     OAuth2 → General (Client Secret) tabs, for an Application registered
+     with a "User Install" installation context. See "Discord" in
+     `php-app/README.md` for the full setup checklist and why the
+     Interactions Endpoint URL itself has to be set in the portal
+     separately, after this app is deployed.
 4. Optionally add these **variables** (same Settings page, "Variables" tab):
    - `FTP_SERVER_DIR` — remote path to deploy into. Defaults to
      `/public_html/` if unset.
@@ -175,6 +187,12 @@ emails going out from the same already-configured sender isn't a concern.
    `DEV_DB_USER`/`DEV_DB_PASSWORD`. No `DEV_SMTP_*` secrets are needed —
    `deploy-dev.yml` reuses production's own `SMTP_*` secrets from step 3
    above, so if those are already set, dev's email sending already works.
+   Discord is the opposite of SMTP here: `DEV_DISCORD_CLIENT_ID`/
+   `DEV_DISCORD_CLIENT_SECRET`/`DEV_DISCORD_PUBLIC_KEY`/
+   `DEV_DISCORD_BOT_TOKEN` need their own, second Discord Application
+   (same Developer Portal, same tabs as production's own — see "Discord"
+   in `php-app/README.md`), since a Discord Application can only ever
+   point its Interactions Endpoint/OAuth2 redirect at one URL.
 3. Add the **variables**: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev
    domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL).
 4. Create a **separate** database for the dev domain (do not point it at
