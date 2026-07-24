@@ -417,8 +417,10 @@ too, proportional to the smaller card width.
     `showReplayBoard()` sets a module-level `isReplaying` flag and loads
     the game's full event list once via the existing `GET /games/log`
     (`getGameLog()`, already used for the "View log" panel -- no new
-    endpoint needed just for the steppable list), defaulting to the last
-    event (the final board). A new `isReadOnlyView()` helper
+    endpoint needed just for the steppable list), defaulting to the first
+    event (round 1's opening play) -- watching a replay starts from the
+    beginning of the game's history, the same way a video starts at 0:00
+    rather than the end. A new `isReadOnlyView()` helper
     (`isSpectating || isReplaying`) replaces every interactivity-gating
     check that used to test `isSpectating` alone (Play/Pass/resign
     buttons hidden, hand always shown via
@@ -430,7 +432,12 @@ too, proportional to the smaller card width.
     - **Step controls** (`#replay-controls`, `renderReplayControls()`):
       "← Previous"/"Next →" buttons (disabled at either end),
       a `#replay-event-select` dropdown ("Jump to") listing every event's
-      own rendered `description` for direct navigation, and a
+      own rendered `description` for direct navigation (each option's
+      label truncated to 50 characters plus an ellipsis whenever the full
+      "Step N (Round R): description" text would otherwise exceed 53, so
+      one especially wordy event -- e.g. a play with several suppression/
+      effect-state changes folded into its description -- can't blow out
+      the dropdown's own width), and a
       `#replay-position` readout ("Step N of M — Round R"). Each control
       just moves a `replayEventIndex` into the already-fetched
       `replayEvents` array and calls `refreshReplayBoard()`, which fetches
