@@ -2995,6 +2995,21 @@ reports as gone-for-good (HTTP 404/410 --
 `MessageSentReport::isSubscriptionExpired()`) is pruned from
 `push_subscriptions` automatically on the next send attempt.
 
+Every other reason `notify()` might not actually deliver anything --
+the recipient's own preference for that event type is off, they have no
+subscriptions on file, VAPID keys aren't configured, the send is inside
+its 5-minute cooldown and gets queued instead -- is also logged to the
+same file, since none of these are exceptions (nothing to `catch`) and
+were previously silent, making a "nothing happened, and I don't know
+why" report undiagnosable from the log alone. Likewise, `WebPush::flush()`
+returns one `MessageSentReport` per subscription rather than throwing
+per-message, so a failed send that isn't a plain expired-subscription
+(a VAPID key mismatch, an auth error, a malformed payload, the push
+service itself erroring) used to be dropped in `sendNow()`'s own loop
+with zero trace -- indistinguishable from a quiet success. It's now
+logged too, with the report's own reason, HTTP status, and response
+body.
+
 `minishlink/web-push` itself only declares `psr/http-client` as an
 interface dependency, not a concrete implementation -- `composer.json`
 also requires `guzzlehttp/guzzle` + `php-http/guzzle7-adapter` (the exact
