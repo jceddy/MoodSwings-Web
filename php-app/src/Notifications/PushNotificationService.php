@@ -79,7 +79,14 @@ final class PushNotificationService
         $this->notify($userId, NotificationScope::FRIEND_REQUEST, 'notify_friend_request', [
             'title' => 'Friend request',
             'body' => "{$requesterUsername} wants to be your friend.",
-            'url' => '/friends/',
+            // There's no standalone /friends/ page -- the friends UI is a
+            // <dialog> inside the lobby (web-static/game/index.html) --
+            // so this has to land on the lobby itself and ask it to open
+            // that dialog, the same way ?spectate_game_id already asks
+            // the lobby to jump straight into spectator mode. See
+            // game.js's own handling of 'open_friends' near the bottom of
+            // its startup IIFE.
+            'url' => '/game/?open_friends=1',
             'tag' => 'friend-request',
         ]);
     }

@@ -2883,6 +2883,16 @@ for three event types --
     player (see `GameService::updateRoundTurnState()`'s own docblock -- a
     same-player extra play from a banked grant or a Duplicity repeat is
     deliberately *not* re-notified).
+  - A brand new round being created with a real (non-null)
+    `current_turn_game_player_id` already set from the moment it's
+    inserted -- round 1 of an ordinary (non-team) game in `startGame()`,
+    an ordinary round-to-round handoff in `finishScoringAndAdvance()`,
+    and Awe's non-team skip-scoring path in `skipScoringAndAdvance()`.
+    These `INSERT INTO game_rounds` statements don't go through
+    `updateRoundTurnState()`'s own `UPDATE` (there's no existing row yet
+    to update), so each calls `notifyItsYourTurn()` directly right after
+    the insert -- otherwise every round-to-round handoff would silently
+    never notify, even though same-round turn advances already did.
   - A fresh pending-decision batch targeting a player (e.g. Compulsion
     asking an opponent which card to give up -- see
     `GameService::writePendingBatch()`/`notifyPendingDecisionTargets()`).
@@ -2904,7 +2914,12 @@ for three event types --
   collapses two different "your turn" reasons for the same game into one
   notification -- see `GameService::notifyGamePlayersItsYourTurn()`.
 - **"Friend request received"** -- sent from the `POST /friends/invite`
-  route handler once `FriendshipService::sendInvite()` succeeds.
+  route handler once `FriendshipService::sendInvite()` succeeds. Its own
+  click-through `url` is `/game/?open_friends=1`, not `/friends/` (there's
+  no standalone friends page -- the friends UI is a `<dialog>` on the
+  lobby itself) -- `game.js`'s startup IIFE opens that dialog when it
+  sees `open_friends=1`, the same way `?spectate_game_id` already jumps
+  straight into spectator mode.
 - **"A game you're in just finished"** -- sent to every winning and losing
   user from `GameService::recordGameCompletionStats()`, the single method
   already called from every code path that completes a game (see its own

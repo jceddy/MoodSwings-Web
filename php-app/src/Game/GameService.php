@@ -1003,6 +1003,12 @@ final class GameService
                     'first_player_turn' => $firstPlayerId,
                     'pending_play_grants' => json_encode([null]),
                 ]);
+                // $firstPlayerId isn't necessarily whoever just clicked
+                // "Start game" -- resolveFirstPlayerId() can pick either
+                // seat -- so the other player needs the same "your turn"
+                // notification any later round handoff gets. Same gap as
+                // finishScoringAndAdvance()'s own round-creation INSERT.
+                $this->notifyItsYourTurn((int) $pdo->lastInsertId(), $firstPlayerId);
             }
 
             $updateGame = $pdo->prepare("UPDATE games SET status = 'in_progress', started_at = NOW() WHERE id = :game_id");
@@ -3852,6 +3858,14 @@ final class GameService
             'plays_remaining' => count($nextRoundGrants),
             'pending_play_grants' => json_encode($nextRoundGrants),
         ]);
+        // Unlike an ordinary same-round turn advance (updateRoundTurnState(),
+        // which this INSERT deliberately doesn't go through -- there's no
+        // existing row to UPDATE yet), a brand new round setting a real
+        // current_turn_game_player_id straight from creation is *also* a
+        // "your turn" moment, and was missing its own notification entirely
+        // until now -- the exact gap that made round-to-round handoffs go
+        // silent even though same-round turn advances already worked.
+        $this->notifyItsYourTurn((int) $pdo->lastInsertId(), $nextFirstPlayer);
 
         return ['round_scored' => true, 'game_completed' => false];
     }
@@ -4527,6 +4541,10 @@ final class GameService
                     'plays_remaining' => count($nextRoundGrants),
                     'pending_play_grants' => json_encode($nextRoundGrants),
                 ]);
+                // Same gap as finishScoringAndAdvance()'s own "create the
+                // next round" INSERT -- this is Awe's own skip-scoring
+                // equivalent of it, and was missing the same notification.
+                $this->notifyItsYourTurn((int) $pdo->lastInsertId(), $nextFirstPlayer);
             }
 
             $pdo->commit();
