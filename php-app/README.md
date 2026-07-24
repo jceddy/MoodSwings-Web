@@ -3139,15 +3139,20 @@ anything yet (no outbound bot REST call exists until the actual
 notification-sending follow-up), but is documented here since it's
 collected from the same portal visit as the rest.
 
-**Only one Interactions Endpoint URL per Discord Application** -- unlike
-`VAPID_*`, which is shared freely across dev/prod, Discord has no
-per-environment equivalent. The deployed choice here is one shared
-Application with the Interactions Endpoint pointed at production only;
-`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` (OAuth linking) and
-`DISCORD_PUBLIC_KEY` (signature verification) still work identically on
-dev, since neither depends on which URL is registered as the Interactions
-Endpoint -- dev just never receives a live signed PING/interaction to
-verify against.
+**Two separate Discord Applications, one per environment** -- unlike
+`VAPID_*`, which is shared freely across dev/prod, a Discord Application
+only ever has one Interactions Endpoint URL and one set of OAuth2
+redirect URIs, so one Application can't cleanly serve both environments
+at once. Dev and prod each get their own Application (own Application
+ID/Public Key/Bot Token/Client Secret, own OAuth2 redirect URI pointing
+at that environment's own `/discord/oauth/callback`, own Interactions
+Endpoint URL) -- the same reasoning `DB_*`/`FTP_*` already get a
+`DEV_`-prefixed secret pair while `SMTP_*`/`VAPID_*` don't:
+`deploy-dev.yml` reads `DEV_DISCORD_CLIENT_ID`/`DEV_DISCORD_CLIENT_SECRET`/
+`DEV_DISCORD_PUBLIC_KEY`/`DEV_DISCORD_BOT_TOKEN` into the same
+unprefixed `DISCORD_*` `.env` keys `deploy.yml` writes from the
+unprefixed secrets -- the application code itself has no notion of
+"which environment," same as every other `Config::get()` value.
 
 ### Lifetime stats
 
