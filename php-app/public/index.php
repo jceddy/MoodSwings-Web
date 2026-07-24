@@ -16,6 +16,9 @@ use MoodSwings\Deck\DecklistNotFoundException;
 use MoodSwings\Deck\DecklistValidationException;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Discord\DiscordInteractionsService;
+use MoodSwings\Discord\DiscordLinkException;
+use MoodSwings\Discord\DiscordOAuthService;
 use MoodSwings\Friends\CannotFriendSelfException;
 use MoodSwings\Friends\FriendshipAlreadyExistsException;
 use MoodSwings\Friends\FriendshipNotFoundException;
@@ -30,6 +33,8 @@ use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Maintenance\MaintenanceGate;
 use MoodSwings\Notifications\PushNotificationService;
+use MoodSwings\Repository\DiscordAccountRepository;
+use MoodSwings\Repository\DiscordOAuthStateRepository;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
@@ -102,6 +107,14 @@ function respondHtml(int $status, string $title, string $heading, string $messag
         . '<p>' . htmlspecialchars($message, ENT_QUOTES) . '</p>'
         . $link
         . '</main></body></html>';
+    exit;
+}
+
+/** A real 302 (not JSON) -- only /discord/oauth/* routes use this; every other route responds JSON via respond(). */
+function redirectTo(string $url): never
+{
+    header('Location: ' . $url);
+    http_response_code(302);
     exit;
 }
 
@@ -464,6 +477,65 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
         (bool) ($body['notify_game_finished'] ?? true)
     );
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
+}
+
+$discordAccounts = new DiscordAccountRepository();
+$discordOAuth = new DiscordOAuthService($discordAccounts, new DiscordOAuthStateRepository());
+$discordInteractions = new DiscordInteractionsService();
+
+if ($path === '/discord/status' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $account = $discordAccounts->findByUserId((int) $currentUser['id']);
+    respond(200, [
+        'status' => 'ok',
+        'linked' => $account !== null,
+        'discord_username' => $account['discord_username'] ?? null,
+    ]);
+}
+
+// Plain browser navigations (a "Connect Discord" link/button), not JSON
+// API calls -- both end in a 302, either straight to Discord's own
+// consent screen or back to the lobby once linking's done.
+if ($path === '/discord/oauth/start' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    redirectTo($discordOAuth->buildAuthorizeUrl((int) $currentUser['id']));
+}
+
+if ($path === '/discord/oauth/callback' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $lobbyUrl = rtrim((string) Config::get('APP_URL', ''), '/') . '/game/';
+
+    try {
+        $discordOAuth->handleCallback((int) $currentUser['id'], (string) ($_GET['code'] ?? ''), (string) ($_GET['state'] ?? ''));
+        redirectTo($lobbyUrl . '?discord_linked=1');
+    } catch (DiscordLinkException $e) {
+        redirectTo($lobbyUrl . '?discord_link_error=' . urlencode($e->getMessage()));
+    }
+}
+
+if ($path === '/discord/unlink' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $discordAccounts->unlink((int) $currentUser['id']);
+    respond(200, ['status' => 'ok', 'message' => 'Discord account unlinked.']);
+}
+
+// Discord's own Interactions Endpoint -- called by Discord itself, never
+// by this site's own JS, so it's authenticated by Ed25519 signature
+// (DiscordInteractionsService::verify()) instead of the session cookie
+// every other route here uses. The raw, exact request body is what gets
+// signed, so it has to be read (and handed to verify()) before anything
+// touches requestBody()'s own json_decode()'d copy.
+if ($path === '/discord/interactions' && $method === 'POST') {
+    $rawBody = (string) file_get_contents('php://input');
+    $signature = $_SERVER['HTTP_X_SIGNATURE_ED25519'] ?? null;
+    $timestamp = $_SERVER['HTTP_X_SIGNATURE_TIMESTAMP'] ?? null;
+
+    if (!is_string($signature) || !is_string($timestamp) || !$discordInteractions->verify($rawBody, $signature, $timestamp)) {
+        respond(401, ['status' => 'error', 'message' => 'Invalid request signature']);
+    }
+
+    $payload = json_decode($rawBody, true);
+    respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
 }
 
 $userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships);

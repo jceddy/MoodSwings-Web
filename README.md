@@ -136,6 +136,15 @@ rather than assuming the first sign of change is already the final state.
      `GET /notifications/vapid-public-key` returns an empty key and the
      frontend shows "Push notifications are not configured on the server
      yet."
+   - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_PUBLIC_KEY`,
+     `DISCORD_BOT_TOKEN` — for Discord account linking/notifications (issue
+     #232). From the [Discord Developer Portal](https://discord.com/developers/applications)'s
+     General Information (Application ID, Public Key), Bot (Token), and
+     OAuth2 → General (Client Secret) tabs, for an Application registered
+     with a "User Install" installation context. See "Discord" in
+     `php-app/README.md` for the full setup checklist and why the
+     Interactions Endpoint URL itself has to be set in the portal
+     separately, after this app is deployed.
 4. Optionally add these **variables** (same Settings page, "Variables" tab):
    - `FTP_SERVER_DIR` — remote path to deploy into. Defaults to
      `/public_html/` if unset.

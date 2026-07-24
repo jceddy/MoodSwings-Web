@@ -91,6 +91,11 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
 | GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished"}}`, all `true` for a user who's never changed them. |
 | POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?}` | Requires auth. Upserts the current user's preferences (each field defaults to `true` if omitted); returns the saved `{"preferences"}`. |
+| GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
+| GET    | `/discord/oauth/start` | —                                                        | Requires auth. Not a JSON endpoint -- a `302` straight to Discord's own OAuth2 consent screen. Meant for browser navigation (a link/button), not `fetch()`. See "Discord" below. |
+| GET    | `/discord/oauth/callback` | `code`, `state` (query params, set by Discord's own redirect) | Requires auth. Not a JSON endpoint -- a `302` back to the lobby, `?discord_linked=1` on success or `?discord_link_error=<message>` on failure. See "Discord" below. |
+| POST   | `/discord/unlink` | —                                                                | Requires auth. Removes the current user's Discord link, if any (silently a no-op otherwise). |
+| POST   | `/discord/interactions` | raw Discord interaction payload                            | **Not** session-cookie authenticated -- called by Discord itself, verified via `X-Signature-Ed25519`/`X-Signature-Timestamp` instead (`401` if it doesn't verify). See "Discord" below. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -2935,9 +2940,10 @@ for three event types --
   `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()`, none of
   which otherwise cared who was asking.
 
-Discord notifications are explicitly out of scope for this pass -- issue
-#108 itself calls them out as needing more planning/design work, so
-they're a separate follow-up.
+Discord notifications (issue #232) reuse this same trigger/preference
+design as a second delivery channel -- see "Discord" below for account
+linking; actually sending a notification over Discord (rather than just
+linking the account) is still a follow-up.
 
 **5-minute cooldown per (user, game), with a queue-and-replace fallback**:
 `PushNotificationService::notify()` checks whether that user was already
@@ -3068,6 +3074,80 @@ the sender, per the Web Push protocol. Generate a key pair with the
 `GET /notifications/vapid-public-key` hands the public half to the
 frontend; if the server has no keys configured, `PushNotificationService`
 silently no-ops every send rather than erroring.
+
+### Discord (issue #232)
+
+First pass: **account linking and the Interactions Endpoint plumbing
+only** -- actually sending a notification over Discord (the rest of issue
+#232) is a follow-up, since it needs `PushNotificationService`'s own
+cooldown/queue/preference orchestration factored out into something a
+second channel can share, rather than duplicated. What exists today:
+
+**Account linking** is Discord's standard OAuth2 authorization-code flow,
+`identify` scope only (`DiscordOAuthService`) -- `GET /discord/oauth/start`
+(requires auth) redirects the browser straight to Discord's own consent
+screen; `GET /discord/oauth/callback` exchanges the returned `code` for an
+access token, reads the player's Discord user id/username from
+`GET /users/@me`, and links it to the current session's user via
+`DiscordAccountRepository::link()` (migration `0050`'s `discord_accounts`
+table, one row per MoodSwings user). The OAuth `state` param is
+CSRF-protected the same shape `email_verifications` uses for its own
+mailed tokens -- a random value, only its SHA-256 hash persisted
+(`discord_oauth_states`, migration `0050`), single-use
+(`DiscordOAuthStateRepository::consumeValid()` deletes on read) and
+short-lived (10 minutes), and checked against the *same* user id that
+requested it (a state issued for user A completing the callback while
+somehow logged in as user B is rejected, never silently linked to B).
+Nothing from the OAuth exchange itself is retained past that one request
+-- no access/refresh token is stored -- since every actual notification
+later sends through the Application's own **bot token** against the REST
+API, never the player's own OAuth grant.
+
+Unlike the `identify` scope's own OAuth-only requirements, actually
+letting the bot DM a linked player later needs the Discord Application
+registered in the Developer Portal as installable directly to a user's
+own account ("User Install", under the Installation tab) -- this is what
+lets a DM be opened without the bot sharing a server with that player.
+That installation happens as a side effect of the same OAuth consent
+screen `buildAuthorizeUrl()` sends the player to; no separate scope is
+requested for it here.
+
+**The Interactions Endpoint** (`DiscordInteractionsService`, mounted at
+`POST /discord/interactions`) is Discord's HTTP-based alternative to a
+persistent gateway/WebSocket bot connection: every slash command/button/
+modal interaction Discord ever sends this app arrives as a single signed
+POST here, so the whole "bot" runs as an ordinary request in the same
+Apache/PHP process model as the rest of `php-app/` -- no separate
+long-running process to deploy or keep alive. Every request is
+Ed25519-signature-verified (`sodium_crypto_sign_verify_detached()` over
+the exact raw body, no new Composer dependency needed --
+`ext-sodium` ships with PHP) against `DISCORD_PUBLIC_KEY` before its JSON
+is even parsed -- a request that fails verification gets a bare `401`,
+never a rendered response. The only interaction type handled so far is
+`PING` (Discord's own one-time "is this endpoint alive and correctly
+verified" check, sent the moment the Interactions Endpoint URL is saved
+in the Developer Portal), answered with a bare `PONG` -- no slash command
+is registered yet (that's issue #233's own "play the game via Discord"
+territory), so nothing else is ever actually sent here today.
+
+**Config**: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+`DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` in `.env`, read the same
+`Config::get()` way `VAPID_*`/`SMTP_*` are -- from the Developer Portal's
+General Information (Application ID, Public Key) and Bot (Token) tabs,
+plus OAuth2 → General (Client Secret). `DISCORD_BOT_TOKEN` isn't read by
+anything yet (no outbound bot REST call exists until the actual
+notification-sending follow-up), but is documented here since it's
+collected from the same portal visit as the rest.
+
+**Only one Interactions Endpoint URL per Discord Application** -- unlike
+`VAPID_*`, which is shared freely across dev/prod, Discord has no
+per-environment equivalent. The deployed choice here is one shared
+Application with the Interactions Endpoint pointed at production only;
+`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` (OAuth linking) and
+`DISCORD_PUBLIC_KEY` (signature verification) still work identically on
+dev, since neither depends on which URL is registered as the Interactions
+Endpoint -- dev just never receives a live signed PING/interaction to
+verify against.
 
 ### Lifetime stats
 

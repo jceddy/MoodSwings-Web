@@ -516,6 +516,21 @@ too, proportional to the smaller card width.
     `open_friends=1` query param opens that dialog directly, the same
     `?spectate_game_id` deep-links straight into spectator mode just
     above it.
+  - **Discord account linking** (issue #232), same `#notifications-dialog`:
+    a `#discord-controls` block below the push-notification controls shows
+    `GET /discord/status` (fetched whenever the dialog opens, alongside
+    the push-subscription refresh) as either "not connected" with a
+    `#discord-connect-link` (a plain `<a href="/discord/oauth/start">`,
+    not a `fetch()` call -- it's a real page navigation into Discord's own
+    OAuth consent screen) or "connected as `{username}`" with a
+    `#discord-disconnect-button` (`POST /discord/unlink`). The startup
+    IIFE's own `discord_linked=1`/`discord_link_error=<message>` query-param
+    handling (set by `GET /discord/oauth/callback`'s own redirect back
+    here) strips those params via `history.replaceState()` and reopens
+    `#notifications-dialog` by dispatching a click on `#notifications-button`
+    itself, showing the error in `#notifications-error` if there was one.
+    See "Discord" in `../php-app/README.md` -- linking is implemented;
+    actually sending a notification over Discord is still a follow-up.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via

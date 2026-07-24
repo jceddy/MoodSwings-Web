@@ -52,6 +52,10 @@ jobs:
           VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          DISCORD_PUBLIC_KEY: ${{ secrets.DISCORD_PUBLIC_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           set -euo pipefail
           rm -rf dist
@@ -113,6 +117,10 @@ jobs:
           write_env_var VAPID_PUBLIC_KEY "$VAPID_PUBLIC_KEY"
           write_env_var VAPID_PRIVATE_KEY "$VAPID_PRIVATE_KEY"
           write_env_var VAPID_SUBJECT "$VAPID_SUBJECT"
+          write_env_var DISCORD_CLIENT_ID "$DISCORD_CLIENT_ID"
+          write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
+          write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"
+          write_env_var DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
 
           # dist/, vendor/, and src/ all end up under the shared document
           # root (no Bluehost document-root change required), so block
