@@ -77,10 +77,19 @@ final class MoodPlayService
         // "Any mood" means any mood currently in play (on the table, in
         // front of any player) -- not any of the 133 printed card designs
         // in the abstract -- so the target has to already be in play.
-        $copiedCardId = $row['effectKey'] === 'creativity' ? $choices->int('copy_card_id') : null;
-        if ($copiedCardId !== null && !$state->isInPlay($copiedCardId)) {
-            throw new InvalidChoiceException("Card {$copiedCardId} is not currently in play, so Creativity can't copy it");
+        $rawCopyTargetId = $row['effectKey'] === 'creativity' ? $choices->int('copy_card_id') : null;
+        if ($rawCopyTargetId !== null && !$state->isInPlay($rawCopyTargetId)) {
+            throw new InvalidChoiceException("Card {$rawCopyTargetId} is not currently in play, so Creativity can't copy it");
         }
+        // Resolved through the WHOLE chain (BoardState::effectiveCardId()),
+        // not just the one card actually targeted: copying a Creativity
+        // that's itself copying, say, Paranoia is a copy of Paranoia --
+        // "an exact copy of that printed card" -- not a copy of Creativity
+        // (which would make it just a blank blue 0). Storing the fully
+        // resolved id here (rather than the raw target) also means the
+        // copy's own identity stays correct even if the intermediate
+        // Creativity it was actually pointed at later leaves play.
+        $copiedCardId = $rawCopyTargetId !== null ? $state->effectiveCardId($rawCopyTargetId) : null;
         $effectiveRow = $copiedCardId !== null ? $state->catalogRow($copiedCardId) : $row;
         $effectiveEffectKey = $effectiveRow['effectKey'];
 
@@ -428,12 +437,16 @@ final class MoodPlayService
      * playMood() itself does (GuileEffect/BlissEffect's canPayToPlayCost()
      * exclude that id from the hand -- Creativity's own id is correct
      * there, since Creativity is what's actually being played and will
-     * occupy that hand slot). Side-effect-free and safe to call
-     * speculatively, same as isPlayable() above.
+     * occupy that hand slot). $copiedCardId is resolved through
+     * BoardState::effectiveCardId() first, same as playMood() itself,
+     * so copying a Creativity that's copying something else costs
+     * whatever that something else costs, not nothing (Creativity's own
+     * printed hasToPlay is always false). Side-effect-free and safe to
+     * call speculatively, same as isPlayable() above.
      */
     public function canPayCopiedToPlayCost(BoardState $state, int $playerId, int $creativityCardId, int $copiedCardId): bool
     {
-        $row = $state->catalogRow($copiedCardId);
+        $row = $state->catalogRow($state->effectiveCardId($copiedCardId));
         if (!$row['hasToPlay']) {
             return true;
         }

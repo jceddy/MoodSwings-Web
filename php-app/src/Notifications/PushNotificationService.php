@@ -144,13 +144,13 @@ final class PushNotificationService
                     $webPush = $subscriptions !== [] ? $this->webPush() : null;
 
                     if ($webPush !== null) {
-                        $this->cooldowns->markNotified($userId, $scope);
                         $this->sendNow($webPush, $subscriptions, [
                             'title' => $row['title'],
                             'body' => $row['body'],
                             'url' => $row['url'],
                             'tag' => $row['tag'],
                         ]);
+                        $this->cooldowns->markNotified($userId, $scope);
                         $sent++;
                     }
                 }
@@ -197,16 +197,21 @@ final class PushNotificationService
                 return;
             }
 
-            $this->cooldowns->markNotified($userId, $scope);
-
-            // A live send supersedes anything still sitting in the queue
-            // for this same scope from earlier in its cooldown window --
-            // without this, a stale queued reminder could still go out
-            // later even though the user was just notified with something
-            // more current about the same game.
-            $this->queuedNotifications->delete($userId, $scope);
-
+            // Only stamp the cooldown -- and clear anything queued for this
+            // scope -- once sendNow() actually completes without throwing.
+            // Marking it beforehand (as this used to) meant a send that
+            // failed partway (e.g. the WebPush library throwing before any
+            // subscription was actually reached) still burned the 5-minute
+            // cooldown despite nothing being delivered, silently demoting
+            // the *next* attempt to a queued one instead of a live send --
+            // exactly what made the friend-request-notification fix above
+            // look like it hadn't taken effect, once a single failed
+            // attempt (e.g. the missing-PSR-18-client bug) had already
+            // stamped the cooldown.
             $this->sendNow($webPush, $subscriptions, $payload);
+
+            $this->cooldowns->markNotified($userId, $scope);
+            $this->queuedNotifications->delete($userId, $scope);
         } catch (\Throwable $e) {
             $this->logError("Failed to send notification (user {$userId}, scope {$scope}): " . $e->getMessage());
         }

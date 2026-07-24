@@ -7340,14 +7340,14 @@ final class GameService
      * what the choices panel would need to offer if this Creativity ends
      * up copying that mood: the same reactionFields() this class already
      * builds for an ordinary hand card, just parameterized by the
-     * candidate's own raw color/catalog row (never the "effective,"
-     * copy-resolved one -- matches MoodPlayService::
-     * playMood()'s own zero-hop $state->catalogRow($copiedCardId)
-     * resolution exactly, so copying a copy correctly simulates "blank
-     * Creativity," not whatever the copy itself was copying), plus
-     * whether that candidate's own "to play" cost could be paid right
-     * now. The client swaps in the matching bundle as copy_card_id
-     * changes instead of needing a round trip -- see web-static/README.md.
+     * candidate's own *effective* color/catalog row (BoardState::
+     * effectiveCardId() -- matches MoodPlayService::playMood()'s own
+     * resolution exactly, so copying a candidate that's itself a
+     * Creativity-copy of something else simulates copying that something
+     * else, not "blank Creativity"), plus whether that candidate's own
+     * "to play" cost could be paid right now. The client swaps in the
+     * matching bundle as copy_card_id changes instead of needing a round
+     * trip -- see web-static/README.md.
      * Duplicity's own repeat option isn't part of this: it's no longer a
      * pre-submitted top-level choice at all (see MoodPlayService::
      * continueAfterPlayingChain()), so it needs no client-side
@@ -7361,7 +7361,7 @@ final class GameService
     {
         $simulation = [];
         foreach ($state->moodsInPlay() as $candidateCardId => $mood) {
-            $candidateRow = $state->catalogRow($candidateCardId);
+            $candidateRow = $state->catalogRow($state->effectiveCardId($candidateCardId));
             $simulation[$candidateCardId] = [
                 'extra_fields' => $this->reactionFields($state, $viewerId, $candidateRow['color']),
                 'cost_payable' => $this->plays->canPayCopiedToPlayCost($state, $viewerId, $creativityCardId, $candidateCardId),

@@ -805,26 +805,43 @@ precomputes, per candidate mood currently in play,
 `copy_simulation[$candidateCardId] = {extra_fields, cost_payable}`
 (`GameService::creativityCopySimulation()`), reusing the exact same
 `reactionFields()` (Scorn) this class already calls for an
-ordinary hand card, just parameterized by the *candidate's* own raw
-color/catalog row instead of Creativity's — Duplicity's own
-repeat is no longer part of this precomputed bundle at all, since it's
-now a post-play pause rather than a field on the play itself.
-`cost_payable`
-mirrors `MoodPlayService::playMood()`'s own to-play-cost check
-(`canPayCopiedToPlayCost()`), passing Creativity's own card id -- not the
-candidate's -- as the effect's `$cardId`, matching what `payMood()` itself
-does (`GuileEffect`/`BlissEffect` exclude that id from the hand, and
-Creativity is what's actually occupying that hand slot). The client swaps
-in the matching bundle, plus the candidate's own already-serialized
-`choice_fields` (its own "to play" cost and after-playing choices, read
-from the same flat top-level `choices` bag a normal play of that card
-would use), as `copy_card_id` changes -- see `web-static/README.md`.
-`MoodPlayService`'s repeat/reaction/pending-decision machinery needed no
-changes at all to support this: it was already effective-aware end to
-end (`BoardState::effectiveCardId()`), so a Creativity copy of, say,
-Compulsion already paused for the target's own real choice the same way
-a real Compulsion would, even before the panel could offer
-`target_player_id` to ask for one.
+ordinary hand card, parameterized by the candidate's *effective*
+color/catalog row (`catalogRow(effectiveCardId($candidateCardId))`) --
+Duplicity's own repeat is no longer part of this precomputed bundle at
+all, since it's now a post-play pause rather than a field on the play
+itself. `cost_payable` mirrors `MoodPlayService::playMood()`'s own
+to-play-cost check (`canPayCopiedToPlayCost()`, also resolved through
+`effectiveCardId()` the same way), passing Creativity's own card id --
+not the candidate's -- as the effect's `$cardId`, matching what
+`payMood()` itself does (`GuileEffect`/`BlissEffect` exclude that id
+from the hand, and Creativity is what's actually occupying that hand
+slot). The client swaps in the matching bundle, plus the candidate's own
+already-serialized `choice_fields` (its own "to play" cost and
+after-playing choices, read from the same flat top-level `choices` bag a
+normal play of that card would use), as `copy_card_id` changes -- see
+`web-static/README.md`. `MoodPlayService`'s repeat/reaction/pending-decision
+machinery needed no changes at all to support this: it was already
+effective-aware end to end (`BoardState::effectiveCardId()`), so a
+Creativity copy of, say, Compulsion already paused for the target's own
+real choice the same way a real Compulsion would, even before the panel
+could offer `target_player_id` to ask for one.
+
+Copying a Creativity that's itself copying something resolves through
+the WHOLE chain, per a rules judge ruling: "an exact copy of that
+printed card" means whatever real (non-`creativity`) card started the
+chain, so a Creativity copying another Creativity that's copying, say,
+Paranoia is a copy of Paranoia -- color, value, to-play cost, and
+after-playing ability all included -- not "a blank blue 0" copy of
+literal Creativity. `MoodPlayService::playMood()` resolves the raw
+`copy_card_id` through `BoardState::effectiveCardId()` (which itself
+walks the whole chain, not just one hop) before computing anything else
+from it, and stores that fully-resolved id as the new mood's own
+`copiedCardId` -- so the copy's identity stays correct even if the
+Creativity it was actually pointed at later leaves play, the same
+permanence a direct copy of a non-Creativity card already had.
+`canPayCopiedToPlayCost()` and `creativityCopySimulation()` above both
+resolve the same way, so the choices panel already previews a
+copy-of-a-copy correctly before the play is even submitted.
 
 Once an in-play Creativity is actually copying something, `serializeCard()`
 displays it AS the copied mood rather than as Creativity: `name`,

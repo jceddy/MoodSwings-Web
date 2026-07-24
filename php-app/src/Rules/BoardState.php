@@ -1059,10 +1059,28 @@ final class BoardState
 
     // --- effective identity, color, and value ---
 
-    /** Creativity plays as a copy of another card; every other mood is just itself. */
+    /**
+     * Creativity plays as a copy of another card; every other mood is just
+     * itself. Resolves the WHOLE chain, not just one hop -- Creativity's
+     * own text is "an exact copy of that printed card," so a Creativity
+     * copying another Creativity that's itself copying, say, Paranoia is a
+     * copy of Paranoia, not a copy of Creativity (which would make it
+     * "just a blue card worth 0" instead). $visited guards against a cycle
+     * -- never possible through ordinary play, since a copy always targets
+     * a card already in play, but instance ids aren't chronological (every
+     * card is instantiated at deal time, not play time), so that can't be
+     * relied on to prove termination on its own.
+     */
     public function effectiveCardId(int $cardId): int
     {
-        return $this->moodsInPlay[$cardId]->copiedCardId ?? $cardId;
+        $current = $cardId;
+        $visited = [];
+        while (($next = $this->moodsInPlay[$current]->copiedCardId ?? null) !== null && !isset($visited[$current])) {
+            $visited[$current] = true;
+            $current = $next;
+        }
+
+        return $current;
     }
 
     /**
