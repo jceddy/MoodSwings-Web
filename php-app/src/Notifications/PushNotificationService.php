@@ -100,14 +100,22 @@ final class PushNotificationService
 
     /**
      * bin/send_queued_notifications.php's own cron flush -- delivers
-     * whatever's currently queued and clears the queue as it goes.
-     * Bypasses the cooldown check entirely (that's the whole point: this
-     * IS the delayed delivery), but still re-checks the relevant
-     * preference (the user may have turned it off between queueing and
-     * now) and still respects VAPID/subscription availability the same
-     * way an ordinary send does. Still stamps last_notified_at forward on
-     * an actual send, so a live event immediately afterward doesn't turn
-     * right around and re-queue on top of what was just delivered.
+     * whatever's queued and old enough to flush, clearing each row as it
+     * goes. "Old enough" means queued at least COOLDOWN_SECONDS ago
+     * (see QueuedNotificationRepository::dueForFlush()'s own docblock) --
+     * a row queued more recently is left alone for a later flush, so a
+     * cron run landing moments after something was queued doesn't
+     * deliver it before the player's had a fair chance to clear it
+     * themselves by taking the action it was reminding them about.
+     *
+     * Otherwise bypasses the cooldown check entirely (that's the whole
+     * point: this IS the delayed delivery), but still re-checks the
+     * relevant preference (the user may have turned it off between
+     * queueing and now) and still respects VAPID/subscription
+     * availability the same way an ordinary send does. Still stamps
+     * last_notified_at forward on an actual send, so a live event
+     * immediately afterward doesn't turn right around and re-queue on top
+     * of what was just delivered.
      *
      * @return int how many notifications were actually sent
      */
@@ -115,7 +123,7 @@ final class PushNotificationService
     {
         $sent = 0;
 
-        foreach ($this->queuedNotifications->all() as $row) {
+        foreach ($this->queuedNotifications->dueForFlush(self::COOLDOWN_SECONDS) as $row) {
             $userId = $row['user_id'];
 
             if ($this->preferences->forUser($userId)[$row['preference_key']]) {

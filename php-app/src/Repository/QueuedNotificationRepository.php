@@ -39,8 +39,10 @@ final class QueuedNotificationRepository
     }
 
     /**
-     * Every currently-queued notification, for bin/send_queued_notifications.php's
-     * own cron flush -- see PushNotificationService::flushQueuedNotifications().
+     * Every currently-queued notification, regardless of age -- used by
+     * tests to inspect queue state. Production sending goes through
+     * dueForFlush() instead, which only returns rows old enough to
+     * actually flush.
      *
      * @return array<int, array{user_id: int, preference_key: string, title: string, body: string, url: string, tag: string}>
      */
@@ -50,6 +52,44 @@ final class QueuedNotificationRepository
             ->query('SELECT user_id, preference_key, title, body, url, tag FROM queued_notifications')
             ->fetchAll();
 
+        return self::mapRows($rows);
+    }
+
+    /**
+     * Only the queued rows old enough to actually flush -- a row queued
+     * more recently than $minAgeSeconds is left in place for a later
+     * flush, rather than being delivered the moment a cron run happens to
+     * land right after it was queued. This matters because clearing a
+     * queued notification (see clearForGameIfMatches()/
+     * clearFriendRequestForUser()) only happens when the player takes the
+     * action it was reminding them about -- giving every queued
+     * notification the same grace window the original cooldown itself
+     * used (bin/send_queued_notifications.php passes
+     * PushNotificationService::COOLDOWN_SECONDS here) means a player who
+     * acts shortly after triggering the notification still gets a chance
+     * to clear it before the cron ever sees it, instead of it going out
+     * moments after being queued.
+     *
+     * @return array<int, array{user_id: int, preference_key: string, title: string, body: string, url: string, tag: string}>
+     */
+    public function dueForFlush(int $minAgeSeconds): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT user_id, preference_key, title, body, url, tag
+             FROM queued_notifications
+             WHERE queued_at <= DATE_SUB(NOW(), INTERVAL :min_age_seconds SECOND)'
+        );
+        $stmt->execute(['min_age_seconds' => $minAgeSeconds]);
+
+        return self::mapRows($stmt->fetchAll());
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array{user_id: int, preference_key: string, title: string, body: string, url: string, tag: string}>
+     */
+    private static function mapRows(array $rows): array
+    {
         return array_map(
             static fn (array $row): array => [
                 'user_id' => (int) $row['user_id'],

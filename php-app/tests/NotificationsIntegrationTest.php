@@ -67,6 +67,18 @@ final class NotificationsIntegrationTest extends TestCase
         putenv('VAPID_PRIVATE_KEY');
     }
 
+    // enqueue() always stamps queued_at = NOW(), so tests that need a row
+    // old enough for dueForFlush()/flushQueuedNotifications() to actually
+    // pick it up must backdate it afterward -- this is exactly what
+    // "having sat in the queue a while" looks like in a fast-running test.
+    private function backdateQueuedNotification(int $userId, int $secondsAgo): void
+    {
+        $stmt = $this->pdo->prepare(
+            'UPDATE queued_notifications SET queued_at = DATE_SUB(NOW(), INTERVAL :seconds_ago SECOND) WHERE user_id = :user_id'
+        );
+        $stmt->execute(['seconds_ago' => $secondsAgo, 'user_id' => $userId]);
+    }
+
     private function insertUser(string $username): int
     {
         $stmt = $this->pdo->prepare(
@@ -288,6 +300,25 @@ final class NotificationsIntegrationTest extends TestCase
         self::assertSame('second', $rows[0]['body']);
     }
 
+    public function testDueForFlushOnlyReturnsRowsAtLeastThatManySecondsOld(): void
+    {
+        $freshUserId = $this->insertUser('due-for-flush-fresh');
+        $this->queuedNotifications->enqueue($freshUserId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'fresh', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+
+        $staleUserId = $this->insertUser('due-for-flush-stale');
+        $this->queuedNotifications->enqueue($staleUserId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'stale', 'url' => '/game/?id=2', 'tag' => 'game-2-turn',
+        ]);
+        $this->backdateQueuedNotification($staleUserId, 600);
+
+        $due = array_column($this->queuedNotifications->dueForFlush(300), 'user_id');
+
+        self::assertContains($staleUserId, $due);
+        self::assertNotContains($freshUserId, $due);
+    }
+
     // notify() checks the cooldown before ever looking at subscriptions or
     // VAPID configuration, so queueing during the cooldown needs neither --
     // this mirrors testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecently()
@@ -315,6 +346,30 @@ final class NotificationsIntegrationTest extends TestCase
         self::assertSame(0, $service->flushQueuedNotifications());
     }
 
+    // A notification that's only just landed in the queue must NOT be
+    // flushed yet -- flushQueuedNotifications() only delivers rows queued
+    // at least COOLDOWN_SECONDS ago (see QueuedNotificationRepository::
+    // dueForFlush()'s own docblock), so a cron run landing moments after
+    // something was queued gives the player a fair chance to clear it
+    // themselves first, rather than delivering it immediately.
+    public function testFlushQueuedNotificationsLeavesAFreshlyQueuedRowAlone(): void
+    {
+        $userId = $this->insertUser('flush-too-fresh');
+        $this->subscriptions->save($userId, 'https://push.example.com/flush-too-fresh', 'p', 'a');
+        $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
+        ]);
+        putenv('VAPID_PUBLIC_KEY=some-public-key');
+        putenv('VAPID_PRIVATE_KEY=some-private-key');
+
+        $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
+
+        self::assertSame(0, $service->flushQueuedNotifications());
+
+        $rows = array_values(array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+        self::assertCount(1, $rows, 'a freshly-queued row must still be queued, not delivered or dropped');
+    }
+
     // The queue is cleared as flushQueuedNotifications() walks it regardless
     // of whether the preference is still on -- re-checking at flush time
     // (not just at the original queue time) matters because the user may
@@ -326,6 +381,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
+        $this->backdateQueuedNotification($userId, 600);
         $this->preferences->save($userId, false, true, true);
 
         $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
@@ -340,6 +396,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
+        $this->backdateQueuedNotification($userId, 600);
 
         $service = new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications);
 
@@ -354,6 +411,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->queuedNotifications->enqueue($userId, 'notify_your_turn', [
             'title' => "It's your turn", 'body' => 'b', 'url' => '/game/?id=1', 'tag' => 'game-1-turn',
         ]);
+        $this->backdateQueuedNotification($userId, 600);
         putenv('VAPID_PUBLIC_KEY=');
         putenv('VAPID_PRIVATE_KEY=');
 

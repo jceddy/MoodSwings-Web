@@ -2890,11 +2890,16 @@ ends up with exactly one queued notification reflecting whatever was
 truly last, never everything that happened in between. `bin/send_queued_
 notifications.php` (meant to run every ~15 minutes via cron) calls
 `PushNotificationService::flushQueuedNotifications()`, which walks every
-queued row, re-checks that user's preference at flush time (they may have
-turned it off since queueing -- this is why the rendered payload's
-`preference_key` is stored alongside it), sends if still eligible, and
-clears the row either way. A live (non-queued) send also clears any
-leftover queued row for that same user first, since a fresher notification
+queued row *at least as old as the same 5-minute `COOLDOWN_SECONDS`*
+(`QueuedNotificationRepository::dueForFlush()`) -- a row queued more
+recently is left alone for a later flush, so a cron run landing moments
+after something was queued doesn't deliver it before the player's had a
+fair chance to clear it themselves (see below) -- re-checks that user's
+preference at flush time (they may have turned it off since queueing --
+this is why the rendered payload's `preference_key` is stored alongside
+it), sends if still eligible, and clears the row either way. A live
+(non-queued) send also clears any leftover queued row for that same user
+first, since a fresher notification
 just went out and an older queued reminder would otherwise still arrive
 stale on top of it.
 
