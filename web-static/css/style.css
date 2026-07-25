@@ -293,6 +293,13 @@ dialog#notifications-dialog #notifications-preferences label {
     gap: 0.5rem;
 }
 
+/* Same reasoning as #new-game-close-button et al above -- without this,
+   Close sits flush against whichever of Connect/Disconnect Discord is
+   currently visible directly above it. */
+#notifications-close-button {
+    margin-top: 0.5rem;
+}
+
 /* A Decks dialog row (issue #92 follow-up) is exactly two direct
    children -- .decks-row-info (name + meta, grows to fill the leftover
    space) and .decks-row-actions (right-justified against the row's own
