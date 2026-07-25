@@ -237,7 +237,8 @@ dialog#resources-dialog #resources-close-button {
 
 dialog#friends-dialog,
 dialog#decks-dialog,
-dialog#deck-view-dialog {
+dialog#deck-view-dialog,
+dialog#notifications-dialog {
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
@@ -275,6 +276,28 @@ dialog#friends-dialog li button {
 
 dialog#friends-dialog li button + button {
     margin-left: 0.25rem;
+}
+
+dialog#notifications-dialog #notifications-preferences {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 0.25rem;
+}
+
+dialog#notifications-dialog #notifications-preferences label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Same reasoning as #new-game-close-button et al above -- without this,
+   Close sits flush against whichever of Connect/Disconnect Discord is
+   currently visible directly above it. */
+#notifications-close-button {
+    margin-top: 0.5rem;
 }
 
 /* A Decks dialog row (issue #92 follow-up) is exactly two direct
@@ -1359,11 +1382,11 @@ dialog#deck-builder-dialog[open] {
     flex-shrink: 0;
 }
 
-/* Fixed width (wide enough for "View log", the longest of the three
-   possible labels) so every row's buttons line up in a column regardless
-   of which label its own game's status/action picked. */
+/* Fixed width (wide enough for "Watch replay" (issue #240), now the
+   longest of the possible labels) so every row's buttons line up in a
+   column regardless of which label its own game's status/action picked. */
 .lobby-actions button {
-    width: 5.5rem;
+    width: 7rem;
 }
 
 .lobby-format {
@@ -1433,5 +1456,35 @@ dialog#deck-builder-dialog[open] {
 
 #user-stats-match-note {
     font-size: 0.85rem;
+    color: var(--color-muted);
+}
+
+/* Watch game replay (issue #240) -- step controls bar. */
+#replay-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 0.5rem 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: 4px;
+}
+
+/* #replay-controls' own `display: flex` above otherwise beats the
+   browser's default `[hidden] { display: none }` UA-stylesheet rule (an
+   author rule always wins over the UA stylesheet, regardless of selector
+   specificity -- see #in-play-board[hidden]/.in-play-zone[hidden] above
+   for the same fix) -- without this, showBoard()'s live-game view left
+   the prev/next/jump-to controls visible even though nothing ever sets
+   `#replay-controls.hidden = false` for a live game; only showLobby()/
+   showReplayBoard() ever toggle it, and the `hidden` attribute alone did
+   nothing to actually hide it. */
+#replay-controls[hidden] {
+    display: none;
+}
+
+#replay-position {
+    margin: 0;
     color: var(--color-muted);
 }

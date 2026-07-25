@@ -10,6 +10,7 @@
     startVersionWatcher();
     checkFriendRequestNotification();
     setInterval(checkFriendRequestNotification, 15000);
+    initNotifications();
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
@@ -94,6 +95,181 @@
         if (ok) {
             setFriendRequestNotification(body.incoming.length > 0);
         }
+    }
+
+    // Browser push notifications (issue #108): Push API + Notifications API
+    // via a Service Worker (see web-static/service-worker.js). Registration
+    // happens unconditionally on page load (cheap, and needed before
+    // pushManager.getSubscription() can report anything); actually asking
+    // for permission and subscribing only happens when the user opens this
+    // dialog and clicks "Enable."
+    //
+    // applicationServerKey needs raw bytes, but the server hands back the
+    // VAPID public key as the URL-safe base64 string PushManager.subscribe()
+    // itself can't consume directly -- this is the standard conversion (see
+    // the Web Push protocol's own recommended snippet).
+    function urlBase64ToUint8Array(base64String) {
+        const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+        const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+        const rawData = atob(base64);
+        const outputArray = new Uint8Array(rawData.length);
+        for (let i = 0; i < rawData.length; i++) {
+            outputArray[i] = rawData.charCodeAt(i);
+        }
+        return outputArray;
+    }
+
+    async function initNotifications() {
+        const dialog = document.getElementById('notifications-dialog');
+        const unsupportedEl = document.getElementById('notifications-unsupported');
+        const blockedEl = document.getElementById('notifications-blocked');
+        const controlsEl = document.getElementById('notifications-controls');
+        const enableButton = document.getElementById('notifications-enable-button');
+        const disableButton = document.getElementById('notifications-disable-button');
+        const preferencesFieldset = document.getElementById('notifications-preferences');
+        const errorEl = document.getElementById('notifications-error');
+        const yourTurnCheckbox = document.getElementById('notify-your-turn-checkbox');
+        const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
+        const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
+
+        const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+        unsupportedEl.hidden = supported;
+        controlsEl.hidden = !supported;
+        blockedEl.hidden = true;
+
+        // Declared here (before the click listeners below close over it),
+        // and stays null for the rest of this function whenever push isn't
+        // usable -- unsupported entirely, or registration itself failed --
+        // so refreshSubscriptionState() is only ever called once there's an
+        // actual registration to ask.
+        let registration = null;
+
+        async function refreshSubscriptionState() {
+            blockedEl.hidden = Notification.permission !== 'denied';
+            const subscription = await registration.pushManager.getSubscription();
+            enableButton.hidden = subscription !== null;
+            disableButton.hidden = subscription === null;
+            preferencesFieldset.disabled = subscription === null;
+            if (subscription !== null) {
+                const { ok, body } = await getNotificationPreferences();
+                if (ok) {
+                    yourTurnCheckbox.checked = body.preferences.notify_your_turn;
+                    friendRequestCheckbox.checked = body.preferences.notify_friend_request;
+                    gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
+                }
+            }
+        }
+
+        // Discord account linking (issue #232) -- independent of whether
+        // browser push is supported at all, so this is wired up outside
+        // the `if (!supported)` early-return below.
+        const discordStatusText = document.getElementById('discord-status-text');
+        const discordConnectLink = document.getElementById('discord-connect-link');
+        const discordDisconnectButton = document.getElementById('discord-disconnect-button');
+
+        async function refreshDiscordStatus() {
+            const { ok, body } = await getDiscordStatus();
+            const linked = ok && body.linked;
+            discordStatusText.textContent = linked ? `connected as ${body.discord_username}` : 'not connected';
+            discordConnectLink.hidden = linked;
+            discordDisconnectButton.hidden = !linked;
+        }
+
+        discordDisconnectButton.addEventListener('click', async () => {
+            await disconnectDiscord();
+            await refreshDiscordStatus();
+        });
+
+        // A real page navigation (kicks off the OAuth2 redirect flow), not
+        // an apiRequest() call -- driven from a <button> rather than an <a
+        // href> so it renders identically to its sibling Disconnect/Close
+        // buttons instead of as a text link. Needs the same API_BASE
+        // ('/app') prefix as apiRequest() itself -- php-app/ is deployed
+        // under that path, not the domain root (see "Deployment" in the
+        // top-level README), so a bare '/discord/oauth/start' 404s against
+        // the static site instead of reaching this route.
+        discordConnectLink.addEventListener('click', () => {
+            window.location.href = API_BASE + '/discord/oauth/start';
+        });
+
+        // The dialog itself (and its "not supported" message) must still be
+        // reachable even when push isn't supported at all -- otherwise
+        // clicking "Notifications" would silently do nothing instead of
+        // explaining why. Only the enable/disable/preferences wiring below
+        // is skipped in that case.
+        document.getElementById('notifications-button').addEventListener('click', async () => {
+            errorEl.hidden = true;
+            dialog.showModal();
+            if (registration !== null) {
+                await refreshSubscriptionState();
+            }
+            await refreshDiscordStatus();
+        });
+
+        document.getElementById('notifications-close-button').addEventListener('click', () => {
+            dialog.close();
+        });
+
+        if (!supported) {
+            return;
+        }
+
+        try {
+            registration = await navigator.serviceWorker.register('/service-worker.js');
+        } catch (e) {
+            unsupportedEl.hidden = false;
+            controlsEl.hidden = true;
+            return;
+        }
+
+        enableButton.addEventListener('click', async () => {
+            errorEl.hidden = true;
+            try {
+                const permission = await Notification.requestPermission();
+                if (permission !== 'granted') {
+                    blockedEl.hidden = permission !== 'denied';
+                    return;
+                }
+
+                const { ok, body } = await getVapidPublicKey();
+                if (!ok || !body.public_key) {
+                    errorEl.textContent = 'Push notifications are not configured on the server yet.';
+                    errorEl.hidden = false;
+                    return;
+                }
+
+                const subscription = await registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: urlBase64ToUint8Array(body.public_key),
+                });
+                await subscribeToPush(subscription);
+                await refreshSubscriptionState();
+            } catch (e) {
+                errorEl.textContent = 'Could not enable push notifications.';
+                errorEl.hidden = false;
+            }
+        });
+
+        disableButton.addEventListener('click', async () => {
+            errorEl.hidden = true;
+            const subscription = await registration.pushManager.getSubscription();
+            if (subscription !== null) {
+                await unsubscribeFromPush(subscription.endpoint);
+                await subscription.unsubscribe();
+            }
+            await refreshSubscriptionState();
+        });
+
+        async function savePreferences() {
+            await saveNotificationPreferences({
+                notify_your_turn: yourTurnCheckbox.checked,
+                notify_friend_request: friendRequestCheckbox.checked,
+                notify_game_finished: gameFinishedCheckbox.checked,
+            });
+        }
+        yourTurnCheckbox.addEventListener('change', savePreferences);
+        friendRequestCheckbox.addEventListener('change', savePreferences);
+        gameFinishedCheckbox.addEventListener('change', savePreferences);
     }
 
     async function refreshFriendsData() {
@@ -809,6 +985,18 @@
     // every single request.
     let isSpectating = false;
     let spectateCode = null;
+    // Watch game replay (issue #240) -- the read-only, step-through-history
+    // counterpart to isSpectating above, for a completed game. Unlike
+    // isSpectating, this DOES reset back to false (see showLobby()) since a
+    // replay is opened in-page from this same lobby, not via a separate
+    // page/URL param the way spectating is -- see showReplayBoard().
+    // replayEvents is the full steppable event list (GameService::
+    // fullEventLog(), reused as-is -- no separate endpoint for it) and
+    // replayEventIndex is which one of those is currently shown.
+    let isReplaying = false;
+    let replayCode = null;
+    let replayEvents = [];
+    let replayEventIndex = 0;
     // Reset in showBoard() so the saved-deck dropdown is re-fetched fresh
     // for each newly-viewed custom_duel game, but not on every 4-second
     // poll's re-render of the SAME game -- see renderDuelDeckSubmission().
@@ -826,6 +1014,32 @@
     // issued call's response is ever actually rendered.
     let boardRequestSeq = 0;
 
+    // Whether the current view is read-only for the same underlying reason
+    // spectating is (no seat of the viewer's own to act from) -- covers
+    // both isSpectating and isReplaying (issue #240). Used to sweep the
+    // interactivity-gating checks that both share (canAct, resign/share
+    // buttons, "your hand" section); spectator-specific chrome (code
+    // re-sending on poll, the "Back to spectate list" label) stays keyed
+    // on isSpectating alone -- see showReplayBoard()'s own docblock.
+    function isReadOnlyView() {
+        return isSpectating || isReplaying;
+    }
+
+    // The share code (if any) authorizing the current read-only view --
+    // whichever of spectateCode/replayCode is actually active, or null for
+    // a normal seated player. Used by openGameLog()/openSharedDeckView()
+    // so those keep working the same way whether reached via spectating or
+    // replaying.
+    function activeShareCode() {
+        if (isSpectating) {
+            return spectateCode;
+        }
+        if (isReplaying) {
+            return replayCode;
+        }
+        return null;
+    }
+
     function showLobby() {
         currentGameId = null;
         currentState = null;
@@ -833,6 +1047,17 @@
             clearInterval(pollTimer);
             pollTimer = null;
         }
+        // Watch game replay (issue #240) -- unlike isSpectating (never
+        // reset; a spectator leaves this page entirely instead), a replay
+        // session ends back at this same in-page lobby, so its own state
+        // needs to be explicitly cleared here rather than lingering into
+        // whatever's opened next.
+        isReplaying = false;
+        replayCode = null;
+        replayEvents = [];
+        replayEventIndex = 0;
+        document.getElementById('back-to-lobby-button').textContent = '← Back to your games';
+        document.getElementById('replay-controls').hidden = true;
         boardView.hidden = true;
         lobbyView.hidden = false;
         refreshLobby();
@@ -901,6 +1126,125 @@
                 refreshBoard();
             }
         }, 4000);
+    }
+
+    // Watch game replay (issue #240) -- another read-only counterpart to
+    // showBoard(), for stepping through a COMPLETED game's own history
+    // move-by-move rather than watching it live. Reuses the same
+    // #board-view/renderBoard() as showSpectatorBoard() above (see
+    // refreshReplayBoard()'s own state.you stub, the same shape
+    // refreshBoard()'s isSpectating branch already builds), but never arms
+    // pollTimer at all -- a completed game's history never changes
+    // underneath the viewer, so there's nothing to poll for. Opened
+    // in-page from this same lobby's own "Watch replay" button (see
+    // buildGameRow()), unlike spectating's separate ?spectate_game_id= URL
+    // entry point, since a replay session always starts from -- and always
+    // returns to -- this same lobby.
+    async function showReplayBoard(gameId, code) {
+        currentGameId = gameId;
+        isReplaying = true;
+        replayCode = code || null;
+        document.getElementById('back-to-lobby-button').textContent = '← Exit replay';
+        lobbyView.hidden = true;
+        boardView.hidden = false;
+        boardMessage.hidden = true;
+        // Starts at genesis (Step 1) -- a seated player opening their own
+        // "Watch replay" button wants to step through from the beginning,
+        // unlike a spectator arriving at an already-finished game (see
+        // loadReplayEventsAndShow()'s own defaultToLastStep, used instead
+        // wherever spectating hands off into replay controls below).
+        await loadReplayEventsAndShow();
+    }
+
+    // Shared by showReplayBoard() above and spectator mode watching a
+    // COMPLETED game (issue #128 + #240, see refreshBoard()'s own
+    // isSpectating branch below) -- both end up showing the exact same
+    // step-controlled board, just entered differently and defaulting to a
+    // different starting step. Loads the full steppable event list via
+    // GET /games/log (activeShareCode() resolves to whichever of
+    // spectateCode/replayCode is actually active, so this needs no
+    // isSpectating/isReplaying branch of its own -- see its own docblock),
+    // prepends the synthetic genesis "Step 1" entry (round-1's dealt
+    // hands, before any real event exists -- id 0 is
+    // GameService::replayStateAsOf()'s own sentinel for genesis; real
+    // game_events ids are auto-increment starting at 1, so 0 can never
+    // collide with an actual event), and shows the requested end of that
+    // list.
+    async function loadReplayEventsAndShow({ defaultToLastStep = false } = {}) {
+        boardError.hidden = true;
+        document.getElementById('replay-controls').hidden = false;
+        if (pollTimer) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+        }
+
+        const { ok, body } = await getGameLog(currentGameId, activeShareCode());
+        replayEvents = ok ? [{ id: 0, round_number: null, description: 'Game start (hands dealt, nothing played yet)' }, ...body.events] : [];
+        replayEventIndex = defaultToLastStep && replayEvents.length > 0 ? replayEvents.length - 1 : 0;
+
+        if (replayEvents.length === 0) {
+            boardError.textContent = 'This game has no history to replay.';
+            boardError.hidden = false;
+            return;
+        }
+
+        await refreshReplayBoard();
+    }
+
+    async function refreshReplayBoard() {
+        const seq = ++boardRequestSeq;
+        const eventId = replayEvents[replayEventIndex].id;
+        const { ok, body } = await getReplayGameState(currentGameId, eventId, activeShareCode());
+        if (seq !== boardRequestSeq) {
+            return; // a newer refreshBoard()/refreshReplayBoard() call has since been issued -- stale, ignore it
+        }
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not load this point in the game.';
+            boardError.hidden = false;
+            return;
+        }
+        boardError.hidden = true;
+        // Same synthesized 'you' stub refreshBoard()'s own isSpectating
+        // branch builds -- see its own comment for why every field is
+        // needed, not just game_player_id.
+        body.you = { game_player_id: null, hand: [], is_your_turn: false };
+        if (isSharedDeckType(body.game.deck_type) && body.players.length > 0) {
+            body.deck_count = body.players[0].deck_count;
+        }
+        currentState = body;
+        renderBoard(body);
+        renderReplayControls();
+    }
+
+    // Keeps #replay-event-select/#replay-position/the prev/next buttons in
+    // sync with replayEventIndex -- called after every refreshReplayBoard()
+    // render, plus once from showReplayBoard() indirectly via that same
+    // call.
+    function renderReplayControls() {
+        const select = document.getElementById('replay-event-select');
+        const position = document.getElementById('replay-position');
+
+        if (select.dataset.gameId !== String(currentGameId)) {
+            select.innerHTML = '';
+            replayEvents.forEach((event, index) => {
+                const option = document.createElement('option');
+                option.value = String(index);
+                const label = 'Step ' + (index + 1)
+                    + (event.round_number ? ' (Round ' + event.round_number + ')' : '')
+                    + ': ' + event.description;
+                option.textContent = label.length > 53 ? label.slice(0, 50) + '...' : label;
+                select.appendChild(option);
+            });
+            select.dataset.gameId = String(currentGameId);
+        }
+        select.value = String(replayEventIndex);
+
+        const current = replayEvents[replayEventIndex];
+        position.textContent = 'Step ' + (replayEventIndex + 1) + ' of ' + replayEvents.length
+            + (current.round_number ? ' — Round ' + current.round_number : '');
+
+        document.getElementById('replay-prev-button').disabled = replayEventIndex <= 0;
+        document.getElementById('replay-next-button').disabled = replayEventIndex >= replayEvents.length - 1;
     }
 
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
@@ -1293,6 +1637,14 @@
         const canPlay = game.status === 'waiting' || game.status === 'in_progress';
         actionsEl.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
         actionsEl.appendChild(actionButton('View log', () => openGameLog(game.id)));
+        // Watch game replay (issue #240) -- only once a game is actually
+        // 'completed' (see GameService::replayStateAsOf()'s own identical
+        // requirement); a still-in-progress game has nothing finished to
+        // step back through yet, and 'waiting'/'abandoned' never dealt a
+        // board worth replaying at all.
+        if (game.status === 'completed') {
+            actionsEl.appendChild(actionButton('Watch replay', () => showReplayBoard(game.id)));
+        }
         // Same "no single shared deck"/"nothing dealt yet" conditions as
         // the board's own #view-shared-deck-button (issue #197) -- a
         // still-'waiting' game (including a match's own compact sub-rows,
@@ -1421,6 +1773,26 @@
             return;
         }
         showLobby();
+    });
+
+    // Watch game replay (issue #240) -- step controls, see
+    // renderReplayControls() for the disabled-at-either-end logic these
+    // rely on.
+    document.getElementById('replay-prev-button').addEventListener('click', () => {
+        if (replayEventIndex > 0) {
+            replayEventIndex -= 1;
+            refreshReplayBoard();
+        }
+    });
+    document.getElementById('replay-next-button').addEventListener('click', () => {
+        if (replayEventIndex < replayEvents.length - 1) {
+            replayEventIndex += 1;
+            refreshReplayBoard();
+        }
+    });
+    document.getElementById('replay-event-select').addEventListener('change', (e) => {
+        replayEventIndex = parseInt(e.target.value, 10);
+        refreshReplayBoard();
     });
 
     // -- New game dialog ---------------------------------------------------
@@ -2209,7 +2581,7 @@
         gameLogDialog.dataset.gameId = gameId;
         gameLogDialog.showModal();
 
-        const { ok, body } = await getGameLog(gameId, isSpectating ? spectateCode : null);
+        const { ok, body } = await getGameLog(gameId, activeShareCode());
         currentGameLogEvents = ok ? body.events : [];
 
         renderList(listEl, emptyEl, currentGameLogEvents, (event) => {
@@ -2296,7 +2668,7 @@
         cardsEl.innerHTML = '';
         document.getElementById('shared-deck-dialog').showModal();
 
-        const { ok, body } = await getSharedDeck(gameId, isSpectating ? spectateCode : null);
+        const { ok, body } = await getSharedDeck(gameId, activeShareCode());
         if (!ok) {
             return;
         }
@@ -2408,6 +2780,24 @@
             return;
         }
         boardError.hidden = true;
+
+        // Spectator mode watching a COMPLETED game (issue #128 + #240)
+        // reuses replay's own step controls instead of this function's
+        // live single-snapshot rendering below -- a spectator arriving at
+        // (or watching a friend's game reach) a finished game gets to
+        // step through its history, not just stare at the end. Checked
+        // here rather than only in showSpectatorBoard() itself, so a game
+        // that completes WHILE being spectated live transitions into
+        // replay controls on its very next poll too, not just on initial
+        // load. defaultToLastStep: true (unlike showReplayBoard()'s own
+        // genesis default) -- a spectator arriving at an already-finished
+        // game wants to see the outcome first, the same default the live
+        // spectator view itself always showed.
+        if (isSpectating && body.game.status === 'completed') {
+            await loadReplayEventsAndShow({ defaultToLastStep: true });
+            return;
+        }
+
         if (isSpectating) {
             // The spectator state route never includes a 'you' key at all
             // (see GameService::buildGameState()) -- this stub makes every
@@ -2478,11 +2868,11 @@
         document.getElementById('board-title').textContent =
             'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
 
-        // Spectator mode (issue #128) -- only a real seated player can
-        // mint/share this game's own code, and only once there's actually
-        // something to spectate (see getSpectatorState()'s own identical
-        // 'waiting' exclusion).
-        document.getElementById('spectate-share-button').hidden = isSpectating || state.game.status === 'waiting';
+        // Spectator mode (issue #128)/Watch game replay (issue #240) --
+        // only a real seated player can mint/share this game's own code,
+        // and only once there's actually something to spectate (see
+        // getSpectatorState()'s own identical 'waiting' exclusion).
+        document.getElementById('spectate-share-button').hidden = isReadOnlyView() || state.game.status === 'waiting';
 
         renderDraftMatchScoreline(state);
 
@@ -2735,12 +3125,12 @@
 
         // A pending decision freezes the whole round -- nobody, including
         // the player whose turn it nominally is, can play or pass until
-        // the targeted player has answered it. !isSpectating is made
+        // the targeted player has answered it. !isReadOnlyView() is made
         // explicit here (rather than relying incidentally on
-        // state.you.is_your_turn always being false for a spectator) so a
-        // future change to the state.you stub can never silently
-        // re-enable controls for a spectator.
-        const canAct = !isSpectating && state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
+        // state.you.is_your_turn always being false for a spectator/replay
+        // viewer) so a future change to the state.you stub can never
+        // silently re-enable controls for either read-only view.
+        const canAct = !isReadOnlyView() && state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
 
         document.getElementById('discard-count').textContent = state.discard_pile.length;
         document.getElementById('deck-count').textContent = state.deck_count;
@@ -2785,16 +3175,18 @@
             return li;
         });
 
-        // Spectator mode (issue #128): a spectator has no hand of their
-        // own to show in #your-hand-section (state.you.hand is always
-        // []) -- swap it for #spectator-final-hands-section instead, only
-        // once the game is 'completed' and every seated player's final
-        // hand has actually been revealed (players[].hand is only ever
-        // present then -- see GameService::buildGameState()'s own
-        // $revealAllHands). Still in_progress -- nothing to show either
-        // way, so both stay hidden.
-        document.getElementById('your-hand-section').hidden = isSpectating;
-        renderSpectatorFinalHands(isSpectating ? state : null);
+        // Spectator mode (issue #128)/Watch game replay (issue #240): a
+        // spectator or replay viewer has no hand of their own to show in
+        // #your-hand-section (state.you.hand is always []) -- swap it for
+        // #spectator-final-hands-section instead, only once the game is
+        // 'completed' and every seated player's final hand has actually
+        // been revealed (players[].hand is only ever present then -- see
+        // GameService::buildGameState()'s own $revealAllHands, and
+        // serializeReplaySnapshot()'s identical always-revealed shape).
+        // Still in_progress -- nothing to show either way, so both stay
+        // hidden.
+        document.getElementById('your-hand-section').hidden = isReadOnlyView();
+        renderSpectatorFinalHands(isReadOnlyView() ? state : null);
 
         renderTeammateHand(state);
         renderTeamDecision(state.team_decision);
@@ -2806,12 +3198,12 @@
         // GameService::resignGame()) -- shown whenever the game is still
         // in_progress and the viewer hasn't already resigned, hidden
         // entirely once the game's over or they have (a resigned player
-        // has nothing left to resign from). A spectator has nothing of
-        // their own to resign from either -- state.you is just the
-        // synthesized stub (never .resigned), so this needs its own
-        // explicit isSpectating check rather than relying on that.
+        // has nothing left to resign from). A spectator/replay viewer has
+        // nothing of their own to resign from either -- state.you is just
+        // the synthesized stub (never .resigned), so this needs its own
+        // explicit isReadOnlyView() check rather than relying on that.
         const resignButton = document.getElementById('resign-button');
-        resignButton.hidden = isSpectating || state.game.status !== 'in_progress' || Boolean(you && you.resigned);
+        resignButton.hidden = isReadOnlyView() || state.game.status !== 'in_progress' || Boolean(you && you.resigned);
         resignButton.disabled = Boolean(pendingDecision);
 
         // "View decklist" (issue #197) -- hidden entirely for a deck_type
@@ -4564,13 +4956,13 @@
         const errorEl = document.getElementById('first-player-decision-error');
         errorEl.hidden = true;
 
-        // Spectator mode (issue #128): this panel's own text is written
-        // entirely in first/second person ("You lost the previous
-        // game...") with no clean generalization to a bystander's point
-        // of view, and there's no real "you" to derive it from anyway --
-        // hidden outright for a spectator rather than shown with
-        // misleading content.
-        if (!decision || isSpectating) {
+        // Spectator mode (issue #128)/Watch game replay (issue #240): this
+        // panel's own text is written entirely in first/second person
+        // ("You lost the previous game...") with no clean generalization
+        // to a bystander's point of view, and there's no real "you" to
+        // derive it from anyway -- hidden outright for a spectator/replay
+        // viewer rather than shown with misleading content.
+        if (!decision || isReadOnlyView()) {
             panel.hidden = true;
             return;
         }
@@ -4920,5 +5312,37 @@
         showSpectatorBoard(parseInt(spectateGameId, 10), spectateCodeParam);
     } else {
         showLobby();
+
+        // A friend-request push notification's own deep link
+        // (NotificationService::notifyFriendRequest()) -- there's no
+        // standalone /friends/ page to send it to, since the friends UI
+        // is just a dialog on this same lobby, so it asks the lobby to
+        // open that dialog itself instead. Same open-then-load pattern
+        // the #friends-button click handler above already uses.
+        if (new URLSearchParams(window.location.search).get('open_friends') === '1') {
+            friendInviteError.hidden = true;
+            friendInviteSuccess.hidden = true;
+            friendsDialog.showModal();
+            refreshFriendsData();
+        }
+
+        // /discord/oauth/callback's own redirect back here once "Connect
+        // Discord" finishes (or fails) -- see index.php. Reuses the
+        // notifications button's own click handler (which already opens
+        // the dialog and refreshes Discord's linked status) rather than
+        // duplicating that logic; the query params are stripped right
+        // after so refreshing the page doesn't reopen the dialog or
+        // re-show a stale error.
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('discord_linked') || params.has('discord_link_error')) {
+            const linkError = params.get('discord_link_error');
+            history.replaceState(null, '', window.location.pathname);
+            document.getElementById('notifications-button').click();
+            if (linkError) {
+                const errorEl = document.getElementById('notifications-error');
+                errorEl.textContent = linkError;
+                errorEl.hidden = false;
+            }
+        }
     }
 })();

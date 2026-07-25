@@ -410,6 +410,127 @@ too, proportional to the smaller card width.
     `waiting`) opening a small dialog with the game's code
     (`POST /games/spectate/code`) and a copy-to-clipboard button. See
     "Spectator mode" in `../php-app/README.md`.
+    - **Spectating a `completed` game hands off into replay's own step
+      controls** (see "Watch replay" immediately below) rather than
+      showing just the live board's single final-state snapshot --
+      `refreshBoard()`'s own `isSpectating` branch checks
+      `body.game.status === 'completed'` on every fetch (not only the
+      first one) and, the moment it sees it, calls the same
+      `loadReplayEventsAndShow()` helper `showReplayBoard()` itself uses,
+      with `{ defaultToLastStep: true }` -- a spectator arriving at (or
+      watching a friend's game reach) a finished game wants to see the
+      outcome first, so this starts at the *last* step rather than
+      genesis the way a seated player's own "Watch replay" button does.
+      `isSpectating` stays `true` throughout (never flips to
+      `isReplaying`) -- `activeShareCode()` already resolves to
+      `spectateCode` in that case, so `GET /games/log`/
+      `GET /games/replay/state` authorize exactly the same way a live
+      spectator's own `GET /games/spectate/state` calls already did, and
+      every existing `isSpectating`-gated affordance (the "← Back to
+      spectate list" button text/navigation, the hidden "Share spectate
+      code" button, etc.) keeps working unchanged.
+  - **Watch replay** (issue #240): a "Watch replay" button on any
+    `completed` lobby row (`actionButton('Watch replay', () =>
+    showReplayBoard(game.id))`, right alongside "View log") opens the
+    same board in-page, no separate URL param the way spectating uses --
+    `showReplayBoard()` sets a module-level `isReplaying` flag, then hands
+    off to the shared `loadReplayEventsAndShow()` helper (also used by
+    spectating a completed game, see above), which loads the game's full
+    event list once via the existing `GET /games/log` (`getGameLog()`,
+    already used for the "View log" panel -- no new endpoint needed just
+    for the steppable list), prepending a synthetic genesis "event"
+    (`id: 0`, `GameService::replayStateAsOf()`'s own sentinel for
+    round-1's dealt hands before any real event exists -- see
+    "Watch replay" in `../php-app/README.md`) so Step 1 always shows both
+    players' opening hands with nothing yet played. This entry point
+    defaults to that genesis step (`defaultToLastStep` left `false`) --
+    watching your own completed game starts from the true beginning of
+    its history, the same way a video starts at 0:00 rather than the end.
+    A new `isReadOnlyView()` helper
+    (`isSpectating || isReplaying`) replaces every interactivity-gating
+    check that used to test `isSpectating` alone (Play/Pass/resign
+    buttons hidden, hand always shown via
+    `renderSpectatorFinalHands()`, pending-decision UI suppressed) --
+    `isReplaying` deliberately does *not* set `isSpectating` itself,
+    since replay has no share-code re-sending and no "Back to spectate
+    list" chrome, only its own "← Exit replay" relabeling of
+    `#back-to-lobby-button`.
+    - **Step controls** (`#replay-controls`, `renderReplayControls()`):
+      "← Previous"/"Next →" buttons (disabled at either end),
+      a `#replay-event-select` dropdown ("Jump to") listing every event's
+      own rendered `description` for direct navigation (each option's
+      label truncated to 50 characters plus an ellipsis whenever the full
+      "Step N (Round R): description" text would otherwise exceed 53, so
+      one especially wordy event -- e.g. a play with several suppression/
+      effect-state changes folded into its description -- can't blow out
+      the dropdown's own width), and a
+      `#replay-position` readout ("Step N of M — Round R"). Each control
+      just moves a `replayEventIndex` into the already-fetched
+      `replayEvents` array and calls `refreshReplayBoard()`, which fetches
+      `GET /games/replay/state` (`getReplayGameState()`) for that specific
+      event id and re-runs the existing `renderBoard()` -- the same
+      `state.you = {game_player_id: null, ...}` stub spectating already
+      synthesizes covers replay's own `you.game_player_id: null` response
+      too, so no new renderer branch was needed. Unlike the live/spectator
+      board, replay **never arms the 4-second poll timer** -- a completed
+      game's history never changes underneath the viewer, so each step is
+      fetched only on demand.
+    - Exiting (`#back-to-lobby-button`) tears down all replay-only state
+      (`isReplaying`, `replayEvents`, `replayEventIndex`) and hides
+      `#replay-controls`, returning to the ordinary lobby the same way
+      exiting spectator mode does. See "Watch replay" in
+      `../php-app/README.md`.
+  - **Browser push notifications** (issue #108): a "Notifications" button
+    (`#notifications-button`) opens `#notifications-dialog`.
+    `service-worker.js` (a site-root file, not under `js/`, registered as
+    `navigator.serviceWorker.register('/service-worker.js')` so its
+    default scope covers every page regardless of which one happens to be
+    open) is the actual Service Worker; `initNotifications()` in
+    `js/game.js` does everything else. If `serviceWorker`/`PushManager`/`Notification` aren't
+    all present (or registration itself throws), the dialog shows
+    `#notifications-unsupported` and hides the controls -- nothing else
+    below runs. Otherwise, opening the dialog calls `pushManager
+    .getSubscription()` to decide which of `#notifications-enable-button`/
+    `#notifications-disable-button` to show, and -- only once subscribed
+    -- fetches `GET /notifications/preferences` to populate the three
+    `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
+    `notify-friend-request-checkbox`/`notify-game-finished-checkbox`,
+    disabled via the `<fieldset>` until a subscription exists). "Enable"
+    calls `Notification.requestPermission()`, then `GET
+    /notifications/vapid-public-key` for the server's public key (converted
+    from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs
+    via `urlBase64ToUint8Array()`), then `pushManager.subscribe()` itself,
+    then `POST /notifications/subscribe` with the resulting
+    `PushSubscription.toJSON()`. "Disable" does the reverse (`POST
+    /notifications/unsubscribe` with the subscription's own `endpoint`,
+    then `subscription.unsubscribe()`). Each checkbox's own `change` event
+    calls `POST /notifications/preferences` directly -- no separate "Save"
+    button. If `Notification.requestPermission()` comes back `'denied'`
+    (the user blocked notifications for this site at the browser level),
+    `#notifications-blocked` is shown instead of erroring. See "Browser
+    push notifications" in `../php-app/README.md` for what actually gets
+    sent and when. A friend-request notification's own click-through URL
+    (`/game/?open_friends=1` -- there's no standalone `/friends/` page,
+    just `#friends-dialog` on this same lobby) is handled by the startup
+    IIFE at the bottom of `js/game.js`: after `showLobby()`, an
+    `open_friends=1` query param opens that dialog directly, the same
+    `?spectate_game_id` deep-links straight into spectator mode just
+    above it.
+  - **Discord account linking** (issue #232), same `#notifications-dialog`:
+    a `#discord-controls` block below the push-notification controls shows
+    `GET /discord/status` (fetched whenever the dialog opens, alongside
+    the push-subscription refresh) as either "not connected" with a
+    `#discord-connect-link` (a plain `<a href="/discord/oauth/start">`,
+    not a `fetch()` call -- it's a real page navigation into Discord's own
+    OAuth consent screen) or "connected as `{username}`" with a
+    `#discord-disconnect-button` (`POST /discord/unlink`). The startup
+    IIFE's own `discord_linked=1`/`discord_link_error=<message>` query-param
+    handling (set by `GET /discord/oauth/callback`'s own redirect back
+    here) strips those params via `history.replaceState()` and reopens
+    `#notifications-dialog` by dispatching a click on `#notifications-button`
+    itself, showing the error in `#notifications-error` if there was one.
+    See "Discord" in `../php-app/README.md` -- linking is implemented;
+    actually sending a notification over Discord is still a follow-up.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via

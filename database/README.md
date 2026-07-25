@@ -365,3 +365,85 @@ half-migrated schema.
   second low-valued mood) silently never re-granted. `ValidationEffect`
   now grants unconditionally, matching every other extra-play card. See
   `ValidationEffect` in `php-app/README.md`.
+- **Watch replay** (`0046`, issue #240): another schema-less `UPDATE
+  schema_version`, same rationale as `0024`/`0025`/`0026`/`0037`/`0040`/
+  `0044`/`0045` — reconstructing a completed game's board at any point in
+  its history is computed on demand from the existing `game_events` log
+  (full forward replay of recorded facts, never re-executed effect
+  code), so nothing new is persisted. See "Watch replay" in
+  `php-app/README.md`.
+- **Clean slate for 1.0.0** (`0047`): a one-time cleanup of every
+  game-related table (`games`, `game_players`, `game_rounds`,
+  `game_cards`, `game_events`, `game_round_scores`,
+  `game_pending_decisions`/`game_pending_decision_batches`,
+  `game_team_decisions`, `game_initial_card_passes`, `draft_matches`/
+  `draft_match_players`/`draft_round_picks`/`draft_winston_state`/
+  `draft_grid_state`) rather than a schema change — every game logged
+  before `0046`'s replay reconstruction landed is missing data that
+  now-required (`drawCard()` didn't record which card was drawn;
+  suppression/effect-state changes were never logged as their own
+  events at all), so a pre-existing game can't be replayed correctly,
+  and one still `waiting`/`in_progress` from before this release can't
+  be continued either. Accepted as an explicit one-time break rather
+  than something to migrate around, which is why `VERSION` jumps all
+  the way to `1.0.0` here instead of another patch/minor bump.
+  `user_lifetime_stats` is deliberately left untouched — see `0042`'s
+  own docblock: "the whole point of 'lifetime' is that it must survive
+  old game data being cleaned up later." `users`/`sessions`/
+  `email_verifications`/`friendships`/`user_decklists` are untouched
+  too, since none of them are game data. Uses plain `DELETE FROM`
+  statements in explicit leaf-to-root foreign-key order (with two
+  `UPDATE`s up front nulling out the three circular-reference columns —
+  `games.winner_game_player_id`/`games.draft_match_id`/
+  `game_cards.copied_card_id`/`suppression_source_game_card_id`) rather
+  than `TRUNCATE TABLE` — `TRUNCATE` is refused outright on any table a
+  foreign key still references (MySQL error 1701), and on at least one
+  production deployment `SET FOREIGN_KEY_CHECKS = 0` didn't actually
+  suppress that for `TRUNCATE` (some clustered/replicated MySQL setups
+  replicate `TRUNCATE` as DDL via their own total-order isolation,
+  bypassing session-level variables entirely). Plain `DELETE` respects
+  foreign keys the ordinary way, so correctly ordering the statements
+  works regardless of the server's own replication topology. See the
+  migration file's own docblock for the full explanation.
+- **Browser push notifications** (`0048`/`0049`, issue #108): `0048` adds
+  three tables -- `push_subscriptions` (one row per subscribed
+  browser/device per user: `endpoint`/`p256dh_key`/`auth_key`, exactly
+  what `PushSubscription.toJSON()` returns; uniqueness is enforced on a
+  SHA-256 `endpoint_hash` rather than the raw `endpoint` column, since
+  push-service endpoint URLs can run past reasonable index key-length
+  limits), `notification_preferences` (one row per user, three boolean
+  columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`
+  -- a row is created lazily the first time a user changes a setting, and
+  no row at all means all-`true` preference defaults), and
+  `queued_notifications` (originally `user_id` alone as the primary key --
+  one row per user -- holding the rendered title/body/url/tag plus the
+  originating `preference_key` for whatever notification is currently
+  delayed by the cooldown; `INSERT ... ON DUPLICATE KEY UPDATE` in
+  `QueuedNotificationRepository::enqueue()` makes a second notification
+  arriving before the first was ever delivered *replace* it rather than
+  accumulate a backlog; `bin/send_queued_notifications.php`, run every
+  ~15 minutes via cron, delivers and clears whatever's queued). `0048`
+  was extended in place twice while still unmerged (first adding
+  `notification_preferences.last_notified_at` for a global per-user
+  cooldown, then the whole `queued_notifications` table) -- safe only
+  because no shipped environment had applied it yet.
+
+  `0049` (issue #108 follow-up: the cooldown/queue needed to be scoped per
+  *game*, not globally per user, or a player active in several games at
+  once could get bumped/starved by unrelated games) is a genuinely
+  separate migration rather than another in-place edit of `0048`, because
+  by the time this need surfaced `0048` had already merged and shipped.
+  It adds `notification_cooldowns` (`user_id`, `scope`, `last_notified_at`,
+  `PRIMARY KEY (user_id, scope)`) to replace
+  `notification_preferences.last_notified_at`'s single per-user timestamp
+  (dropped by this same migration), and re-keys `queued_notifications`
+  from `user_id` alone to `(user_id, scope)` (a new `scope` column, PK
+  changed to match) so a notification queued for one game can never
+  replace (or be replaced by) one already queued for a different game.
+  `scope` is either `game:{id}` (every it's-your-turn/game-finished
+  notification about that game shares one scope, regardless of which
+  tag/event type triggered it) or the constant `friend_request` (not
+  tied to any game) -- see `NotificationScope`. `VERSION` bumps to
+  `1.1.1` (a PATCH-level correction of `0048`'s own not-yet-shipped-when-
+  written behavior, not a new feature in its own right). See "Browser
+  push notifications" in `php-app/README.md`.

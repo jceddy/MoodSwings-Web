@@ -14,12 +14,28 @@ use MoodSwings\Rules\RequiresOpponentDecision;
 /**
  * Pride: "After playing this mood, you may choose a player with more
  * moods than you. If you do, you may keep playing additional moods this
- * turn until you have as many moods as the chosen player." The gap
- * between the two players' mood counts (Pride itself already counted, as
- * it's in play by the time this resolves) is computed once and granted as
- * that many unconditional extra plays -- equivalent to "until you match
- * them", since the chosen player can't play anything more this turn to
- * widen the gap further.
+ * turn as long as the chosen player has more moods than you." Per
+ * published rulings, this is a single standing permission, not a
+ * fixed-count batch of extra plays computed once: it's re-checked fresh
+ * before every subsequent play for the rest of the turn (see
+ * BoardState::grantIsActive()'s 'requiresBehindPlayer' handling), so it
+ * keeps renewing itself as long as the gap holds and expires the instant
+ * it doesn't -- not "count the gap once and hand out that many plays".
+ * Two consequences fall out of that:
+ *
+ * - A play that itself closes the gap (e.g. Hate, "put a card on the
+ *   bottom of the deck", played against the chosen player) is still
+ *   allowed to happen as long as the gap was open when the player
+ *   committed to that specific play -- the check only has to hold going
+ *   in, not after the play resolves (matches MoodPlayService::playMood()'s
+ *   own sequencing, which checks/consumes the grant before moving the
+ *   card into play or running its effect either way).
+ * - Pride is an "after playing this card" effect, not a "while in play"
+ *   one, so the permission survives Pride itself later leaving play (e.g.
+ *   sacrificed to Infatuation) -- unlike Hope/Grace's own "while in play"
+ *   bonus, which is lost the moment their source card leaves. See
+ *   grantIsActive()'s docblock for how 'requiresBehindPlayer' differs
+ *   from 'requiresSourceInPlay' in exactly this respect.
  *
  * "More moods than you" can't be evaluated correctly at the moment an
  * ordinary up-front choices panel would be filled out -- Pride is still
@@ -86,11 +102,10 @@ final class PrideEffect extends AbstractMoodEffect implements RequiresOpponentDe
             throw new InvalidChoiceException("Player {$chosenPlayerId} is not a valid player");
         }
 
-        $gap = count($state->moodsOwnedBy($chosenPlayerId)) - count($state->moodsOwnedBy($playerId));
-        if ($gap <= 0) {
+        if (count($state->moodsOwnedBy($chosenPlayerId)) <= count($state->moodsOwnedBy($playerId))) {
             throw new InvalidChoiceException("Player {$chosenPlayerId} does not have more moods than player {$playerId}");
         }
 
-        $state->grantExtraPlay($gap, sourceCardId: $cardId);
+        $state->grantExtraPlay(1, ['requiresBehindPlayer' => $chosenPlayerId], sourceCardId: $cardId);
     }
 }

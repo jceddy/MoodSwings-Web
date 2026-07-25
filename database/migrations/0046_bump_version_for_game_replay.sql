@@ -1,0 +1,14 @@
+-- Watch game replay (issue #240): step through a completed game's history
+-- move-by-move, reusing the existing board-rendering code -- see
+-- GameService::replayStateAsOf()/ReplayStateBuilder. No schema change:
+-- reconstruction is computed on demand by forward-replaying facts
+-- game_events already recorded (no new tables, game_events.details is
+-- already JSON, nothing new persisted). This migration exists purely to
+-- keep schema_version in sync with the VERSION bump, the same way
+-- 0024/0025/0026/0037/0040/0044/0045 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request (see migration 0021's own
+-- docblock), so a VERSION bump with no matching schema_version update
+-- would show maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '0.17.0' WHERE id = 1;

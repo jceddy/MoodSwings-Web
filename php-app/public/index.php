@@ -16,6 +16,10 @@ use MoodSwings\Deck\DecklistNotFoundException;
 use MoodSwings\Deck\DecklistValidationException;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Discord\DiscordInteractionsService;
+use MoodSwings\Discord\DiscordLinkException;
+use MoodSwings\Discord\DiscordNotificationChannel;
+use MoodSwings\Discord\DiscordOAuthService;
 use MoodSwings\Friends\CannotFriendSelfException;
 use MoodSwings\Friends\FriendshipAlreadyExistsException;
 use MoodSwings\Friends\FriendshipNotFoundException;
@@ -26,10 +30,19 @@ use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\CardCatalog;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
+use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Maintenance\MaintenanceGate;
+use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Notifications\PushNotificationChannel;
+use MoodSwings\Repository\DiscordAccountRepository;
+use MoodSwings\Repository\DiscordOAuthStateRepository;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\NotificationCooldownRepository;
+use MoodSwings\Repository\NotificationPreferenceRepository;
+use MoodSwings\Repository\PushSubscriptionRepository;
+use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
@@ -39,6 +52,7 @@ use MoodSwings\Rules\Exceptions\IllegalPlayException;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\SiteUrl;
 
 header('Content-Type: application/json');
 
@@ -96,6 +110,14 @@ function respondHtml(int $status, string $title, string $heading, string $messag
         . '<p>' . htmlspecialchars($message, ENT_QUOTES) . '</p>'
         . $link
         . '</main></body></html>';
+    exit;
+}
+
+/** A real 302 (not JSON) -- only /discord/oauth/* routes use this; every other route responds JSON via respond(). */
+function redirectTo(string $url): never
+{
+    header('Location: ' . $url);
+    http_response_code(302);
     exit;
 }
 
@@ -336,6 +358,22 @@ if ($path === '/me' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'user' => $result['user']]);
 }
 
+$pushSubscriptions = new PushSubscriptionRepository();
+$notificationPreferences = new NotificationPreferenceRepository();
+$queuedNotifications = new QueuedNotificationRepository();
+$notificationCooldowns = new NotificationCooldownRepository();
+// $discordAccounts is constructed here (rather than alongside the rest of
+// the /discord/* routes further below) so it can feed
+// DiscordNotificationChannel -- the "notify me when..." preferences
+// dialog applies to every linked channel at once (push and/or Discord),
+// so both channels are wired into the same NotificationService rather
+// than kept as two independent senders.
+$discordAccounts = new DiscordAccountRepository();
+$notifications = new NotificationService($notificationPreferences, $queuedNotifications, $notificationCooldowns, [
+    new PushNotificationChannel($pushSubscriptions),
+    new DiscordNotificationChannel($discordAccounts),
+]);
+
 $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
 
 if ($path === '/friends' && $method === 'GET') {
@@ -358,6 +396,7 @@ if ($path === '/friends/invite' && $method === 'POST') {
 
     try {
         $target = $friendships->sendInvite((int) $currentUser['id'], (string) ($body['username_or_email'] ?? ''));
+        $notifications->notifyFriendRequest((int) $target['id'], (string) $currentUser['username']);
         respond(201, [
             'status' => 'ok',
             'message' => 'Friend request sent.',
@@ -377,6 +416,7 @@ if ($path === '/friends/respond' && $method === 'POST') {
 
     try {
         $friendships->respondToInvite((int) $currentUser['id'], (int) ($body['user_id'] ?? 0), $action);
+        $notifications->clearQueuedFriendRequest((int) $currentUser['id']);
         respond(200, ['status' => 'ok', 'message' => match ($action) {
             'accept' => 'Friend request accepted.',
             'decline' => 'Friend request declined.',
@@ -402,6 +442,114 @@ if ($path === '/friends/remove' && $method === 'POST') {
     } catch (FriendshipNotFoundException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     }
+}
+
+// Browser push notifications (issue #108). The public key is handed to
+// PushManager.subscribe() client-side; it isn't secret (it's the whole
+// point of asymmetric VAPID auth) so no auth is required to read it, same
+// reasoning as /cards/catalog being public knowledge.
+if ($path === '/notifications/vapid-public-key' && $method === 'GET') {
+    respond(200, ['status' => 'ok', 'public_key' => Config::get('VAPID_PUBLIC_KEY', '')]);
+}
+
+if ($path === '/notifications/subscribe' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $endpoint = (string) ($body['endpoint'] ?? '');
+    $keys = is_array($body['keys'] ?? null) ? $body['keys'] : [];
+
+    if ($endpoint === '' || !is_string($keys['p256dh'] ?? null) || !is_string($keys['auth'] ?? null)) {
+        respond(400, ['status' => 'error', 'message' => 'A subscription endpoint and keys.p256dh/keys.auth are required.']);
+    }
+
+    $pushSubscriptions->save((int) $currentUser['id'], $endpoint, $keys['p256dh'], $keys['auth']);
+    respond(201, ['status' => 'ok', 'message' => 'Subscribed to push notifications.']);
+}
+
+if ($path === '/notifications/unsubscribe' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    $pushSubscriptions->deleteByEndpoint((int) $currentUser['id'], (string) ($body['endpoint'] ?? ''));
+    respond(200, ['status' => 'ok', 'message' => 'Unsubscribed from push notifications.']);
+}
+
+if ($path === '/notifications/preferences' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
+}
+
+if ($path === '/notifications/preferences' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+
+    $notificationPreferences->save(
+        (int) $currentUser['id'],
+        (bool) ($body['notify_your_turn'] ?? true),
+        (bool) ($body['notify_friend_request'] ?? true),
+        (bool) ($body['notify_game_finished'] ?? true)
+    );
+    respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
+}
+
+// $discordAccounts itself was already constructed above, alongside
+// $notifications.
+$discordOAuth = new DiscordOAuthService($discordAccounts, new DiscordOAuthStateRepository());
+$discordInteractions = new DiscordInteractionsService();
+
+if ($path === '/discord/status' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $account = $discordAccounts->findByUserId((int) $currentUser['id']);
+    respond(200, [
+        'status' => 'ok',
+        'linked' => $account !== null,
+        'discord_username' => $account['discord_username'] ?? null,
+    ]);
+}
+
+// Plain browser navigations (a "Connect Discord" link/button), not JSON
+// API calls -- both end in a 302, either straight to Discord's own
+// consent screen or back to the lobby once linking's done.
+if ($path === '/discord/oauth/start' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    redirectTo($discordOAuth->buildAuthorizeUrl((int) $currentUser['id']));
+}
+
+if ($path === '/discord/oauth/callback' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $lobbyUrl = SiteUrl::root() . '/game/';
+
+    try {
+        $discordOAuth->handleCallback((int) $currentUser['id'], (string) ($_GET['code'] ?? ''), (string) ($_GET['state'] ?? ''));
+        redirectTo($lobbyUrl . '?discord_linked=1');
+    } catch (DiscordLinkException $e) {
+        redirectTo($lobbyUrl . '?discord_link_error=' . urlencode($e->getMessage()));
+    }
+}
+
+if ($path === '/discord/unlink' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $discordAccounts->unlink((int) $currentUser['id']);
+    respond(200, ['status' => 'ok', 'message' => 'Discord account unlinked.']);
+}
+
+// Discord's own Interactions Endpoint -- called by Discord itself, never
+// by this site's own JS, so it's authenticated by Ed25519 signature
+// (DiscordInteractionsService::verify()) instead of the session cookie
+// every other route here uses. The raw, exact request body is what gets
+// signed, so it has to be read (and handed to verify()) before anything
+// touches requestBody()'s own json_decode()'d copy.
+if ($path === '/discord/interactions' && $method === 'POST') {
+    $rawBody = (string) file_get_contents('php://input');
+    $signature = $_SERVER['HTTP_X_SIGNATURE_ED25519'] ?? null;
+    $timestamp = $_SERVER['HTTP_X_SIGNATURE_TIMESTAMP'] ?? null;
+
+    if (!is_string($signature) || !is_string($timestamp) || !$discordInteractions->verify($rawBody, $signature, $timestamp)) {
+        respond(401, ['status' => 'error', 'message' => 'Invalid request signature']);
+    }
+
+    $payload = json_decode($rawBody, true);
+    respond(200, $discordInteractions->handle(is_array($payload) ? $payload : []));
 }
 
 $userDecklists = new UserDecklistService(new UserDecklistRepository(), $friendships);
@@ -494,7 +642,7 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists);
+$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
@@ -735,6 +883,31 @@ if ($path === '/games/log' && $method === 'GET') {
         respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
     }
     respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
+}
+
+// Issue #240 "watch game replay": the board reconstructed as of one
+// specific past event -- only ever available once a game is 'completed'
+// (see ReplayStateBuilder). Same no-per-viewer-customization reasoning,
+// and the same canSpectateGame() authorization, as GET /games/log
+// immediately above -- the frontend's own step controls reuse that same
+// route for the steppable event list, this one just answers "what did the
+// board look like at event N".
+if ($path === '/games/replay/state' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $eventId = (int) ($_GET['event_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
+
+    $isSeated = $games->gamePlayerIdFor($gameId, (int) $currentUser['id']) !== null;
+    if (!$isSeated && !canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
+    }
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->replayStateAsOf($gameId, $eventId)]);
+    } catch (GameStateException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
 }
 
 // Every card in a shared-deck game's single deck (issue #197) -- named

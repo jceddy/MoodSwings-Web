@@ -297,6 +297,20 @@ function getGameLog(gameId, code) {
     return apiRequest(path);
 }
 
+// Watch game replay (issue #240): the board reconstructed as of one
+// specific past event -- see GameService::replayStateAsOf(). code is only
+// ever passed while replaying via a share code rather than friendship,
+// same as getGameLog() above -- see showReplayBoard() in game.js. The
+// steppable event list itself is just getGameLog() reused as-is, no
+// separate endpoint needed for that part.
+function getReplayGameState(gameId, eventId, code) {
+    let path = '/games/replay/state?game_id=' + encodeURIComponent(gameId) + '&event_id=' + encodeURIComponent(eventId);
+    if (code) {
+        path += '&code=' + encodeURIComponent(code);
+    }
+    return apiRequest(path);
+}
+
 // A shared-deck game's full deck (issue #197) -- see GameService::viewSharedDeck().
 // code is only ever passed while spectating (issue #128) via a share code
 // rather than friendship -- see openSharedDeckView() in game.js.
@@ -373,6 +387,50 @@ function respondToDecision(gameId, choices) {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, choices: choices || {} }),
     });
+}
+
+// Browser push notifications (issue #108) -- see initNotifications() in
+// game.js for the Service Worker registration + subscribe/unsubscribe flow
+// these back, and PushNotificationChannel.php for what actually gets sent.
+function getVapidPublicKey() {
+    return apiRequest('/notifications/vapid-public-key');
+}
+
+function subscribeToPush(subscription) {
+    return apiRequest('/notifications/subscribe', {
+        method: 'POST',
+        body: JSON.stringify(subscription.toJSON()),
+    });
+}
+
+function unsubscribeFromPush(endpoint) {
+    return apiRequest('/notifications/unsubscribe', {
+        method: 'POST',
+        body: JSON.stringify({ endpoint }),
+    });
+}
+
+function getNotificationPreferences() {
+    return apiRequest('/notifications/preferences');
+}
+
+function saveNotificationPreferences(preferences) {
+    return apiRequest('/notifications/preferences', {
+        method: 'POST',
+        body: JSON.stringify(preferences),
+    });
+}
+
+// Discord account linking (issue #232) -- getDiscordStatus() is the only
+// GET; connecting itself is a plain page navigation to /discord/oauth/start
+// (Discord's own OAuth2 consent screen redirects back through
+// /discord/oauth/callback), not an apiRequest() call.
+function getDiscordStatus() {
+    return apiRequest('/discord/status');
+}
+
+function disconnectDiscord() {
+    return apiRequest('/discord/unlink', { method: 'POST' });
 }
 
 // --- Shared list/label rendering helpers ------------------------------

@@ -10,7 +10,15 @@ use MoodSwings\Friends\FriendshipService;
 use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
+use MoodSwings\Game\ReplayStateBuilder;
+use MoodSwings\Notifications\NotificationScope;
+use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Notifications\PushNotificationChannel;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\NotificationCooldownRepository;
+use MoodSwings\Repository\NotificationPreferenceRepository;
+use MoodSwings\Repository\PushSubscriptionRepository;
+use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
 use MoodSwings\Rules\DefaultEffectRegistry;
@@ -47,6 +55,8 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+        $pdo->exec('TRUNCATE TABLE push_subscriptions');
+        $pdo->exec('TRUNCATE TABLE notification_preferences');
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE draft_round_picks');
         $pdo->exec('TRUNCATE TABLE draft_winston_state');
@@ -86,6 +96,7 @@ final class GameServiceIntegrationTest extends TestCase
             new MoodPlayService($registry),
             new RoundScorer(),
             $userDecklists,
+            new ReplayStateBuilder($registry),
         );
     }
 
@@ -197,6 +208,40 @@ final class GameServiceIntegrationTest extends TestCase
         $stmt->execute(['game_id' => $gameId]);
 
         return $stmt->fetch();
+    }
+
+    /**
+     * A second GameService instance, identical to $this->games except with
+     * a real NotificationService wired in -- used only by the handful
+     * of tests confirming issue #108's notification hooks don't disturb
+     * the game flow they're attached to. Deliberately not the default
+     * $this->games every other test uses, so the other ~900 tests in this
+     * file stay unaffected by push-notification wiring. Only the push
+     * channel is configured (no Discord accounts exist in these tests'
+     * fixture data anyway), same scope as before NotificationService
+     * supported more than one channel.
+     */
+    private function gamesWithNotificationsWired(): GameService
+    {
+        $registry = DefaultEffectRegistry::build();
+        $userDecklists = new UserDecklistService(
+            new UserDecklistRepository(),
+            new FriendshipService(new UserRepository(), new FriendshipRepository()),
+        );
+
+        return new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            $userDecklists,
+            new ReplayStateBuilder($registry),
+            notifications: new NotificationService(
+                new NotificationPreferenceRepository(),
+                new QueuedNotificationRepository(),
+                new NotificationCooldownRepository(),
+                [new PushNotificationChannel(new PushSubscriptionRepository())],
+            ),
+        );
     }
 
     public function testCreateGameAndStartGameDealsCardsAndBeginsFirstRound(): void
@@ -3112,6 +3157,182 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Issue #240 replay's one real gap: drawCard() now records the drawn
+     * card's own id (not just who drew), but fullEventLog() must still
+     * redact it for a live game -- exactly the privacy BoardState::
+     * $pendingDraws used to provide by omitting the card id outright --
+     * revealing it only once the game is 'completed' (matching
+     * getSpectatorState()'s own $revealAllHands boundary, since a
+     * completed game's hands are already fully public by then).
+     */
+    public function testFullEventLogRedactsDrawnCardIdUntilGameIsCompleted(): void
+    {
+        $u1 = $this->insertUser('drawredact1');
+        $u2 = $this->insertUser('drawredact2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $zealId = $this->insertGameCard($gameId, 106, 'hand', $p1); // Zeal
+        $benevolenceId = $this->insertGameCard($gameId, 2, 'hand', $p1); // Bottomed as Zeal's own cost
+        $drawnCardId = $this->insertGameCard($gameId, 9, 'deck', null, 0); // What p1 draws in exchange -- shared deck, so owner is null (see BoardStateRepository::load())
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $zealId, ['hand_card_id' => $benevolenceId]);
+
+        $liveDraws = $this->games->fullEventLog($gameId)[0]['details']['draws'];
+        self::assertSame([['player_id' => $p1]], $liveDraws, 'card_id must be redacted while the game is still in_progress');
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $gameId]);
+
+        $completedDraws = $this->games->fullEventLog($gameId)[0]['details']['draws'];
+        self::assertSame([['player_id' => $p1, 'card_id' => $drawnCardId]], $completedDraws, 'card_id must be revealed once the game is completed');
+    }
+
+    /**
+     * Issue #240 replay's other new queues: suppression_changes/
+     * effect_state_changes fold BoardState::consumeSuppressionChanges()/
+     * consumeEffectStateChanges() into the event's own details, the same
+     * way card_moves/ownership_changes already do -- Scorn's mandatory
+     * "after playing, suppress a mood" is a simple, single-event way to
+     * exercise both: the suppression itself, and the newly-entered-play
+     * Scorn's own initial effectState bag (playedFromZone).
+     */
+    public function testFullEventLogIncludesSuppressionAndEffectStateChanges(): void
+    {
+        $u1 = $this->insertUser('suppresslog1');
+        $u2 = $this->insertUser('suppresslog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $scornId = $this->insertGameCard($gameId, 24, 'hand', $p1); // Scorn, white
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $p1); // Charity, white -- suppression target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $scornId, ['target_mood_id' => $charityId]);
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+
+        self::assertSame(
+            [['card_id' => $charityId, 'is_suppressed' => true, 'suppression_expiry' => 'end_of_round', 'suppression_source_card_id' => $scornId]],
+            $entry['details']['suppression_changes'],
+        );
+        self::assertContains(
+            ['card_id' => $scornId, 'key' => 'playedFromZone', 'value' => 'hand', 'cleared' => false],
+            $entry['details']['effect_state_changes'],
+        );
+    }
+
+    /**
+     * Issue #240 replay: event_id 0 is the frontend's own "Step 1" --
+     * genesis, before any real event exists -- so both players' original
+     * dealt hands must show in full, and recent_events (nothing has
+     * happened yet) must come back empty rather than the game's actual
+     * most-recent 15 events.
+     */
+    public function testReplayStateAsOfGenesisShowsBothHandsWithNoRecentEvents(): void
+    {
+        $u1 = $this->insertUser('replaygenesissnap1');
+        $u2 = $this->insertUser('replaygenesissnap2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity
+        $this->insertGameCard($gameId, 9, 'hand', $p2); // Discipline
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $charityId, []);
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $gameId]);
+
+        $snapshot = $this->games->replayStateAsOf($gameId, 0);
+
+        $p1Snapshot = array_values(array_filter($snapshot['players'], fn (array $p) => $p['game_player_id'] === $p1))[0];
+        $p2Snapshot = array_values(array_filter($snapshot['players'], fn (array $p) => $p['game_player_id'] === $p2))[0];
+        self::assertSame([$charityId], array_column($p1Snapshot['hand'], 'card_id'), 'genesis shows p1\'s original dealt hand, not the post-play one');
+        self::assertSame([], $snapshot['in_play'], 'nothing is in play at genesis');
+        self::assertSame('Discipline', $p2Snapshot['hand'][0]['name'] ?? null);
+        self::assertSame([], $snapshot['recent_events'], 'genesis has no history behind it');
+        self::assertNull($snapshot['round']['round_number']);
+    }
+
+    /**
+     * Issue #240 replay: recent_events must reflect only what a viewer
+     * would have actually seen by the step being displayed, not the
+     * game's own most-recent-15-overall the way GET /games/state's live
+     * recent_events does -- otherwise an early replay step would spoil
+     * events from later in the game.
+     */
+    public function testReplayStateAsOfRecentEventsAreCappedToTheStepBeingViewed(): void
+    {
+        $u1 = $this->insertUser('replaycapsnap1');
+        $u2 = $this->insertUser('replaycapsnap2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity, round 1's play
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency -- "No ability," round 2's play, so p1's turn ends normally after it (no extra-play grant to account for)
+        $this->insertGameCard($gameId, 9, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Round 1: p1 plays, p2 passes -- both plays used, so the round
+        // auto-scores and round 2 begins with p1's turn again (p1 won
+        // round 1, and the round's own winner always goes first next).
+        $this->games->playMood($gameId, $p1, $dignityId, []);
+        $this->games->pass($gameId, $p2);
+        // Round 2.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $this->games->pass($gameId, $p2);
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $gameId]);
+
+        $events = $this->games->fullEventLog($gameId);
+        self::assertGreaterThanOrEqual(4, count($events));
+        $dignityEventId = $events[0]['id'];
+
+        $earlySnapshot = $this->games->replayStateAsOf($gameId, $dignityEventId);
+        self::assertSame([$dignityEventId], array_column($earlySnapshot['recent_events'], 'id'), 'only the one event at/before this step -- nothing from later in the game');
+
+        $finalEventId = $events[count($events) - 1]['id'];
+        $finalSnapshot = $this->games->replayStateAsOf($gameId, $finalEventId);
+        self::assertSame(
+            array_reverse(array_column($events, 'id')),
+            array_column($finalSnapshot['recent_events'], 'id'),
+            'by the last step every event is included, newest first, matching fullEventLog() reversed',
+        );
+    }
+
+    /**
      * Every seated player sees the exact same full log, the same way
      * recentEvents() itself already applies no per-viewer filtering --
      * confirmed here against a Malice cascade specifically (see
@@ -3371,6 +3592,50 @@ final class GameServiceIntegrationTest extends TestCase
         $round = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
         self::assertSame(1, (int) $round['plays_remaining']);
+    }
+
+    // Issue #108's "it's your turn" push notification hooks into the same
+    // updateRoundTurnState() this test above already exercises -- this
+    // confirms wiring a real NotificationService in doesn't break the
+    // turn advance itself. No push_subscriptions rows exist for either
+    // user, so notify() returns before ever touching the network (see
+    // NotificationsIntegrationTest for that guarantee in isolation).
+    public function testPlayMoodStillAdvancesTurnWhenPushNotificationsAreWired(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $games = $this->gamesWithNotificationsWired();
+        $result = $games->playMood($gameId, $p1, $apathyId, []);
+
+        self::assertFalse($result['round_scored']);
+        self::assertFalse($result['game_completed']);
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+    }
+
+    // GameService::clearQueuedNotificationForGamePlayer() -- a player
+    // taking their action clears any reminder that was queued for THEM
+    // about THIS game (see NotificationService::notify()'s cooldown
+    // queue), so the eventual cron flush doesn't nag them about a turn
+    // they already took. clearForGameIfMatches()'s own scope-exactness
+    // (game 4's clear can't cross-match game 42's queued row) is covered
+    // directly in NotificationsIntegrationTest -- this only needs to
+    // confirm GameService actually resolves the acting player's user_id
+    // and calls through to it.
+    public function testPlayMoodClearsAQueuedNotificationForTheActingPlayer(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $queuedNotifications = new QueuedNotificationRepository();
+        $queuedNotifications->enqueue($u1, NotificationScope::forGame($gameId), 'notify_your_turn', [
+            'title' => "It's your turn", 'body' => 'stale reminder', 'url' => "/game/?id={$gameId}", 'tag' => "game-{$gameId}-turn",
+        ]);
+
+        $games = $this->gamesWithNotificationsWired();
+        $games->playMood($gameId, $p1, $apathyId, []);
+
+        self::assertSame([], array_filter($queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $u1));
     }
 
     public function testFullRoundCycleAssignsHurtFeelingsDrawsForLosersAndCompletesGame(): void
@@ -6034,6 +6299,7 @@ final class GameServiceIntegrationTest extends TestCase
                 new UserDecklistRepository(),
                 new FriendshipService(new UserRepository(), new FriendshipRepository()),
             ),
+            new ReplayStateBuilder($registry),
             1, // seconds -- short so this test doesn't wait out the real 10s default
         );
 
@@ -7517,6 +7783,48 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($loserUserId, $firstPlayerUserId);
         self::assertNotSame($winnerUserId, $firstPlayerUserId);
         self::assertSame($round['first_game_player_id'], $round['current_turn_game_player_id'], 'the round unfreezes once decided');
+    }
+
+    /**
+     * The lobby's own "waiting on you" hourglass (is_awaiting_your_response/
+     * awaiting_response_usernames) was previously blind to this freeze --
+     * isAwaitingResponseFrom() had no case for it at all, so a player whose
+     * best-of-three match was frozen on their own first-player choice saw
+     * no indication of that in their lobby. Only the loser is flagged; the
+     * winner (who has nothing to do) is not.
+     */
+    public function testLobbyFlagsTheLoserAsAwaitingTheirFirstPlayerChoice(): void
+    {
+        [
+            'nextGameId' => $nextGameId,
+            'winnerUserId' => $winnerUserId, 'loserUserId' => $loserUserId,
+        ] = $this->buildQuickDraftMatchAtGameTwoStart();
+
+        $loserRow = $this->findGameRowForUser($nextGameId, $loserUserId);
+        self::assertTrue($loserRow['is_awaiting_your_response']);
+        self::assertContains($this->fetchUsername($loserUserId), $loserRow['awaiting_response_usernames']);
+
+        $winnerRow = $this->findGameRowForUser($nextGameId, $winnerUserId);
+        self::assertFalse($winnerRow['is_awaiting_your_response']);
+        self::assertNotContains($this->fetchUsername($winnerUserId), $winnerRow['awaiting_response_usernames']);
+
+        // Deciding resolves the freeze -- nobody is left "awaiting" once
+        // the round has unfrozen (same as any other resolved decision).
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, true);
+        $loserRowAfter = $this->findGameRowForUser($nextGameId, $loserUserId);
+        self::assertFalse($loserRowAfter['is_awaiting_your_response']);
+    }
+
+    /** @return array<string, mixed> */
+    private function findGameRowForUser(int $gameId, int $userId): array
+    {
+        foreach ($this->games->listGamesForUser($userId) as $row) {
+            if ($row['id'] === $gameId) {
+                return $row;
+            }
+        }
+
+        self::fail("Game {$gameId} not found in listGamesForUser({$userId})");
     }
 
     /** Choosing to let the previous winner go first again is still a real, round-unfreezing decision -- not a no-op. */
@@ -9016,6 +9324,33 @@ final class GameServiceIntegrationTest extends TestCase
         // nothing can be played against it anymore.
         $this->expectException(GameStateException::class);
         $this->games->pass($gameId, $p2);
+    }
+
+    // Issue #108's "game finished" push notification hooks into
+    // recordGameCompletionStats(), called from this same resignation path.
+    // As above, no push_subscriptions rows exist, so this only confirms
+    // the wiring doesn't disturb resignGame()'s own completion behavior.
+    public function testResigningStillCompletesTheGameWhenPushNotificationsAreWired(): void
+    {
+        $u1 = $this->insertUser('resign-notify-p1');
+        $u2 = $this->insertUser('resign-notify-p2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('duel', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $games = $this->gamesWithNotificationsWired();
+        $result = $games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame($p2, $result['winner_game_player_id']);
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
     }
 
     public function testResignInTeamFormatCreditsTheOpposingTeam(): void

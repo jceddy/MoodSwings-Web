@@ -160,14 +160,44 @@ final class BoardState
     private array $pendingOwnershipChanges = [];
 
     /**
-     * @var int[] One entry (the drawing player's id) per successful
-     * drawCard() call this play/response/scoring pass -- deliberately just
-     * the player id, never the card itself (see drawCard()'s own docblock
-     * for why revealing which card was drawn would leak hidden hand
-     * information no other recorded move does). Same consume-before-
-     * logging convention as $pendingCardMoves/$pendingOwnershipChanges.
+     * @var array<int, array{player_id: int, card_id: int}> One entry per
+     * successful drawCard() call this play/response/scoring pass. Used to
+     * carry card_id too (not just who drew) so a completed game's replay
+     * (issue #240) can reconstruct exactly which card ended up where --
+     * GameService::fullEventLog() is the one place that still hides the
+     * card id, redacting it from any game that isn't yet 'completed' so a
+     * live opponent can't learn what was privately drawn from the log the
+     * way this field itself used to prevent by omission. Same
+     * consume-before-logging convention as $pendingCardMoves/
+     * $pendingOwnershipChanges.
      */
     private array $pendingDraws = [];
+
+    /**
+     * @var array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
+     * One entry per mood whose suppression actually changed (newly
+     * suppressed via suppress(), or lifted via clearSuppressionsFrom()/
+     * clearEndOfRoundSuppressions()) this play/response/scoring pass --
+     * suppression itself is otherwise tracked only as each MoodInPlay's own
+     * current field, with no historical trail (game_cards persists just the
+     * latest value, overwritten every save), so a completed game's replay
+     * (issue #240) needs this queue to reconstruct when a suppression
+     * started/ended. Same consume-before-logging convention as
+     * $pendingCardMoves/$pendingOwnershipChanges.
+     */
+    private array $pendingSuppressionChanges = [];
+
+    /**
+     * @var array<int, array{card_id: int, key: string, value: mixed, cleared: bool}>
+     * One entry per effectState mutation (setEffectState()/
+     * clearEffectState(), plus one entry per key of a freshly-played mood's
+     * own initial bag from moveHandToInPlay()/moveDiscardToInPlay()) this
+     * play/response/scoring pass -- same rationale and consume-before-
+     * logging convention as $pendingSuppressionChanges immediately above:
+     * effectState is otherwise only ever the current value, with nothing
+     * recording how it got there.
+     */
+    private array $pendingEffectStateChanges = [];
 
     /**
      * @var array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int}>
@@ -487,17 +517,29 @@ final class BoardState
     public function moveHandToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromHand($playerId, $cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'hand', $playerId));
+        $effectState = $this->initialEffectState($cardId, 'hand', $playerId);
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $effectState);
+        $this->recordInitialEffectState($cardId, $effectState);
     }
 
     /** Harmony/Grief/Angst: plays a mood "from the discard pile" instead of from hand -- see BoardState::$playGrants' 'source' key and MoodPlayService. */
     public function moveDiscardToInPlay(int $playerId, int $cardId, ?int $copiedCardId = null): void
     {
         $this->removeFromDiscard($cardId);
-        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $this->initialEffectState($cardId, 'discard', $playerId));
+        $effectState = $this->initialEffectState($cardId, 'discard', $playerId);
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $playerId, $copiedCardId, effectState: $effectState);
+        $this->recordInitialEffectState($cardId, $effectState);
         // The card just became $playerId's own in-play mood, no longer a
         // discard-pile card with a "last owner" of its own -- see
         // removeFromDiscard(), which already cleared any stale entry.
+    }
+
+    /** @param array<string, mixed> $effectState */
+    private function recordInitialEffectState(int $cardId, array $effectState): void
+    {
+        foreach ($effectState as $key => $value) {
+            $this->recordEffectStateChange($cardId, $key, $value, false);
+        }
     }
 
     /**
@@ -705,17 +747,17 @@ final class BoardState
             return null;
         }
         $this->hands[$playerId][] = $cardId;
-        $this->pendingDraws[] = $playerId;
+        $this->pendingDraws[] = ['player_id' => $playerId, 'card_id' => $cardId];
 
         return $cardId;
     }
 
     /**
-     * Returns and clears every player id recorded via drawCard() since the
-     * last call -- see $pendingDraws' own docblock. Same consume-before-
-     * logging convention as consumeCardMoves()/consumeOwnershipChanges().
+     * Returns and clears every draw recorded via drawCard() since the last
+     * call -- see $pendingDraws' own docblock. Same consume-before-logging
+     * convention as consumeCardMoves()/consumeOwnershipChanges().
      *
-     * @return int[]
+     * @return array<int, array{player_id: int, card_id: int}>
      */
     public function consumeDraws(): array
     {
@@ -800,6 +842,34 @@ final class BoardState
         $mood->isSuppressed = true;
         $mood->suppressionExpiry = $expiry;
         $mood->suppressionSourceCardId = $sourceCardId;
+        $this->recordSuppressionChange($cardId, true, $expiry, $sourceCardId);
+    }
+
+    private function recordSuppressionChange(int $cardId, bool $isSuppressed, ?string $expiry, ?int $sourceCardId): void
+    {
+        $this->pendingSuppressionChanges[] = [
+            'card_id' => $cardId,
+            'is_suppressed' => $isSuppressed,
+            'suppression_expiry' => $expiry,
+            'suppression_source_card_id' => $sourceCardId,
+        ];
+    }
+
+    /**
+     * Returns and clears every suppression change recorded via suppress()/
+     * clearSuppressionsFrom()/clearEndOfRoundSuppressions() since the last
+     * call -- see $pendingSuppressionChanges' own docblock. Same
+     * consume-before-logging convention as consumeCardMoves()/
+     * consumeOwnershipChanges().
+     *
+     * @return array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
+     */
+    public function consumeSuppressionChanges(): array
+    {
+        $changes = $this->pendingSuppressionChanges;
+        $this->pendingSuppressionChanges = [];
+
+        return $changes;
     }
 
     public function isSuppressed(int $cardId): bool
@@ -912,6 +982,7 @@ final class BoardState
                 $mood->isSuppressed = false;
                 $mood->suppressionExpiry = null;
                 $mood->suppressionSourceCardId = null;
+                $this->recordSuppressionChange($mood->cardId, false, null, null);
             }
         }
     }
@@ -924,6 +995,7 @@ final class BoardState
                 $mood->isSuppressed = false;
                 $mood->suppressionExpiry = null;
                 $mood->suppressionSourceCardId = null;
+                $this->recordSuppressionChange($mood->cardId, false, null, null);
             }
         }
     }
@@ -933,6 +1005,7 @@ final class BoardState
     public function setEffectState(int $cardId, string $key, mixed $value): void
     {
         $this->moodInPlay($cardId)->effectState[$key] = $value;
+        $this->recordEffectStateChange($cardId, $key, $value, false);
     }
 
     public function effectState(int $cardId, string $key): mixed
@@ -943,7 +1016,39 @@ final class BoardState
     /** Unsets a specific effectState key so a one-shot marker (e.g. an after-scoring tag) doesn't reapply next round once it's been resolved. */
     public function clearEffectState(int $cardId, string $key): void
     {
-        unset($this->moodInPlay($cardId)->effectState[$key]);
+        $mood = $this->moodInPlay($cardId);
+        if (array_key_exists($key, $mood->effectState)) {
+            unset($mood->effectState[$key]);
+            $this->recordEffectStateChange($cardId, $key, null, true);
+        }
+    }
+
+    private function recordEffectStateChange(int $cardId, string $key, mixed $value, bool $cleared): void
+    {
+        $this->pendingEffectStateChanges[] = [
+            'card_id' => $cardId,
+            'key' => $key,
+            'value' => $value,
+            'cleared' => $cleared,
+        ];
+    }
+
+    /**
+     * Returns and clears every effectState mutation recorded via
+     * setEffectState()/clearEffectState() (plus each freshly-played mood's
+     * own initial bag from moveHandToInPlay()/moveDiscardToInPlay()) since
+     * the last call -- see $pendingEffectStateChanges' own docblock. Same
+     * consume-before-logging convention as consumeCardMoves()/
+     * consumeSuppressionChanges().
+     *
+     * @return array<int, array{card_id: int, key: string, value: mixed, cleared: bool}>
+     */
+    public function consumeEffectStateChanges(): array
+    {
+        $changes = $this->pendingEffectStateChanges;
+        $this->pendingEffectStateChanges = [];
+
+        return $changes;
     }
 
     /** A one-time score change from an "after playing" effect (e.g. Dignity's "value becomes 5"), as opposed to a continuously recomputed "while in play" value. */
@@ -954,10 +1059,28 @@ final class BoardState
 
     // --- effective identity, color, and value ---
 
-    /** Creativity plays as a copy of another card; every other mood is just itself. */
+    /**
+     * Creativity plays as a copy of another card; every other mood is just
+     * itself. Resolves the WHOLE chain, not just one hop -- Creativity's
+     * own text is "an exact copy of that printed card," so a Creativity
+     * copying another Creativity that's itself copying, say, Paranoia is a
+     * copy of Paranoia, not a copy of Creativity (which would make it
+     * "just a blue card worth 0" instead). $visited guards against a cycle
+     * -- never possible through ordinary play, since a copy always targets
+     * a card already in play, but instance ids aren't chronological (every
+     * card is instantiated at deal time, not play time), so that can't be
+     * relied on to prove termination on its own.
+     */
     public function effectiveCardId(int $cardId): int
     {
-        return $this->moodsInPlay[$cardId]->copiedCardId ?? $cardId;
+        $current = $cardId;
+        $visited = [];
+        while (($next = $this->moodsInPlay[$current]->copiedCardId ?? null) !== null && !isset($visited[$current])) {
+            $visited[$current] = true;
+            $current = $next;
+        }
+
+        return $current;
     }
 
     /**
@@ -1197,10 +1320,11 @@ final class BoardState
      * "does a grant exist at all" test, and startTurn()'s own base
      * allowance is never granted through this method at all. A
      * restriction may also carry 'requiresSourceInPlay' => true (Hope's
-     * and Grace's own same-turn bonus) -- see grantIsActive()'s own
-     * docblock for what that does.
+     * and Grace's own same-turn bonus) or 'requiresBehindPlayer' => int
+     * (Pride's own bonus) -- see grantIsActive()'s own docblock for what
+     * those do.
      *
-     * @param ?array{type?: string, values?: int[], source?: string, requiresSourceInPlay?: bool} $restriction
+     * @param ?array{type?: string, values?: int[], source?: string, requiresSourceInPlay?: bool, requiresBehindPlayer?: int} $restriction
      */
     public function grantExtraPlay(int $count = 1, ?array $restriction = null, ?int $sourceCardId = null): void
     {
@@ -1300,8 +1424,16 @@ final class BoardState
                 continue;
             }
             if ($this->grantAllows($restriction, $cardId, $playerId)) {
-                unset($this->playGrants[$index]);
-                $this->playGrants = array_values($this->playGrants);
+                // Pride's own grant ('requiresBehindPlayer') is never
+                // removed on use -- it isn't a one-shot extra play at all,
+                // but a standing permission that keeps re-qualifying itself
+                // (via grantIsActive()) for as long as the chosen player
+                // stays ahead, so it has to remain in $playGrants for the
+                // next play to find again.
+                if (!isset($restriction['requiresBehindPlayer'])) {
+                    unset($this->playGrants[$index]);
+                    $this->playGrants = array_values($this->playGrants);
+                }
 
                 if ($restriction !== null) {
                     $this->pendingGrantUsed = $restriction;
@@ -1352,28 +1484,68 @@ final class BoardState
 
     /**
      * Whether $restriction (an entry in $playGrants) still actually
-     * counts. True for every ordinary grant, but a grant tagged
-     * 'requiresSourceInPlay' -- Hope's and Grace's own bonus, both the
-     * same-turn one (grantExtraPlay(), the moment either card is played)
-     * and every future turn's perpetual one
-     * (GameService::computeFreshGrants()) -- only counts while its own
-     * 'sourceCardId' is still actually in play. If that specific Hope or
-     * Grace is discarded, returned to hand, or otherwise leaves play
-     * before the player gets around to using the play it granted, the
-     * grant is lost, not merely un-attributed. Stubbornness's own
-     * perpetual grant is deliberately never tagged this way -- once
-     * computeFreshGrants() grants it at the start of a turn, it persists
-     * for that turn even if Stubbornness itself later leaves play, unlike
-     * Hope/Grace. Neither is the base allowance (always null) or a banked
-     * Generosity/Joy grant, both unaffected by this distinction.
+     * counts. True for every ordinary grant, but two tags make a grant
+     * conditional on live board state, re-checked fresh on every call
+     * rather than decided once when the grant was created:
+     *
+     * - 'requiresSourceInPlay' -- Hope's and Grace's own bonus, both the
+     *   same-turn one (grantExtraPlay(), the moment either card is played)
+     *   and every future turn's perpetual one
+     *   (GameService::computeFreshGrants()) -- only counts while its own
+     *   'sourceCardId' is still actually in play. If that specific Hope or
+     *   Grace is discarded, returned to hand, or otherwise leaves play
+     *   before the player gets around to using the play it granted, the
+     *   grant is lost, not merely un-attributed. Stubbornness's own
+     *   perpetual grant is deliberately never tagged this way -- once
+     *   computeFreshGrants() grants it at the start of a turn, it persists
+     *   for that turn even if Stubbornness itself later leaves play,
+     *   unlike Hope/Grace.
+     * - 'requiresBehindPlayer' => that opponent's player id -- Pride's own
+     *   bonus. Unlike every other restriction here, this isn't evaluated
+     *   against whether some *card* is still in play; it's a live
+     *   comparison of mood counts, re-run every time this method is
+     *   called (playsRemaining(), useGrantFor(), etc.), which is what
+     *   makes the grant self-renewing for the rest of the turn: it stays
+     *   active for as long as the chosen player has strictly more moods in
+     *   play than the current turn's player (see currentPlayerId() --
+     *   $playGrants is reset every turn, so whoever's turn it currently is
+     *   is always the player Pride's own grant belongs to), including
+     *   surviving Pride itself later leaving play (e.g. sacrificed to
+     *   Infatuation) -- Pride is an "after playing this card" effect, not
+     *   a "while in play" one, so it's deliberately never tagged
+     *   'requiresSourceInPlay' the way Hope/Grace are. Because this is
+     *   re-checked before each individual play (see MoodPlayService::
+     *   playMood(), which checks hasUsablePlayGrant()/useGrantFor()
+     *   before moving the card into play or resolving its own effect), a
+     *   play that itself closes the gap to zero (e.g. Hate reducing the
+     *   chosen player's mood count) is still allowed to happen -- the
+     *   check only has to hold at the moment the player commits to that
+     *   play, not after it resolves.
+     *
+     * Neither is the base allowance (always null) or a banked
+     * Generosity/Joy grant, both unaffected by either distinction.
      */
     private function grantIsActive(?array $restriction): bool
     {
-        if ($restriction === null || !($restriction['requiresSourceInPlay'] ?? false)) {
+        if ($restriction === null) {
             return true;
         }
 
-        return $this->isInPlay($restriction['sourceCardId']);
+        if (($restriction['requiresSourceInPlay'] ?? false) && !$this->isInPlay($restriction['sourceCardId'])) {
+            return false;
+        }
+
+        if (isset($restriction['requiresBehindPlayer'])) {
+            $currentPlayerId = $this->currentPlayerId();
+            if ($currentPlayerId === null) {
+                return false;
+            }
+            if (count($this->moodsOwnedBy($restriction['requiresBehindPlayer'])) <= count($this->moodsOwnedBy($currentPlayerId))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

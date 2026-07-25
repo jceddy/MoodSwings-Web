@@ -126,15 +126,42 @@ rather than assuming the first sign of change is already the final state.
    - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`,
      `SMTP_ENCRYPTION` (`tls` or `ssl`), `SMTP_FROM_ADDRESS`,
      `SMTP_FROM_NAME` — from step 2, used to send verification emails.
+   - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` — for browser
+     push notifications. Generate a keypair with `php -r 'require
+     "vendor/autoload.php"; print_r((new
+     Minishlink\WebPush\VAPID)::createVapidKeys());'` from `php-app/`, or
+     the `web-push` npm CLI; `VAPID_SUBJECT` is a `mailto:`/`https://` URL
+     identifying you, e.g. `mailto:you@example.com`. See "Browser push
+     notifications" in `php-app/README.md` for details. Without these set,
+     `GET /notifications/vapid-public-key` returns an empty key and the
+     frontend shows "Push notifications are not configured on the server
+     yet."
+   - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_PUBLIC_KEY`,
+     `DISCORD_BOT_TOKEN` — for Discord account linking/notifications (issue
+     #232), **production's own Discord Application** (dev gets a second,
+     separate one — see "Development environment setup" below, and
+     "Discord" in `php-app/README.md` for why one Application can't serve
+     both). From the [Discord Developer Portal](https://discord.com/developers/applications)'s
+     General Information (Application ID, Public Key), Bot (Token), and
+     OAuth2 → General (Client Secret) tabs, for an Application registered
+     with a "User Install" installation context. See "Discord" in
+     `php-app/README.md` for the full setup checklist and why the
+     Interactions Endpoint URL itself has to be set in the portal
+     separately, after this app is deployed.
 4. Optionally add these **variables** (same Settings page, "Variables" tab):
    - `FTP_SERVER_DIR` — remote path to deploy into. Defaults to
      `/public_html/` if unset.
    - `APP_URL` — your live site's base URL including the `/app` path (e.g.
      `https://example.com/app`), used to build the verification link sent
      in the registration email.
-   - `SITE_URL` — your live site's base URL (e.g. `https://example.com`). If
-     set, the workflow curls `$SITE_URL/app/health` after each deploy as a
-     smoke test.
+   - `SITE_URL` — your live site's base URL (e.g. `https://example.com`),
+     domain root only, no `/app`. If set, the workflow curls
+     `$SITE_URL/app/health` after each deploy as a smoke test; the app
+     itself also reads it (via `.env`) to build links back into the
+     static frontend, e.g. the post-Discord-link redirect to `/game/` --
+     see `siteRootUrl()` in `php-app/README.md`'s "Discord" section. If
+     unset, the app derives it from `APP_URL` instead, so this is optional
+     but recommended.
 5. Create the database itself and apply its migrations — this repo's GitHub
    Actions runner cannot reach Bluehost's MySQL directly, so run each file
    in `database/migrations/` (in order) yourself via phpMyAdmin's SQL tab in
@@ -165,6 +192,12 @@ emails going out from the same already-configured sender isn't a concern.
    `DEV_DB_USER`/`DEV_DB_PASSWORD`. No `DEV_SMTP_*` secrets are needed —
    `deploy-dev.yml` reuses production's own `SMTP_*` secrets from step 3
    above, so if those are already set, dev's email sending already works.
+   Discord is the opposite of SMTP here: `DEV_DISCORD_CLIENT_ID`/
+   `DEV_DISCORD_CLIENT_SECRET`/`DEV_DISCORD_PUBLIC_KEY`/
+   `DEV_DISCORD_BOT_TOKEN` need their own, second Discord Application
+   (same Developer Portal, same tabs as production's own — see "Discord"
+   in `php-app/README.md`), since a Discord Application can only ever
+   point its Interactions Endpoint/OAuth2 redirect at one URL.
 3. Add the **variables**: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev
    domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL).
 4. Create a **separate** database for the dev domain (do not point it at

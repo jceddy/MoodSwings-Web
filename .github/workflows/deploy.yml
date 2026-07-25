@@ -11,10 +11,10 @@ on:
     branches: [main]
 
 env:
-  # Must be >= the "php": ">=8.1" requirement in php-app/composer.json, and
+  # Must be >= the "php": ">=8.2" requirement in php-app/composer.json, and
   # should match the PHP version set for your domain in cPanel's MultiPHP
   # Manager so the deployed code actually runs the way it was built.
-  PHP_VERSION: '8.1'
+  PHP_VERSION: '8.3'
 
 jobs:
   deploy:
@@ -42,6 +42,7 @@ jobs:
           DB_USER: ${{ secrets.DB_USER }}
           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
           APP_URL: ${{ vars.APP_URL }}
+          SITE_URL: ${{ vars.SITE_URL }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -49,6 +50,13 @@ jobs:
           SMTP_ENCRYPTION: ${{ secrets.SMTP_ENCRYPTION }}
           SMTP_FROM_ADDRESS: ${{ secrets.SMTP_FROM_ADDRESS }}
           SMTP_FROM_NAME: ${{ secrets.SMTP_FROM_NAME }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.DISCORD_CLIENT_SECRET }}
+          DISCORD_PUBLIC_KEY: ${{ secrets.DISCORD_PUBLIC_KEY }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
         run: |
           set -euo pipefail
           rm -rf dist
@@ -100,6 +108,7 @@ jobs:
           write_env_var DB_USER "$DB_USER"
           write_env_var DB_PASSWORD "$DB_PASSWORD"
           write_env_var APP_URL "$APP_URL"
+          write_env_var SITE_URL "$SITE_URL"
           write_env_var SMTP_HOST "$SMTP_HOST"
           write_env_var SMTP_PORT "$SMTP_PORT"
           write_env_var SMTP_USERNAME "$SMTP_USERNAME"
@@ -107,6 +116,13 @@ jobs:
           write_env_var SMTP_ENCRYPTION "$SMTP_ENCRYPTION"
           write_env_var SMTP_FROM_ADDRESS "$SMTP_FROM_ADDRESS"
           write_env_var SMTP_FROM_NAME "$SMTP_FROM_NAME"
+          write_env_var VAPID_PUBLIC_KEY "$VAPID_PUBLIC_KEY"
+          write_env_var VAPID_PRIVATE_KEY "$VAPID_PRIVATE_KEY"
+          write_env_var VAPID_SUBJECT "$VAPID_SUBJECT"
+          write_env_var DISCORD_CLIENT_ID "$DISCORD_CLIENT_ID"
+          write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
+          write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"
+          write_env_var DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
 
           # dist/, vendor/, and src/ all end up under the shared document
           # root (no Bluehost document-root change required), so block

@@ -377,6 +377,51 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 108]));
     }
 
+    /**
+     * Per a rules judge ruling, Creativity's "an exact copy of that
+     * printed card" resolves through the WHOLE chain: a Creativity
+     * copying another Creativity that's itself copying Paranoia is a
+     * copy of Paranoia -- color, value, and its after-playing ability all
+     * included -- not "a blank blue 0" copy of literal Creativity. 2001
+     * and 2002 are two distinct physical copies of catalog card 32
+     * (Creativity), the same catalogCardIdFor setup
+     * testAngerTreatsTwoPhysicalCardsSharingACatalogIdAsDistinctTargets()
+     * above uses for two physical copies of the same design.
+     */
+    public function testCreativityCopyingACreativityCopyResolvesTransitivelyToTheOriginal(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [2001, 5], 2 => [71, 2002]], // Creativity, Complacency (filler); Paranoia, Creativity
+            deck: [6], // so Paranoia's own draw doesn't just re-draw the card it bottomed
+            catalogCardIdFor: [2001 => 32, 2002 => 32],
+        );
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 71, new PlayerChoices([])); // Paranoia, now in play
+
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 2001, new PlayerChoices(['copy_card_id' => 71])); // Creativity copying Paranoia
+        self::assertSame(71, $state->effectiveCardId(2001));
+
+        $state->startTurn(2);
+        self::assertSame(1, count($state->hand(1))); // just Complacency (5) left
+        $this->plays->playMood($state, 2, 2002, new PlayerChoices([
+            'copy_card_id' => 2001, // copying the OTHER Creativity, itself copying Paranoia
+            'target_player_id' => 1,
+        ]));
+
+        self::assertSame(71, $state->effectiveCardId(2002));
+        self::assertSame('black', $state->colorOf(2002));
+        self::assertSame(2, $state->valueOf(2002));
+        // Paranoia's after-playing effect (choose a player, reveal+bottom a
+        // random hand card, then draw) fired transitively too -- player 1's
+        // last hand card (Complacency) is gone.
+        self::assertSame(0, count($state->hand(1)));
+        self::assertContains(5, $state->deck());
+    }
+
     public function testBenevolenceAllowsABonusPlayOfADifferentColor(): void
     {
         $state = $this->boardState(hands: [1 => [2, 106]]); // Benevolence (white), Zeal (red)
@@ -3379,7 +3424,7 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(6, $state->valueOf(92), 'the bonus resumes once it is back with whoever actually played it, still the same round');
     }
 
-    public function testPridePausesForYourOwnChoiceThenGrantsExtraPlaysToMatchTheChosenPlayersMoodCount(): void
+    public function testPridePausesForYourOwnChoiceThenGrantsASelfRenewingExtraPlayWhileBehindTheChosenPlayer(): void
     {
         $state = $this->boardState(hands: [1 => [22, 4, 9], 2 => [5, 32, 55]]);
         $state->moveHandToInPlay(2, 5);
@@ -3400,19 +3445,26 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame([2], $result->pendingDecisions[0]->field['candidate_player_ids']);
         self::assertSame(0, $state->playsRemaining());
 
-        // Pride itself already counts, so player 1 has 1 mood vs player 2's
-        // 3 -- a gap of 2 extra plays.
+        // Pride grants a single standing permission, not a fixed count of
+        // plays equal to the gap (player 1 has 1 mood vs player 2's 3) --
+        // it re-qualifies itself fresh before each subsequent play for as
+        // long as player 2 stays ahead.
         $this->plays->resolvePendingDecisions(
             $state, 22, 1, $choices, $choices, 0,
             ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
         );
-        self::assertSame(2, $state->playsRemaining());
+        self::assertSame(1, $state->playsRemaining());
 
         $this->plays->playMood($state, 1, 4, new PlayerChoices([]));
+        // Still behind (2 moods vs player 2's 3) -- the same grant renews
+        // itself rather than being consumed.
+        self::assertSame(1, $state->playsRemaining());
+
         $this->plays->playMood($state, 1, 9, new PlayerChoices([]));
 
         self::assertTrue($state->isInPlay(4));
         self::assertTrue($state->isInPlay(9));
+        // Now tied at 3 moods each -- the grant stops re-qualifying.
         self::assertSame(0, $state->playsRemaining());
     }
 
@@ -3474,6 +3526,128 @@ final class MoodPlayServiceTest extends TestCase
             ['target_player_id' => new PlayerChoices(['target_player_id' => null])],
         );
 
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    /**
+     * Published ruling: "If cards you play reduce the number of moods of
+     * the chosen player, that will impact how many cards you can play...
+     * You can choose to play Hate ["put a card on the bottom of the deck"]
+     * third because, at that time, the chosen player had one more mood
+     * than you. After the third card resolves, they do not have the
+     * additional mood, but you already played Hate as your third card."
+     * The eligibility check has to hold going into a play, not survive
+     * that same play's own resolution -- MoodPlayService::playMood()
+     * already checks/consumes the grant before moving the card into play
+     * or resolving its effect, so this falls out for free once Pride's
+     * grant is re-checked live instead of pre-counted.
+     */
+    public function testPrideAllowsAPlayThatItselfClosesTheGapAgainstTheChosenPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [22, 66], 2 => [5, 32]], deck: [99]);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 32);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $this->plays->playMood($state, 1, 22, $choices); // Pride
+        $this->plays->resolvePendingDecisions(
+            $state, 22, 1, $choices, $choices, 0,
+            ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+        );
+        // Player 1 has 1 mood (Pride) vs player 2's 2 -- still behind.
+        self::assertSame(1, $state->playsRemaining());
+
+        // Hate bottoms one of player 2's moods -- its own resolution
+        // closes the gap to zero -- but the play itself is still allowed,
+        // since player 2 was ahead at the moment it was committed to.
+        $this->plays->playMood($state, 1, 66, new PlayerChoices(['target_mood_id' => 32]));
+
+        self::assertTrue($state->isInPlay(66));
+        self::assertFalse($state->isInPlay(32));
+        // Player 2 now has only card 5 in play (1 mood) vs player 1's 2
+        // (Pride+Hate) -- player 1 is now AHEAD, so Pride's grant no
+        // longer qualifies.
+        self::assertSame(0, $state->playsRemaining());
+    }
+
+    /**
+     * Published rulings: "Pride is an 'after playing this card' effect, so
+     * it will persist even if the card generating the effect leaves play"
+     * and "if you play Pride, then sac it to Infatuation, you still have
+     * Pride's effect and odds are you have less cards in play as you just
+     * sacrificed two. If you do, yes, you can play more cards, up until no
+     * opponent has more than you." Unlike Hope/Grace's "while in play"
+     * bonus (see testHopeSacrificedToInfatuationAsFirstPlayGrantsNoSecondPlay()
+     * below), Pride's grant must survive Pride itself leaving play.
+     */
+    public function testPrideSurvivesBeingSacrificedToInfatuation(): void
+    {
+        $state = $this->boardState(hands: [1 => [22, 95, 9], 2 => [5, 32, 55]]);
+        $state->moveHandToInPlay(2, 5);
+        $state->moveHandToInPlay(2, 32);
+        $state->moveHandToInPlay(2, 55);
+        $state->startTurn(1);
+
+        $choices = new PlayerChoices([]);
+        $this->plays->playMood($state, 1, 22, $choices); // Pride
+        $this->plays->resolvePendingDecisions(
+            $state, 22, 1, $choices, $choices, 0,
+            ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+        );
+        self::assertSame(1, $state->playsRemaining());
+
+        // Infatuation needs two OTHER moods already in play to sacrifice,
+        // so first play Discipline (using Pride's grant) to give it one.
+        $this->plays->playMood($state, 1, 9, new PlayerChoices([])); // Discipline, using Pride's grant
+        self::assertTrue($state->isInPlay(9));
+        self::assertSame(1, $state->playsRemaining());
+
+        // Infatuation (95), sacrificing Pride (22) and Discipline (9) --
+        // player 1's whole board -- using Pride's grant one last time.
+        $this->plays->playMood($state, 1, 95, new PlayerChoices(['discard_mood_ids' => [22, 9]]));
+
+        self::assertFalse($state->isInPlay(22));
+        self::assertFalse($state->isInPlay(9));
+        self::assertTrue($state->isInPlay(95));
+        // Player 1 now has only Infatuation in play (1 mood) vs player 2's
+        // 3 -- still behind, so Pride's grant (sourced from card 22, now
+        // gone) is still usable.
+        self::assertSame(1, $state->playsRemaining());
+    }
+
+    /**
+     * Contrast case for the Pride fix above, confirming Hope/Grace's
+     * distinct "while in play" bonus is unaffected: "if you sacrifice Hope
+     * to Infatuation, as your first play, you don't get a second play."
+     * Hope here is already in play from a previous turn -- its own
+     * perpetual grant already active, same as GameService::
+     * computeFreshGrants() would set up, simulated directly per
+     * testPlayMoodWithGrantSourceCardIdConsumesThatSpecificGrant() above --
+     * so that sacrificing it can be this turn's very first play.
+     */
+    public function testHopeSacrificedToInfatuationAsFirstPlayGrantsNoSecondPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [95, 124, 9]]);
+        $state->moveHandToInPlay(1, 124); // Hope, already in play from a previous turn
+        $state->moveHandToInPlay(1, 9); // Discipline, already in play from a previous turn
+        $state->startTurn(1);
+        $state->grantExtraPlay(1, ['requiresSourceInPlay' => true], sourceCardId: 124); // Hope's own perpetual grant
+
+        self::assertSame(2, $state->playsRemaining()); // base allowance + Hope's grant
+
+        // First play this turn: Infatuation, sacrificing Hope and
+        // Discipline -- spends the base allowance (whichever usable grant
+        // comes first; Hope's grant is untouched by this).
+        $this->plays->playMood($state, 1, 95, new PlayerChoices(['discard_mood_ids' => [124, 9]]));
+
+        self::assertFalse($state->isInPlay(124));
+        self::assertFalse($state->isInPlay(9));
+        self::assertTrue($state->isInPlay(95));
+        // Hope is gone -- its "while in play" grant is lost along with it
+        // (cascadeMoodLeavingPlay()), not merely un-attributed, so there's
+        // no second play -- unlike Pride's "after playing this card" grant,
+        // which survives its own source leaving play.
         self::assertSame(0, $state->playsRemaining());
     }
 

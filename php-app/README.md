@@ -71,7 +71,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Only callable once a best-of-three draft match's game 2/3 has actually started -- the loser of the previous game doesn't have to decide who goes first until they can see their own opening hand, and round 1 stays frozen (nobody can play/pass) until they do. Lets them go first themselves (`play_first: true`) or leave the previous winner going first again (`play_first: false`); either answer permanently unfreezes the round. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, hasn't started yet, is game 1 of its match (nothing to base the choice on), the calling user wasn't the previous game's loser, or the decision was already made. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
-| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, or `closed_team`'s still-unsubmitted pregame card pass; see `isAwaitingResponseFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username"}`, `winner_username` only set once the match's own status is `completed`) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
+| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in -- `waiting`/`in_progress` games always sort above `completed` (or `abandoned`) ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username"}`, `winner_username` only set once the match's own status is `completed`) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id` per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
@@ -84,7 +84,18 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/spectate/code` | `{"game_id"}`                                              | Requires auth; `403` if you're not seated in that game. Returns `{"code"}` -- that game's own share code (an existing one if already minted, else a freshly generated one). See "Spectator mode" below. |
 | POST   | `/games/spectate/resolve` | `{"code"}`                                              | Requires auth. `404` if no game has that code, or it's `waiting`/`abandoned`. Returns `{"game_id"}` for the frontend to navigate with. See "Spectator mode" below. |
 | GET    | `/games/spectate/state` | query params `game_id`, `code`?                        | Requires auth; deliberately does **not** require you to be seated in that game -- see "Spectator mode" below for its own authorization rule. `403` unless you're friends with a seated player or `code` matches the game's own spectate code; `400` if the game is `waiting`/`abandoned`. Same shape as `GET /games/state`, minus `you`, `team_decision`'s propose/confirm affordances, and any draft-match internals -- plus, once the game is `completed`, every player's `hand` is additionally revealed (there's nothing left to hide once the outcome is decided). |
+| GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
+| GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
+| POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
+| POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
+| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished"}}`, all `true` for a user who's never changed them. |
+| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?}` | Requires auth. Upserts the current user's preferences (each field defaults to `true` if omitted); returns the saved `{"preferences"}`. |
+| GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
+| GET    | `/discord/oauth/start` | —                                                        | Requires auth. Not a JSON endpoint -- a `302` straight to Discord's own OAuth2 consent screen. Meant for browser navigation (a link/button), not `fetch()`. See "Discord" below. |
+| GET    | `/discord/oauth/callback` | `code`, `state` (query params, set by Discord's own redirect) | Requires auth. Not a JSON endpoint -- a `302` back to the lobby, `?discord_linked=1` on success or `?discord_link_error=<message>` on failure. See "Discord" below. |
+| POST   | `/discord/unlink` | —                                                                | Requires auth. Removes the current user's Discord link, if any (silently a no-op otherwise). |
+| POST   | `/discord/interactions` | raw Discord interaction payload                            | **Not** session-cookie authenticated -- called by Discord itself, verified via `X-Signature-Ed25519`/`X-Signature-Timestamp` instead (`401` if it doesn't verify). See "Discord" below. |
 
 Auth-requiring routes use the same `session_token` cookie as `/me` (`401` if
 missing/invalid). Friendships are stored as one row per pair of users
@@ -101,9 +112,9 @@ authenticated request.
 Verification links are single-use and expire after 24 hours; email is sent
 via SMTP (PHPMailer) using the `SMTP_*` variables in `.env` (see
 `.env.example`). `APP_URL` (no trailing slash) is used to build the link,
-e.g. `https://example.com/app` if deployed under `/app`. Phone numbers and
-verified email are captured for future notification use but nothing sends
-notifications yet.
+e.g. `https://example.com/app` if deployed under `/app`. Phone numbers are
+still captured but nothing sends SMS -- see "Browser push notifications"
+below for what does send notifications today (issue #108).
 
 If a verification email fails to send, the real error (e.g. the SMTP
 error PHPMailer raised) is appended to `src/mail-errors.log` — a fixed,
@@ -279,10 +290,16 @@ the round number, since "you played it this round" means whoever
 Instability/Betrayal/Recklessness/Arrogance/Avoidance/Chaos'
 `giveInPlayToPlayer()` no longer qualifies for its new owner even though
 it's the same round, and the bonus resumes if it's ever handed back to
-whoever actually played it), a variable-count
-extra-play grant sized to close a mood-count gap with a chosen opponent,
-computed once the acting player's own deferred choice of who to target is
-answered (Pride — see `RequiresOpponentDecision` below), a widening of which zone a
+whoever actually played it), a single self-renewing extra-play permission
+that stays active for the rest of the turn for as long as a chosen
+opponent has more moods in play than the acting player — re-checked live
+before every subsequent play rather than pre-counted as a fixed gap, so a
+play that itself closes the gap (e.g. Hate reducing that opponent's mood
+count) is still allowed as long as the gap was open going into it, and the
+permission survives even if the card that granted it later leaves play,
+since it's an "after playing this card" effect rather than a "while in
+play" one (Pride — `'requiresBehindPlayer'` in `BoardState::grantIsActive()`,
+see `RequiresOpponentDecision` below for how the opponent is chosen), a widening of which zone a
 player's *normal* plays (not just bonus ones) can draw from, special-
 cased by `effect_key` inside `BoardState::grantAllows()` the same way
 `colorOf()` special-cases Imagination (Melancholy), and a color ban
@@ -793,26 +810,43 @@ precomputes, per candidate mood currently in play,
 `copy_simulation[$candidateCardId] = {extra_fields, cost_payable}`
 (`GameService::creativityCopySimulation()`), reusing the exact same
 `reactionFields()` (Scorn) this class already calls for an
-ordinary hand card, just parameterized by the *candidate's* own raw
-color/catalog row instead of Creativity's — Duplicity's own
-repeat is no longer part of this precomputed bundle at all, since it's
-now a post-play pause rather than a field on the play itself.
-`cost_payable`
-mirrors `MoodPlayService::playMood()`'s own to-play-cost check
-(`canPayCopiedToPlayCost()`), passing Creativity's own card id -- not the
-candidate's -- as the effect's `$cardId`, matching what `payMood()` itself
-does (`GuileEffect`/`BlissEffect` exclude that id from the hand, and
-Creativity is what's actually occupying that hand slot). The client swaps
-in the matching bundle, plus the candidate's own already-serialized
-`choice_fields` (its own "to play" cost and after-playing choices, read
-from the same flat top-level `choices` bag a normal play of that card
-would use), as `copy_card_id` changes -- see `web-static/README.md`.
-`MoodPlayService`'s repeat/reaction/pending-decision machinery needed no
-changes at all to support this: it was already effective-aware end to
-end (`BoardState::effectiveCardId()`), so a Creativity copy of, say,
-Compulsion already paused for the target's own real choice the same way
-a real Compulsion would, even before the panel could offer
-`target_player_id` to ask for one.
+ordinary hand card, parameterized by the candidate's *effective*
+color/catalog row (`catalogRow(effectiveCardId($candidateCardId))`) --
+Duplicity's own repeat is no longer part of this precomputed bundle at
+all, since it's now a post-play pause rather than a field on the play
+itself. `cost_payable` mirrors `MoodPlayService::playMood()`'s own
+to-play-cost check (`canPayCopiedToPlayCost()`, also resolved through
+`effectiveCardId()` the same way), passing Creativity's own card id --
+not the candidate's -- as the effect's `$cardId`, matching what
+`payMood()` itself does (`GuileEffect`/`BlissEffect` exclude that id
+from the hand, and Creativity is what's actually occupying that hand
+slot). The client swaps in the matching bundle, plus the candidate's own
+already-serialized `choice_fields` (its own "to play" cost and
+after-playing choices, read from the same flat top-level `choices` bag a
+normal play of that card would use), as `copy_card_id` changes -- see
+`web-static/README.md`. `MoodPlayService`'s repeat/reaction/pending-decision
+machinery needed no changes at all to support this: it was already
+effective-aware end to end (`BoardState::effectiveCardId()`), so a
+Creativity copy of, say, Compulsion already paused for the target's own
+real choice the same way a real Compulsion would, even before the panel
+could offer `target_player_id` to ask for one.
+
+Copying a Creativity that's itself copying something resolves through
+the WHOLE chain, per a rules judge ruling: "an exact copy of that
+printed card" means whatever real (non-`creativity`) card started the
+chain, so a Creativity copying another Creativity that's copying, say,
+Paranoia is a copy of Paranoia -- color, value, to-play cost, and
+after-playing ability all included -- not "a blank blue 0" copy of
+literal Creativity. `MoodPlayService::playMood()` resolves the raw
+`copy_card_id` through `BoardState::effectiveCardId()` (which itself
+walks the whole chain, not just one hop) before computing anything else
+from it, and stores that fully-resolved id as the new mood's own
+`copiedCardId` -- so the copy's identity stays correct even if the
+Creativity it was actually pointed at later leaves play, the same
+permanence a direct copy of a non-Creativity card already had.
+`canPayCopiedToPlayCost()` and `creativityCopySimulation()` above both
+resolve the same way, so the choices panel already previews a
+copy-of-a-copy correctly before the play is even submitted.
 
 Once an in-play Creativity is actually copying something, `serializeCard()`
 displays it AS the copied mood rather than as Creativity: `name`,
@@ -1244,6 +1278,31 @@ does, so once granted, it persists for that turn even if Stubbornness
 itself is later discarded. Neither the base allowance nor a banked
 Generosity/Joy grant carry this tag either, both unaffected by the
 distinction.
+
+Pride's own grant carries a different tag, `'requiresBehindPlayer' =>`
+the chosen opponent's player id, and is the deliberate opposite of
+`'requiresSourceInPlay'` in exactly the respect that matters: per
+published rulings, Pride is an "after playing this card" effect, not a
+"while in play" one, so its grant must persist even if Pride itself later
+leaves play (e.g. discarded as a cost to Infatuation), unlike Hope/Grace
+above. What it depends on instead is a live comparison of mood counts --
+`grantIsActive()` returns `false` for it the moment the chosen opponent no
+longer has strictly more moods in play than whoever's turn it currently is
+(`BoardState::currentPlayerId()`; `$playGrants` is reset every turn, so
+this is always the player Pride's own grant belongs to) -- re-run fresh on
+every `playsRemaining()`/`hasUsablePlayGrant()`/`useGrantFor()` call rather
+than decided once when Pride resolved. `useGrantFor()` also never removes
+this particular grant from `$playGrants` on use, the one exception to its
+otherwise-unconditional "spend it" behavior, since it isn't a one-shot
+extra play at all but a standing permission that keeps re-qualifying
+itself. Because eligibility is checked going into a play, not after that
+play resolves, a play that itself closes the gap (e.g. Hate, "put a card
+on the bottom of the deck", played against the chosen opponent) is still
+allowed to happen -- `MoodPlayService::playMood()` already checks and
+consumes the relevant grant before moving the card into play or resolving
+its own effect either way, matching the ruling that you may play such a
+card as long as the opponent was still ahead at the moment you committed
+to it, even though it doesn't stay ahead once that same card resolves.
 
 Losing a grant this way is silent from `playsRemaining()`'s own
 perspective -- it just reads one lower, with nothing to say why -- so
@@ -2683,6 +2742,482 @@ and pending-decision internals for a still-`in_progress` game (for
 casting/streaming) -- deliberately not built on top of the plain
 `spectate_code` mechanism above, since that mechanism's entire premise
 is that holding a code never reveals hands before the game ends.
+
+Once a spectated game reaches `completed`, the frontend hands off from
+this live single-snapshot view into "Watch replay"'s own step controls
+(see below) -- no server-side change needed, since `GET /games/log` and
+`GET /games/replay/state` already authorize a spectator the same way
+`GET /games/spectate/state` does. See "Spectator mode" in
+`web-static/README.md` for the client-side switch.
+
+### Watch replay (issue #240)
+
+Step through a *completed* game move-by-move -- the actual board (in-play
+zones, discard, hands, scores) as it looked immediately after any past
+event, not just the final state. The issue left "snapshot vs. replay"
+undecided; this landed on **full forward replay of recorded facts**, not
+re-executed `Effects/*.php` logic and not stored per-event snapshots: for
+"board as of event N," derive the game's *genesis* (round-1 starting
+hands/decks, before any event exists) by walking the whole `game_events`
+log **in reverse** from the final `game_cards` state, undoing every
+recorded fact, then walk **forward** from genesis re-applying those same
+facts up to event N. At this game's scale (rarely more than a few hundred
+events per game -- see "Game log" above) a full reverse-then-forward walk
+per request is cheap enough that no caching/incremental-snapshot
+infrastructure was needed.
+
+`ReplayStateBuilder` (`genesis()`/`stateAsOf()`) does the reconstruction
+and hands back a real `BoardState`; `GameService::replayStateAsOf()` then
+runs it through `serializeReplaySnapshot()`, a private sibling of
+`buildGameState()` that returns the same top-level shape
+`getSpectatorState()` does (`you: {game_player_id: null}`, every hand
+always revealed) but with every live-round-only field
+(`current_turn_game_player_id`, `pending_decision`, `plays_remaining`,
+`play_grants`, team/draft fields) nulled out -- there is no "current
+round" for a specific past event. It reuses `buildGameState()`'s
+stateless building blocks (`serializeCard()`, `scoringEffectEntries()`,
+`boardEffectEntries()`, `boardPointTotalFor()`, `affectingEntries()`,
+`temporaryOwnershipInfo()`) verbatim rather than duplicating them, so
+`renderBoard()` needed zero frontend changes to display a replay
+snapshot. `GET /games/replay/state` authorizes identically to
+`GET /games/log` (seated player OR `canSpectateGame()`, see "Spectator
+mode" above) and rejects a non-`completed` game or an `event_id` from a
+different game with `400`. The frontend's step control reuses the
+existing `GET /games/log` for the steppable event list -- no separate
+endpoint for that part.
+
+**The frontend's first step is genesis itself, not the first play.**
+`replayStateAsOf(int $gameId, int $eventId)` treats `$eventId === 0` as a
+sentinel for genesis -- real `game_events` rows are auto-increment ids
+starting at 1, so 0 can never collide with a genuine event --
+`ReplayStateBuilder::stateAsOf()` short-circuits straight to `genesis()`
+in that case. This lets the frontend's steppable event list simply
+prepend a synthetic "Step 1" entry with `id: 0` ahead of the real events
+(see "Watch replay" in `web-static/README.md`), so opening a replay
+always starts at round-1's dealt hands -- both players' opening hand
+visible, nothing yet played -- rather than jumping straight to the first
+recorded play.
+
+`serializeReplaySnapshot()`'s `recent_events` field (the same "Recent
+plays" data `GET /games/state` exposes) is capped to events at or before
+the step being viewed (`recentEvents($gameId, $players, 15, $eventId)`'s
+new `$upToEventId` parameter, folded into a plain `id <= :up_to_event_id`
+SQL filter) rather than the game's own most-recent 15 overall -- so each
+replay step's "Recent plays" section shows exactly what a live player
+would have seen at that specific moment, never events from later in the
+game. Genesis's `$eventId` of 0 naturally yields zero rows here (`id <=
+0` matches nothing), correctly showing nothing has happened yet.
+
+**Why genesis needs no new event.** Defined precisely as "state
+immediately before `game_events` row #1," genesis needs no dedicated
+"game started" log entry: `startGame()`'s deal and `closed_team`'s blind
+initial card pass (`submitInitialCardPass()`) both complete strictly
+before any round's first play is ever logged, so a reverse walk lands
+exactly on the right starting point for either format with no special
+casing -- see `ReplayStateBuilder`'s own docblock. Because nothing can be
+in play or discarded before the game's first play is ever logged,
+genesis's own reverse walk only needs to track bare zone membership
+(hand/deck/discard) -- never suppression/effect-state/who-owned-a-mood-
+while-it-was-in-play, all of which are guaranteed already back to "not in
+play at all" once every event has been undone. `stateAsOf()`'s forward
+walk, by contrast, tracks full in-play fidelity (owner, `copiedCardId`,
+suppression, effect-state), since that's exactly what rendering a
+specific point in history needs.
+
+**The one real gap this required fixing**: `BoardState::drawCard()` used
+to record only the drawing player's id, not the card id -- a deliberate
+privacy choice so a live opponent reading `GET /games/log` mid-game can't
+learn what a player privately drew. That made a card sitting untouched in
+a hand at game end ambiguous between "dealt there at genesis" and "drawn
+there later, never played," breaking reverse genesis-derivation. Fixed by
+recording the card id too, but **`fullEventLog()` redacts
+`details.draws[].card_id` for any game that isn't yet `completed`**,
+preserving the existing live-game privacy guarantee exactly while making
+the real card id available to replay (which only ever operates on
+`completed` games, where hands are already fully revealed to spectators
+anyway).
+
+**Suppression and effect-state changes also needed a historical trail.**
+`BoardState::suppress()`/`clearSuppressionsFrom()`/
+`clearEndOfRoundSuppressions()`/`setEffectState()`/`clearEffectState()`
+used to mutate a mood's suppression/effect-state bag with no record
+beyond the final persisted value. Two new queues,
+`$pendingSuppressionChanges`/`consumeSuppressionChanges()` and
+`$pendingEffectStateChanges`/`consumeEffectStateChanges()`, mirror the
+existing `$pendingCardMoves`/`consumeCardMoves()` pattern (a clear that
+was already a no-op emits nothing); `moveHandToInPlay()`/
+`moveDiscardToInPlay()` also queue one effect-state entry per key of a
+freshly-played mood's initial effect-state bag (`playedFromZone`, any
+cost-time staged state like Bliss's `blissColor`). `GameService::
+withCardHistory()` folds both queues into `details` as
+`suppression_changes`/`effect_state_changes`, the same way `card_moves`/
+`ownership_changes` already are.
+
+**A subtlety caught during implementation, not by any test**: a
+Duplicity-triggered repeat re-tags `details['played_from']` on the *same*
+card (read from the mood's own permanently-persisted `playedFromZone`
+effect-state), which would otherwise look like a second "entering play"
+event. `applyEventForward()`'s forward walk guards on
+`!isset($inPlay[$cardId])` -- only the chronologically-first occurrence
+with an empty in-play slot actually triggers entering-play logic; the
+reverse walk uses a precomputed "first `played_from` event id per card"
+map so only that exact event id triggers the "eject from in-play" undo
+step.
+
+Out of scope, documented rather than silently dropped: **draft-phase
+pick-by-pick replay** (`quick_draft`'s `draft_round_picks` table actually
+has enough data for this already; `winston_draft`/`grid_draft` delete
+their own draft-state tables on completion and would need their own
+persisted picks-log first -- a natural, separate follow-up) and
+**team-format propose/reject intermediate steps** (no board-state impact,
+only the final confirmed choice is logged).
+
+The frontend reuses the board renderer entirely -- see "Watch replay" in
+`web-static/README.md` for the step-control UI.
+
+### Browser push notifications (issue #108)
+
+First pass at issue #108's notification system: real-time browser push
+for three event types --
+
+- **"It's your turn"**, covering every "waiting on you" state the lobby's
+  own `is_awaiting_your_response`/`awaiting_response_usernames` fields
+  recognize (see `GET /games` above and `isAwaitingResponseFrom()`), not
+  just an ordinary turn advance:
+  - `game_rounds.current_turn_game_player_id` actually changing to a new
+    player (see `GameService::updateRoundTurnState()`'s own docblock -- a
+    same-player extra play from a banked grant or a Duplicity repeat is
+    deliberately *not* re-notified).
+  - A brand new round being created with a real (non-null)
+    `current_turn_game_player_id` already set from the moment it's
+    inserted -- round 1 of an ordinary (non-team) game in `startGame()`,
+    an ordinary round-to-round handoff in `finishScoringAndAdvance()`,
+    and Awe's non-team skip-scoring path in `skipScoringAndAdvance()`.
+    These `INSERT INTO game_rounds` statements don't go through
+    `updateRoundTurnState()`'s own `UPDATE` (there's no existing row yet
+    to update), so each calls `notifyItsYourTurn()` directly right after
+    the insert -- otherwise every round-to-round handoff would silently
+    never notify, even though same-round turn advances already did.
+  - A fresh pending-decision batch targeting a player (e.g. Compulsion
+    asking an opponent which card to give up -- see
+    `GameService::writePendingBatch()`/`notifyPendingDecisionTargets()`).
+  - A fresh team `turn_order`/`draw_recipient` decision -- every candidate
+    teammate is notified at once, since either may propose (see
+    `createTeamDecision()`).
+  - `closed_team`'s pregame blind card pass -- all 4 seated players are
+    notified the moment the game starts, since every one of them owes a
+    pass before round 1 can unfreeze (see `startGame()`'s own
+    `closed_team` branch).
+  - A best-of-three draft match's game 2/3 starting frozen on
+    `setPlayFirstNextMatchGame()` -- only the previous game's loser is
+    notified, since they're the only one who can actually act (see
+    `startGame()`'s own `match_game_number > 1` branch and
+    `isAwaitingFirstPlayerChoiceFrom()`).
+
+  Each of these carries its own notification `tag` (`turn`/`decision`/
+  `team-decision`/`initial-pass`/`first-player-choice`) so the OS never
+  collapses two different "your turn" reasons for the same game into one
+  notification -- see `GameService::notifyGamePlayersItsYourTurn()`.
+- **"Friend request received"** -- sent from the `POST /friends/invite`
+  route handler once `FriendshipService::sendInvite()` succeeds. Its own
+  click-through `url` is `/game/?open_friends=1`, not `/friends/` (there's
+  no standalone friends page -- the friends UI is a `<dialog>` on the
+  lobby itself) -- `game.js`'s startup IIFE opens that dialog when it
+  sees `open_friends=1`, the same way `?spectate_game_id` already jumps
+  straight into spectator mode.
+- **"A game you're in just finished"** -- sent to every winning and losing
+  user from `GameService::recordGameCompletionStats()`, the single method
+  already called from every code path that completes a game (see its own
+  docblock) -- **except** whichever player's own move/response/resignation
+  is what just completed it. That player is still credited a lifetime
+  win/loss like everyone else; they just don't get a push telling them
+  something they're already looking at on screen. Every completion path
+  threads its own caller's `game_player_id` down to
+  `recordGameCompletionStats()`'s `$excludeGamePlayerId` for this --
+  `playMood()`/`pass()`/`respondToDecision()`'s own `$gamePlayerId`, or
+  `resignGame()`'s own resigning player -- through `finishPlay()`/
+  `advanceTurn()`/`advanceTeamTurn()`/`scoreRoundAndAdvance()`/
+  `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()`, none of
+  which otherwise cared who was asking.
+
+Discord notifications (issue #232) reuse this same trigger/preference
+design as a second delivery channel, rather than a parallel one -- see
+"Discord" below for both account linking and how the Discord DM itself
+gets sent.
+
+**`NotificationService`** (`src/Notifications/NotificationService.php`,
+formerly `PushNotificationService` back when browser push was the only
+channel that existed) owns the trigger/preference/cooldown/queue
+orchestration described in this whole section, and fans each decided-on
+notification out to every configured `NotificationChannel`
+(`PushNotificationChannel`, `Discord\DiscordNotificationChannel`) --
+each channel only decides *how* to deliver to a user who's already
+cleared the shared preference/cooldown check, never *whether* to. A
+channel with nothing to deliver to for this particular user (no push
+subscription, no linked Discord account) or nothing configured at all
+(no VAPID keys, no bot token) returns `false` from its own `send()`
+rather than being treated as a failure -- a player linked to both gets
+one push *and* one Discord DM per event, a player linked to only one
+gets just that one, and a player linked to neither still doesn't error,
+just delivers nothing. One channel throwing is caught and logged without
+stopping the others from being tried.
+
+**5-minute cooldown per (user, game), with a queue-and-replace fallback**:
+`NotificationService::notify()` checks whether that user was already
+notified about this specific *scope* within the last 5 minutes
+(`NotificationCooldownRepository::wasNotifiedRecently()`/`markNotified()`,
+backed by the `notification_cooldowns` table added in migration `0049`)
+-- otherwise a player actively working through several turns/decisions in
+a row would get one notification per event. `NotificationScope` defines
+what a scope is: `forGame($gameId)` for any it's-your-turn/game-finished
+notification (regardless of which of the several tag suffixes triggered
+it -- an ordinary turn, a Compulsion-style decision, a team decision,
+etc. all share one scope per game), or the constant `FRIEND_REQUEST` for
+friend requests, which aren't tied to any game. Scoping this way (rather
+than one cooldown per user covering every game at once) means a player
+active in several games simultaneously can still get more than one round
+of notifications within 5 minutes overall, but never more than one round
+within 5 minutes about any *one* specific game. The cooldown (and the
+queued-notification cleanup below) is only stamped once at least one
+channel actually delivered -- an event nobody could be reached about on
+any channel doesn't burn the cooldown, so the next attempt still gets a
+real shot instead of being silently queued behind it.
+
+Rather than simply dropping a notification that arrives during its
+scope's cooldown, it's queued instead (`QueuedNotificationRepository`,
+backed by the `queued_notifications` table added in migration `0048` and
+re-keyed by migration `0049`) and delivered later by a cron flush.
+`queued_notifications`' primary key is `(user_id, scope)` -- one row per
+user *per scope* -- so `enqueue()`'s `INSERT ... ON DUPLICATE KEY UPDATE`
+naturally *replaces* whatever was queued for that same scope before,
+without touching a different scope's own queued row: a player busy in
+game A for 20 minutes ends up with exactly one queued notification for
+game A reflecting whatever was truly last there, while a notification
+that arrived for game B in the meantime is queued separately and
+delivered on its own. `bin/send_queued_notifications.php` (meant to run
+every ~15 minutes via cron) calls
+`NotificationService::flushQueuedNotifications()`, which walks every
+queued row *at least as old as the same 5-minute `COOLDOWN_SECONDS`*
+(`QueuedNotificationRepository::dueForFlush()`) -- a row queued more
+recently is left alone for a later flush, so a cron run landing moments
+after something was queued doesn't deliver it before the player's had a
+fair chance to clear it themselves (see below) -- re-checks that user's
+preference at flush time (they may have turned it off since queueing --
+this is why the rendered payload's `preference_key` is stored alongside
+it), sends if still eligible, and clears the row either way. A live
+(non-queued) send also clears any leftover queued row for that same
+(user, scope) first, since a fresher notification about that same game
+(or the same friend-request scope) just went out and an older queued
+reminder would otherwise still arrive stale on top of it.
+
+Separately, `GameService::clearQueuedNotificationForGamePlayer()` (called
+from `playMood()`, `pass()`, `resignGame()`, `respondToDecision()`,
+`submitInitialCardPass()`, `proposeTeamDecision()`, `confirmTeamDecision()`,
+and `setPlayFirstNextMatchGame()`) and the `/friends/respond` route handler
+(`NotificationService::clearQueuedFriendRequest()`) clear a queued
+notification early, the moment the player actually takes the action it
+would have reminded them about -- so the cron flush never delivers a
+stale "it's your turn" for a turn already taken.
+`QueuedNotificationRepository::clearForGameIfMatches()`/
+`clearFriendRequestForUser()` delete by exact scope match (`game:{id}` or
+`friend_request`), so clearing one game's queued reminder can never touch
+a different game's, or a friend request's.
+
+**Architecture**: the standard three-part Web Push stack -- Push API
+(`PushManager.subscribe()`) + Notifications API (`ServiceWorkerRegistration
+.showNotification()`) + a Service Worker (`web-static/service-worker.js`,
+registered at the site root so it can show/handle a notification
+regardless of which page happens to be open). See "Browser push
+notifications" in `web-static/README.md` for the frontend half.
+
+**Backend** (`minishlink/web-push`, added via Composer):
+`src/Notifications/PushNotificationChannel.php` wraps the library's
+`WebPush` client. Every `notifyXxx()` method is a deliberate best-effort,
+fire-and-forget call -- a stale/expired subscription, an unreachable push
+service, or VAPID keys not being configured at all (e.g. local dev) must
+never fail the request that triggered it, so `notify()`'s whole body (and
+each row of `flushQueuedNotifications()`'s loop individually) is wrapped
+in `try`/`catch (\Throwable)`, logging to `src/notification-errors.log`
+(same convention as `logMailError()`/`MaintenanceGate`'s own error logs)
+rather than letting anything propagate. A subscription the push service
+reports as gone-for-good (HTTP 404/410 --
+`MessageSentReport::isSubscriptionExpired()`) is pruned from
+`push_subscriptions` automatically on the next send attempt.
+
+Every other reason `notify()` might not actually deliver anything --
+the recipient's own preference for that event type is off, they have no
+subscriptions on file, VAPID keys aren't configured, the send is inside
+its 5-minute cooldown and gets queued instead -- is also logged to the
+same file, since none of these are exceptions (nothing to `catch`) and
+were previously silent, making a "nothing happened, and I don't know
+why" report undiagnosable from the log alone. Likewise, `WebPush::flush()`
+returns one `MessageSentReport` per subscription rather than throwing
+per-message, so a failed send that isn't a plain expired-subscription
+(a VAPID key mismatch, an auth error, a malformed payload, the push
+service itself erroring) used to be dropped in `sendNow()`'s own loop
+with zero trace -- indistinguishable from a quiet success. It's now
+logged too, with the report's own reason, HTTP status, and response
+body.
+
+`minishlink/web-push` itself only declares `psr/http-client` as an
+interface dependency, not a concrete implementation -- `composer.json`
+also requires `guzzlehttp/guzzle` + `php-http/guzzle7-adapter` (the exact
+pair the library's own test suite uses) so `php-http/discovery` actually
+finds a PSR-18 client at runtime. Without one of these, every send throws
+`Http\Discovery\Exception\NotFoundException` ("No PSR-18 clients
+found..."), which is exactly the kind of failure the `try`/`catch` above
+now keeps from ever reaching the triggering request.
+
+**Storage** (migrations `0048_add_push_notifications.sql` and
+`0049_scope_notification_cooldown_and_queue_by_game.sql`): `push_subscriptions`
+(one row per subscribed browser/device per user -- `endpoint`/`p256dh_key`/
+`auth_key`, exactly what `PushSubscription.toJSON()` returns; uniqueness is
+enforced on a SHA-256 `endpoint_hash` rather than the raw `endpoint` column,
+since push-service endpoint URLs can run past reasonable index key-length
+limits); `notification_preferences` (one row per user, three boolean
+columns -- `notify_your_turn`/`notify_friend_request`/`notify_game_finished`
+-- created lazily the first time a user changes a setting; a user with no
+row yet gets all-`true` defaults from `NotificationPreferenceRepository::forUser()`);
+`notification_cooldowns` (one row per `(user_id, scope)` pair, `last_notified_at`
+-- see `NotificationCooldownRepository`); and `queued_notifications` (one
+row per `(user_id, scope)` pair, holding the rendered title/body/url/tag
+and originating `preference_key` for whatever notification about that
+scope is currently delayed by the cooldown -- see above).
+
+**Config**: `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` in `.env`
+(see `.env.example`), read via the same `Config::get()` pattern `Mailer.php`
+uses for `SMTP_*`. `VAPID_SUBJECT` is a `mailto:`/`https://` URL identifying
+the sender, per the Web Push protocol. Generate a key pair with the
+`web-push` npm CLI or `minishlink/web-push`'s own `VAPID::createVapidKeys()`.
+`GET /notifications/vapid-public-key` hands the public half to the
+frontend; if the server has no keys configured, `PushNotificationChannel`
+silently no-ops every send rather than erroring.
+
+### Discord (issue #232)
+
+Three parts: account linking, the Interactions Endpoint plumbing, and
+actually sending a notification as a Discord DM
+(`Discord\DiscordNotificationChannel`, one of the `NotificationChannel`s
+`NotificationService` fans a notification out to -- see "Browser push
+notifications" above for the shared trigger/preference/cooldown/queue
+orchestration both channels sit behind). A slash-command/button-driven
+"play the game via Discord" is still out of scope here -- that's issue
+#233's own territory, and the only interaction type
+`DiscordInteractionsService` handles today is still just `PING`.
+
+**Account linking** is Discord's standard OAuth2 authorization-code flow,
+`identify` scope only (`DiscordOAuthService`) -- `GET /discord/oauth/start`
+(requires auth) redirects the browser straight to Discord's own consent
+screen; `GET /discord/oauth/callback` exchanges the returned `code` for an
+access token, reads the player's Discord user id/username from
+`GET /users/@me`, and links it to the current session's user via
+`DiscordAccountRepository::link()` (migration `0050`'s `discord_accounts`
+table, one row per MoodSwings user). The OAuth `state` param is
+CSRF-protected the same shape `email_verifications` uses for its own
+mailed tokens -- a random value, only its SHA-256 hash persisted
+(`discord_oauth_states`, migration `0050`), single-use
+(`DiscordOAuthStateRepository::consumeValid()` deletes on read) and
+short-lived (10 minutes), and checked against the *same* user id that
+requested it (a state issued for user A completing the callback while
+somehow logged in as user B is rejected, never silently linked to B).
+Nothing from the OAuth exchange itself is retained past that one request
+-- no access/refresh token is stored -- since every actual notification
+later sends through the Application's own **bot token** against the REST
+API, never the player's own OAuth grant. On success (or a
+`DiscordLinkException`), `/discord/oauth/callback` redirects the browser
+back to the lobby (`?discord_linked=1` or `?discord_link_error=<message>`)
+at the *site's own domain root* (`/game/`), not `APP_URL` -- unlike
+`/discord/oauth/callback` itself (a PHP route, correctly under `APP_URL`'s
+own `/app` prefix), `/game/` is the static frontend, served from the
+domain root. `siteRootUrl()` in `index.php` gets this right: it prefers
+the optional `SITE_URL` config value when set, otherwise derives it by
+stripping `APP_URL`'s own trailing `/app`.
+
+Unlike the `identify` scope's own OAuth-only requirements, actually
+letting the bot DM a linked player later needs the Discord Application
+registered in the Developer Portal as installable directly to a user's
+own account ("User Install", under the Installation tab) -- this is what
+lets a DM be opened without the bot sharing a server with that player.
+That installation happens as a side effect of the same OAuth consent
+screen `buildAuthorizeUrl()` sends the player to; no separate scope is
+requested for it here.
+
+**The Interactions Endpoint** (`DiscordInteractionsService`, mounted at
+`POST /discord/interactions`) is Discord's HTTP-based alternative to a
+persistent gateway/WebSocket bot connection: every slash command/button/
+modal interaction Discord ever sends this app arrives as a single signed
+POST here, so the whole "bot" runs as an ordinary request in the same
+Apache/PHP process model as the rest of `php-app/` -- no separate
+long-running process to deploy or keep alive. Every request is
+Ed25519-signature-verified (`sodium_crypto_sign_verify_detached()` over
+the exact raw body, no new Composer dependency needed --
+`ext-sodium` ships with PHP) against `DISCORD_PUBLIC_KEY` before its JSON
+is even parsed -- a request that fails verification gets a bare `401`,
+never a rendered response. The only interaction type handled so far is
+`PING` (Discord's own one-time "is this endpoint alive and correctly
+verified" check, sent the moment the Interactions Endpoint URL is saved
+in the Developer Portal), answered with a bare `PONG` -- no slash command
+is registered yet (that's issue #233's own "play the game via Discord"
+territory), so nothing else is ever actually sent here today. Every
+rejected request (missing/malformed signature headers, no
+`DISCORD_PUBLIC_KEY` configured, a signature that doesn't verify, or --
+defensively -- `ext-sodium` itself unavailable) logs why to its own
+`discord-errors.log` (same convention as `notification-errors.log`), so a
+failed "verify this URL" attempt in the Developer Portal is actually
+diagnosable from the deployed site alone.
+
+**The Interactions Endpoint URL must include this deployment's own path
+prefix, not just its domain** -- `php-app/` (and therefore every route in
+the table above, `/discord/interactions` included) is commonly deployed
+under a subfolder like `/app` rather than a domain's own document root
+(see `APP_URL`'s own convention, e.g. `https://example.com/app`); the
+Developer Portal has no notion of that prefix on its own, so it has to be
+typed in explicitly, e.g. `https://example.com/app/discord/interactions`.
+Pointing it at the bare domain instead fails the Portal's own live
+verification with "The specified interactions endpoint url could not be
+verified" -- indistinguishable, from the Portal's side, from every other
+possible failure, but never something `discord-errors.log` will show
+anything for, since the request never reaches this app's own routing at
+all.
+
+**Sending a notification** (`Discord\DiscordNotificationChannel`) uses
+the Application's own bot token, never a player's OAuth grant --
+consistent with `DiscordOAuthService`'s own docblock on why nothing from
+that exchange is retained. A DM is two REST calls every time (Discord has
+no persistent-channel concept to cache here): `POST /users/@me/channels`
+with the recipient's Discord user id opens (or re-opens -- idempotent)
+a DM channel, then `POST /channels/{id}/messages` sends into it. A user
+with no linked Discord account, or a deployment with no
+`DISCORD_BOT_TOKEN` configured, is a no-op from this channel's own
+`send()` (`false`, not an exception) -- `NotificationService` treats that
+exactly like `PushNotificationChannel` returning `false` for a user with
+no push subscription, not a failure. The message body resolves
+`$payload`'s relative `url` (e.g. `/game/?id=7`) against `SiteUrl::root()`
+first, since Discord (unlike the Service Worker handling a push payload's
+`url` directly) has no notion of a relative in-app link. Every rejection
+or send failure logs to the same `discord-errors.log`
+`DiscordInteractionsService` already writes to.
+
+**Config**: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
+`DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` in `.env`, read the same
+`Config::get()` way `VAPID_*`/`SMTP_*` are -- from the Developer Portal's
+General Information (Application ID, Public Key) and Bot (Token) tabs,
+plus OAuth2 → General (Client Secret).
+
+**Two separate Discord Applications, one per environment** -- unlike
+`VAPID_*`, which is shared freely across dev/prod, a Discord Application
+only ever has one Interactions Endpoint URL and one set of OAuth2
+redirect URIs, so one Application can't cleanly serve both environments
+at once. Dev and prod each get their own Application (own Application
+ID/Public Key/Bot Token/Client Secret, own OAuth2 redirect URI pointing
+at that environment's own `/discord/oauth/callback`, own Interactions
+Endpoint URL) -- the same reasoning `DB_*`/`FTP_*` already get a
+`DEV_`-prefixed secret pair while `SMTP_*`/`VAPID_*` don't:
+`deploy-dev.yml` reads `DEV_DISCORD_CLIENT_ID`/`DEV_DISCORD_CLIENT_SECRET`/
+`DEV_DISCORD_PUBLIC_KEY`/`DEV_DISCORD_BOT_TOKEN` into the same
+unprefixed `DISCORD_*` `.env` keys `deploy.yml` writes from the
+unprefixed secrets -- the application code itself has no notion of
+"which environment," same as every other `Config::get()` value.
 
 ### Lifetime stats
 
