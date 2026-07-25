@@ -183,9 +183,13 @@
         // A real page navigation (kicks off the OAuth2 redirect flow), not
         // an apiRequest() call -- driven from a <button> rather than an <a
         // href> so it renders identically to its sibling Disconnect/Close
-        // buttons instead of as a text link.
+        // buttons instead of as a text link. Needs the same API_BASE
+        // ('/app') prefix as apiRequest() itself -- php-app/ is deployed
+        // under that path, not the domain root (see "Deployment" in the
+        // top-level README), so a bare '/discord/oauth/start' 404s against
+        // the static site instead of reaching this route.
         discordConnectLink.addEventListener('click', () => {
-            window.location.href = '/discord/oauth/start';
+            window.location.href = API_BASE + '/discord/oauth/start';
         });
 
         // The dialog itself (and its "not supported" message) must still be
