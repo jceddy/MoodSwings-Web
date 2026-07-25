@@ -5314,7 +5314,7 @@
         showLobby();
 
         // A friend-request push notification's own deep link
-        // (PushNotificationService::notifyFriendRequest()) -- there's no
+        // (NotificationService::notifyFriendRequest()) -- there's no
         // standalone /friends/ page to send it to, since the friends UI
         // is just a dialog on this same lobby, so it asks the lobby to
         // open that dialog itself instead. Same open-then-load pattern

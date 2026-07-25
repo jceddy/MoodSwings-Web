@@ -550,12 +550,12 @@
     </dialog>
 
     <!-- Browser push notifications (issue #108) -- see initNotifications()
-         in game.js and PushNotificationService.php. The same
-         notify-me-when preferences fieldset applies to every linked
-         channel at once (push and/or Discord) -- issue #232's own
-         DiscordOAuthService/DiscordAccountRepository account-linking only
-         so far; actually sending a Discord notification is still a
-         follow-up (see php-app/README.md's own "Discord" section). -->
+         in game.js and NotificationService.php. The same notify-me-when
+         preferences fieldset applies to every linked channel at once
+         (push and/or Discord) -- issue #232's own DiscordOAuthService/
+         DiscordAccountRepository handle account linking, and
+         Discord\DiscordNotificationChannel actually sends the DM (see
+         php-app/README.md's own "Discord" section). -->
     <dialog id="notifications-dialog">
         <h2>Notifications</h2>
         <p id="notifications-unsupported" hidden>Your browser doesn't support push notifications.</p>

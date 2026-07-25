@@ -18,6 +18,7 @@ use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Discord\DiscordInteractionsService;
 use MoodSwings\Discord\DiscordLinkException;
+use MoodSwings\Discord\DiscordNotificationChannel;
 use MoodSwings\Discord\DiscordOAuthService;
 use MoodSwings\Friends\CannotFriendSelfException;
 use MoodSwings\Friends\FriendshipAlreadyExistsException;
@@ -32,7 +33,8 @@ use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Maintenance\MaintenanceGate;
-use MoodSwings\Notifications\PushNotificationService;
+use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Notifications\PushNotificationChannel;
 use MoodSwings\Repository\DiscordAccountRepository;
 use MoodSwings\Repository\DiscordOAuthStateRepository;
 use MoodSwings\Repository\EmailVerificationRepository;
@@ -50,6 +52,7 @@ use MoodSwings\Rules\Exceptions\IllegalPlayException;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\SiteUrl;
 
 header('Content-Type: application/json');
 
@@ -116,26 +119,6 @@ function redirectTo(string $url): never
     header('Location: ' . $url);
     http_response_code(302);
     exit;
-}
-
-/**
- * The deployed site's own domain root -- distinct from APP_URL, which
- * (per its own documented convention) includes the PHP app's fixed
- * '/app' path prefix (see "Deployment" in the top-level README). Prefers
- * the optional SITE_URL config value when set; otherwise derives it by
- * stripping APP_URL's own trailing '/app', since that path is a fixed
- * part of how every environment deploys (see deploy.yml/deploy-dev.yml's
- * `dist/app/` layout), not something that varies per install.
- */
-function siteRootUrl(): string
-{
-    $siteUrl = trim((string) Config::get('SITE_URL', ''));
-    if ($siteUrl !== '') {
-        return rtrim($siteUrl, '/');
-    }
-
-    $appUrl = rtrim((string) Config::get('APP_URL', ''), '/');
-    return str_ends_with($appUrl, '/app') ? substr($appUrl, 0, -4) : $appUrl;
 }
 
 function publicUser(array $user): array
@@ -379,7 +362,17 @@ $pushSubscriptions = new PushSubscriptionRepository();
 $notificationPreferences = new NotificationPreferenceRepository();
 $queuedNotifications = new QueuedNotificationRepository();
 $notificationCooldowns = new NotificationCooldownRepository();
-$pushNotifications = new PushNotificationService($pushSubscriptions, $notificationPreferences, $queuedNotifications, $notificationCooldowns);
+// $discordAccounts is constructed here (rather than alongside the rest of
+// the /discord/* routes further below) so it can feed
+// DiscordNotificationChannel -- the "notify me when..." preferences
+// dialog applies to every linked channel at once (push and/or Discord),
+// so both channels are wired into the same NotificationService rather
+// than kept as two independent senders.
+$discordAccounts = new DiscordAccountRepository();
+$notifications = new NotificationService($notificationPreferences, $queuedNotifications, $notificationCooldowns, [
+    new PushNotificationChannel($pushSubscriptions),
+    new DiscordNotificationChannel($discordAccounts),
+]);
 
 $friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
 
@@ -403,7 +396,7 @@ if ($path === '/friends/invite' && $method === 'POST') {
 
     try {
         $target = $friendships->sendInvite((int) $currentUser['id'], (string) ($body['username_or_email'] ?? ''));
-        $pushNotifications->notifyFriendRequest((int) $target['id'], (string) $currentUser['username']);
+        $notifications->notifyFriendRequest((int) $target['id'], (string) $currentUser['username']);
         respond(201, [
             'status' => 'ok',
             'message' => 'Friend request sent.',
@@ -423,7 +416,7 @@ if ($path === '/friends/respond' && $method === 'POST') {
 
     try {
         $friendships->respondToInvite((int) $currentUser['id'], (int) ($body['user_id'] ?? 0), $action);
-        $pushNotifications->clearQueuedFriendRequest((int) $currentUser['id']);
+        $notifications->clearQueuedFriendRequest((int) $currentUser['id']);
         respond(200, ['status' => 'ok', 'message' => match ($action) {
             'accept' => 'Friend request accepted.',
             'decline' => 'Friend request declined.',
@@ -499,7 +492,8 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }
 
-$discordAccounts = new DiscordAccountRepository();
+// $discordAccounts itself was already constructed above, alongside
+// $notifications.
 $discordOAuth = new DiscordOAuthService($discordAccounts, new DiscordOAuthStateRepository());
 $discordInteractions = new DiscordInteractionsService();
 
@@ -523,7 +517,7 @@ if ($path === '/discord/oauth/start' && $method === 'GET') {
 
 if ($path === '/discord/oauth/callback' && $method === 'GET') {
     $currentUser = requireAuth($auth);
-    $lobbyUrl = siteRootUrl() . '/game/';
+    $lobbyUrl = SiteUrl::root() . '/game/';
 
     try {
         $discordOAuth->handleCallback((int) $currentUser['id'], (string) ($_GET['code'] ?? ''), (string) ($_GET['state'] ?? ''));
@@ -648,7 +642,7 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $pushNotifications);
+$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/

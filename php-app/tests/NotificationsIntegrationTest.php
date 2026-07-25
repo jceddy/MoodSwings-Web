@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace MoodSwings\Tests;
 
 use MoodSwings\Notifications\NotificationScope;
-use MoodSwings\Notifications\PushNotificationService;
+use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Notifications\PushNotificationChannel;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
@@ -65,16 +66,23 @@ final class NotificationsIntegrationTest extends TestCase
     protected function tearDown(): void
     {
         // Several tests below putenv() VAPID keys to exercise
-        // PushNotificationService's "not configured" branch -- clear them
+        // NotificationService's "not configured" branch -- clear them
         // afterward so no other test file (running later in the same
         // PHPUnit process) inherits a stale value.
         putenv('VAPID_PUBLIC_KEY');
         putenv('VAPID_PRIVATE_KEY');
     }
 
-    private function service(): PushNotificationService
+    // Only the push channel is wired in here -- these tests cover the
+    // shared preference/cooldown/queue orchestration NotificationService
+    // itself owns, which behaves identically regardless of how many
+    // channels are configured; Discord\DiscordNotificationChannel has its
+    // own dedicated test coverage (DiscordNotificationChannelTest).
+    private function service(): NotificationService
     {
-        return new PushNotificationService($this->subscriptions, $this->preferences, $this->queuedNotifications, $this->cooldowns);
+        return new NotificationService($this->preferences, $this->queuedNotifications, $this->cooldowns, [
+            new PushNotificationChannel($this->subscriptions),
+        ]);
     }
 
     // enqueue() always stamps queued_at = NOW(), so tests that need a row
@@ -180,7 +188,7 @@ final class NotificationsIntegrationTest extends TestCase
         self::assertSame('https://push.example.com/two', $remaining[0]['endpoint']);
     }
 
-    // PushNotificationService's notify() must never attempt a network call
+    // NotificationService's notify() must never attempt a network call
     // (and therefore never throw) when there's nothing to send to -- these
     // cases are all resolved from the database alone, before WebPush is
     // ever constructed, so they're safe to assert without a real push
@@ -260,7 +268,7 @@ final class NotificationsIntegrationTest extends TestCase
         self::assertFalse($this->cooldowns->wasNotifiedRecently($userId, NotificationScope::forGame(2), 300));
     }
 
-    // PushNotificationService::notify() checks the cooldown before ever
+    // NotificationService::notify() checks the cooldown before ever
     // looking at subscriptions or building a WebPush client -- pre-marking
     // it here means a still-configured, still-subscribed user's second
     // notification for the SAME game returns immediately without ever

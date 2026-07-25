@@ -7,7 +7,7 @@ namespace MoodSwings\Repository;
 use MoodSwings\Database\Connection;
 
 /**
- * Backs PushNotificationService::notify()'s 5-minute cooldown, scoped per
+ * Backs NotificationService::notify()'s 5-minute cooldown, scoped per
  * (user, NotificationScope) rather than globally per user -- see
  * migration 0049's own docblock for why this replaced
  * notification_preferences.last_notified_at's single per-user timestamp.
