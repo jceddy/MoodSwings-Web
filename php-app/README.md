@@ -2941,13 +2941,30 @@ for three event types --
   which otherwise cared who was asking.
 
 Discord notifications (issue #232) reuse this same trigger/preference
-design as a second delivery channel -- see "Discord" below for account
-linking; actually sending a notification over Discord (rather than just
-linking the account) is still a follow-up.
+design as a second delivery channel, rather than a parallel one -- see
+"Discord" below for both account linking and how the Discord DM itself
+gets sent.
+
+**`NotificationService`** (`src/Notifications/NotificationService.php`,
+formerly `PushNotificationService` back when browser push was the only
+channel that existed) owns the trigger/preference/cooldown/queue
+orchestration described in this whole section, and fans each decided-on
+notification out to every configured `NotificationChannel`
+(`PushNotificationChannel`, `Discord\DiscordNotificationChannel`) --
+each channel only decides *how* to deliver to a user who's already
+cleared the shared preference/cooldown check, never *whether* to. A
+channel with nothing to deliver to for this particular user (no push
+subscription, no linked Discord account) or nothing configured at all
+(no VAPID keys, no bot token) returns `false` from its own `send()`
+rather than being treated as a failure -- a player linked to both gets
+one push *and* one Discord DM per event, a player linked to only one
+gets just that one, and a player linked to neither still doesn't error,
+just delivers nothing. One channel throwing is caught and logged without
+stopping the others from being tried.
 
 **5-minute cooldown per (user, game), with a queue-and-replace fallback**:
-`PushNotificationService::notify()` checks whether that user was already
-sent a push about this specific *scope* within the last 5 minutes
+`NotificationService::notify()` checks whether that user was already
+notified about this specific *scope* within the last 5 minutes
 (`NotificationCooldownRepository::wasNotifiedRecently()`/`markNotified()`,
 backed by the `notification_cooldowns` table added in migration `0049`)
 -- otherwise a player actively working through several turns/decisions in
@@ -2958,12 +2975,13 @@ it -- an ordinary turn, a Compulsion-style decision, a team decision,
 etc. all share one scope per game), or the constant `FRIEND_REQUEST` for
 friend requests, which aren't tied to any game. Scoping this way (rather
 than one cooldown per user covering every game at once) means a player
-active in several games simultaneously can still get more than one push
-within 5 minutes overall, but never more than one within 5 minutes about
-any *one* specific game. The cooldown is stamped forward *before* the
-actual send is attempted (right after confirming there's a subscription
-and VAPID keys to send with), not after, so it also protects against
-piling up retries against an unreachable push service.
+active in several games simultaneously can still get more than one round
+of notifications within 5 minutes overall, but never more than one round
+within 5 minutes about any *one* specific game. The cooldown (and the
+queued-notification cleanup below) is only stamped once at least one
+channel actually delivered -- an event nobody could be reached about on
+any channel doesn't burn the cooldown, so the next attempt still gets a
+real shot instead of being silently queued behind it.
 
 Rather than simply dropping a notification that arrives during its
 scope's cooldown, it's queued instead (`QueuedNotificationRepository`,
@@ -2978,7 +2996,7 @@ game A reflecting whatever was truly last there, while a notification
 that arrived for game B in the meantime is queued separately and
 delivered on its own. `bin/send_queued_notifications.php` (meant to run
 every ~15 minutes via cron) calls
-`PushNotificationService::flushQueuedNotifications()`, which walks every
+`NotificationService::flushQueuedNotifications()`, which walks every
 queued row *at least as old as the same 5-minute `COOLDOWN_SECONDS`*
 (`QueuedNotificationRepository::dueForFlush()`) -- a row queued more
 recently is left alone for a later flush, so a cron run landing moments
@@ -2996,7 +3014,7 @@ Separately, `GameService::clearQueuedNotificationForGamePlayer()` (called
 from `playMood()`, `pass()`, `resignGame()`, `respondToDecision()`,
 `submitInitialCardPass()`, `proposeTeamDecision()`, `confirmTeamDecision()`,
 and `setPlayFirstNextMatchGame()`) and the `/friends/respond` route handler
-(`PushNotificationService::clearQueuedFriendRequest()`) clear a queued
+(`NotificationService::clearQueuedFriendRequest()`) clear a queued
 notification early, the moment the player actually takes the action it
 would have reminded them about -- so the cron flush never delivers a
 stale "it's your turn" for a turn already taken.
@@ -3013,7 +3031,7 @@ regardless of which page happens to be open). See "Browser push
 notifications" in `web-static/README.md` for the frontend half.
 
 **Backend** (`minishlink/web-push`, added via Composer):
-`src/Notifications/PushNotificationService.php` wraps the library's
+`src/Notifications/PushNotificationChannel.php` wraps the library's
 `WebPush` client. Every `notifyXxx()` method is a deliberate best-effort,
 fire-and-forget call -- a stale/expired subscription, an unreachable push
 service, or VAPID keys not being configured at all (e.g. local dev) must
@@ -3072,16 +3090,20 @@ uses for `SMTP_*`. `VAPID_SUBJECT` is a `mailto:`/`https://` URL identifying
 the sender, per the Web Push protocol. Generate a key pair with the
 `web-push` npm CLI or `minishlink/web-push`'s own `VAPID::createVapidKeys()`.
 `GET /notifications/vapid-public-key` hands the public half to the
-frontend; if the server has no keys configured, `PushNotificationService`
+frontend; if the server has no keys configured, `PushNotificationChannel`
 silently no-ops every send rather than erroring.
 
 ### Discord (issue #232)
 
-First pass: **account linking and the Interactions Endpoint plumbing
-only** -- actually sending a notification over Discord (the rest of issue
-#232) is a follow-up, since it needs `PushNotificationService`'s own
-cooldown/queue/preference orchestration factored out into something a
-second channel can share, rather than duplicated. What exists today:
+Three parts: account linking, the Interactions Endpoint plumbing, and
+actually sending a notification as a Discord DM
+(`Discord\DiscordNotificationChannel`, one of the `NotificationChannel`s
+`NotificationService` fans a notification out to -- see "Browser push
+notifications" above for the shared trigger/preference/cooldown/queue
+orchestration both channels sit behind). A slash-command/button-driven
+"play the game via Discord" is still out of scope here -- that's issue
+#233's own territory, and the only interaction type
+`DiscordInteractionsService` handles today is still just `PING`.
 
 **Account linking** is Discord's standard OAuth2 authorization-code flow,
 `identify` scope only (`DiscordOAuthService`) -- `GET /discord/oauth/start`
@@ -3158,14 +3180,29 @@ possible failure, but never something `discord-errors.log` will show
 anything for, since the request never reaches this app's own routing at
 all.
 
+**Sending a notification** (`Discord\DiscordNotificationChannel`) uses
+the Application's own bot token, never a player's OAuth grant --
+consistent with `DiscordOAuthService`'s own docblock on why nothing from
+that exchange is retained. A DM is two REST calls every time (Discord has
+no persistent-channel concept to cache here): `POST /users/@me/channels`
+with the recipient's Discord user id opens (or re-opens -- idempotent)
+a DM channel, then `POST /channels/{id}/messages` sends into it. A user
+with no linked Discord account, or a deployment with no
+`DISCORD_BOT_TOKEN` configured, is a no-op from this channel's own
+`send()` (`false`, not an exception) -- `NotificationService` treats that
+exactly like `PushNotificationChannel` returning `false` for a user with
+no push subscription, not a failure. The message body resolves
+`$payload`'s relative `url` (e.g. `/game/?id=7`) against `SiteUrl::root()`
+first, since Discord (unlike the Service Worker handling a push payload's
+`url` directly) has no notion of a relative in-app link. Every rejection
+or send failure logs to the same `discord-errors.log`
+`DiscordInteractionsService` already writes to.
+
 **Config**: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
 `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` in `.env`, read the same
 `Config::get()` way `VAPID_*`/`SMTP_*` are -- from the Developer Portal's
 General Information (Application ID, Public Key) and Bot (Token) tabs,
-plus OAuth2 → General (Client Secret). `DISCORD_BOT_TOKEN` isn't read by
-anything yet (no outbound bot REST call exists until the actual
-notification-sending follow-up), but is documented here since it's
-collected from the same portal visit as the rest.
+plus OAuth2 → General (Client Secret).
 
 **Two separate Discord Applications, one per environment** -- unlike
 `VAPID_*`, which is shared freely across dev/prod, a Discord Application

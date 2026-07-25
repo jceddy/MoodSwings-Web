@@ -115,7 +115,7 @@ final class DiscordInteractionsService
     }
 
     /**
-     * Same convention as PushNotificationService::logError() -- a
+     * Same convention as PushNotificationChannel::logError() -- a
      * dedicated log file rather than the general PHP error log, so a
      * rejected interaction (the Developer Portal's own verification
      * check, a forged request, a misconfigured DISCORD_PUBLIC_KEY) is

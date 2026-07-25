@@ -7,7 +7,7 @@ namespace MoodSwings\Game;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
-use MoodSwings\Notifications\PushNotificationService;
+use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
@@ -221,7 +221,7 @@ final class GameService
         private readonly UserDecklistService $userDecklists,
         private readonly ReplayStateBuilder $replay,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
-        private readonly ?PushNotificationService $notifications = null,
+        private readonly ?NotificationService $notifications = null,
     ) {
     }
 
@@ -8037,7 +8037,7 @@ final class GameService
      * (both from startGame()). $tag is per-caller so each of these gets
      * its own notification (never collapsed/deduped against a different
      * kind of "your turn" for the same game) -- see
-     * PushNotificationService::notifyYourTurn()'s own tag parameter.
+     * NotificationService::notifyYourTurn()'s own tag parameter.
      *
      * @param int[] $gamePlayerIds
      */

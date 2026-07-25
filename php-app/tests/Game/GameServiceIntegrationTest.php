@@ -12,7 +12,8 @@ use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Notifications\NotificationScope;
-use MoodSwings\Notifications\PushNotificationService;
+use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Notifications\PushNotificationChannel;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
@@ -211,11 +212,14 @@ final class GameServiceIntegrationTest extends TestCase
 
     /**
      * A second GameService instance, identical to $this->games except with
-     * a real PushNotificationService wired in -- used only by the handful
+     * a real NotificationService wired in -- used only by the handful
      * of tests confirming issue #108's notification hooks don't disturb
      * the game flow they're attached to. Deliberately not the default
      * $this->games every other test uses, so the other ~900 tests in this
-     * file stay unaffected by push-notification wiring.
+     * file stay unaffected by push-notification wiring. Only the push
+     * channel is configured (no Discord accounts exist in these tests'
+     * fixture data anyway), same scope as before NotificationService
+     * supported more than one channel.
      */
     private function gamesWithNotificationsWired(): GameService
     {
@@ -231,7 +235,12 @@ final class GameServiceIntegrationTest extends TestCase
             new RoundScorer(),
             $userDecklists,
             new ReplayStateBuilder($registry),
-            notifications: new PushNotificationService(new PushSubscriptionRepository(), new NotificationPreferenceRepository(), new QueuedNotificationRepository(), new NotificationCooldownRepository()),
+            notifications: new NotificationService(
+                new NotificationPreferenceRepository(),
+                new QueuedNotificationRepository(),
+                new NotificationCooldownRepository(),
+                [new PushNotificationChannel(new PushSubscriptionRepository())],
+            ),
         );
     }
 
@@ -3587,7 +3596,7 @@ final class GameServiceIntegrationTest extends TestCase
 
     // Issue #108's "it's your turn" push notification hooks into the same
     // updateRoundTurnState() this test above already exercises -- this
-    // confirms wiring a real PushNotificationService in doesn't break the
+    // confirms wiring a real NotificationService in doesn't break the
     // turn advance itself. No push_subscriptions rows exist for either
     // user, so notify() returns before ever touching the network (see
     // NotificationsIntegrationTest for that guarantee in isolation).
@@ -3607,7 +3616,7 @@ final class GameServiceIntegrationTest extends TestCase
 
     // GameService::clearQueuedNotificationForGamePlayer() -- a player
     // taking their action clears any reminder that was queued for THEM
-    // about THIS game (see PushNotificationService::notify()'s cooldown
+    // about THIS game (see NotificationService::notify()'s cooldown
     // queue), so the eventual cron flush doesn't nag them about a turn
     // they already took. clearForGameIfMatches()'s own scope-exactness
     // (game 4's clear can't cross-match game 42's queued row) is covered

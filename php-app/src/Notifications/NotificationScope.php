@@ -6,7 +6,7 @@ namespace MoodSwings\Notifications;
 
 /**
  * The unit the 5-minute cooldown and its queue-and-replace fallback
- * (PushNotificationService::notify()) operate on -- coarser than a
+ * (NotificationService::notify()) operate on -- coarser than a
  * notification's own `tag` (which further distinguishes turn/decision/
  * team-decision/etc. within the same game): every it's-your-turn or
  * game-finished notification about the SAME game shares one scope, so a

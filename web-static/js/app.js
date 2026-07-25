@@ -391,7 +391,7 @@ function respondToDecision(gameId, choices) {
 
 // Browser push notifications (issue #108) -- see initNotifications() in
 // game.js for the Service Worker registration + subscribe/unsubscribe flow
-// these back, and PushNotificationService.php for what actually gets sent.
+// these back, and PushNotificationChannel.php for what actually gets sent.
 function getVapidPublicKey() {
     return apiRequest('/notifications/vapid-public-key');
 }

@@ -7,7 +7,7 @@
 // Deliberately does nothing on 'install'/'activate' beyond the defaults
 // (no asset caching/offline support -- out of scope for this feature) and
 // nothing beyond 'push'/'notificationclick' -- see
-// PushNotificationService.php for the payload shape every push carries:
+// PushNotificationChannel.php for the payload shape every push carries:
 // {title, body, url, tag}.
 
 self.addEventListener('push', (event) => {
@@ -15,7 +15,7 @@ self.addEventListener('push', (event) => {
     try {
         payload = event.data ? event.data.json() : payload;
     } catch (e) {
-        // Non-JSON payload (shouldn't happen -- PushNotificationService.php
+        // Non-JSON payload (shouldn't happen -- PushNotificationChannel.php
         // always sends JSON) -- fall back to the generic title/empty body.
     }
 

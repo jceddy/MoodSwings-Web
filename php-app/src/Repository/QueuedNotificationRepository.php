@@ -70,7 +70,7 @@ final class QueuedNotificationRepository
      * action it was reminding them about -- giving every queued
      * notification the same grace window the original cooldown itself
      * used (bin/send_queued_notifications.php passes
-     * PushNotificationService::COOLDOWN_SECONDS here) means a player who
+     * NotificationService::COOLDOWN_SECONDS here) means a player who
      * acts shortly after triggering the notification still gets a chance
      * to clear it before the cron ever sees it, instead of it going out
      * moments after being queued.
