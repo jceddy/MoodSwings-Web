@@ -52,25 +52,40 @@ final class DiscordInteractionsService
     public function verify(string $rawBody, ?string $signatureHex, ?string $timestamp): bool
     {
         if ($signatureHex === null || $timestamp === null) {
+            $this->logError('Rejected interaction: missing X-Signature-Ed25519/X-Signature-Timestamp header');
             return false;
         }
 
         $publicKeyHex = Config::get('DISCORD_PUBLIC_KEY', '');
         if ($publicKeyHex === '') {
+            $this->logError('Rejected interaction: DISCORD_PUBLIC_KEY is not configured');
             return false;
         }
 
         $signature = @hex2bin($signatureHex);
         $publicKey = @hex2bin($publicKeyHex);
         if ($signature === false || $publicKey === false || strlen($signature) !== SODIUM_CRYPTO_SIGN_BYTES) {
+            $this->logError('Rejected interaction: malformed signature or public key hex');
             return false;
         }
 
+        // \Throwable, not just \SodiumException -- a hosting environment
+        // without ext-sodium available would otherwise surface as an
+        // uncaught \Error ("Call to undefined function
+        // sodium_crypto_sign_verify_detached()") instead of a clean 401,
+        // and with no trace of why in any log this class controls.
         try {
-            return sodium_crypto_sign_verify_detached($signature, $timestamp . $rawBody, $publicKey);
-        } catch (\SodiumException) {
+            $verified = sodium_crypto_sign_verify_detached($signature, $timestamp . $rawBody, $publicKey);
+        } catch (\Throwable $e) {
+            $this->logError('Rejected interaction: signature verification threw -- ' . $e->getMessage());
             return false;
         }
+
+        if (!$verified) {
+            $this->logError('Rejected interaction: signature did not verify against DISCORD_PUBLIC_KEY');
+        }
+
+        return $verified;
     }
 
     /**
@@ -97,5 +112,19 @@ final class DiscordInteractionsService
         // so nothing else is expected to arrive -- acknowledged the same
         // shape as PING rather than left unanswered.
         return ['type' => self::TYPE_PONG];
+    }
+
+    /**
+     * Same convention as PushNotificationService::logError() -- a
+     * dedicated log file rather than the general PHP error log, so a
+     * rejected interaction (the Developer Portal's own verification
+     * check, a forged request, a misconfigured DISCORD_PUBLIC_KEY) is
+     * actually diagnosable from the deployed site without shell access to
+     * the server's own PHP error log.
+     */
+    private function logError(string $message): void
+    {
+        $line = '[' . date('Y-m-d H:i:s') . "] {$message}\n";
+        error_log($line, 3, dirname(__DIR__) . '/discord-errors.log');
     }
 }
