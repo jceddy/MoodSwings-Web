@@ -180,6 +180,14 @@
             await refreshDiscordStatus();
         });
 
+        // A real page navigation (kicks off the OAuth2 redirect flow), not
+        // an apiRequest() call -- driven from a <button> rather than an <a
+        // href> so it renders identically to its sibling Disconnect/Close
+        // buttons instead of as a text link.
+        discordConnectLink.addEventListener('click', () => {
+            window.location.href = '/discord/oauth/start';
+        });
+
         // The dialog itself (and its "not supported" message) must still be
         // reachable even when push isn't supported at all -- otherwise
         // clicking "Notifications" would silently do nothing instead of

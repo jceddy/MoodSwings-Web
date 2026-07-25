@@ -5,6 +5,7 @@ php-app/.phpunit.result.cache
 php-app/src/mail-errors.log
 php-app/src/maintenance-errors.log
 php-app/src/notification-errors.log
+php-app/src/discord-errors.log
 
 # Deploy artifact
 /dist/

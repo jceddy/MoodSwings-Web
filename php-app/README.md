@@ -3128,7 +3128,27 @@ never a rendered response. The only interaction type handled so far is
 verified" check, sent the moment the Interactions Endpoint URL is saved
 in the Developer Portal), answered with a bare `PONG` -- no slash command
 is registered yet (that's issue #233's own "play the game via Discord"
-territory), so nothing else is ever actually sent here today.
+territory), so nothing else is ever actually sent here today. Every
+rejected request (missing/malformed signature headers, no
+`DISCORD_PUBLIC_KEY` configured, a signature that doesn't verify, or --
+defensively -- `ext-sodium` itself unavailable) logs why to its own
+`discord-errors.log` (same convention as `notification-errors.log`), so a
+failed "verify this URL" attempt in the Developer Portal is actually
+diagnosable from the deployed site alone.
+
+**The Interactions Endpoint URL must include this deployment's own path
+prefix, not just its domain** -- `php-app/` (and therefore every route in
+the table above, `/discord/interactions` included) is commonly deployed
+under a subfolder like `/app` rather than a domain's own document root
+(see `APP_URL`'s own convention, e.g. `https://example.com/app`); the
+Developer Portal has no notion of that prefix on its own, so it has to be
+typed in explicitly, e.g. `https://example.com/app/discord/interactions`.
+Pointing it at the bare domain instead fails the Portal's own live
+verification with "The specified interactions endpoint url could not be
+verified" -- indistinguishable, from the Portal's side, from every other
+possible failure, but never something `discord-errors.log` will show
+anything for, since the request never reaches this app's own routing at
+all.
 
 **Config**: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
 `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN` in `.env`, read the same
