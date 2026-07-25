@@ -52,6 +52,7 @@ jobs:
           DB_USER: ${{ secrets.DEV_DB_USER }}
           DB_PASSWORD: ${{ secrets.DEV_DB_PASSWORD }}
           APP_URL: ${{ vars.DEV_APP_URL }}
+          SITE_URL: ${{ vars.DEV_SITE_URL }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
@@ -117,6 +118,7 @@ jobs:
           write_env_var DB_USER "$DB_USER"
           write_env_var DB_PASSWORD "$DB_PASSWORD"
           write_env_var APP_URL "$APP_URL"
+          write_env_var SITE_URL "$SITE_URL"
           write_env_var SMTP_HOST "$SMTP_HOST"
           write_env_var SMTP_PORT "$SMTP_PORT"
           write_env_var SMTP_USERNAME "$SMTP_USERNAME"
