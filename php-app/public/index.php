@@ -118,6 +118,26 @@ function redirectTo(string $url): never
     exit;
 }
 
+/**
+ * The deployed site's own domain root -- distinct from APP_URL, which
+ * (per its own documented convention) includes the PHP app's fixed
+ * '/app' path prefix (see "Deployment" in the top-level README). Prefers
+ * the optional SITE_URL config value when set; otherwise derives it by
+ * stripping APP_URL's own trailing '/app', since that path is a fixed
+ * part of how every environment deploys (see deploy.yml/deploy-dev.yml's
+ * `dist/app/` layout), not something that varies per install.
+ */
+function siteRootUrl(): string
+{
+    $siteUrl = trim((string) Config::get('SITE_URL', ''));
+    if ($siteUrl !== '') {
+        return rtrim($siteUrl, '/');
+    }
+
+    $appUrl = rtrim((string) Config::get('APP_URL', ''), '/');
+    return str_ends_with($appUrl, '/app') ? substr($appUrl, 0, -4) : $appUrl;
+}
+
 function publicUser(array $user): array
 {
     return [
@@ -503,7 +523,7 @@ if ($path === '/discord/oauth/start' && $method === 'GET') {
 
 if ($path === '/discord/oauth/callback' && $method === 'GET') {
     $currentUser = requireAuth($auth);
-    $lobbyUrl = rtrim((string) Config::get('APP_URL', ''), '/') . '/game/';
+    $lobbyUrl = siteRootUrl() . '/game/';
 
     try {
         $discordOAuth->handleCallback((int) $currentUser['id'], (string) ($_GET['code'] ?? ''), (string) ($_GET['state'] ?? ''));

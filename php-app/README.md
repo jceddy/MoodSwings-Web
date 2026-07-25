@@ -3101,7 +3101,15 @@ somehow logged in as user B is rejected, never silently linked to B).
 Nothing from the OAuth exchange itself is retained past that one request
 -- no access/refresh token is stored -- since every actual notification
 later sends through the Application's own **bot token** against the REST
-API, never the player's own OAuth grant.
+API, never the player's own OAuth grant. On success (or a
+`DiscordLinkException`), `/discord/oauth/callback` redirects the browser
+back to the lobby (`?discord_linked=1` or `?discord_link_error=<message>`)
+at the *site's own domain root* (`/game/`), not `APP_URL` -- unlike
+`/discord/oauth/callback` itself (a PHP route, correctly under `APP_URL`'s
+own `/app` prefix), `/game/` is the static frontend, served from the
+domain root. `siteRootUrl()` in `index.php` gets this right: it prefers
+the optional `SITE_URL` config value when set, otherwise derives it by
+stripping `APP_URL`'s own trailing `/app`.
 
 Unlike the `identify` scope's own OAuth-only requirements, actually
 letting the bot DM a linked player later needs the Discord Application

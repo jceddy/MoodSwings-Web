@@ -154,9 +154,14 @@ rather than assuming the first sign of change is already the final state.
    - `APP_URL` — your live site's base URL including the `/app` path (e.g.
      `https://example.com/app`), used to build the verification link sent
      in the registration email.
-   - `SITE_URL` — your live site's base URL (e.g. `https://example.com`). If
-     set, the workflow curls `$SITE_URL/app/health` after each deploy as a
-     smoke test.
+   - `SITE_URL` — your live site's base URL (e.g. `https://example.com`),
+     domain root only, no `/app`. If set, the workflow curls
+     `$SITE_URL/app/health` after each deploy as a smoke test; the app
+     itself also reads it (via `.env`) to build links back into the
+     static frontend, e.g. the post-Discord-link redirect to `/game/` --
+     see `siteRootUrl()` in `php-app/README.md`'s "Discord" section. If
+     unset, the app derives it from `APP_URL` instead, so this is optional
+     but recommended.
 5. Create the database itself and apply its migrations — this repo's GitHub
    Actions runner cannot reach Bluehost's MySQL directly, so run each file
    in `database/migrations/` (in order) yourself via phpMyAdmin's SQL tab in
