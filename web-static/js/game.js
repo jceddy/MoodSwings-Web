@@ -1071,6 +1071,7 @@
     }
 
     function showBoard(gameId) {
+        pushDisplayHistoryEntry();
         currentGameId = gameId;
         duelSavedDecklistSelectPopulated = false;
         lobbyView.hidden = true;
@@ -1110,6 +1111,7 @@
     // state.you before rendering) -- see "Spectator mode" in
     // web-static/README.md for why that's safe.
     function showSpectatorBoard(gameId, code) {
+        pushDisplayHistoryEntry();
         currentGameId = gameId;
         isSpectating = true;
         spectateCode = code || null;
@@ -1141,6 +1143,7 @@
     // entry point, since a replay session always starts from -- and always
     // returns to -- this same lobby.
     async function showReplayBoard(gameId, code) {
+        pushDisplayHistoryEntry();
         currentGameId = gameId;
         isReplaying = true;
         replayCode = code || null;
@@ -1764,15 +1767,17 @@
         renderList(gamesList, document.getElementById('games-empty'), entries, (buildEntry) => buildEntry());
     }
 
+    // Routes through the browser's own back-navigation handling (see
+    // "Browser back button" below) rather than calling showLobby()/
+    // window.location.href directly -- showBoard()/showSpectatorBoard()/
+    // showReplayBoard() each push a history entry on the way in, so
+    // history.back() consumes it and the popstate handler performs the
+    // actual transition. This is what makes clicking this button and
+    // pressing the physical/OS back button do exactly the same thing, by
+    // construction, instead of two parallel implementations that could
+    // drift out of sync.
     document.getElementById('back-to-lobby-button').addEventListener('click', () => {
-        // Spectator mode (issue #128) -- a spectator has no lobby of their
-        // own to go "back" to; sends them back to the Spectate page
-        // instead (see showSpectatorBoard()'s own button-text swap).
-        if (isSpectating) {
-            window.location.href = '../spectate/';
-            return;
-        }
-        showLobby();
+        history.back();
     });
 
     // Watch game replay (issue #240) -- step controls, see
@@ -5303,6 +5308,101 @@
 
         friendInviteError.textContent = body.message || 'Could not send friend request.';
         friendInviteError.hidden = false;
+    });
+
+    // -- Browser back button -----------------------------------------
+    // This is a single-page app with no real per-view URLs, so by default
+    // the browser's own Back button does nothing useful here -- it just
+    // leaves the page entirely for whatever was open before it (or does
+    // nothing at all, if this tab opened directly on the lobby). This
+    // wires it up to instead: close the top-most open <dialog> if one's
+    // open; else return to the lobby from a display (a board being
+    // played, spectated, or replayed) the same way #back-to-lobby-button
+    // itself does; else -- already at the lobby's own base state, with
+    // nothing open -- do nothing at all, rather than leaving the site.
+    //
+    // Every <dialog> in this file only ever opens via showModal() and
+    // closes via close() (including indirectly, e.g. Escape or a
+    // <form method="dialog"> submit) -- rather than touching every one of
+    // this file's dozen-plus open/close call sites individually, a single
+    // MutationObserver watches every dialog's own `open` attribute
+    // directly, so this works uniformly regardless of *how* a dialog
+    // closed. Dialogs can genuinely stack here (e.g. Decks -> Deck View ->
+    // Card Detail, each opened on top of the last rather than replacing
+    // it), so openDialogStack tracks real open order rather than assuming
+    // DOM order or that only one is ever open at a time.
+    let openDialogStack = [];
+    let suppressHistoryPopFor = null;
+
+    const dialogHistoryObserver = new MutationObserver((mutations) => {
+        for (const { target: dialog } of mutations) {
+            if (dialog.open) {
+                openDialogStack.push(dialog);
+                history.pushState({ overlay: true }, '');
+                continue;
+            }
+
+            openDialogStack = openDialogStack.filter((d) => d !== dialog);
+            if (suppressHistoryPopFor === dialog) {
+                // Closed because the user pressed Back (see the popstate
+                // handler below) -- the browser already consumed the
+                // history entry pushed when this dialog opened by
+                // navigating there; consuming another one here would eat
+                // an extra, unrelated Back press too.
+                suppressHistoryPopFor = null;
+            } else {
+                // Closed some other way (a Close/Cancel button, Escape,
+                // clicking outside, a form submit) -- the history entry
+                // pushed when it opened is now orphaned; discard it so
+                // Back doesn't need an extra do-nothing press before it
+                // reaches anything real.
+                history.back();
+            }
+        }
+    });
+    document.querySelectorAll('dialog').forEach((dialog) => {
+        dialogHistoryObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] });
+    });
+
+    // Called by showBoard()/showSpectatorBoard()/showReplayBoard() --
+    // the only three places that ever leave the lobby for a display (see
+    // their own callers) -- so one history entry is pushed per "entered a
+    // display" transition, mirroring the per-dialog pushState above.
+    function pushDisplayHistoryEntry() {
+        history.pushState({ display: true }, '');
+    }
+
+    // The base entry every lobby-level Back press bounces off of -- see
+    // the popstate handler below, which re-pushes this same marker
+    // every time Back is pressed while already at the lobby with nothing
+    // open, so the site can never actually be left that way.
+    history.pushState({ base: true }, '');
+
+    window.addEventListener('popstate', () => {
+        const topDialog = openDialogStack[openDialogStack.length - 1];
+        if (topDialog) {
+            suppressHistoryPopFor = topDialog;
+            topDialog.close();
+            return;
+        }
+
+        if (boardView.hidden) {
+            // Already at the lobby's own base state -- nothing to close
+            // or leave, so undo this Back navigation immediately rather
+            // than letting it fall through to whatever page was open
+            // before this one.
+            history.pushState({ base: true }, '');
+            return;
+        }
+
+        // On the board (playing, spectating, or replaying) with nothing
+        // else open -- the exact same policy #back-to-lobby-button's own
+        // click handler now delegates to this via history.back().
+        if (isSpectating) {
+            window.location.href = '../spectate/';
+            return;
+        }
+        showLobby();
     });
 
     // Spectator mode (issue #128) -- ?spectate_game_id=<id>[&spectate_code=<code>]

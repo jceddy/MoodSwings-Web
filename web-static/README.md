@@ -1922,6 +1922,38 @@ too, proportional to the smaller card width.
     it already has, so accepting/declining/blocking a request clears the
     dot right away rather than waiting for the next poll.
 
+  - **Browser back button**: since this is a single-page app with no real
+    per-view URLs, the browser's own Back button would otherwise just leave
+    the page entirely (or do nothing, if opened directly on the lobby) --
+    wired up instead so Back closes the top-most open `<dialog>` if one's
+    open, else returns to the lobby (or, for a spectator, `../spectate/`)
+    the same way `#back-to-lobby-button` itself does, else -- already at the
+    lobby with nothing open -- does nothing at all, rather than leaving the
+    site. `#back-to-lobby-button`'s own click handler now just calls
+    `history.back()`, so the physical button and the browser's Back button
+    always agree by construction instead of via two parallel
+    implementations. Every `<dialog>` here only ever opens via
+    `showModal()`/closes via `close()` (including indirectly, e.g. Escape or
+    a `<form method="dialog">` submit), so rather than touching each of this
+    file's dozen-plus open/close call sites individually, a single
+    `MutationObserver` watches every dialog's own `open` attribute and an
+    `openDialogStack` array tracks real open order (dialogs genuinely stack
+    here, e.g. Decks → Deck View → Card Detail). `showBoard()`/
+    `showSpectatorBoard()`/`showReplayBoard()` each call
+    `pushDisplayHistoryEntry()` on the way in, so a display transition and a
+    dialog opening both correspond 1:1 with a pushed history entry that a
+    single Back press consumes. A `suppressHistoryPopFor` flag (set right
+    before a Back-driven `close()`, cleared only once the observer actually
+    processes that dialog's `open` mutation) distinguishes a dialog closed
+    by Back itself (whose history entry the browser already consumed) from
+    one closed some other way (whose now-orphaned entry gets discarded via
+    an extra `history.back()`), so a subsequent single Back press never
+    needs an extra no-op press either way. The lobby's own "base" state is
+    a `history.pushState({ base: true }, '')` pushed once at load; the
+    popstate handler re-pushes that same marker every time Back is pressed
+    while already there with nothing open, so the site can never actually
+    be left via Back.
+
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
 [`../php-app/README.md`](../php-app/README.md) for the API itself.
