@@ -1078,6 +1078,18 @@ body.game-page {
     color: var(--color-info);
 }
 
+/* Online/presence indicator (issue #110) -- online tints green
+   (--color-success, this app's established "good/active" color, same as
+   the on-turn flag above); offline is left at the default --color-muted
+   (no override needed) since a plain gray dot reads as "nothing special"
+   the same way the seat/hand icons' own neutral default does elsewhere.
+   .player-flag--presenceHidden gets no color override either -- its own
+   distinct eye-slash SHAPE (see buildPresenceFlag() in game.js) is what
+   sets it apart from "offline", not a different color. */
+.player-flag--presenceOnline {
+    color: var(--color-success);
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {

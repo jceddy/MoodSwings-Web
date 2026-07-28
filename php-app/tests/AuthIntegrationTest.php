@@ -184,6 +184,26 @@ final class AuthIntegrationTest extends TestCase
         self::assertNull($this->auth->currentUser(bin2hex(random_bytes(32))));
     }
 
+    /**
+     * Online/presence indicator (issue #110): share_presence defaults to
+     * true (shared) for every user, and currentUser()'s own user object
+     * reflects a later opt-out immediately -- the User info page reads
+     * this to initialize its toggle without a separate fetch.
+     */
+    public function testCurrentUserSharePresenceDefaultsTrueAndReflectsUpdates(): void
+    {
+        $registered = $this->registerAndVerify('lucy');
+        $result = $this->auth->login('lucy', 'correcthorsebattery', null, null);
+
+        $current = $this->auth->currentUser($result['token']);
+        self::assertTrue($current['user']['share_presence']);
+
+        (new UserRepository())->setSharePresence((int) $registered['user']['id'], false);
+
+        $currentAfterOptOut = $this->auth->currentUser($result['token']);
+        self::assertFalse($currentAfterOptOut['user']['share_presence']);
+    }
+
     public function testResendVerificationIssuesNewTokenAndRevokesOld(): void
     {
         $registered = $this->auth->register('henry', 'henry@example.com', 'correcthorsebattery', null);

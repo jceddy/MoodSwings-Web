@@ -1534,6 +1534,33 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    /**
+     * Online/presence indicator (issue #110): each players[] row gets a
+     * 'presence' field derived from that seat's own user, defaulting to
+     * 'offline' (no session inserted here) and switching to 'hidden' --
+     * distinct from 'offline', never conflated with it -- once that user
+     * opts out via users.share_presence.
+     */
+    public function testGetStateExposesPresenceStatusPerPlayer(): void
+    {
+        $creator = $this->insertUser('presence-alice');
+        $bob = $this->insertUser('presence-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+
+        $state = $this->games->getState($gameId, $creator);
+        foreach ($state['players'] as $player) {
+            self::assertSame('offline', $player['presence']);
+        }
+
+        $this->pdo->prepare('UPDATE users SET share_presence = 0 WHERE id = :id')->execute(['id' => $bob]);
+
+        $stateAfterOptOut = $this->games->getState($gameId, $creator);
+        $bobRow = array_values(array_filter($stateAfterOptOut['players'], fn (array $p) => $p['user_id'] === $bob))[0];
+        self::assertSame('hidden', $bobRow['presence']);
+    }
+
     public function testGetStateExposesBaseValueAndAltValueDistinctFromLiveValue(): void
     {
         $u1 = $this->insertUser('printedvalues1');

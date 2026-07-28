@@ -180,6 +180,16 @@ function getUserStats() {
     return apiRequest('/user/stats');
 }
 
+// Online/presence indicator (issue #110) -- write-only; the current value
+// already rides on getCurrentUser()'s own user.share_presence field, so
+// there's no matching getPresencePreference().
+function savePresencePreference(sharePresence) {
+    return apiRequest('/user/presence-preference', {
+        method: 'POST',
+        body: JSON.stringify({ share_presence: sharePresence }),
+    });
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.

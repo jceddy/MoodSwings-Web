@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace MoodSwings\Friends;
 
+use MoodSwings\Presence\PresenceService;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
 
 final class FriendshipService
@@ -12,6 +14,7 @@ final class FriendshipService
     public function __construct(
         private readonly UserRepository $users,
         private readonly FriendshipRepository $friendships,
+        private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
     ) {
     }
 
@@ -82,9 +85,30 @@ final class FriendshipService
         $this->friendships->delete((int) $friendship['id']);
     }
 
+    /**
+     * Each friend's own row additionally carries 'presence'
+     * ('online'|'offline'|'hidden' -- see PresenceService) alongside the
+     * existing friend_id/friend_username/created_at fields.
+     */
     public function listFriends(int $userId): array
     {
-        return $this->friendships->listAcceptedForUser($userId);
+        $friends = $this->friendships->listAcceptedForUser($userId);
+
+        $sharePresenceByUserId = [];
+        foreach ($friends as $friend) {
+            $sharePresenceByUserId[(int) $friend['friend_id']] = (bool) $friend['friend_share_presence'];
+        }
+        $statuses = $this->presence->statusesFor($sharePresenceByUserId);
+
+        return array_map(
+            static function (array $friend) use ($statuses): array {
+                $friend['presence'] = $statuses[(int) $friend['friend_id']];
+                unset($friend['friend_share_presence']);
+
+                return $friend;
+            },
+            $friends,
+        );
     }
 
     /**

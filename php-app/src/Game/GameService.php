@@ -8,6 +8,8 @@ use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Presence\PresenceService;
+use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
@@ -222,6 +224,7 @@ final class GameService
         private readonly ReplayStateBuilder $replay,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
         private readonly ?NotificationService $notifications = null,
+        private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
     ) {
     }
 
@@ -5802,12 +5805,26 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.share_presence FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
         $playersStmt->execute(['game_id' => $gameId]);
         $playerRows = $playersStmt->fetchAll();
+
+        // Online/presence indicator (issue #110) -- computed once per
+        // request for every seated player at once (a single sessions
+        // lookup) rather than per-row, and reused for the loop below.
+        // Deliberately not shared with serializeReplaySnapshot()'s own,
+        // separate players loop -- a completed game's historical replay
+        // has no "current round" for a specific past event (see that
+        // method's own docblock), and "was this player online" is
+        // meaningless for a moment frozen in the past the same way.
+        $sharePresenceByUserId = [];
+        foreach ($playerRows as $row) {
+            $sharePresenceByUserId[(int) $row['user_id']] = (bool) $row['share_presence'];
+        }
+        $presenceStatuses = $this->presence->statusesFor($sharePresenceByUserId);
 
         $handCounts = [];
         if ($game['status'] === 'in_progress' || $game['status'] === 'completed') {
@@ -5864,6 +5881,11 @@ final class GameService
                 // only ever true mid-game for 'standard' format's own 3-4
                 // player "game continues without them" case.
                 'resigned' => $row['resigned_at'] !== null,
+                // Online/presence indicator (issue #110) -- 'online',
+                // 'offline', or 'hidden' (this player has opted out of
+                // sharing presence at all, see users.share_presence /
+                // the User info page) -- see PresenceService.
+                'presence' => $presenceStatuses[(int) $row['user_id']],
             ];
         }
 

@@ -166,7 +166,7 @@ final class AuthService
     }
 
     /**
-     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string}, expiresAt: DateTimeImmutable}|null
+     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
     {
@@ -185,6 +185,12 @@ final class AuthService
                 'username' => $session['username'],
                 'email' => $session['email'],
                 'phone_number' => $session['phone_number'],
+                // Online/presence indicator (issue #110) -- this user's
+                // own current opt-in/out of sharing their presence with
+                // others; the User info page reads this to initialize its
+                // toggle. See PresenceService for how a shared status is
+                // actually computed for someone else's view.
+                'share_presence' => (bool) $session['share_presence'],
             ],
             'expiresAt' => $expiresAt,
         ];
