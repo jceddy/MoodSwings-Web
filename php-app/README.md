@@ -442,6 +442,24 @@ reads each one via the nullable `->string($key)` and treats `null` as "no
 color chosen", not via checking whether the key is merely present (every
 key always is).
 
+For a `required: true` field (Fury's/Suspicion's/Confusion's own discard
+or hand-card choice, unlike Disillusionment's optional color),
+`respondToDecision()` rejects a missing/null answer with a `400`
+*before* writing anything, rather than persisting that row as resolved
+and letting a `required` accessor (`requireInt()`/`requireString()`)
+throw later inside `resolveDecisions()`. That later-throw shape used to
+be a real bug: once persisted, a bad answer can only surface once some
+*other*, later player's own answer happens to complete the batch --
+`resolvePendingDecisions()` throwing at that point rolls back the whole
+transaction, including that later player's own perfectly valid answer
+(see `respondToDecision()`'s `catch (Throwable $e) { $pdo->rollBack();
+throw $e; }`), and the resulting error names the first player's field
+key, not the actual responder's -- leaving the batch permanently stuck
+with no way for anyone to complete it. Validating at intake means a bad
+submission is rejected immediately, attributed to whoever actually sent
+it, and a `required` row can never again reach `resolved_at` with a
+`null` answer.
+
 `BetrayalEffect` is an eleventh `RequiresOpponentDecision` implementer (of
 twelve, now that `PrideEffect` is a twelfth -- see below), for
 a different reason than the other ten: nothing about Betrayal's own printed

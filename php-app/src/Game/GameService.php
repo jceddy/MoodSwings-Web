@@ -2739,6 +2739,20 @@ final class GameService
             $field = json_decode((string) $decisionRow['field'], true);
             $answerKey = $field['key'];
 
+            if (($field['required'] ?? false) === true && ($choices[$answerKey] ?? null) === null) {
+                // Reject before ever writing this row -- otherwise a blank/
+                // missing submission gets persisted as "resolved" with a
+                // null answer, and the batch only surfaces the resulting
+                // failure later, to whichever OTHER player's response
+                // happens to complete it (resolvePendingDecisions() throws
+                // for this row's own key, and that throw rolls back that
+                // later player's own perfectly valid answer too -- see
+                // respondToDecision()'s catch block below). Validating here
+                // attributes the error to the player who actually caused it
+                // and never lets a bad answer reach "resolved" at all.
+                throw new InvalidChoiceException("Missing required choice '{$answerKey}'");
+            }
+
             $pdo = Connection::get();
             $pdo->beginTransaction();
 
