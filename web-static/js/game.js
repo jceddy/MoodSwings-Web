@@ -4533,9 +4533,14 @@
 
         const select = document.createElement('select');
         select.id = 'choice-field-' + path;
+
+        const options = field.type === 'mode'
+            ? field.options.map((value) => ({ value, label: capitalize(value).replace(/_/g, ' ') }))
+            : fieldOptions(field, card);
+
         if (field.multi) {
             select.multiple = true;
-        } else {
+        } else if (!(field.required && options.length === 1)) {
             // 'grant_choice' (grant_source_card_id) reads differently from
             // every other optional field here: leaving it blank doesn't
             // mean "use no grant" (a play always uses one), just "no
@@ -4543,12 +4548,20 @@
             // playMood()'s own fallback to "whichever comes first" -- so
             // "(any)" says what actually happens, where "(none)" would
             // misleadingly suggest declining to use a grant at all.
+            //
+            // Skipped entirely for a required field with exactly one
+            // candidate (e.g. Fury's discarded-mood pick when the
+            // responding player has only one mood in play) -- otherwise
+            // this blank option is what the <select> defaults to, and a
+            // player who (reasonably) doesn't bother re-picking their
+            // only real option submits with the field still empty,
+            // silently dropped by buildChoicesFromFields() below and
+            // rejected server-side as a missing required choice. With
+            // nothing else appended first, the single real option below
+            // becomes the <select>'s own default.
             select.appendChild(new Option(field.type === 'grant_choice' ? '(any)' : '(none)', ''));
         }
 
-        const options = field.type === 'mode'
-            ? field.options.map((value) => ({ value, label: capitalize(value).replace(/_/g, ' ') }))
-            : fieldOptions(field, card);
         if (field.type === 'mood') {
             appendGroupedMoodOptions(select, options);
         } else {

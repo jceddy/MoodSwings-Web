@@ -1168,6 +1168,18 @@ too, proportional to the smaller card width.
     mean "use no grant" (a play always uses one), just "no preference which
     outstanding one," so "(none)" would misleadingly suggest declining a
     grant entirely.
+    That blank default option is skipped entirely for a `required: true`
+    field with exactly one candidate (e.g. Fury's own per-player
+    `discarded_mood_id_<game_player_id>` pick when that player has only
+    one mood in play) -- otherwise the `<select>` still defaults to the
+    blank option rather than the single real one, and a player who
+    reasonably doesn't bother re-picking their only choice submits with
+    the field still empty, which `buildChoicesFromFields()` silently
+    drops from the payload and the server then rejects as a missing
+    required choice. With the blank option skipped, the one real
+    `<option>` becomes the `<select>`'s own default, so
+    `updateRespondButtonEnabled()`/`updatePlayButtonEnabled()` already see
+    it filled at render time, with no explicit re-selection needed.
     A `type: 'mood'` field's own options (e.g. Faith's `target_mood_id`)
     also mark a candidate mood with `card.has_unused_play_grant` (see
     `php-app/README.md`) with a trailing ` *` right after its name
