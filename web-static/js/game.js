@@ -131,6 +131,7 @@
         const yourTurnCheckbox = document.getElementById('notify-your-turn-checkbox');
         const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
         const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
+        const disableCooldownCheckbox = document.getElementById('disable-cooldown-checkbox');
 
         const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
         unsupportedEl.hidden = supported;
@@ -156,6 +157,7 @@
                     yourTurnCheckbox.checked = body.preferences.notify_your_turn;
                     friendRequestCheckbox.checked = body.preferences.notify_friend_request;
                     gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
+                    disableCooldownCheckbox.checked = body.preferences.disable_cooldown;
                 }
             }
         }
@@ -265,11 +267,13 @@
                 notify_your_turn: yourTurnCheckbox.checked,
                 notify_friend_request: friendRequestCheckbox.checked,
                 notify_game_finished: gameFinishedCheckbox.checked,
+                disable_cooldown: disableCooldownCheckbox.checked,
             });
         }
         yourTurnCheckbox.addEventListener('change', savePreferences);
         friendRequestCheckbox.addEventListener('change', savePreferences);
         gameFinishedCheckbox.addEventListener('change', savePreferences);
+        disableCooldownCheckbox.addEventListener('change', savePreferences);
     }
 
     async function refreshFriendsData() {
@@ -1071,6 +1075,7 @@
     }
 
     function showBoard(gameId) {
+        pushDisplayHistoryEntry();
         currentGameId = gameId;
         duelSavedDecklistSelectPopulated = false;
         lobbyView.hidden = true;
@@ -1110,6 +1115,7 @@
     // state.you before rendering) -- see "Spectator mode" in
     // web-static/README.md for why that's safe.
     function showSpectatorBoard(gameId, code) {
+        pushDisplayHistoryEntry();
         currentGameId = gameId;
         isSpectating = true;
         spectateCode = code || null;
@@ -1141,6 +1147,7 @@
     // entry point, since a replay session always starts from -- and always
     // returns to -- this same lobby.
     async function showReplayBoard(gameId, code) {
+        pushDisplayHistoryEntry();
         currentGameId = gameId;
         isReplaying = true;
         replayCode = code || null;
@@ -1764,15 +1771,17 @@
         renderList(gamesList, document.getElementById('games-empty'), entries, (buildEntry) => buildEntry());
     }
 
+    // Routes through the browser's own back-navigation handling (see
+    // "Browser back button" below) rather than calling showLobby()/
+    // window.location.href directly -- showBoard()/showSpectatorBoard()/
+    // showReplayBoard() each push a history entry on the way in, so
+    // history.back() consumes it and the popstate handler performs the
+    // actual transition. This is what makes clicking this button and
+    // pressing the physical/OS back button do exactly the same thing, by
+    // construction, instead of two parallel implementations that could
+    // drift out of sync.
     document.getElementById('back-to-lobby-button').addEventListener('click', () => {
-        // Spectator mode (issue #128) -- a spectator has no lobby of their
-        // own to go "back" to; sends them back to the Spectate page
-        // instead (see showSpectatorBoard()'s own button-text swap).
-        if (isSpectating) {
-            window.location.href = '../spectate/';
-            return;
-        }
-        showLobby();
+        history.back();
     });
 
     // Watch game replay (issue #240) -- step controls, see
@@ -2098,7 +2107,12 @@
         // neither one covers the other.
         if (card.base_color && card.base_color !== card.color) {
             const colorBadge = document.createElement('span');
-            colorBadge.className = 'card-thumb__badge card-thumb__badge--recolored';
+            // card.color is always one of the five printed mood colors
+            // (JCEDDYS_75_DECK_COLORS' own white/blue/black/red/green) --
+            // this modifier class tints the badge to match the color it's
+            // actually declaring, rather than one fixed color regardless
+            // of which one Imagination (or a Creativity copy of it) chose.
+            colorBadge.className = 'card-thumb__badge card-thumb__badge--recolored card-thumb__badge--recolored-' + card.color;
             colorBadge.textContent = '→ ' + capitalize(card.color);
             colorBadge.title = 'Currently counts as ' + card.color + ' (printed ' + card.base_color + ')';
             button.appendChild(colorBadge);
@@ -4409,7 +4423,7 @@
                     .filter((p) => !field.excludes_teammate || p.game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
-            case 'mood':
+            case 'mood': {
                 // ownerLabel drives buildFieldWidget()'s own <optgroup>
                 // grouping below -- with 3+ players in play, a flat list
                 // made it tedious to find a specific player's moods. It
@@ -4418,12 +4432,26 @@
                 // same way the old inline "— Owner" suffix used to, just
                 // via the group label instead of repeating it on every
                 // option.
+                // includes_self (see CardChoiceSchema.php's own docblock):
+                // the handful of cards whose ability can legally target the
+                // very card being played (e.g. Anger) need a synthetic entry
+                // built directly from `card` (the played card itself), not
+                // filtered out of currentState.in_play below -- that list is
+                // this game's state as of *before* this play is submitted,
+                // so it never contains the card currently being chosen for,
+                // self or not, regardless of this flag. Labeled "[self]" so
+                // it isn't mistaken for some other in-play copy of the same
+                // card (a duel deck, or two of the same custom card, can
+                // each be played independently in the same game).
+                const selfOption = field.includes_self
+                    ? [{ value: card.card_id, label: cardLabel(card) + ' [self]', ownerLabel: playerLabelFor(currentState.you.game_player_id) }]
+                    : [];
                 if (field.candidate_card_ids) {
-                    return currentState.in_play
+                    return selfOption.concat(currentState.in_play
                         .filter((c) => field.candidate_card_ids.includes(c.card_id))
-                        .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) }));
+                        .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) })));
                 }
-                return currentState.in_play
+                return selfOption.concat(currentState.in_play
                     .filter((c) => c.card_id !== card.card_id)
                     .filter((c) => {
                         if (field.scope === 'own') return c.owner_game_player_id === currentState.you.game_player_id;
@@ -4436,7 +4464,8 @@
                     // themselves.
                     .filter((c) => !field.excludes_teammate || c.owner_game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
-                    .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) }));
+                    .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) })));
+            }
             case 'hand_card':
                 // No owner suffix needed here -- every option is already
                 // the viewer's own hand, and two identical physical copies
@@ -4523,9 +4552,14 @@
 
         const select = document.createElement('select');
         select.id = 'choice-field-' + path;
+
+        const options = field.type === 'mode'
+            ? field.options.map((value) => ({ value, label: capitalize(value).replace(/_/g, ' ') }))
+            : fieldOptions(field, card);
+
         if (field.multi) {
             select.multiple = true;
-        } else {
+        } else if (!(field.required && options.length === 1)) {
             // 'grant_choice' (grant_source_card_id) reads differently from
             // every other optional field here: leaving it blank doesn't
             // mean "use no grant" (a play always uses one), just "no
@@ -4533,12 +4567,20 @@
             // playMood()'s own fallback to "whichever comes first" -- so
             // "(any)" says what actually happens, where "(none)" would
             // misleadingly suggest declining to use a grant at all.
+            //
+            // Skipped entirely for a required field with exactly one
+            // candidate (e.g. Fury's discarded-mood pick when the
+            // responding player has only one mood in play) -- otherwise
+            // this blank option is what the <select> defaults to, and a
+            // player who (reasonably) doesn't bother re-picking their
+            // only real option submits with the field still empty,
+            // silently dropped by buildChoicesFromFields() below and
+            // rejected server-side as a missing required choice. With
+            // nothing else appended first, the single real option below
+            // becomes the <select>'s own default.
             select.appendChild(new Option(field.type === 'grant_choice' ? '(any)' : '(none)', ''));
         }
 
-        const options = field.type === 'mode'
-            ? field.options.map((value) => ({ value, label: capitalize(value).replace(/_/g, ' ') }))
-            : fieldOptions(field, card);
         if (field.type === 'mood') {
             appendGroupedMoodOptions(select, options);
         } else {
@@ -5298,6 +5340,101 @@
 
         friendInviteError.textContent = body.message || 'Could not send friend request.';
         friendInviteError.hidden = false;
+    });
+
+    // -- Browser back button -----------------------------------------
+    // This is a single-page app with no real per-view URLs, so by default
+    // the browser's own Back button does nothing useful here -- it just
+    // leaves the page entirely for whatever was open before it (or does
+    // nothing at all, if this tab opened directly on the lobby). This
+    // wires it up to instead: close the top-most open <dialog> if one's
+    // open; else return to the lobby from a display (a board being
+    // played, spectated, or replayed) the same way #back-to-lobby-button
+    // itself does; else -- already at the lobby's own base state, with
+    // nothing open -- do nothing at all, rather than leaving the site.
+    //
+    // Every <dialog> in this file only ever opens via showModal() and
+    // closes via close() (including indirectly, e.g. Escape or a
+    // <form method="dialog"> submit) -- rather than touching every one of
+    // this file's dozen-plus open/close call sites individually, a single
+    // MutationObserver watches every dialog's own `open` attribute
+    // directly, so this works uniformly regardless of *how* a dialog
+    // closed. Dialogs can genuinely stack here (e.g. Decks -> Deck View ->
+    // Card Detail, each opened on top of the last rather than replacing
+    // it), so openDialogStack tracks real open order rather than assuming
+    // DOM order or that only one is ever open at a time.
+    let openDialogStack = [];
+    let suppressHistoryPopFor = null;
+
+    const dialogHistoryObserver = new MutationObserver((mutations) => {
+        for (const { target: dialog } of mutations) {
+            if (dialog.open) {
+                openDialogStack.push(dialog);
+                history.pushState({ overlay: true }, '');
+                continue;
+            }
+
+            openDialogStack = openDialogStack.filter((d) => d !== dialog);
+            if (suppressHistoryPopFor === dialog) {
+                // Closed because the user pressed Back (see the popstate
+                // handler below) -- the browser already consumed the
+                // history entry pushed when this dialog opened by
+                // navigating there; consuming another one here would eat
+                // an extra, unrelated Back press too.
+                suppressHistoryPopFor = null;
+            } else {
+                // Closed some other way (a Close/Cancel button, Escape,
+                // clicking outside, a form submit) -- the history entry
+                // pushed when it opened is now orphaned; discard it so
+                // Back doesn't need an extra do-nothing press before it
+                // reaches anything real.
+                history.back();
+            }
+        }
+    });
+    document.querySelectorAll('dialog').forEach((dialog) => {
+        dialogHistoryObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] });
+    });
+
+    // Called by showBoard()/showSpectatorBoard()/showReplayBoard() --
+    // the only three places that ever leave the lobby for a display (see
+    // their own callers) -- so one history entry is pushed per "entered a
+    // display" transition, mirroring the per-dialog pushState above.
+    function pushDisplayHistoryEntry() {
+        history.pushState({ display: true }, '');
+    }
+
+    // The base entry every lobby-level Back press bounces off of -- see
+    // the popstate handler below, which re-pushes this same marker
+    // every time Back is pressed while already at the lobby with nothing
+    // open, so the site can never actually be left that way.
+    history.pushState({ base: true }, '');
+
+    window.addEventListener('popstate', () => {
+        const topDialog = openDialogStack[openDialogStack.length - 1];
+        if (topDialog) {
+            suppressHistoryPopFor = topDialog;
+            topDialog.close();
+            return;
+        }
+
+        if (boardView.hidden) {
+            // Already at the lobby's own base state -- nothing to close
+            // or leave, so undo this Back navigation immediately rather
+            // than letting it fall through to whatever page was open
+            // before this one.
+            history.pushState({ base: true }, '');
+            return;
+        }
+
+        // On the board (playing, spectating, or replaying) with nothing
+        // else open -- the exact same policy #back-to-lobby-button's own
+        // click handler now delegates to this via history.back().
+        if (isSpectating) {
+            window.location.href = '../spectate/';
+            return;
+        }
+        showLobby();
     });
 
     // Spectator mode (issue #128) -- ?spectate_game_id=<id>[&spectate_code=<code>]

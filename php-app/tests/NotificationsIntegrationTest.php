@@ -113,14 +113,14 @@ final class NotificationsIntegrationTest extends TestCase
         $userId = $this->insertUser('prefs-default');
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
 
         $this->preferences->save($userId, false, true, false);
 
         self::assertSame(
-            ['notify_your_turn' => false, 'notify_friend_request' => true, 'notify_game_finished' => false],
+            ['notify_your_turn' => false, 'notify_friend_request' => true, 'notify_game_finished' => false, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
     }
@@ -133,9 +133,36 @@ final class NotificationsIntegrationTest extends TestCase
         $this->preferences->save($userId, true, true, true);
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
+    }
+
+    // disable_cooldown (migration 0051) defaults to false -- untouched,
+    // it must default off just like every other never-saved preference
+    // defaults on -- and is independently settable/upsertable from the
+    // three notify_* toggles, the same way each of those already is from
+    // one another.
+    public function testDisableCooldownPreferenceDefaultsOffAndIsIndependentlySettable(): void
+    {
+        $userId = $this->insertUser('prefs-disable-cooldown');
+
+        self::assertFalse($this->preferences->forUser($userId)['disable_cooldown']);
+
+        $this->preferences->save($userId, true, true, true, true);
+
+        self::assertSame(
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'disable_cooldown' => true],
+            $this->preferences->forUser($userId)
+        );
+
+        // Saving again without passing disable_cooldown falls back to its
+        // own default (false) rather than preserving whatever was there
+        // before -- save() always writes a complete row, matching how the
+        // three notify_* toggles already behave (see
+        // testNotificationPreferencesSaveIsUpsert() above).
+        $this->preferences->save($userId, true, true, true);
+        self::assertFalse($this->preferences->forUser($userId)['disable_cooldown']);
     }
 
     public function testPushSubscriptionSaveListAndDelete(): void
@@ -312,6 +339,24 @@ final class NotificationsIntegrationTest extends TestCase
 
         // Not queued -- notify() only queues when THIS game's own scope is
         // within cooldown, which game 2's never was.
+        self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
+    }
+
+    // disable_cooldown (migration 0051) skips notify()'s own
+    // wasNotifiedRecently() check outright -- unlike the "different game"
+    // case above, THIS game's own scope really was just marked notified,
+    // so without the preference on this would take the queue branch. No
+    // subscriptions exist, so there's nothing to actually attempt to
+    // deliver to either way -- what's under test is purely that the queue
+    // branch itself was never reached despite the cooldown being live.
+    public function testDisableCooldownPreferenceSkipsQueueingEvenWithinCooldown(): void
+    {
+        $userId = $this->insertUser('cooldown-disabled');
+        $this->preferences->save($userId, true, true, true, true);
+        $this->cooldowns->markNotified($userId, NotificationScope::forGame(1));
+
+        $this->service()->notifyYourTurn($userId, 1, 'Game #1 is waiting on your move.');
+
         self::assertSame([], array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId));
     }
 

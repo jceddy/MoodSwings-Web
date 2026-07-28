@@ -42,7 +42,22 @@ final class MoodPlayService
     {
     }
 
-    public function playMood(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices): PlayResult
+    /**
+     * $cardNames, when given, maps this game's own card instance ids to
+     * their printed names (see GameService::cardNamesFor()) purely so the
+     * 'grant_source_card_id' validation below can name both cards in its
+     * exception message instead of showing their bare ids -- the one
+     * user-facing message in this whole class, since every other
+     * exception here reports a rules violation a well-behaved client
+     * should never actually trigger (see the class docblock: BoardState
+     * itself, and so this whole service, is deliberately kept unaware of
+     * anything DB-backed, including card names -- left null, as every
+     * caller other than GameService does, falls back to the bare id the
+     * same way every other exception in this class already does).
+     *
+     * @param ?array<int, string> $cardNames
+     */
+    public function playMood(BoardState $state, int $playerId, int $cardId, PlayerChoices $choices, ?array $cardNames = null): PlayResult
     {
         if ($state->currentPlayerId() !== $playerId) {
             throw new IllegalPlayException("It is not player {$playerId}'s turn");
@@ -118,7 +133,9 @@ final class MoodPlayService
                 $state->usableGrants($cardId, $playerId),
             );
             if (!in_array($preferredGrantSourceCardId, $usableSourceCardIds, true)) {
-                throw new InvalidChoiceException("Grant sourced from card {$preferredGrantSourceCardId} is not currently usable for playing card {$cardId}");
+                $grantLabel = $cardNames[$preferredGrantSourceCardId] ?? "card {$preferredGrantSourceCardId}";
+                $cardLabel = $cardNames[$cardId] ?? "card {$cardId}";
+                throw new InvalidChoiceException("Grant sourced from {$grantLabel} is not currently usable for playing {$cardLabel}");
             }
         }
 

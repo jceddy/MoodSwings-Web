@@ -41,6 +41,13 @@ use MoodSwings\Repository\QueuedNotificationRepository;
  * clearQueuedForGame()/clearQueuedFriendRequest() delete a queued row
  * early if the player takes the action it would have reminded them about
  * before the flush ever runs.
+ *
+ * A user can opt out of this cooldown/queue behavior entirely via their
+ * own disable_cooldown preference (migration 0051, off by default) --
+ * with it on, notify() delivers every eligible event immediately instead
+ * of throttling to one per scope every 5 minutes, for someone who'd
+ * rather see everything as it happens than have a burst of activity
+ * collapsed down to one delayed summary.
  */
 final class NotificationService
 {
@@ -187,12 +194,21 @@ final class NotificationService
         // to swallow its own failures (see NotificationChannel's own
         // docblock), so this is a backstop, not the primary defense.
         try {
-            if (!$this->preferences->forUser($userId)[$preferenceKey]) {
+            $preferences = $this->preferences->forUser($userId);
+            if (!$preferences[$preferenceKey]) {
                 $this->logError("Not notifying (user {$userId}, scope {$scope}): preference '{$preferenceKey}' is off");
                 return;
             }
 
-            if ($this->cooldowns->wasNotifiedRecently($userId, $scope, self::COOLDOWN_SECONDS)) {
+            // disable_cooldown (migration 0051) opts a user out of the
+            // cooldown/queue fallback below entirely -- every notification
+            // they're otherwise eligible for is delivered immediately, even
+            // several in quick succession, rather than being throttled to
+            // at most one per scope every 5 minutes. wasNotifiedRecently()
+            // is skipped outright rather than checked-and-ignored, so a
+            // user with this on never queues a notification behind
+            // another one either.
+            if (!$preferences['disable_cooldown'] && $this->cooldowns->wasNotifiedRecently($userId, $scope, self::COOLDOWN_SECONDS)) {
                 $this->queuedNotifications->enqueue($userId, $scope, $preferenceKey, $payload);
                 $this->logError("Queued notification instead of sending (user {$userId}, scope {$scope}): within the cooldown window");
                 return;

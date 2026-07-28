@@ -3614,6 +3614,66 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
     }
 
+    // GameService::notifyDraftUsersItsYourTurn()'s own "waiting on you"
+    // notifications for a draft in progress -- a fresh round dealt (or the
+    // received-stage unlocking) for Quick Draft, a turn handed off for
+    // Winston/Grid Draft, and deck_building starting once a draft
+    // finishes. Like testPlayMoodStillAdvancesTurnWhenPushNotificationsAreWired
+    // above, this only confirms wiring a real NotificationService in
+    // doesn't disturb the underlying draft mechanics it's attached to --
+    // no push_subscriptions rows exist for either user, so notify() never
+    // touches the network. Every one of the three formats' own createGame()
+    // (round 1 / first pile-take / first grid pick), mid-draft pick, and
+    // finalize-into-deck_building notify call sites gets exercised here.
+    public function testDraftMechanicsStillWorkWhenPushNotificationsAreWired(): void
+    {
+        $games = $this->gamesWithNotificationsWired();
+
+        // Quick Draft: createGame() deals round 1 (first notify call
+        // site); both players' draw-stage picks unlock the received stage
+        // each round (second call site); both players' received-stage
+        // picks deal the next round (third call site, dealQuickDraftRound()
+        // itself) for rounds 1-3, or finalize the draft into deck_building
+        // (fourth call site) for round 4.
+        $qU1 = $this->insertUser('qdnotif-' . uniqid('u1'));
+        $qU2 = $this->insertUser('qdnotif-' . uniqid('u2'));
+        $qGameId = $games->createGame($qU1, [$qU1, $qU2], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+
+        for ($round = 1; $round <= 4; $round++) {
+            foreach ([$qU1, $qU2] as $userId) {
+                $pack = $games->getState($qGameId, $userId)['quick_draft']['drafting']['pack'];
+                $games->submitQuickDraftPick($qGameId, $userId, $round, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+            }
+            foreach ([$qU1, $qU2] as $userId) {
+                $pack = $games->getState($qGameId, $userId)['quick_draft']['drafting']['pack'];
+                $games->submitQuickDraftPick($qGameId, $userId, $round, 'received', [$pack[0]['card_id'], $pack[1]['card_id']]);
+            }
+        }
+        self::assertSame('deck_building', $this->fetchDraftMatch((int) $this->fetchGame($qGameId)['draft_match_id'])['status']);
+
+        // Winston Draft: createGame() picks a first player (first notify
+        // call site); a 'take' (which always ends the turn) hands off to
+        // the opponent (second call site).
+        $wU1 = $this->insertUser('wdnotif-' . uniqid('u1'));
+        $wU2 = $this->insertUser('wdnotif-' . uniqid('u2'));
+        $wGameId = $games->createGame($wU1, [$wU1, $wU2], format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48');
+        $wDraftMatchId = (int) $this->fetchGame($wGameId)['draft_match_id'];
+        $wFirstPlayer = (int) $this->fetchWinstonState($wDraftMatchId)['current_player_user_id'];
+        $wResult = $games->submitWinstonDraftPick($wGameId, $wFirstPlayer, 'take');
+        self::assertTrue($wResult['turn_advanced']);
+
+        // Grid Draft: createGame() picks a first picker (first notify
+        // call site); the round's first pick hands the turn to the
+        // opponent for the second pick (second call site).
+        $gU1 = $this->insertUser('gdnotif-' . uniqid('u1'));
+        $gU2 = $this->insertUser('gdnotif-' . uniqid('u2'));
+        $gGameId = $games->createGame($gU1, [$gU1, $gU2], format: 'draft', deckType: 'grid_draft', gridDraftPoolSource: 'random_48');
+        $gDraftMatchId = (int) $this->fetchGame($gGameId)['draft_match_id'];
+        $gFirstPicker = (int) $this->fetchGridState($gDraftMatchId)['current_turn_user_id'];
+        $gResult = $games->submitGridDraftPick($gGameId, $gFirstPicker, 'row', 0);
+        self::assertTrue($gResult['turn_advanced']);
+    }
+
     // GameService::clearQueuedNotificationForGamePlayer() -- a player
     // taking their action clears any reminder that was queued for THEM
     // about THIS game (see NotificationService::notify()'s cooldown
@@ -4429,6 +4489,37 @@ final class GameServiceIntegrationTest extends TestCase
             ['value' => $hope2Id, 'label' => 'An extra play from Hope'],
             $grantField['options'][2],
         );
+    }
+
+    /**
+     * See MoodPlayService::playMood()'s own $cardNames param: GameService is
+     * the one caller that has real card names available (cardNamesFor()),
+     * so a stale/fabricated 'grant_source_card_id' has to surface as a
+     * message naming both cards, not their opaque in-game ids -- a player
+     * has no way to look up what card 47 is.
+     */
+    public function testGrantSourceCardIdRejectionMessageNamesBothCardsInsteadOfIds(): void
+    {
+        $u1 = $this->insertUser('grantnames1');
+        $u2 = $this->insertUser('grantnames2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency, no abilities
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, not sourcing any grant
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->expectExceptionMessage('Grant sourced from Charity is not currently usable for playing Complacency');
+
+        $this->games->playMood($gameId, $p1, $complacencyId, ['grant_source_card_id' => $charityId]);
     }
 
     /**

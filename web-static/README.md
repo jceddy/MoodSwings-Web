@@ -492,10 +492,16 @@ too, proportional to the smaller card width.
     below runs. Otherwise, opening the dialog calls `pushManager
     .getSubscription()` to decide which of `#notifications-enable-button`/
     `#notifications-disable-button` to show, and -- only once subscribed
-    -- fetches `GET /notifications/preferences` to populate the three
+    -- fetches `GET /notifications/preferences` to populate the four
     `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
-    `notify-friend-request-checkbox`/`notify-game-finished-checkbox`,
-    disabled via the `<fieldset>` until a subscription exists). "Enable"
+    `notify-friend-request-checkbox`/`notify-game-finished-checkbox`/
+    `disable-cooldown-checkbox`, disabled via the `<fieldset>` until a
+    subscription exists). The fourth ("Send every notification
+    immediately (disable the 5-minute cooldown)") maps to the server's
+    own `disable_cooldown` preference -- off by default, so the cooldown
+    stays on until a player explicitly opts out of it (see "Browser push
+    notifications" in `../php-app/README.md` for what it actually does).
+    "Enable"
     calls `Notification.requestPermission()`, then `GET
     /notifications/vapid-public-key` for the server's public key (converted
     from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs
@@ -1146,6 +1152,15 @@ too, proportional to the smaller card width.
     tedious, and grouping by owner mirrors how the in-play board itself is
     already organized by seating position. Groups appear in the order
     each owner's first candidate is encountered, not resorted by seat.
+    A `type: 'mood'` field's candidate list is normally built from the
+    board as it stands *before* this play (the card being played itself
+    isn't in play yet, from the browser's own point of view, until the
+    request resolves) — but a card whose schema marks the field
+    `includes_self` (Anger is the first: "put any number of moods with
+    total value 5 or less into the discard pile," and Anger's own value
+    is 0) gets a synthetic option built directly from the card being
+    played instead, labeled "`<name>` (`color`, `value`) [self]" so it
+    isn't mistaken for some other in-play copy of the same card.
     A `type: 'grant_choice'` field (`grant_source_card_id`, prepended ahead
     of the card's own fields) appears only when 2+ outstanding play grants
     would each independently cover the card being played — most commonly
@@ -1168,6 +1183,18 @@ too, proportional to the smaller card width.
     mean "use no grant" (a play always uses one), just "no preference which
     outstanding one," so "(none)" would misleadingly suggest declining a
     grant entirely.
+    That blank default option is skipped entirely for a `required: true`
+    field with exactly one candidate (e.g. Fury's own per-player
+    `discarded_mood_id_<game_player_id>` pick when that player has only
+    one mood in play) -- otherwise the `<select>` still defaults to the
+    blank option rather than the single real one, and a player who
+    reasonably doesn't bother re-picking their only choice submits with
+    the field still empty, which `buildChoicesFromFields()` silently
+    drops from the payload and the server then rejects as a missing
+    required choice. With the blank option skipped, the one real
+    `<option>` becomes the `<select>`'s own default, so
+    `updateRespondButtonEnabled()`/`updatePlayButtonEnabled()` already see
+    it filled at render time, with no explicit re-selection needed.
     A `type: 'mood'` field's own options (e.g. Faith's `target_mood_id`)
     also mark a candidate mood with `card.has_unused_play_grant` (see
     `php-app/README.md`) with a trailing ` *` right after its name
@@ -1921,6 +1948,38 @@ too, proportional to the smaller card width.
     fetch) also re-applies it immediately from the same `incoming` array
     it already has, so accepting/declining/blocking a request clears the
     dot right away rather than waiting for the next poll.
+
+  - **Browser back button**: since this is a single-page app with no real
+    per-view URLs, the browser's own Back button would otherwise just leave
+    the page entirely (or do nothing, if opened directly on the lobby) --
+    wired up instead so Back closes the top-most open `<dialog>` if one's
+    open, else returns to the lobby (or, for a spectator, `../spectate/`)
+    the same way `#back-to-lobby-button` itself does, else -- already at the
+    lobby with nothing open -- does nothing at all, rather than leaving the
+    site. `#back-to-lobby-button`'s own click handler now just calls
+    `history.back()`, so the physical button and the browser's Back button
+    always agree by construction instead of via two parallel
+    implementations. Every `<dialog>` here only ever opens via
+    `showModal()`/closes via `close()` (including indirectly, e.g. Escape or
+    a `<form method="dialog">` submit), so rather than touching each of this
+    file's dozen-plus open/close call sites individually, a single
+    `MutationObserver` watches every dialog's own `open` attribute and an
+    `openDialogStack` array tracks real open order (dialogs genuinely stack
+    here, e.g. Decks → Deck View → Card Detail). `showBoard()`/
+    `showSpectatorBoard()`/`showReplayBoard()` each call
+    `pushDisplayHistoryEntry()` on the way in, so a display transition and a
+    dialog opening both correspond 1:1 with a pushed history entry that a
+    single Back press consumes. A `suppressHistoryPopFor` flag (set right
+    before a Back-driven `close()`, cleared only once the observer actually
+    processes that dialog's `open` mutation) distinguishes a dialog closed
+    by Back itself (whose history entry the browser already consumed) from
+    one closed some other way (whose now-orphaned entry gets discarded via
+    an extra `history.back()`), so a subsequent single Back press never
+    needs an extra no-op press either way. The lobby's own "base" state is
+    a `history.pushState({ base: true }, '')` pushed once at load; the
+    popstate handler re-pushes that same marker every time Back is pressed
+    while already there with nothing open, so the site can never actually
+    be left via Back.
 
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
