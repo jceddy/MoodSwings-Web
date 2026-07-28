@@ -2467,7 +2467,7 @@ final class GameService
 
             $state = $this->boardStates->load($gameId);
             $playerChoices = new PlayerChoices($choices);
-            $result = $this->plays->playMood($state, $gamePlayerId, $cardId, $playerChoices);
+            $result = $this->plays->playMood($state, $gamePlayerId, $cardId, $playerChoices, $this->cardNamesFor($gameId));
 
             if ($result->isPending) {
                 $pdo = Connection::get();

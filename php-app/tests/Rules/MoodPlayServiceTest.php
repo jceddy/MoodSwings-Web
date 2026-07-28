@@ -3848,6 +3848,42 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 999]));
     }
 
+    /**
+     * Left null (the default, and what every caller other than GameService
+     * passes -- see MoodPlayService::playMood()'s own docblock), the
+     * rejection message above falls back to bare card ids, same as every
+     * other exception in this class.
+     */
+    public function testPlayMoodRejectsAnInvalidGrantSourceCardIdWithBareIdsByDefault(): void
+    {
+        $state = $this->boardState(hands: [1 => [5]]);
+        $state->startTurn(1);
+
+        try {
+            $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 999]));
+            self::fail('Expected an InvalidChoiceException');
+        } catch (InvalidChoiceException $e) {
+            self::assertSame('Grant sourced from card 999 is not currently usable for playing card 5', $e->getMessage());
+        }
+    }
+
+    /**
+     * GameService passes its own cardNamesFor($gameId) map so a player
+     * actually sees which cards are involved, not their opaque in-game ids.
+     */
+    public function testPlayMoodRejectsAnInvalidGrantSourceCardIdWithNamesWhenGiven(): void
+    {
+        $state = $this->boardState(hands: [1 => [5]]);
+        $state->startTurn(1);
+
+        try {
+            $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 999]), [999 => 'Hope', 5 => 'Complacency']);
+            self::fail('Expected an InvalidChoiceException');
+        } catch (InvalidChoiceException $e) {
+            self::assertSame('Grant sourced from Hope is not currently usable for playing Complacency', $e->getMessage());
+        }
+    }
+
     public function testGraceGrantsADiscardSourcedColorMatchingPlayTheTurnItsPlayed(): void
     {
         $state = $this->boardState(hands: [1 => [121]], discard: [110]); // Grace (green), Cheer (green) in discard

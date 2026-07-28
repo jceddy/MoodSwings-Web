@@ -4492,6 +4492,37 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * See MoodPlayService::playMood()'s own $cardNames param: GameService is
+     * the one caller that has real card names available (cardNamesFor()),
+     * so a stale/fabricated 'grant_source_card_id' has to surface as a
+     * message naming both cards, not their opaque in-game ids -- a player
+     * has no way to look up what card 47 is.
+     */
+    public function testGrantSourceCardIdRejectionMessageNamesBothCardsInsteadOfIds(): void
+    {
+        $u1 = $this->insertUser('grantnames1');
+        $u2 = $this->insertUser('grantnames2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency, no abilities
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity, not sourcing any grant
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->expectException(InvalidChoiceException::class);
+        $this->expectExceptionMessage('Grant sourced from Charity is not currently usable for playing Complacency');
+
+        $this->games->playMood($gameId, $p1, $complacencyId, ['grant_source_card_id' => $charityId]);
+    }
+
+    /**
      * The card-detail-dialog indicator's own backing data: each Hope
      * remains "armed" (has_unused_play_grant true) until the specific play
      * it granted is actually spent -- choosing one via grant_source_card_id

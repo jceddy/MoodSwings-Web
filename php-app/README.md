@@ -1379,7 +1379,15 @@ comes first" behavior via `useGrantFor()`'s new optional
 (naming a grant that's since been consumed or lost) throws
 `InvalidChoiceException` rather than silently falling through to spend
 some *other* grant the player never chose, which would otherwise corrupt
-`playsRemaining()` in a way that's hard to notice after the fact.
+`playsRemaining()` in a way that's hard to notice after the fact. That
+exception's message names both cards involved (e.g. "Grant sourced from
+Hope is not currently usable for playing Complacency") rather than their
+opaque in-game ids -- `MoodPlayService::playMood()` takes an optional
+`$cardNames` map (`cardId => name`) purely for this one message, since
+BoardState/MoodPlayService are otherwise deliberately unaware of
+anything DB-backed; `GameService::playMood()` is the only caller that
+passes one (its own `cardNamesFor($gameId)`), so every other caller
+(direct tests included) still gets the bare-id message this always had.
 
 Each in-play mood's own serialization also carries `has_unused_play_grant`
 -- whether that specific card currently has an active, not-yet-consumed
