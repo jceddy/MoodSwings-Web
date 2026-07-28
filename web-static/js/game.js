@@ -131,6 +131,7 @@
         const yourTurnCheckbox = document.getElementById('notify-your-turn-checkbox');
         const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
         const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
+        const disableCooldownCheckbox = document.getElementById('disable-cooldown-checkbox');
 
         const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
         unsupportedEl.hidden = supported;
@@ -156,6 +157,7 @@
                     yourTurnCheckbox.checked = body.preferences.notify_your_turn;
                     friendRequestCheckbox.checked = body.preferences.notify_friend_request;
                     gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
+                    disableCooldownCheckbox.checked = body.preferences.disable_cooldown;
                 }
             }
         }
@@ -265,11 +267,13 @@
                 notify_your_turn: yourTurnCheckbox.checked,
                 notify_friend_request: friendRequestCheckbox.checked,
                 notify_game_finished: gameFinishedCheckbox.checked,
+                disable_cooldown: disableCooldownCheckbox.checked,
             });
         }
         yourTurnCheckbox.addEventListener('change', savePreferences);
         friendRequestCheckbox.addEventListener('change', savePreferences);
         gameFinishedCheckbox.addEventListener('change', savePreferences);
+        disableCooldownCheckbox.addEventListener('change', savePreferences);
     }
 
     async function refreshFriendsData() {

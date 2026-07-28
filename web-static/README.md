@@ -492,10 +492,16 @@ too, proportional to the smaller card width.
     below runs. Otherwise, opening the dialog calls `pushManager
     .getSubscription()` to decide which of `#notifications-enable-button`/
     `#notifications-disable-button` to show, and -- only once subscribed
-    -- fetches `GET /notifications/preferences` to populate the three
+    -- fetches `GET /notifications/preferences` to populate the four
     `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
-    `notify-friend-request-checkbox`/`notify-game-finished-checkbox`,
-    disabled via the `<fieldset>` until a subscription exists). "Enable"
+    `notify-friend-request-checkbox`/`notify-game-finished-checkbox`/
+    `disable-cooldown-checkbox`, disabled via the `<fieldset>` until a
+    subscription exists). The fourth ("Send every notification
+    immediately (disable the 5-minute cooldown)") maps to the server's
+    own `disable_cooldown` preference -- off by default, so the cooldown
+    stays on until a player explicitly opts out of it (see "Browser push
+    notifications" in `../php-app/README.md` for what it actually does).
+    "Enable"
     calls `Notification.requestPermission()`, then `GET
     /notifications/vapid-public-key` for the server's public key (converted
     from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs

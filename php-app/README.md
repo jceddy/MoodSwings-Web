@@ -89,8 +89,8 @@ maintenance page) — see "Maintenance mode" below.
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
-| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished"}}`, all `true` for a user who's never changed them. |
-| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?}` | Requires auth. Upserts the current user's preferences (each field defaults to `true` if omitted); returns the saved `{"preferences"}`. |
+| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "disable_cooldown"}}` -- the three `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
+| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does. |
 | GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
 | GET    | `/discord/oauth/start` | —                                                        | Requires auth. Not a JSON endpoint -- a `302` straight to Discord's own OAuth2 consent screen. Meant for browser navigation (a link/button), not `fetch()`. See "Discord" below. |
 | GET    | `/discord/oauth/callback` | `code`, `state` (query params, set by Discord's own redirect) | Requires auth. Not a JSON endpoint -- a `302` back to the lobby, `?discord_linked=1` on success or `?discord_link_error=<message>` on failure. See "Discord" below. |
@@ -3043,6 +3043,19 @@ stale "it's your turn" for a turn already taken.
 `clearFriendRequestForUser()` delete by exact scope match (`game:{id}` or
 `friend_request`), so clearing one game's queued reminder can never touch
 a different game's, or a friend request's.
+
+**Opting out of the cooldown entirely**: a `disable_cooldown` preference
+(migration `0051`, defaulting `false` -- the cooldown stays on for every
+existing user until they explicitly turn it off) lets a player receive
+every notification they're otherwise eligible for immediately, even
+several in quick succession, rather than being throttled to at most one
+per scope every 5 minutes. `NotificationService::notify()` simply skips
+the `wasNotifiedRecently()` check (and therefore the queue branch)
+outright when this preference is on, so a user with it enabled never
+gets a notification queued behind another one -- every eligible event
+either delivers right away or (only for the same reasons an ordinary
+send might not: preference off, nothing to deliver to, VAPID
+unconfigured) doesn't happen at all, never delayed to a later cron flush.
 
 **Architecture**: the standard three-part Web Push stack -- Push API
 (`PushManager.subscribe()`) + Notifications API (`ServiceWorkerRegistration
