@@ -288,7 +288,7 @@ final class CardChoiceSchema
             ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false, 'label' => 'Player to target (must have 2+ moods)', 'filter' => ['min_mood_count' => 2]],
         ],
         'hesitation' => [
-            ['key' => 'mode', 'type' => 'mode', 'required' => true, 'options' => ['single', 'all'], 'label' => "Return one qualifying mood to its player's hand, or all of them"],
+            ['key' => 'mode', 'type' => 'mode', 'required' => false, 'options' => ['single', 'all'], 'label' => "Return one qualifying mood to its player's hand, or all of them"],
             ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => "Mood to return to its player's hand (red or green; required if mode is single)", 'filter' => ['colors' => ['red', 'green']]],
         ],
         'nostalgia' => [
