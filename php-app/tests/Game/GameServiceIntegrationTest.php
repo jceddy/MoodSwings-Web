@@ -5248,6 +5248,75 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Regression test for a production bug: a required decision field
+     * (Suspicion's, Fury's, and every other RequiresOpponentDecision
+     * field with 'required' => true) used to be persisted as "resolved"
+     * with a null answer whenever the client submitted a blank/missing
+     * value, with no validation at intake. Once a LATER responder then
+     * completed the batch, resolvePendingDecisions() would throw because
+     * of the EARLIER player's null answer -- and respondToDecision()'s
+     * own transaction would roll back, undoing the later responder's own
+     * perfectly valid answer too, leaving them permanently stuck (see
+     * respondToDecision()'s own docblock comment). The fix rejects a
+     * missing required answer immediately, before anything is written,
+     * so p2's own row here never gets marked resolved and p3's decision
+     * is never even reached.
+     */
+    public function testRespondToDecisionRejectsAMissingRequiredAnswerBeforePersistingIt(): void
+    {
+        $u1 = $this->insertUser('susp-missing1');
+        $u2 = $this->insertUser('susp-missing2');
+        $u3 = $this->insertUser('susp-missing3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $suspicionId = $this->insertGameCard($gameId, 78, 'hand', $p1); // Suspicion
+        $card9Id = $this->insertGameCard($gameId, 9, 'hand', $p2);
+        $card3Id = $this->insertGameCard($gameId, 3, 'hand', $p2);
+        $card106Id = $this->insertGameCard($gameId, 106, 'hand', $p3);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $suspicionId, ['player_ids' => [$p2, $p3]]);
+
+        try {
+            $this->games->respondToDecision($gameId, $p2, []);
+            self::fail('Expected a missing required answer to be rejected');
+        } catch (InvalidChoiceException $e) {
+            self::assertSame("Missing required choice 'discarded_card_id_{$p2}'", $e->getMessage());
+        }
+
+        // p2's own decision must still be open (not silently marked
+        // resolved with a null answer) -- responding out of turn as p3
+        // is still rejected, exactly as before the bad submission.
+        try {
+            $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => $card106Id]);
+            self::fail('Expected p3 to have no decision pending until p2 answers first');
+        } catch (GameStateException) {
+            // expected
+        }
+
+        $firstRespondResult = $this->games->respondToDecision($gameId, $p2, ['discarded_card_id_' . $p2 => $card9Id]);
+        self::assertTrue($firstRespondResult['pending_decision'] ?? false);
+
+        $finalRespondResult = $this->games->respondToDecision($gameId, $p3, ['discarded_card_id_' . $p3 => $card106Id]);
+        self::assertArrayNotHasKey('pending_decision', $finalRespondResult);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame([$card3Id], $state->hand($p2));
+        self::assertSame([], $state->hand($p3));
+        self::assertCount(2, $state->discardPile());
+    }
+
+    /**
      * Disillusionment's queue asks every player at the table, including
      * the acting player themselves, starting with the next player in
      * turn order and wrapping around -- the round stays frozen through

@@ -1981,6 +1981,26 @@ too, proportional to the smaller card width.
     while already there with nothing open, so the site can never actually
     be left via Back.
 
+    A second, mirror-image flag -- `suppressNextPopState` -- was needed
+    to fix a real bug: `history.back()` fires its own `popstate` event
+    once the browser actually processes the navigation, exactly like a
+    real Back press does, and without this flag the handler had no way
+    to tell that apart from a genuine Back press. Closing a *lone* dialog
+    via a button (Select/De-select, Close, a form submit) while nothing
+    else was open used to trigger that orphan-cleanup `history.back()`
+    call above, whose resulting `popstate` then fell through to the
+    handler's normal logic -- with no dialog left open, it read as "Back
+    was pressed on the board itself" and silently bounced the player to
+    the lobby, e.g. clicking Select/De-select on a single card in the
+    quick_draft/winston_draft/grid_draft deck-trim picker or the
+    `closed_team` initial card-pass picker (see `openCardDetail()`'s
+    `selection` param below), or simply closing an ordinary card-detail
+    dialog. `suppressNextPopState` is set immediately before that cleanup
+    `history.back()` call and consumed at the very top of the popstate
+    handler, so that self-triggered event is swallowed instead of acted
+    on -- the dialog it belonged to is already closed and already removed
+    from `openDialogStack`, so there's nothing left to do.
+
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
 [`../php-app/README.md`](../php-app/README.md) for the API itself.
