@@ -2700,6 +2700,67 @@
         document.getElementById('shared-deck-dialog').close();
     });
 
+    // Private in-game notepad (issue #258) -- one freeform note per seat,
+    // autosaved as you type (debounced 1s) rather than an explicit Save
+    // button. Read-only once the game is no longer 'in_progress' (see
+    // GameService::saveNote()'s own gate), but the note stays fully
+    // visible either way -- see isNotesReadOnly() below.
+    const gameNotesDialog = document.getElementById('game-notes-dialog');
+    const gameNotesTextarea = document.getElementById('game-notes-textarea');
+    // Holds the pending debounce timer id, or null once it's fired (or
+    // there's nothing unsaved) -- game-notes-close-button uses this to
+    // flush an unsaved edit immediately rather than losing it on close.
+    let saveNoteTimer = null;
+
+    function isNotesReadOnly() {
+        return !currentState || currentState.game.status !== 'in_progress';
+    }
+
+    async function flushNoteSave(gameId) {
+        const statusEl = document.getElementById('game-notes-save-status');
+        const { ok } = await saveGameNote(gameId, gameNotesTextarea.value);
+        if (gameNotesDialog.dataset.gameId === gameId) {
+            statusEl.textContent = ok ? 'Saved.' : 'Could not save your notes.';
+        }
+    }
+
+    async function openNotesDialog(gameId) {
+        gameNotesDialog.dataset.gameId = gameId;
+        window.clearTimeout(saveNoteTimer);
+        saveNoteTimer = null;
+        const readOnly = isNotesReadOnly();
+        gameNotesTextarea.disabled = true;
+        gameNotesTextarea.value = '';
+        document.getElementById('game-notes-readonly-message').hidden = !readOnly;
+        document.getElementById('game-notes-save-status').textContent = '';
+        gameNotesDialog.showModal();
+
+        const { ok, body } = await getGameNote(gameId);
+        gameNotesTextarea.value = ok ? body.note_text : '';
+        gameNotesTextarea.disabled = readOnly;
+    }
+
+    document.getElementById('view-notes-button').addEventListener('click', () => openNotesDialog(currentGameId));
+
+    document.getElementById('game-notes-close-button').addEventListener('click', () => {
+        if (saveNoteTimer !== null) {
+            window.clearTimeout(saveNoteTimer);
+            saveNoteTimer = null;
+            flushNoteSave(gameNotesDialog.dataset.gameId);
+        }
+        gameNotesDialog.close();
+    });
+
+    gameNotesTextarea.addEventListener('input', () => {
+        document.getElementById('game-notes-save-status').textContent = 'Saving…';
+        window.clearTimeout(saveNoteTimer);
+        const gameId = gameNotesDialog.dataset.gameId;
+        saveNoteTimer = window.setTimeout(() => {
+            saveNoteTimer = null;
+            flushNoteSave(gameId);
+        }, 1000);
+    });
+
     // Small inline pictograms (issue #143) replacing the players list's own
     // plain-text stat clauses ("4 point(s)", "went first this round", ...)
     // -- self-contained straight-line shapes rather than curves, so each is
@@ -3262,6 +3323,12 @@
         // the game has actually started and its deck has been dealt (see
         // the 'waiting' branch above, which hides this whole area).
         document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
+
+        // "Notes" (issue #258) -- a private per-seat scratchpad, so it only
+        // ever makes sense for an actual seated player, never a
+        // spectator/replay viewer (state.you is just a synthesized stub
+        // with no game_player_id there -- see isReadOnlyView()'s docblock).
+        document.getElementById('view-notes-button').hidden = isReadOnlyView();
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's

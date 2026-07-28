@@ -1585,6 +1585,24 @@ too, proportional to the smaller card width.
     cards, and a card thumbnail takes up considerably more room than a
     line of log text).
 
+    **In-game notepad (issue #258).** A "Notes" button (`#view-notes-
+    button`, next to "View log"/"View decklist") opens `#game-notes-
+    dialog` -- a private, per-seat scratchpad, never shared with anyone
+    else at the table, so unlike "View log"/"View decklist" it has no
+    lobby-row counterpart and is hidden entirely while spectating/
+    replaying (`isReadOnlyView()`; a spectator/replay viewer has no seat
+    of their own to have a note for). Opening it fetches the note's
+    current text via `GET /games/notes` (`getGameNote()` in `app.js`);
+    typing into the textarea autosaves on a 1-second debounce
+    (`saveGameNote()` -> `POST /games/notes`) rather than needing an
+    explicit Save button, and closing the dialog with an edit still
+    pending flushes it immediately first. Once the game's own status
+    isn't `in_progress`, the textarea is disabled and a "This game has
+    ended, so your notes are read-only" message replaces the save-status
+    line -- the previously-saved text is still loaded and shown, just not
+    editable (see `GameService::saveNote()`'s own gate in
+    `php-app/README.md`).
+
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
     `#in-progress-area` (a pending decision/scoring preview belongs to

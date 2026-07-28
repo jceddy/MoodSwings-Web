@@ -63,6 +63,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE draft_grid_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
+        $pdo->exec('TRUNCATE TABLE game_notes');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
         $pdo->exec('TRUNCATE TABLE game_team_decisions');
         $pdo->exec('TRUNCATE TABLE game_pending_decisions');
@@ -9771,6 +9772,93 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('decision still pending');
         $this->games->resignGame($gameId, $p2);
+    }
+
+    /**
+     * Private in-game notepad (issue #258) -- one freeform note per seat,
+     * keyed on game_player_id (see GameNoteRepository), editable only
+     * while the game is 'in_progress' but always fully visible.
+     */
+    public function testGetNoteReturnsEmptyStringWhenNoneHasEverBeenSaved(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        self::assertSame('', $this->games->getNote($p1));
+    }
+
+    public function testSaveNoteThenGetNoteRoundTrips(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->games->saveNote($gameId, $p1, 'Watch out for Apathy.');
+
+        self::assertSame('Watch out for Apathy.', $this->games->getNote($p1));
+
+        $this->games->saveNote($gameId, $p1, 'Actually, watch out for Boredom instead.');
+
+        self::assertSame('Actually, watch out for Boredom instead.', $this->games->getNote($p1));
+    }
+
+    public function testNotesAreIsolatedPerSeatEvenInTheSameGame(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildThreePlayerFixture();
+
+        $this->games->saveNote($gameId, $p1, "p1's note");
+        $this->games->saveNote($gameId, $p2, "p2's note");
+
+        self::assertSame("p1's note", $this->games->getNote($p1));
+        self::assertSame("p2's note", $this->games->getNote($p2));
+    }
+
+    public function testSaveNoteRejectsTextOverTheLengthLimit(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->games->saveNote($gameId, $p1, str_repeat('a', 20001));
+    }
+
+    public function testSaveNoteAllowsTextExactlyAtTheLengthLimit(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $text = str_repeat('a', 20000);
+        $this->games->saveNote($gameId, $p1, $text);
+
+        self::assertSame($text, $this->games->getNote($p1));
+    }
+
+    public function testSaveNoteFailsOnceTheGameHasCompleted(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+        $this->games->saveNote($gameId, $p1, 'Saved while still in progress.');
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed' WHERE id = :id")->execute(['id' => $gameId]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->saveNote($gameId, $p1, 'Trying to edit after the game ended.');
+    }
+
+    public function testGetNoteStillReturnsThePreviouslySavedTextAfterTheGameCompletes(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+        $this->games->saveNote($gameId, $p1, 'Saved while still in progress.');
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed' WHERE id = :id")->execute(['id' => $gameId]);
+
+        self::assertSame('Saved while still in progress.', $this->games->getNote($p1));
+    }
+
+    public function testSaveNoteFailsOnceTheGameHasBeenAbandoned(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->pdo->prepare("UPDATE games SET status = 'abandoned' WHERE id = :id")->execute(['id' => $gameId]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->saveNote($gameId, $p1, 'Trying to edit an abandoned game.');
     }
 
     /**

@@ -1021,6 +1021,37 @@ if ($path === '/games/resign' && $method === 'POST') {
     }
 }
 
+// In-game notepad (issue #258): private per-seat scratch notes, never
+// shared with anyone else at the table. GET always succeeds for a seated
+// player regardless of the game's own status (a completed game's notes
+// stay fully readable); only the POST (save) is gated to 'in_progress'.
+if ($path === '/games/notes' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    respond(200, ['status' => 'ok', 'note_text' => $games->getNote($gamePlayerId)]);
+}
+
+if ($path === '/games/notes' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $noteText = (string) ($body['note_text'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->saveNote($gameId, $gamePlayerId, $noteText);
+        respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/games/respond' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

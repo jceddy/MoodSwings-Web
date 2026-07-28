@@ -392,6 +392,21 @@ function resignGame(gameId) {
     });
 }
 
+// Private in-game notepad (issue #258) -- see GameService::getNote()/
+// saveNote(). Editable only while the game is 'in_progress'; saveGameNote()
+// rejects with a 409 (game not in progress) or 400 (over the length limit)
+// past that point -- see openNotesDialog() in game.js.
+function getGameNote(gameId) {
+    return apiRequest('/games/notes?game_id=' + encodeURIComponent(gameId));
+}
+
+function saveGameNote(gameId, noteText) {
+    return apiRequest('/games/notes', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, note_text: noteText }),
+    });
+}
+
 function respondToDecision(gameId, choices) {
     return apiRequest('/games/respond', {
         method: 'POST',

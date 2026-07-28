@@ -9,6 +9,7 @@ use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Notifications\NotificationService;
 use MoodSwings\Presence\PresenceService;
+use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
@@ -213,6 +214,9 @@ final class GameService
     /** Shared best-of-three threshold for every draft-based deck_type's own match. */
     private const DRAFT_GAMES_TO_WIN = 2;
 
+    /** In-game notepad (issue #258) -- a note's max length, in characters. */
+    private const MAX_NOTE_LENGTH = 20000;
+
     /** @var array<int, array<int, string>> gameId => (card_id => name), memoized per instance by cardNamesFor() */
     private array $cardNamesByGame = [];
 
@@ -225,6 +229,7 @@ final class GameService
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
         private readonly ?NotificationService $notifications = null,
         private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
+        private readonly GameNoteRepository $notes = new GameNoteRepository(),
     ) {
     }
 
@@ -3741,6 +3746,41 @@ final class GameService
         $total = $wins + $losses;
 
         return $total > 0 ? (int) round($wins / $total * 100) : null;
+    }
+
+    /**
+     * In-game notepad (issue #258): private per-seat scratch notes, never
+     * shared with anyone else at the table -- keyed on $gamePlayerId
+     * directly (the caller already resolved and authorized it, the same
+     * `requireGamePlayer()` pattern every other per-seat action uses), not
+     * $userId, since a seat already uniquely identifies "this player, in
+     * this game." Empty string (not null) for a seat that's never saved
+     * one yet, so the frontend's textarea always has a plain string to
+     * bind to.
+     */
+    public function getNote(int $gamePlayerId): string
+    {
+        return $this->notes->findByGamePlayerId($gamePlayerId) ?? '';
+    }
+
+    /**
+     * Only editable while the game is still 'in_progress' -- once it
+     * reaches a terminal status ('completed'/'abandoned') the note stays
+     * fully visible (see getNote() above) but read-only, the same as
+     * every other in-progress-only board action.
+     */
+    public function saveNote(int $gameId, int $gamePlayerId, string $noteText): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['status'] !== 'in_progress') {
+            throw new GameStateException('Notes can only be edited while the game is in progress.');
+        }
+
+        if (mb_strlen($noteText) > self::MAX_NOTE_LENGTH) {
+            throw new \InvalidArgumentException('A note cannot be longer than ' . self::MAX_NOTE_LENGTH . ' characters.');
+        }
+
+        $this->notes->upsert($gamePlayerId, $noteText);
     }
 
     /**

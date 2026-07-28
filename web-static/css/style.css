@@ -1205,6 +1205,33 @@ dialog#shared-deck-dialog[open] {
     overflow-y: auto;
 }
 
+/* The private in-game notepad (issue #258) -- same dialog-sizing reasoning
+   as dialog#game-log-dialog[open] above, just narrower since it only ever
+   holds one textarea rather than a list or card grid. */
+dialog#game-notes-dialog[open] {
+    box-sizing: border-box;
+    max-width: 30rem;
+    width: 90%;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+#game-notes-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+}
+
+#game-notes-textarea:disabled {
+    background-color: var(--color-bg);
+    color: var(--color-muted);
+}
+
 /* The deck builder (issue #93) shows the full card catalog next to the
    deck under construction side by side -- wider still than
    dialog#shared-deck-dialog[open] above, since it needs room for two of

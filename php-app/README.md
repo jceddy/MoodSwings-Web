@@ -80,6 +80,8 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress`, you've already resigned, or a decision is pending. Gives up instead of playing the game out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
+| GET    | `/games/notes`  | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. Returns `{"note_text"}` -- your own private note for that seat (issue #258), `""` if you've never saved one. Always readable, regardless of the game's status. See "In-game notepad" below. |
+| POST   | `/games/notes`  | `{"game_id", "note_text"}`                                         | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` -- the note stays visible but read-only once a game ends. `400` if `note_text` is over 20,000 characters. See "In-game notepad" below. |
 | GET    | `/games/spectatable` | —                                                             | Requires auth. Lists any friend's game that's currently `in_progress` and you're not seated in yourself, same shape as `GET /games` rows (minus the viewer-scoped fields, `draft_match` always `null`). See "Spectator mode" below. |
 | POST   | `/games/spectate/code` | `{"game_id"}`                                              | Requires auth; `403` if you're not seated in that game. Returns `{"code"}` -- that game's own share code (an existing one if already minted, else a freshly generated one). See "Spectator mode" below. |
 | POST   | `/games/spectate/resolve` | `{"code"}`                                              | Requires auth. `404` if no game has that code, or it's `waiting`/`abandoned`. Returns `{"game_id"}` for the frontend to navigate with. See "Spectator mode" below. |
@@ -3409,6 +3411,54 @@ for online, the same shape defaulting to `--color-muted` for offline,
 and a distinct eye-slash icon (not just a different color) for hidden,
 so a colorblind viewer -- or anyone glancing quickly -- can tell
 "offline" and "opted out" apart by shape, not only color.
+
+### In-game notepad (issue #258)
+
+A small freeform scratchpad for jotting down private reads/reminders
+during a game -- who's bluffing, what's already been played, a plan for
+next round -- never shared with anyone else at the table, including
+teammates. Per-game rather than persistent across every game a player's
+ever in (the issue's own scope), and keyed directly on `game_players.id`
+(migration `0054`'s `game_notes` table, `UNIQUE KEY` on
+`game_player_id`) rather than a separate `(user_id, game_id)` compound --
+a seat already uniquely identifies "this player, in this game," the same
+way `resigned_at`/`custom_deck_name`/the initial card pass all hang off
+`game_player_id` rather than inventing their own key. `GameNoteRepository`
+(`src/Repository/GameNoteRepository.php`) is a two-method repository:
+`findByGamePlayerId(int): ?string` and `upsert(int, string): void` (an
+`INSERT ... ON DUPLICATE KEY UPDATE`, so the row is lazily created on
+first save rather than provisioned up front for every seat).
+
+`GameService::getNote(int $gamePlayerId): string` (empty string, not
+`null`, if nothing's ever been saved -- one less null-check for both the
+HTTP layer and the frontend) and `GameService::saveNote(int $gameId, int
+$gamePlayerId, string $noteText): void` are the only two entry points.
+`saveNote()` enforces a `MAX_NOTE_LENGTH` of 20,000 characters (checked
+in PHP via `mb_strlen()` -- the column itself is `MEDIUMTEXT`,
+effectively unbounded at the DB layer, so this is purely an
+application-level sanity limit) and throws `GameStateException` unless
+the game is still `in_progress`. That gate is deliberate: once a game
+reaches a terminal status (`completed` or `abandoned`) the note becomes
+**read-only**, matching how a resigned/finished game locks out every
+other board action -- but `getNote()` has no such gate, so the note
+itself stays fully readable forever; only further edits are refused.
+`GET /games/notes`/`POST /games/notes` (see the API table above) are
+thin wrappers around these two methods, both behind the same
+`requireGamePlayer()` seat check every other per-player game route uses.
+
+Frontend (`web-static/game/index.html`/`web-static/js/game.js`): a
+"Notes" button next to the existing "View log"/"View decklist" buttons
+opens `#game-notes-dialog`, matching that same established dialog
+pattern rather than a persistent inline panel (only reachable from that
+game's own board, never a separate cross-game notes page, per the
+issue's own "per-game, not persistent" scope). Typing into the textarea
+autosaves on a 1-second debounce (`saveGameNote()` in `app.js`) rather
+than needing an explicit Save button; closing the dialog with an edit
+still pending flushes it immediately rather than discarding it. Once the
+game's own status isn't `in_progress`, the textarea is disabled and a
+"This game has ended, so your notes are read-only" message is shown
+instead -- the previously-saved text is still loaded and displayed, just
+not editable, mirroring the backend's own read-but-not-write rule.
 
 ### Duel: separate per-player decks
 
