@@ -487,7 +487,8 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
         (int) $currentUser['id'],
         (bool) ($body['notify_your_turn'] ?? true),
         (bool) ($body['notify_friend_request'] ?? true),
-        (bool) ($body['notify_game_finished'] ?? true)
+        (bool) ($body['notify_game_finished'] ?? true),
+        (bool) ($body['disable_cooldown'] ?? false)
     );
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }

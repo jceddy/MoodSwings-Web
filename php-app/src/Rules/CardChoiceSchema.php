@@ -56,6 +56,22 @@ namespace MoodSwings\Rules;
  *                           // php-app/README.md's "Open Team Play" section for exactly which cards this
  *                           // applies to and which don't). A no-op outside team format: there's no
  *                           // teammate to exclude, so fieldOptions() narrowing on it never removes anything.
+ *     includes_self?: bool, // mood only: game.js's own fieldOptions() builds a 'mood' field's candidate
+ *                           // list from currentState.in_play -- the board as of *before* this play is
+ *                           // submitted, so it never contains the card currently being chosen for, self or
+ *                           // not (server-side, by contrast, MoodPlayService::playMood() moves a card into
+ *                           // play before resolving its own effect, so afterPlaying() itself sees no such
+ *                           // restriction -- targeting the card's own id is already accepted there). Correct
+ *                           // for almost every card (nothing already in play yet could ever legally name
+ *                           // itself), but wrong for the handful whose printed text has no reason to rule out
+ *                           // targeting itself -- Anger ("put any number of moods with total value 5 or less
+ *                           // into the discard pile," value 0, so discarding itself is not just legal but
+ *                           // often efficient) is the first such card. Set true to have fieldOptions()
+ *                           // synthesize a self entry directly from the card being played (labeled " [self]"
+ *                           // so it isn't mistaken for some other in-play copy of the same card -- a duel
+ *                           // deck, or two of the same custom card, can each be played independently in the
+ *                           // same game) rather than trying to find it in currentState.in_play, where it can
+ *                           // never actually be.
  *     count?: array{        // multi fields only: how many selections are legal
  *         min?: int,             // fewer than this is illegal (unless zero_ok and none are selected)
  *         max?: int,             // more than this is illegal
@@ -160,7 +176,7 @@ final class CardChoiceSchema
             ['key' => 'color', 'type' => 'mode', 'required' => true, 'options' => self::FIVE_COLORS, 'label' => 'Color to declare'],
         ],
         'anger' => [
-            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to put into the discard pile (combined value 5 or less)', 'constraint' => ['type' => 'max_total_value', 'max' => 5]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'scope' => 'any', 'multi' => true, 'required' => false, 'label' => 'Moods to put into the discard pile (combined value 5 or less)', 'constraint' => ['type' => 'max_total_value', 'max' => 5], 'includes_self' => true],
         ],
         'self_loathing' => [
             ['key' => 'discard_mood_ids', 'type' => 'mood', 'scope' => 'own', 'multi' => true, 'required' => true, 'label' => 'Your mood(s) to put into the discard pile (cost to play this card, one or more)', 'count' => ['min' => 1]],

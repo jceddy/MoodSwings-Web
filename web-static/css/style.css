@@ -874,7 +874,37 @@ body.game-page {
 .card-thumb__badge--recolored {
     top: calc(0.25rem + 20px);
     left: 0.25rem;
-    background: #8a5a00;
+}
+
+/* Tints the recolored badge to the mood color it's actually declaring
+   (card.color, one of the five printed colors -- see
+   JCEDDYS_75_DECK_COLORS in game.js) instead of one fixed color
+   regardless of which color Imagination chose. Fixed hex values rather
+   than theme variables, same as --recolored's own sibling badges
+   (--copy/--suppressed) -- these represent a card's own printed color
+   identity, not something that should shift with light/dark mode.
+   White is the one badge here needing dark text instead of the base
+   .card-thumb__badge's white, for contrast against its own light
+   background. */
+.card-thumb__badge--recolored-white {
+    background: #ded6bd;
+    color: #222;
+}
+
+.card-thumb__badge--recolored-blue {
+    background: #1f6fb2;
+}
+
+.card-thumb__badge--recolored-black {
+    background: #2b2b2b;
+}
+
+.card-thumb__badge--recolored-red {
+    background: #b3261e;
+}
+
+.card-thumb__badge--recolored-green {
+    background: #1f7a3d;
 }
 
 /* A card can be both a Creativity copy AND separately recolored (e.g.

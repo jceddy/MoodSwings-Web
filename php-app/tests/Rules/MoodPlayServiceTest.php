@@ -793,6 +793,25 @@ final class MoodPlayServiceTest extends TestCase
         self::assertEqualsCanonicalizing([3, 7], $state->discardPile());
     }
 
+    /**
+     * Anger is already in play by the time its own afterPlaying() runs
+     * (MoodPlayService::playMood() moves the card into play before
+     * resolving its effect), and its own value is 0 -- so targeting itself
+     * is both legal and, discarding it for free, often the efficient play.
+     * See CardChoiceSchema.php's own 'includes_self' docblock for why the
+     * frontend now offers this option too.
+     */
+    public function testAngerCanDiscardItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [80]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 80, new PlayerChoices(['target_mood_ids' => [80]]));
+
+        self::assertFalse($state->isInPlay(80));
+        self::assertSame([80], $state->discardPile());
+    }
+
     public function testAngerRejectsExceedingTheTotalValueLimit(): void
     {
         $state = $this->boardState(hands: [1 => [80], 2 => [9]]);
@@ -3267,6 +3286,26 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(['sourceCardId' => 100, 'ownerId' => 2], $state->effectState(3, 'returnsToOwnerAfterScoring'));
     }
 
+    /**
+     * See BoardState::giveInPlayToPlayer()'s own docblock: stealing an
+     * opponent's in-play Hope grants the same same-turn bonus play Hope's
+     * own "while in play... including the turn you play this mood" text
+     * grants when Hope is played outright, since the stealing player now
+     * controls it during their own active turn.
+     */
+    public function testRecklessnessStealingAnOpponentsHopeGrantsAnExtraPlayThisTurn(): void
+    {
+        $state = $this->boardState(hands: [1 => [100], 2 => [124]]);
+        $state->moveHandToInPlay(2, 124); // opponent's Hope, already in play before this turn
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 100, new PlayerChoices(['target_mood_id' => 124]));
+
+        self::assertSame(1, $state->ownerOf(124));
+        // Recklessness itself consumed the base play; stealing Hope grants a fresh one for this turn.
+        self::assertSame(1, $state->playsRemaining());
+    }
+
     public function testRecklessnessRejectsTakingYourOwnMood(): void
     {
         $state = $this->boardState(hands: [1 => [100, 3]]);
@@ -3826,6 +3865,42 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->expectException(InvalidChoiceException::class);
         $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 999]));
+    }
+
+    /**
+     * Left null (the default, and what every caller other than GameService
+     * passes -- see MoodPlayService::playMood()'s own docblock), the
+     * rejection message above falls back to bare card ids, same as every
+     * other exception in this class.
+     */
+    public function testPlayMoodRejectsAnInvalidGrantSourceCardIdWithBareIdsByDefault(): void
+    {
+        $state = $this->boardState(hands: [1 => [5]]);
+        $state->startTurn(1);
+
+        try {
+            $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 999]));
+            self::fail('Expected an InvalidChoiceException');
+        } catch (InvalidChoiceException $e) {
+            self::assertSame('Grant sourced from card 999 is not currently usable for playing card 5', $e->getMessage());
+        }
+    }
+
+    /**
+     * GameService passes its own cardNamesFor($gameId) map so a player
+     * actually sees which cards are involved, not their opaque in-game ids.
+     */
+    public function testPlayMoodRejectsAnInvalidGrantSourceCardIdWithNamesWhenGiven(): void
+    {
+        $state = $this->boardState(hands: [1 => [5]]);
+        $state->startTurn(1);
+
+        try {
+            $this->plays->playMood($state, 1, 5, new PlayerChoices(['grant_source_card_id' => 999]), [999 => 'Hope', 5 => 'Complacency']);
+            self::fail('Expected an InvalidChoiceException');
+        } catch (InvalidChoiceException $e) {
+            self::assertSame('Grant sourced from Hope is not currently usable for playing Complacency', $e->getMessage());
+        }
     }
 
     public function testGraceGrantsADiscardSourcedColorMatchingPlayTheTurnItsPlayed(): void

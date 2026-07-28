@@ -89,8 +89,8 @@ maintenance page) — see "Maintenance mode" below.
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
-| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished"}}`, all `true` for a user who's never changed them. |
-| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?}` | Requires auth. Upserts the current user's preferences (each field defaults to `true` if omitted); returns the saved `{"preferences"}`. |
+| GET    | `/notifications/preferences` | —                                                        | Requires auth. Returns `{"preferences": {"notify_your_turn", "notify_friend_request", "notify_game_finished", "disable_cooldown"}}` -- the three `notify_*` toggles default `true`, `disable_cooldown` defaults `false`, for a user who's never changed them. |
+| POST   | `/notifications/preferences` | `{"notify_your_turn"?, "notify_friend_request"?, "notify_game_finished"?, "disable_cooldown"?}` | Requires auth. Upserts the current user's preferences (each `notify_*` field defaults to `true` if omitted, `disable_cooldown` defaults to `false`); returns the saved `{"preferences"}`. See "Browser push notifications" below for what `disable_cooldown` does. |
 | GET    | `/discord/status` | —                                                             | Requires auth. Returns `{"linked", "discord_username"}` (the latter `null` if unlinked). See "Discord" below. |
 | GET    | `/discord/oauth/start` | —                                                        | Requires auth. Not a JSON endpoint -- a `302` straight to Discord's own OAuth2 consent screen. Meant for browser navigation (a link/button), not `fetch()`. See "Discord" below. |
 | GET    | `/discord/oauth/callback` | `code`, `state` (query params, set by Discord's own redirect) | Requires auth. Not a JSON endpoint -- a `302` back to the lobby, `?discord_linked=1` on success or `?discord_link_error=<message>` on failure. See "Discord" below. |
@@ -313,7 +313,12 @@ color match (Grace), or conditional on another player currently having
 more moods in play (Stubbornness) — with the turn the card is actually
 played on handled separately since Hope/Grace have no after-playing
 ability to hook (`GameService::computeFreshGrants()`, plus
-`MoodPlayService`'s same-turn special case), a one-shot "banked" extra
+`MoodPlayService`'s same-turn special case, plus
+`BoardState::giveInPlayToPlayer()`'s own mid-turn case: gaining control
+of an in-play Hope/Grace via any steal/give effect — Recklessness,
+Instability, Guile, Betrayal, Arrogance, Avoidance, Chaos — grants the
+same bonus the instant it happens, if it lands on whoever's turn is
+currently active), a one-shot "banked" extra
 play for a specific player's next turn — however many turns from now
 that turns out to be — for another player (Generosity) or yourself
 (Joy), consulted by that same `computeFreshGrants()`, and an opponent's
@@ -1258,10 +1263,17 @@ left" indicator stays hidden entirely unless it's actually the viewer's
 turn (see `web-static/README.md`), rather than showing another player's
 own outstanding plays as if they were the viewer's.
 
-Hope's and Grace's own grants -- both the same-turn one
-(`MoodPlayService`, the moment either card enters play) and every future
-turn's perpetual one (`computeFreshGrants()`) -- also carry
-`'requiresSourceInPlay' => true` alongside their `sourceCardId`. Unlike an
+Hope's and Grace's own grants -- the same-turn one (`MoodPlayService`,
+the moment either card enters play), every future turn's perpetual one
+(`computeFreshGrants()`), and the mid-turn one for gaining control of an
+already-in-play Hope/Grace via a steal/give effect
+(`BoardState::giveInPlayToPlayer()`; e.g. Recklessness's own "take one of
+your opponents' moods" landing on a Hope, or Instability/Guile/Betrayal/
+Arrogance/Avoidance/Chaos doing the same -- only fires when the new owner
+is whoever's turn is currently active, and never for a no-op transfer
+where the owner doesn't actually change, e.g. Instability giving a mood
+to itself) -- all three also carry `'requiresSourceInPlay' => true`
+alongside their `sourceCardId`. Unlike an
 ordinary grant, one tagged this way is lost outright, not merely
 un-attributed, if that specific Hope or Grace leaves play (discarded,
 returned to hand, etc.) before a player gets around to actually using the
@@ -1367,7 +1379,15 @@ comes first" behavior via `useGrantFor()`'s new optional
 (naming a grant that's since been consumed or lost) throws
 `InvalidChoiceException` rather than silently falling through to spend
 some *other* grant the player never chose, which would otherwise corrupt
-`playsRemaining()` in a way that's hard to notice after the fact.
+`playsRemaining()` in a way that's hard to notice after the fact. That
+exception's message names both cards involved (e.g. "Grant sourced from
+Hope is not currently usable for playing Complacency") rather than their
+opaque in-game ids -- `MoodPlayService::playMood()` takes an optional
+`$cardNames` map (`cardId => name`) purely for this one message, since
+BoardState/MoodPlayService are otherwise deliberately unaware of
+anything DB-backed; `GameService::playMood()` is the only caller that
+passes one (its own `cardNamesFor($gameId)`), so every other caller
+(direct tests included) still gets the bare-id message this always had.
 
 Each in-play mood's own serialization also carries `has_unused_play_grant`
 -- whether that specific card currently has an active, not-yet-consumed
@@ -2913,11 +2933,32 @@ for three event types --
     notified, since they're the only one who can actually act (see
     `startGame()`'s own `match_game_number > 1` branch and
     `isAwaitingFirstPlayerChoiceFrom()`).
+  - A Quick Draft/Winston Draft/Grid Draft match's own "waiting on you"
+    states during `drafting`/`deck_building` -- the same states
+    `draftAwaitingResponseUsernames()` already surfaces to the lobby (see
+    `GET /games` above), but pushed the moment they arise rather than
+    only polled for: a fresh Quick Draft round dealt or its
+    received-stage unlocking (`dealQuickDraftRound()`/
+    `submitQuickDraftPick()`), a Winston/Grid Draft turn handed to the
+    other player (`initializeWinstonDraft()`/`submitWinstonDraftPick()`,
+    `initializeGridDraft()`/`submitGridDraftPick()`), and every format's
+    own transition into `deck_building` -- an initial trim right after
+    drafting finishes, or a later sideboard between the match's up-to-3
+    games (`finalizeQuickDraft()`/`finalizeWinstonDraft()`/
+    `submitGridDraftPick()`'s own round-6 branch,
+    `advanceDraftMatch()`). Since this data is keyed by `user_id` rather
+    than `game_player_id` (a match's drafted/deck state outlives any one
+    of its `games` rows -- see migration `0027`), these route through a
+    separate `notifyDraftUsersItsYourTurn()` helper that skips
+    `notifyGamePlayersItsYourTurn()`'s own `game_players` lookup instead
+    of reusing it directly.
 
   Each of these carries its own notification `tag` (`turn`/`decision`/
-  `team-decision`/`initial-pass`/`first-player-choice`) so the OS never
-  collapses two different "your turn" reasons for the same game into one
-  notification -- see `GameService::notifyGamePlayersItsYourTurn()`.
+  `team-decision`/`initial-pass`/`first-player-choice`/`draft-pick`/
+  `draft-deck`) so the OS never collapses two different "your turn"
+  reasons for the same game into one notification -- see
+  `GameService::notifyGamePlayersItsYourTurn()`/
+  `notifyDraftUsersItsYourTurn()`.
 - **"Friend request received"** -- sent from the `POST /friends/invite`
   route handler once `FriendshipService::sendInvite()` succeeds. Its own
   click-through `url` is `/game/?open_friends=1`, not `/friends/` (there's
@@ -3022,6 +3063,19 @@ stale "it's your turn" for a turn already taken.
 `clearFriendRequestForUser()` delete by exact scope match (`game:{id}` or
 `friend_request`), so clearing one game's queued reminder can never touch
 a different game's, or a friend request's.
+
+**Opting out of the cooldown entirely**: a `disable_cooldown` preference
+(migration `0051`, defaulting `false` -- the cooldown stays on for every
+existing user until they explicitly turn it off) lets a player receive
+every notification they're otherwise eligible for immediately, even
+several in quick succession, rather than being throttled to at most one
+per scope every 5 minutes. `NotificationService::notify()` simply skips
+the `wasNotifiedRecently()` check (and therefore the queue branch)
+outright when this preference is on, so a user with it enabled never
+gets a notification queued behind another one -- every eligible event
+either delivers right away or (only for the same reasons an ordinary
+send might not: preference off, nothing to deliver to, VAPID
+unconfigured) doesn't happen at all, never delayed to a later cron flush.
 
 **Architecture**: the standard three-part Web Push stack -- Push API
 (`PushManager.subscribe()`) + Notifications API (`ServiceWorkerRegistration
