@@ -442,11 +442,11 @@ final class GameService
                 }
 
                 if ($deckType === 'quick_draft') {
-                    $this->dealQuickDraftRound($draftMatchId, 1, $draftPoolCardIds, array_values($seatedUserIds));
+                    $this->dealQuickDraftRound($gameId, $draftMatchId, 1, $draftPoolCardIds, array_values($seatedUserIds));
                 } elseif ($deckType === 'winston_draft') {
-                    $this->initializeWinstonDraft($draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
+                    $this->initializeWinstonDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
                 } elseif ($deckType === 'grid_draft') {
-                    $this->initializeGridDraft($draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
+                    $this->initializeGridDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
                 }
             }
 
@@ -1625,12 +1625,14 @@ final class GameService
      * generalized to whatever the actual shortfall is. Called once from
      * createGame() (round 1) and once from submitQuickDraftPick() each time
      * a round's stage 'received' fully resolves for both players (rounds
-     * 2-4).
+     * 2-4). Notifies both players their new round is dealt and ready for
+     * their draw-stage pick -- see notifyDraftUsersItsYourTurn()'s own
+     * docblock.
      *
      * @param int[] $poolCardIds the match's full configured pool
      * @param int[] $userIds exactly the match's 2 user ids
      */
-    private function dealQuickDraftRound(int $draftMatchId, int $roundNumber, array $poolCardIds, array $userIds): void
+    private function dealQuickDraftRound(int $gameId, int $draftMatchId, int $roundNumber, array $poolCardIds, array $userIds): void
     {
         $derived = $this->draftDerivedState($draftMatchId, $userIds);
         $remainingPool = $this->multisetSubtract($poolCardIds, $derived['allDrawnCardIds']);
@@ -1658,6 +1660,8 @@ final class GameService
                 'drawn' => json_encode($drawnCardIds),
             ]);
         }
+
+        $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft round {$roundNumber} is ready for your pick.", 'draft-pick');
     }
 
     /**
@@ -1719,7 +1723,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        return $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $roundNumber, $stage, $cardIds): array {
+        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $roundNumber, $stage, $cardIds): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -1772,6 +1776,21 @@ final class GameService
                     'round' => $roundNumber,
                 ]);
 
+                // The received-card pack for BOTH players is only
+                // determined once BOTH have made their draw pick -- if
+                // this submission is the second one, that just became
+                // true for the first time, so both players now have a new
+                // action waiting on them (quickDraftAwaitingResponseUsernames()'s
+                // own $bothSubmittedDraw condition, mirrored here).
+                $bothDrawnStmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM draft_round_picks
+                     WHERE draft_match_id = :match_id AND round_number = :round AND kept_from_draw_ids IS NOT NULL'
+                );
+                $bothDrawnStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber]);
+                if ((int) $bothDrawnStmt->fetchColumn() >= count($userIds)) {
+                    $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft round {$roundNumber} received cards are ready for your pick.", 'draft-pick');
+                }
+
                 return ['stage_completed' => 'draw', 'round_advanced' => false, 'draft_completed' => false];
             }
 
@@ -1823,12 +1842,13 @@ final class GameService
 
             if ($roundNumber >= self::QUICK_DRAFT_ROUNDS) {
                 $this->finalizeQuickDraft($draftMatchId, $userIds);
+                $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
 
                 return ['stage_completed' => 'received', 'round_advanced' => false, 'draft_completed' => true];
             }
 
             $poolCardIds = array_map(intval(...), json_decode((string) $match['pool_card_ids'], true));
-            $this->dealQuickDraftRound($draftMatchId, $roundNumber + 1, $poolCardIds, $userIds);
+            $this->dealQuickDraftRound($gameId, $draftMatchId, $roundNumber + 1, $poolCardIds, $userIds);
             $pdo->prepare('UPDATE draft_matches SET current_round = :round WHERE id = :id')
                 ->execute(['round' => $roundNumber + 1, 'id' => $draftMatchId]);
 
@@ -1936,12 +1956,13 @@ final class GameService
      * this codebase for a creator-chosen first player -- matches Closed
      * Team Play's own randomized round-1 leader). Called once from
      * createGame(), exactly where dealQuickDraftRound() is called for
-     * Quick Draft.
+     * Quick Draft. Notifies whoever goes first that it's their pick --
+     * see notifyDraftUsersItsYourTurn()'s own docblock.
      *
      * @param int[] $poolCardIds
      * @param int[] $userIds exactly the match's 2 user ids
      */
-    private function initializeWinstonDraft(int $draftMatchId, array $poolCardIds, array $userIds): void
+    private function initializeWinstonDraft(int $gameId, int $draftMatchId, array $poolCardIds, array $userIds): void
     {
         $pool = $poolCardIds;
         shuffle($pool);
@@ -1949,6 +1970,7 @@ final class GameService
         $pile1 = [array_shift($pool)];
         $pile2 = [array_shift($pool)];
         $pile3 = [array_shift($pool)];
+        $firstPlayerUserId = $userIds[array_rand($userIds)];
 
         Connection::get()->prepare(
             'INSERT INTO draft_winston_state
@@ -1960,8 +1982,10 @@ final class GameService
             'pile1' => json_encode($pile1),
             'pile2' => json_encode($pile2),
             'pile3' => json_encode($pile3),
-            'current_player' => $userIds[array_rand($userIds)],
+            'current_player' => $firstPlayerUserId,
         ]);
+
+        $this->notifyDraftUsersItsYourTurn($gameId, [$firstPlayerUserId], "Game #{$gameId}'s Winston Draft is ready for your pick.", 'draft-pick');
     }
 
     /** Appends $newCardIds to $userId's own drafted_card_ids for this match -- Winston Draft's and Grid Draft's picks both accumulate incrementally, unlike Quick Draft's finalize-at-the-end. */
@@ -2014,7 +2038,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        return $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $action): array {
+        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $action): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -2088,7 +2112,7 @@ final class GameService
 
             if ($draftCompleted) {
                 $pdo->prepare('DELETE FROM draft_winston_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
-                $this->finalizeWinstonDraft($draftMatchId, $userIds);
+                $this->finalizeWinstonDraft($gameId, $draftMatchId, $userIds);
 
                 return ['action_completed' => $action, 'turn_advanced' => false, 'draft_completed' => true];
             }
@@ -2112,6 +2136,10 @@ final class GameService
                 'last_action' => json_encode($lastDraftActionByUserId),
                 'match_id' => $draftMatchId,
             ]);
+
+            if ($turnEnds) {
+                $this->notifyDraftUsersItsYourTurn($gameId, [$nextPlayerUserId], "Game #{$gameId}'s Winston Draft is ready for your pick.", 'draft-pick');
+            }
 
             return ['action_completed' => $action, 'turn_advanced' => $turnEnds, 'draft_completed' => false];
         });
@@ -2139,7 +2167,7 @@ final class GameService
      *
      * @param int[] $userIds exactly the match's 2 user ids
      */
-    private function finalizeWinstonDraft(int $draftMatchId, array $userIds): void
+    private function finalizeWinstonDraft(int $gameId, int $draftMatchId, array $userIds): void
     {
         $pdo = Connection::get();
 
@@ -2184,6 +2212,7 @@ final class GameService
         }
 
         $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+        $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
     }
 
     // -- Grid Draft (issue #188) ----------------------------------------
@@ -2195,12 +2224,13 @@ final class GameService
      * first this round (alternates every round thereafter -- see
      * submitGridDraftPick()). Called once from createGame(), exactly
      * where initializeWinstonDraft()/dealQuickDraftRound() are called for
-     * the other two draft deck_types.
+     * the other two draft deck_types. Notifies whoever picks first that
+     * it's their pick -- see notifyDraftUsersItsYourTurn()'s own docblock.
      *
      * @param int[] $poolCardIds
      * @param int[] $userIds exactly the match's 2 user ids
      */
-    private function initializeGridDraft(int $draftMatchId, array $poolCardIds, array $userIds): void
+    private function initializeGridDraft(int $gameId, int $draftMatchId, array $poolCardIds, array $userIds): void
     {
         $pool = $poolCardIds;
         shuffle($pool);
@@ -2218,6 +2248,8 @@ final class GameService
             'grid' => json_encode($grid),
             'first_picker' => $firstPickerUserId,
         ]);
+
+        $this->notifyDraftUsersItsYourTurn($gameId, [$firstPickerUserId], "Game #{$gameId}'s Grid Draft is ready for your pick.", 'draft-pick');
     }
 
     /**
@@ -2259,7 +2291,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        return $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $axis, $index): array {
+        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $axis, $index): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -2318,6 +2350,8 @@ final class GameService
                     'match_id' => $draftMatchId,
                 ]);
 
+                $this->notifyDraftUsersItsYourTurn($gameId, [$opponentUserId], "Game #{$gameId}'s Grid Draft is ready for your pick.", 'draft-pick');
+
                 return [
                     'axis' => $axis,
                     'index' => $index,
@@ -2335,6 +2369,7 @@ final class GameService
             if ($currentRound >= self::GRID_DRAFT_ROUNDS) {
                 $pdo->prepare('DELETE FROM draft_grid_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
                 $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+                $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
 
                 return [
                     'axis' => $axis,
@@ -2363,6 +2398,8 @@ final class GameService
                 'first_picker' => $nextFirstPickerUserId,
                 'match_id' => $draftMatchId,
             ]);
+
+            $this->notifyDraftUsersItsYourTurn($gameId, [$nextFirstPickerUserId], "Game #{$gameId}'s draft round " . ($currentRound + 1) . ' is ready for your pick.', 'draft-pick');
 
             return [
                 'axis' => $axis,
@@ -3990,6 +4027,9 @@ final class GameService
 
         $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
             ->execute(['id' => $draftMatchId]);
+
+        $seatUserIds = array_map(static fn (array $seat): int => (int) $seat['user_id'], $seats);
+        $this->notifyDraftUsersItsYourTurn($nextGameId, $seatUserIds, "Game #{$nextGameId} needs your sideboard before the next game.", 'draft-deck');
     }
 
     /**
@@ -8053,6 +8093,42 @@ final class GameService
 
         foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $userId) {
             $this->notifications->notifyYourTurn((int) $userId, $gameId, $message, $tag);
+        }
+    }
+
+    /**
+     * Draft-drafting/deck-building counterpart to
+     * notifyGamePlayersItsYourTurn() immediately above -- a Quick Draft/
+     * Winston Draft/Grid Draft match's own "waiting on you" state
+     * (draftAwaitingResponseUsernames()'s own domain) lives on
+     * draft_round_picks/draft_winston_state/draft_grid_state/
+     * draft_match_players, all keyed by user_id rather than
+     * game_player_id (a match's drafted/deck data outlives any single one
+     * of its up-to-3 `games` rows -- see migration 0027's own docblock),
+     * so this skips that method's game_players lookup entirely and
+     * notifies user ids directly. Called from dealQuickDraftRound()/
+     * submitQuickDraftPick() (a fresh round dealt, or the received-stage
+     * unlocked once both players have drawn), initializeWinstonDraft()/
+     * submitWinstonDraftPick() and initializeGridDraft()/
+     * submitGridDraftPick() (whoever the active turn passes to), and
+     * finalizeQuickDraft()/finalizeWinstonDraft()/submitGridDraftPick()/
+     * advanceDraftMatch() (deck_building -- an initial trim or a later
+     * sideboard, either way every seated player needs to (re)submit a
+     * deck). $tag distinguishes "a pick is waiting" ('draft-pick') from
+     * "a deck submission is waiting" ('draft-deck') the same way
+     * notifyGamePlayersItsYourTurn()'s own $tag keeps its several cases
+     * from colliding.
+     *
+     * @param int[] $userIds
+     */
+    private function notifyDraftUsersItsYourTurn(int $gameId, array $userIds, string $message, string $tag): void
+    {
+        if ($this->notifications === null) {
+            return;
+        }
+
+        foreach ($userIds as $userId) {
+            $this->notifications->notifyYourTurn($userId, $gameId, $message, $tag);
         }
     }
 

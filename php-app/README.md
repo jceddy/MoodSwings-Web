@@ -2913,11 +2913,32 @@ for three event types --
     notified, since they're the only one who can actually act (see
     `startGame()`'s own `match_game_number > 1` branch and
     `isAwaitingFirstPlayerChoiceFrom()`).
+  - A Quick Draft/Winston Draft/Grid Draft match's own "waiting on you"
+    states during `drafting`/`deck_building` -- the same states
+    `draftAwaitingResponseUsernames()` already surfaces to the lobby (see
+    `GET /games` above), but pushed the moment they arise rather than
+    only polled for: a fresh Quick Draft round dealt or its
+    received-stage unlocking (`dealQuickDraftRound()`/
+    `submitQuickDraftPick()`), a Winston/Grid Draft turn handed to the
+    other player (`initializeWinstonDraft()`/`submitWinstonDraftPick()`,
+    `initializeGridDraft()`/`submitGridDraftPick()`), and every format's
+    own transition into `deck_building` -- an initial trim right after
+    drafting finishes, or a later sideboard between the match's up-to-3
+    games (`finalizeQuickDraft()`/`finalizeWinstonDraft()`/
+    `submitGridDraftPick()`'s own round-6 branch,
+    `advanceDraftMatch()`). Since this data is keyed by `user_id` rather
+    than `game_player_id` (a match's drafted/deck state outlives any one
+    of its `games` rows -- see migration `0027`), these route through a
+    separate `notifyDraftUsersItsYourTurn()` helper that skips
+    `notifyGamePlayersItsYourTurn()`'s own `game_players` lookup instead
+    of reusing it directly.
 
   Each of these carries its own notification `tag` (`turn`/`decision`/
-  `team-decision`/`initial-pass`/`first-player-choice`) so the OS never
-  collapses two different "your turn" reasons for the same game into one
-  notification -- see `GameService::notifyGamePlayersItsYourTurn()`.
+  `team-decision`/`initial-pass`/`first-player-choice`/`draft-pick`/
+  `draft-deck`) so the OS never collapses two different "your turn"
+  reasons for the same game into one notification -- see
+  `GameService::notifyGamePlayersItsYourTurn()`/
+  `notifyDraftUsersItsYourTurn()`.
 - **"Friend request received"** -- sent from the `POST /friends/invite`
   route handler once `FriendshipService::sendInvite()` succeeds. Its own
   click-through `url` is `/game/?open_friends=1`, not `/friends/` (there's
