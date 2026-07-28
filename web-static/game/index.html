@@ -300,6 +300,7 @@
 
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
+                <button id="view-notes-button" type="button" hidden>Notes</button>
                 <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
@@ -547,6 +548,20 @@
         <p id="shared-deck-meta"></p>
         <div id="shared-deck-cards"></div>
         <button id="shared-deck-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Private in-game notepad (issue #258) -- one freeform note per seat,
+         never shared with the other players at the table. Autosaves as you
+         type (debounced) -- see openNotesDialog() in game.js and
+         GameService::getNote()/saveNote(). Read-only once the game is no
+         longer in_progress (the note itself stays fully visible either
+         way, per issue #258's own design). -->
+    <dialog id="game-notes-dialog">
+        <h2>Notes</h2>
+        <p id="game-notes-readonly-message" hidden>This game has ended, so your notes are read-only.</p>
+        <textarea id="game-notes-textarea" rows="12"></textarea>
+        <p id="game-notes-save-status"></p>
+        <button id="game-notes-close-button" type="button">Close</button>
     </dialog>
 
     <!-- Browser push notifications (issue #108) -- see initNotifications()

@@ -658,6 +658,25 @@ if ($path === '/user/stats' && $method === 'GET') {
     ]);
 }
 
+// Online/presence indicator (issue #110): lets a user opt out of sharing
+// their own derived online/offline status with friends and fellow game
+// players entirely -- surfaced to others as a distinct 'hidden' status
+// rather than folded into 'offline' (see PresenceService). Current value
+// is already carried on GET /me's own user object (see
+// AuthService::currentUser()), so this route is write-only; no
+// matching GET is needed.
+if ($path === '/user/presence-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('share_presence', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'share_presence is required.']);
+    }
+
+    (new UserRepository())->setSharePresence((int) $currentUser['id'], (bool) $input['share_presence']);
+    respond(200, ['status' => 'ok']);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't
@@ -999,6 +1018,37 @@ if ($path === '/games/resign' && $method === 'POST') {
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// In-game notepad (issue #258): private per-seat scratch notes, never
+// shared with anyone else at the table. GET always succeeds for a seated
+// player regardless of the game's own status (a completed game's notes
+// stay fully readable); only the POST (save) is gated to 'in_progress'.
+if ($path === '/games/notes' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    respond(200, ['status' => 'ok', 'note_text' => $games->getNote($gamePlayerId)]);
+}
+
+if ($path === '/games/notes' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $noteText = (string) ($body['note_text'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->saveNote($gameId, $gamePlayerId, $noteText);
+        respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 

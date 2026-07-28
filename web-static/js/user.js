@@ -35,4 +35,15 @@
         document.getElementById('user-stats-match-record').textContent =
             recordFormatted(stats.match_wins, stats.match_losses, stats.match_win_percentage);
     }
+
+    // Online/presence indicator (issue #110) -- initialized from
+    // getCurrentUser()'s own user.share_presence (already fetched above),
+    // no separate GET needed. Saved immediately on change, same
+    // auto-save-on-toggle pattern the lobby's own Notifications dialog
+    // checkboxes use.
+    const sharePresenceCheckbox = document.getElementById('share-presence-checkbox');
+    sharePresenceCheckbox.checked = user.share_presence;
+    sharePresenceCheckbox.addEventListener('change', () => {
+        savePresencePreference(sharePresenceCheckbox.checked);
+    });
 })();

@@ -131,6 +131,31 @@ final class FriendshipIntegrationTest extends TestCase
         self::assertSame('alice', $bobFriends[0]['friend_username']);
     }
 
+    /**
+     * Online/presence indicator (issue #110): listFriends() attaches a
+     * 'presence' field per friend -- 'offline' for a friend with no
+     * currently-valid session at all (the default for a freshly
+     * registered/verified-only user, no login performed here), and
+     * 'hidden' -- distinct from 'offline', never conflated with it --
+     * once that friend has opted out via users.share_presence.
+     */
+    public function testListFriendsAttachesPresenceStatus(): void
+    {
+        $aliceId = $this->createUser('alice');
+        $bobId = $this->createUser('bob');
+
+        $this->friendships->sendInvite($aliceId, 'bob');
+        $this->friendships->respondToInvite($bobId, $aliceId, 'accept');
+
+        $aliceFriends = $this->friendships->listFriends($aliceId);
+        self::assertSame('offline', $aliceFriends[0]['presence']);
+
+        (new UserRepository())->setSharePresence($bobId, false);
+
+        $aliceFriendsAfterOptOut = $this->friendships->listFriends($aliceId);
+        self::assertSame('hidden', $aliceFriendsAfterOptOut[0]['presence']);
+    }
+
     public function testRemoveFriendDeletesAcceptedFriendshipForBoth(): void
     {
         $aliceId = $this->createUser('alice');

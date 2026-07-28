@@ -58,6 +58,18 @@ final class UserRepository
         $stmt->execute(['id' => $id]);
     }
 
+    /**
+     * Online/presence indicator (issue #110) -- whether this user allows
+     * their derived online/offline status to be shown to friends and
+     * fellow game players at all. Defaults to true (share_presence = 1);
+     * see PresenceService for how a shared status is actually computed.
+     */
+    public function setSharePresence(int $id, bool $sharePresence): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET share_presence = :share_presence WHERE id = :id');
+        $stmt->execute(['share_presence' => $sharePresence ? 1 : 0, 'id' => $id]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM users WHERE id = :id');

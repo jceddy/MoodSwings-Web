@@ -56,6 +56,7 @@ final class FriendshipRepository
                 f.id,
                 CASE WHEN f.user_low_id = :user_id1 THEN f.user_high_id ELSE f.user_low_id END AS friend_id,
                 u.username AS friend_username,
+                u.share_presence AS friend_share_presence,
                 f.created_at
              FROM friendships f
              JOIN users u ON u.id = CASE WHEN f.user_low_id = :user_id2 THEN f.user_high_id ELSE f.user_low_id END

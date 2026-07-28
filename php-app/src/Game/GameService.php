@@ -8,6 +8,9 @@ use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Notifications\NotificationService;
+use MoodSwings\Presence\PresenceService;
+use MoodSwings\Repository\GameNoteRepository;
+use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
@@ -211,6 +214,9 @@ final class GameService
     /** Shared best-of-three threshold for every draft-based deck_type's own match. */
     private const DRAFT_GAMES_TO_WIN = 2;
 
+    /** In-game notepad (issue #258) -- a note's max length, in characters. */
+    private const MAX_NOTE_LENGTH = 20000;
+
     /** @var array<int, array<int, string>> gameId => (card_id => name), memoized per instance by cardNamesFor() */
     private array $cardNamesByGame = [];
 
@@ -222,6 +228,8 @@ final class GameService
         private readonly ReplayStateBuilder $replay,
         private readonly int $gameLockTimeoutSeconds = self::GAME_LOCK_TIMEOUT_SECONDS,
         private readonly ?NotificationService $notifications = null,
+        private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
+        private readonly GameNoteRepository $notes = new GameNoteRepository(),
     ) {
     }
 
@@ -3741,6 +3749,41 @@ final class GameService
     }
 
     /**
+     * In-game notepad (issue #258): private per-seat scratch notes, never
+     * shared with anyone else at the table -- keyed on $gamePlayerId
+     * directly (the caller already resolved and authorized it, the same
+     * `requireGamePlayer()` pattern every other per-seat action uses), not
+     * $userId, since a seat already uniquely identifies "this player, in
+     * this game." Empty string (not null) for a seat that's never saved
+     * one yet, so the frontend's textarea always has a plain string to
+     * bind to.
+     */
+    public function getNote(int $gamePlayerId): string
+    {
+        return $this->notes->findByGamePlayerId($gamePlayerId) ?? '';
+    }
+
+    /**
+     * Only editable while the game is still 'in_progress' -- once it
+     * reaches a terminal status ('completed'/'abandoned') the note stays
+     * fully visible (see getNote() above) but read-only, the same as
+     * every other in-progress-only board action.
+     */
+    public function saveNote(int $gameId, int $gamePlayerId, string $noteText): void
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['status'] !== 'in_progress') {
+            throw new GameStateException('Notes can only be edited while the game is in progress.');
+        }
+
+        if (mb_strlen($noteText) > self::MAX_NOTE_LENGTH) {
+            throw new \InvalidArgumentException('A note cannot be longer than ' . self::MAX_NOTE_LENGTH . ' characters.');
+        }
+
+        $this->notes->upsert($gamePlayerId, $noteText);
+    }
+
+    /**
      * $state is the same instance the triggering play/pass already
      * loaded (and, if it was a play, already saved game_cards for) --
      * reused here rather than reloaded, since a round-wide flag like
@@ -5802,12 +5845,26 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.share_presence FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
         $playersStmt->execute(['game_id' => $gameId]);
         $playerRows = $playersStmt->fetchAll();
+
+        // Online/presence indicator (issue #110) -- computed once per
+        // request for every seated player at once (a single sessions
+        // lookup) rather than per-row, and reused for the loop below.
+        // Deliberately not shared with serializeReplaySnapshot()'s own,
+        // separate players loop -- a completed game's historical replay
+        // has no "current round" for a specific past event (see that
+        // method's own docblock), and "was this player online" is
+        // meaningless for a moment frozen in the past the same way.
+        $sharePresenceByUserId = [];
+        foreach ($playerRows as $row) {
+            $sharePresenceByUserId[(int) $row['user_id']] = (bool) $row['share_presence'];
+        }
+        $presenceStatuses = $this->presence->statusesFor($sharePresenceByUserId);
 
         $handCounts = [];
         if ($game['status'] === 'in_progress' || $game['status'] === 'completed') {
@@ -5864,6 +5921,11 @@ final class GameService
                 // only ever true mid-game for 'standard' format's own 3-4
                 // player "game continues without them" case.
                 'resigned' => $row['resigned_at'] !== null,
+                // Online/presence indicator (issue #110) -- 'online',
+                // 'offline', or 'hidden' (this player has opted out of
+                // sharing presence at all, see users.share_presence /
+                // the User info page) -- see PresenceService.
+                'presence' => $presenceStatuses[(int) $row['user_id']],
             ];
         }
 
