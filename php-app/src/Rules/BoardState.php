@@ -724,11 +724,44 @@ final class BoardState
         $this->recordMove($cardId, 'discard', 'deck');
     }
 
+    /**
+     * Every "steal/give a mood" effect (Recklessness, Instability, Guile,
+     * Betrayal, Arrogance, Avoidance, Chaos) funnels its ownership change
+     * through here, which is why Hope's/Grace's own "while in play, you
+     * may play an additional mood during each of your turns, including the
+     * turn you play this mood" is honored generically here rather than in
+     * each of those effect classes individually: if $cardId's effective
+     * card is a Hope or Grace and $newOwnerId is the player whose turn is
+     * currently active, gaining control of it mid-turn grants the same
+     * same-turn bonus play MoodPlayService grants when either card is
+     * played outright (same 'requiresSourceInPlay' restriction shape, so
+     * it's lost the same way if the card leaves play again before the
+     * player uses it). Guarded on $oldOwnerId !== $newOwnerId so effects
+     * that can target their own owner as a no-op (e.g. Instability giving
+     * itself away) never grant a bonus for a "transfer" that didn't
+     * actually change hands. Deliberately not guarded against the rare
+     * case of a card round-tripping ownership away from and back to the
+     * same player within one turn -- each genuine ownership change to the
+     * active player is treated as its own grant, the same way
+     * computeFreshGrants() already grants one bonus per qualifying mood
+     * rather than deduplicating by card.
+     */
     public function giveInPlayToPlayer(int $cardId, int $newOwnerId): void
     {
         $oldOwnerId = $this->moodInPlay($cardId)->ownerId;
         $this->moodInPlay($cardId)->ownerId = $newOwnerId;
         $this->recordOwnershipChange($cardId, $oldOwnerId, $newOwnerId);
+
+        if ($oldOwnerId === $newOwnerId || $newOwnerId !== $this->currentPlayerId()) {
+            return;
+        }
+
+        $effectKey = $this->catalogRow($this->effectiveCardId($cardId))['effectKey'];
+        if ($effectKey === 'hope') {
+            $this->grantExtraPlay(1, ['requiresSourceInPlay' => true], $cardId);
+        } elseif ($effectKey === 'grace') {
+            $this->grantExtraPlay(1, ['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'requiresSourceInPlay' => true], $cardId);
+        }
     }
 
     /** Fascination: hands a card directly from one player's hand to another's (e.g. "give it to another player"), rather than routing it through discard/deck. */

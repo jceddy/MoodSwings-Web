@@ -108,6 +108,110 @@ final class BoardStateTest extends TestCase
         self::assertSame(2, $state->ownerOf(3));
     }
 
+    /**
+     * Hope's "while in play, you may play an additional mood during each
+     * of your turns" doesn't only fire when Hope is played outright (see
+     * MoodPlayService) or at the start of a later turn (see
+     * GameService::computeFreshGrants()) -- it also has to fire the
+     * instant an in-play Hope changes hands mid-turn to land on whoever's
+     * turn it currently is (e.g. Recklessness stealing an opponent's
+     * Hope), since giveInPlayToPlayer() is the one generic primitive every
+     * steal/give effect (Recklessness, Instability, Guile, Betrayal,
+     * Arrogance, Avoidance, Chaos) funnels through.
+     */
+    public function testGiveInPlayToPlayerGrantsAnExtraPlayWhenAHopeChangesHandsToTheActivePlayerMidTurn(): void
+    {
+        $state = $this->boardState(hands: [2 => [124]]); // Hope, owned by player 2
+        $state->startTurn(1);
+        $state->moveHandToInPlay(2, 124);
+
+        self::assertSame(1, $state->playsRemaining()); // just the base turn -- player 1 doesn't own Hope yet
+
+        $state->giveInPlayToPlayer(124, 1); // e.g. Recklessness stealing it mid-turn
+
+        self::assertSame(1, $state->ownerOf(124));
+        self::assertSame(2, $state->playsRemaining()); // base turn + Hope's own bonus, granted immediately
+        self::assertSame(
+            [['requiresSourceInPlay' => true, 'sourceCardId' => 124]],
+            $state->consumeGrantsCreated(),
+        );
+    }
+
+    /** Same mechanic, Grace's own version of the bonus (color-restricted, sourced from discard). */
+    public function testGiveInPlayToPlayerGrantsAnExtraPlayWhenAGraceChangesHandsToTheActivePlayerMidTurn(): void
+    {
+        $state = $this->boardState(hands: [2 => [121]]); // Grace
+        $state->startTurn(1);
+        $state->moveHandToInPlay(2, 121);
+
+        $state->giveInPlayToPlayer(121, 1);
+
+        self::assertSame(2, $state->playsRemaining());
+        self::assertSame(
+            [['type' => 'shares_color_with_your_moods', 'source' => 'discard', 'requiresSourceInPlay' => true, 'sourceCardId' => 121]],
+            $state->consumeGrantsCreated(),
+        );
+    }
+
+    /**
+     * Contrast with the two tests above: giving an in-play Hope to anyone
+     * other than the player whose turn it currently is grants nothing --
+     * only the player who can actually use an extra play *this* turn
+     * benefits, the same as Hope's own same-turn bonus in MoodPlayService
+     * only ever targets the player who just played it.
+     */
+    public function testGiveInPlayToPlayerGrantsNothingWhenTheNewOwnerIsNotTheActivePlayer(): void
+    {
+        $state = $this->boardState(hands: [2 => [124]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(2, 124);
+
+        $state->giveInPlayToPlayer(124, 3); // player 3's turn isn't the active one either
+
+        self::assertSame(3, $state->ownerOf(124));
+        self::assertSame([], $state->consumeGrantsCreated());
+    }
+
+    /**
+     * Instability can give a mood to its own owner as a no-op (see
+     * InstabilityEffect's own "give itself away" fix) -- that must never
+     * be mistaken for a genuine mid-turn steal and grant a bonus for a
+     * transfer that didn't actually change hands.
+     */
+    public function testGiveInPlayToPlayerGrantsNothingWhenTheOwnerIsUnchanged(): void
+    {
+        $state = $this->boardState(hands: [1 => [124]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(1, 124); // Hope enters play already owned by the active player
+        $state->consumeGrantsCreated(); // discard the same-turn bonus MoodPlayService would grant on the real play
+
+        $state->giveInPlayToPlayer(124, 1); // gives it to its own already-current owner
+
+        self::assertSame([], $state->consumeGrantsCreated());
+    }
+
+    /**
+     * The grant a mid-turn Hope steal creates is tagged exactly like
+     * Hope's own same-turn bonus -- 'requiresSourceInPlay' -- so it's lost
+     * outright, not merely left un-attributed, if the stolen Hope is
+     * discarded before the stealing player gets around to using it. See
+     * testHopeSourcedGrantIsLostIfHopeLeavesPlayBeforeItsUsed() above for
+     * the non-stolen counterpart.
+     */
+    public function testStolenHopeGrantIsLostIfTheHopeLeavesPlayBeforeItsUsed(): void
+    {
+        $state = $this->boardState(hands: [2 => [124]]);
+        $state->startTurn(1);
+        $state->moveHandToInPlay(2, 124);
+        $state->giveInPlayToPlayer(124, 1);
+
+        self::assertSame(2, $state->playsRemaining());
+
+        $state->moveInPlayToDiscard(124);
+
+        self::assertSame(1, $state->playsRemaining());
+    }
+
     public function testDrawCardMovesTopOfDeckToHand(): void
     {
         $state = $this->boardState(deck: [10, 20, 30]);

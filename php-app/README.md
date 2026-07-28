@@ -313,7 +313,12 @@ color match (Grace), or conditional on another player currently having
 more moods in play (Stubbornness) — with the turn the card is actually
 played on handled separately since Hope/Grace have no after-playing
 ability to hook (`GameService::computeFreshGrants()`, plus
-`MoodPlayService`'s same-turn special case), a one-shot "banked" extra
+`MoodPlayService`'s same-turn special case, plus
+`BoardState::giveInPlayToPlayer()`'s own mid-turn case: gaining control
+of an in-play Hope/Grace via any steal/give effect — Recklessness,
+Instability, Guile, Betrayal, Arrogance, Avoidance, Chaos — grants the
+same bonus the instant it happens, if it lands on whoever's turn is
+currently active), a one-shot "banked" extra
 play for a specific player's next turn — however many turns from now
 that turns out to be — for another player (Generosity) or yourself
 (Joy), consulted by that same `computeFreshGrants()`, and an opponent's
@@ -1258,10 +1263,17 @@ left" indicator stays hidden entirely unless it's actually the viewer's
 turn (see `web-static/README.md`), rather than showing another player's
 own outstanding plays as if they were the viewer's.
 
-Hope's and Grace's own grants -- both the same-turn one
-(`MoodPlayService`, the moment either card enters play) and every future
-turn's perpetual one (`computeFreshGrants()`) -- also carry
-`'requiresSourceInPlay' => true` alongside their `sourceCardId`. Unlike an
+Hope's and Grace's own grants -- the same-turn one (`MoodPlayService`,
+the moment either card enters play), every future turn's perpetual one
+(`computeFreshGrants()`), and the mid-turn one for gaining control of an
+already-in-play Hope/Grace via a steal/give effect
+(`BoardState::giveInPlayToPlayer()`; e.g. Recklessness's own "take one of
+your opponents' moods" landing on a Hope, or Instability/Guile/Betrayal/
+Arrogance/Avoidance/Chaos doing the same -- only fires when the new owner
+is whoever's turn is currently active, and never for a no-op transfer
+where the owner doesn't actually change, e.g. Instability giving a mood
+to itself) -- all three also carry `'requiresSourceInPlay' => true`
+alongside their `sourceCardId`. Unlike an
 ordinary grant, one tagged this way is lost outright, not merely
 un-attributed, if that specific Hope or Grace leaves play (discarded,
 returned to hand, etc.) before a player gets around to actually using the
