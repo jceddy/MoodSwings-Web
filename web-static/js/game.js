@@ -5365,6 +5365,18 @@
     // DOM order or that only one is ever open at a time.
     let openDialogStack = [];
     let suppressHistoryPopFor = null;
+    // Set immediately before the orphan-cleanup history.back() call below,
+    // and consumed at the very top of the popstate handler -- history.back()
+    // fires its own popstate event once the browser actually processes the
+    // navigation, exactly like a real Back press does, and the handler has
+    // no other way to tell "the user pressed Back" apart from "our own
+    // cleanup code just called history.back() on their behalf". Without
+    // this flag, that self-triggered popstate fell through to the handler's
+    // normal logic and, with no dialog left open, was treated as a genuine
+    // Back press on the board itself -- silently bouncing the player to the
+    // lobby every time they closed a lone dialog via a button (Close,
+    // Select/De-select, a form submit, ...) instead of pressing Back.
+    let suppressNextPopState = false;
 
     const dialogHistoryObserver = new MutationObserver((mutations) => {
         for (const { target: dialog } of mutations) {
@@ -5387,7 +5399,10 @@
                 // clicking outside, a form submit) -- the history entry
                 // pushed when it opened is now orphaned; discard it so
                 // Back doesn't need an extra do-nothing press before it
-                // reaches anything real.
+                // reaches anything real. See suppressNextPopState's own
+                // docblock above for why the resulting popstate must be
+                // swallowed rather than acted on.
+                suppressNextPopState = true;
                 history.back();
             }
         }
@@ -5411,6 +5426,16 @@
     history.pushState({ base: true }, '');
 
     window.addEventListener('popstate', () => {
+        if (suppressNextPopState) {
+            // Our own orphan-cleanup history.back() call above, not a real
+            // Back press -- the history entry it targeted is already fully
+            // accounted for (the dialog it belonged to is already closed
+            // and already removed from openDialogStack), so there's
+            // nothing left to do.
+            suppressNextPopState = false;
+            return;
+        }
+
         const topDialog = openDialogStack[openDialogStack.length - 1];
         if (topDialog) {
             suppressHistoryPopFor = topDialog;
