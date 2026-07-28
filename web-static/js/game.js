@@ -289,7 +289,8 @@
             friends,
             (friend) => {
                 const li = document.createElement('li');
-                li.append(friend.friend_username + ' ');
+                li.appendChild(buildPresenceFlag(friend.friend_username, friend.presence));
+                li.append(' ' + friend.friend_username + ' ');
                 li.appendChild(actionButton('Remove', async () => {
                     await removeFriend(friend.friend_id);
                     await refreshFriendsData();
@@ -2699,6 +2700,67 @@
         document.getElementById('shared-deck-dialog').close();
     });
 
+    // Private in-game notepad (issue #258) -- one freeform note per seat,
+    // autosaved as you type (debounced 1s) rather than an explicit Save
+    // button. Read-only once the game is no longer 'in_progress' (see
+    // GameService::saveNote()'s own gate), but the note stays fully
+    // visible either way -- see isNotesReadOnly() below.
+    const gameNotesDialog = document.getElementById('game-notes-dialog');
+    const gameNotesTextarea = document.getElementById('game-notes-textarea');
+    // Holds the pending debounce timer id, or null once it's fired (or
+    // there's nothing unsaved) -- game-notes-close-button uses this to
+    // flush an unsaved edit immediately rather than losing it on close.
+    let saveNoteTimer = null;
+
+    function isNotesReadOnly() {
+        return !currentState || currentState.game.status !== 'in_progress';
+    }
+
+    async function flushNoteSave(gameId) {
+        const statusEl = document.getElementById('game-notes-save-status');
+        const { ok } = await saveGameNote(gameId, gameNotesTextarea.value);
+        if (gameNotesDialog.dataset.gameId === gameId) {
+            statusEl.textContent = ok ? 'Saved.' : 'Could not save your notes.';
+        }
+    }
+
+    async function openNotesDialog(gameId) {
+        gameNotesDialog.dataset.gameId = gameId;
+        window.clearTimeout(saveNoteTimer);
+        saveNoteTimer = null;
+        const readOnly = isNotesReadOnly();
+        gameNotesTextarea.disabled = true;
+        gameNotesTextarea.value = '';
+        document.getElementById('game-notes-readonly-message').hidden = !readOnly;
+        document.getElementById('game-notes-save-status').textContent = '';
+        gameNotesDialog.showModal();
+
+        const { ok, body } = await getGameNote(gameId);
+        gameNotesTextarea.value = ok ? body.note_text : '';
+        gameNotesTextarea.disabled = readOnly;
+    }
+
+    document.getElementById('view-notes-button').addEventListener('click', () => openNotesDialog(currentGameId));
+
+    document.getElementById('game-notes-close-button').addEventListener('click', () => {
+        if (saveNoteTimer !== null) {
+            window.clearTimeout(saveNoteTimer);
+            saveNoteTimer = null;
+            flushNoteSave(gameNotesDialog.dataset.gameId);
+        }
+        gameNotesDialog.close();
+    });
+
+    gameNotesTextarea.addEventListener('input', () => {
+        document.getElementById('game-notes-save-status').textContent = 'Saving…';
+        window.clearTimeout(saveNoteTimer);
+        const gameId = gameNotesDialog.dataset.gameId;
+        saveNoteTimer = window.setTimeout(() => {
+            saveNoteTimer = null;
+            flushNoteSave(gameId);
+        }, 1000);
+    });
+
     // Small inline pictograms (issue #143) replacing the players list's own
     // plain-text stat clauses ("4 point(s)", "went first this round", ...)
     // -- self-contained straight-line shapes rather than curves, so each is
@@ -2733,6 +2795,22 @@
         // clause next to a saved deck's name.
         friendsShared: '<circle cx="8" cy="8" r="3"/><rect x="3" y="13" width="10" height="8" rx="3"/>'
             + '<circle cx="16" cy="7" r="3.5"/><rect x="10" y="12" width="12" height="9" rx="3.5"/>',
+        // Online/presence indicator (issue #110): a plain filled dot --
+        // shared by both 'online' (tinted --color-success) and 'offline'
+        // (the default --color-muted, no extra class needed) since those
+        // two are meant to read as the same shape, different color, the
+        // same way onTurn/wentFirst do. presenceHidden below is a
+        // deliberately DIFFERENT shape, not just a different color of
+        // this same dot -- see its own comment.
+        presence: '<circle cx="12" cy="12" r="7"/>',
+        // Opted out of sharing presence at all (users.share_presence):
+        // an eye-with-a-slash, so "hidden" reads as a distinct state at a
+        // glance rather than just a differently-colored dot someone could
+        // mistake for another shade of "offline".
+        presenceHidden: '<path d="M2 12C4 7 8 4 12 4s8 3 10 8c-1 2.2-2.6 4-4.4 5.3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+            + '<path d="M7.3 17.5C5.9 16.4 4.7 14.9 4 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>'
+            + '<circle cx="12" cy="12" r="3"/>'
+            + '<line x1="3" y1="3" x2="21" y2="21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
     };
 
     // <template> parses its own innerHTML through the HTML parser's SVG
@@ -2778,6 +2856,20 @@
         wrapper.setAttribute('aria-label', label);
         wrapper.appendChild(buildStatIcon(kind));
         return wrapper;
+    }
+
+    // Online/presence indicator (issue #110) -- shared by the friends list
+    // and the board's own Players list, both of which get a `presence`
+    // field ('online'/'offline'/'hidden') per person from the backend
+    // (see PresenceService). `username` only feeds the tooltip/aria-label
+    // text, not any lookup.
+    function buildPresenceFlag(username, presence) {
+        if (presence === 'hidden') {
+            return buildPlayerFlag('presenceHidden', username + ' has turned off sharing their online status.');
+        }
+
+        const label = presence === 'online' ? username + ' is online now.' : username + ' is offline.';
+        return buildPlayerFlag('presence', label, presence === 'online' ? 'player-flag--presenceOnline' : null);
     }
 
     async function refreshBoard() {
@@ -2994,6 +3086,9 @@
                 // keeps its original full text as a tooltip/aria-label
                 // (see buildPlayerStat()/buildPlayerFlag()) so none of that
                 // information is lost, just no longer spelled out inline.
+                // Online/presence indicator (issue #110) -- first, so it's
+                // the first thing seen next to the name.
+                iconsEl.appendChild(buildPresenceFlag(player.username, player.presence));
                 iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
@@ -3228,6 +3323,12 @@
         // the game has actually started and its deck has been dealt (see
         // the 'waiting' branch above, which hides this whole area).
         document.getElementById('view-shared-deck-button').hidden = !isSharedDeckType(state.game.deck_type);
+
+        // "Notes" (issue #258) -- a private per-seat scratchpad, so it only
+        // ever makes sense for an actual seated player, never a
+        // spectator/replay viewer (state.you is just a synthesized stub
+        // with no game_player_id there -- see isReadOnlyView()'s docblock).
+        document.getElementById('view-notes-button').hidden = isReadOnlyView();
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's

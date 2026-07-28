@@ -1078,6 +1078,18 @@ body.game-page {
     color: var(--color-info);
 }
 
+/* Online/presence indicator (issue #110) -- online tints green
+   (--color-success, this app's established "good/active" color, same as
+   the on-turn flag above); offline is left at the default --color-muted
+   (no override needed) since a plain gray dot reads as "nothing special"
+   the same way the seat/hand icons' own neutral default does elsewhere.
+   .player-flag--presenceHidden gets no color override either -- its own
+   distinct eye-slash SHAPE (see buildPresenceFlag() in game.js) is what
+   sets it apart from "offline", not a different color. */
+.player-flag--presenceOnline {
+    color: var(--color-success);
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {
@@ -1191,6 +1203,33 @@ dialog#shared-deck-dialog[open] {
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     overflow-y: auto;
+}
+
+/* The private in-game notepad (issue #258) -- same dialog-sizing reasoning
+   as dialog#game-log-dialog[open] above, just narrower since it only ever
+   holds one textarea rather than a list or card grid. */
+dialog#game-notes-dialog[open] {
+    box-sizing: border-box;
+    max-width: 30rem;
+    width: 90%;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+#game-notes-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+}
+
+#game-notes-textarea:disabled {
+    background-color: var(--color-bg);
+    color: var(--color-muted);
 }
 
 /* The deck builder (issue #93) shows the full card catalog next to the
