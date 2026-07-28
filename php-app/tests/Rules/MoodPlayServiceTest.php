@@ -793,6 +793,25 @@ final class MoodPlayServiceTest extends TestCase
         self::assertEqualsCanonicalizing([3, 7], $state->discardPile());
     }
 
+    /**
+     * Anger is already in play by the time its own afterPlaying() runs
+     * (MoodPlayService::playMood() moves the card into play before
+     * resolving its effect), and its own value is 0 -- so targeting itself
+     * is both legal and, discarding it for free, often the efficient play.
+     * See CardChoiceSchema.php's own 'includes_self' docblock for why the
+     * frontend now offers this option too.
+     */
+    public function testAngerCanDiscardItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [80]]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 80, new PlayerChoices(['target_mood_ids' => [80]]));
+
+        self::assertFalse($state->isInPlay(80));
+        self::assertSame([80], $state->discardPile());
+    }
+
     public function testAngerRejectsExceedingTheTotalValueLimit(): void
     {
         $state = $this->boardState(hands: [1 => [80], 2 => [9]]);

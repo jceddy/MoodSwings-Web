@@ -359,6 +359,20 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertArrayNotHasKey('count', $fields[0]);
     }
 
+    /**
+     * Anger's own value is 0, and its printed text has no "another
+     * player's"/"an opponent's" restriction, so it's one of the handful of
+     * cards whose target list should keep the card being played itself as
+     * a candidate rather than the usual self-exclusion -- see
+     * game.js's fieldOptions() and this flag's own docblock above.
+     */
+    public function testAngerIncludesSelfAsATarget(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('anger');
+
+        self::assertTrue($fields[0]['includes_self']);
+    }
+
     public function testCrueltyIndecisivenessAndSuspicionHaveNoCountOrConstraintSinceTheyAllowAnyNumber(): void
     {
         foreach (['cruelty', 'indecisiveness', 'suspicion', 'doubt', 'thrill'] as $effectKey) {

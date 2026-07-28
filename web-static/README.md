@@ -1152,6 +1152,15 @@ too, proportional to the smaller card width.
     tedious, and grouping by owner mirrors how the in-play board itself is
     already organized by seating position. Groups appear in the order
     each owner's first candidate is encountered, not resorted by seat.
+    A `type: 'mood'` field's candidate list is normally built from the
+    board as it stands *before* this play (the card being played itself
+    isn't in play yet, from the browser's own point of view, until the
+    request resolves) — but a card whose schema marks the field
+    `includes_self` (Anger is the first: "put any number of moods with
+    total value 5 or less into the discard pile," and Anger's own value
+    is 0) gets a synthetic option built directly from the card being
+    played instead, labeled "`<name>` (`color`, `value`) [self]" so it
+    isn't mistaken for some other in-play copy of the same card.
     A `type: 'grant_choice'` field (`grant_source_card_id`, prepended ahead
     of the card's own fields) appears only when 2+ outstanding play grants
     would each independently cover the card being played — most commonly

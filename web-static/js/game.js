@@ -4423,7 +4423,7 @@
                     .filter((p) => !field.excludes_teammate || p.game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((p) => matchesPlayerFilter(p, field.filter))
                     .map((p) => ({ value: p.game_player_id, label: p.username }));
-            case 'mood':
+            case 'mood': {
                 // ownerLabel drives buildFieldWidget()'s own <optgroup>
                 // grouping below -- with 3+ players in play, a flat list
                 // made it tedious to find a specific player's moods. It
@@ -4432,12 +4432,26 @@
                 // same way the old inline "— Owner" suffix used to, just
                 // via the group label instead of repeating it on every
                 // option.
+                // includes_self (see CardChoiceSchema.php's own docblock):
+                // the handful of cards whose ability can legally target the
+                // very card being played (e.g. Anger) need a synthetic entry
+                // built directly from `card` (the played card itself), not
+                // filtered out of currentState.in_play below -- that list is
+                // this game's state as of *before* this play is submitted,
+                // so it never contains the card currently being chosen for,
+                // self or not, regardless of this flag. Labeled "[self]" so
+                // it isn't mistaken for some other in-play copy of the same
+                // card (a duel deck, or two of the same custom card, can
+                // each be played independently in the same game).
+                const selfOption = field.includes_self
+                    ? [{ value: card.card_id, label: cardLabel(card) + ' [self]', ownerLabel: playerLabelFor(currentState.you.game_player_id) }]
+                    : [];
                 if (field.candidate_card_ids) {
-                    return currentState.in_play
+                    return selfOption.concat(currentState.in_play
                         .filter((c) => field.candidate_card_ids.includes(c.card_id))
-                        .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) }));
+                        .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) })));
                 }
-                return currentState.in_play
+                return selfOption.concat(currentState.in_play
                     .filter((c) => c.card_id !== card.card_id)
                     .filter((c) => {
                         if (field.scope === 'own') return c.owner_game_player_id === currentState.you.game_player_id;
@@ -4450,7 +4464,8 @@
                     // themselves.
                     .filter((c) => !field.excludes_teammate || c.owner_game_player_id !== currentState.you.teammate_game_player_id)
                     .filter((c) => matchesCardFilter(c, field.filter))
-                    .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) }));
+                    .map((c) => ({ value: c.card_id, label: cardLabel(c), ownerLabel: playerLabelFor(c.owner_game_player_id) })));
+            }
             case 'hand_card':
                 // No owner suffix needed here -- every option is already
                 // the viewer's own hand, and two identical physical copies
