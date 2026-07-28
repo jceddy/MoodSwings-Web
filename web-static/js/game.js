@@ -2098,7 +2098,12 @@
         // neither one covers the other.
         if (card.base_color && card.base_color !== card.color) {
             const colorBadge = document.createElement('span');
-            colorBadge.className = 'card-thumb__badge card-thumb__badge--recolored';
+            // card.color is always one of the five printed mood colors
+            // (JCEDDYS_75_DECK_COLORS' own white/blue/black/red/green) --
+            // this modifier class tints the badge to match the color it's
+            // actually declaring, rather than one fixed color regardless
+            // of which one Imagination (or a Creativity copy of it) chose.
+            colorBadge.className = 'card-thumb__badge card-thumb__badge--recolored card-thumb__badge--recolored-' + card.color;
             colorBadge.textContent = '→ ' + capitalize(card.color);
             colorBadge.title = 'Currently counts as ' + card.color + ' (printed ' + card.base_color + ')';
             button.appendChild(colorBadge);
