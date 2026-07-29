@@ -10,10 +10,11 @@ use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\PlayerChoices;
 
 /**
- * Hesitation: "After playing this mood, choose one: put a red or green
- * mood into its player's hand, or put all red and green moods into their
- * players' hands." The same modal single-vs-mass shape as Guilt/Contempt,
- * mandatory like Guilt (no "you may").
+ * Hesitation: "After playing this mood, you may choose one: put a red or
+ * green mood into its player's hand, or put all red and green moods into
+ * their players' hands." The same modal single-vs-mass shape as
+ * Guilt/Contempt, optional like Contempt ("you may choose one") --
+ * declining (no 'mode' submitted) is a no-op.
  */
 final class HesitationEffect extends AbstractMoodEffect
 {
@@ -21,7 +22,10 @@ final class HesitationEffect extends AbstractMoodEffect
 
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $mode = $choices->requireString('mode');
+        $mode = $choices->string('mode');
+        if ($mode === null) {
+            return;
+        }
 
         $targets = match ($mode) {
             'single' => [$this->validatedSingleTarget($state, $choices)],
