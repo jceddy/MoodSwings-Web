@@ -1588,9 +1588,8 @@ too, proportional to the smaller card width.
     `completed` game forever -- see "Past games" in `php-app/README.md`
     for the exact split (the one exception: a completed game still part
     of an undecided best-of-three draft match stays in the main list).
-    `#lobby-view` now holds two sibling `<div>`s, toggled in place rather
-    than as a separate history entry: `#current-games-section` (the
-    pre-existing "Your games" list, unchanged apart from no longer
+    `#lobby-view` now holds two sibling `<div>`s: `#current-games-section`
+    (the pre-existing "Your games" list, unchanged apart from no longer
     showing most completed games) and a new `#past-games-section`
     (initially `hidden`), each with its own `<ul>`/empty-state pair. A
     "Past games" button (`#past-games-button`, next to "New game") calls
@@ -1602,18 +1601,28 @@ too, proportional to the smaller card width.
     out of `refreshLobby()` so both views share it), so a decided draft
     match still shows as one grouped row with its final score, and a
     completed game's "Watch replay"/"Download data" buttons work
-    identically. A "&larr; Back to your games" button
-    (`#back-to-current-games-button`) calls `showCurrentGamesSection()` to
-    flip back. Deliberately NOT wired into the lobby's own 4-second poll
+    identically. Deliberately NOT wired into the lobby's own 4-second poll
     timer -- completed games never change underneath the viewer, so
     `refreshPastGames()` only runs when the section is actually opened.
-    This toggle is implemented entirely within the existing `#lobby-view`
-    section rather than as a new top-level view, so it needs no
-    integration with the browser-history/back-button system described in
-    "Watch replay" above -- `showLobby()` always resets back to the
-    current-games sub-view on entry, so returning to the lobby from
-    anywhere never strands a player on a stale Past games view from an
-    earlier visit.
+    `showLobby()` always resets back to the current-games sub-view on
+    entry, so returning to the lobby from anywhere never strands a player
+    on a stale Past games view from an earlier visit.
+
+    Unlike a dialog or a board display, showing Past games doesn't leave
+    `#lobby-view` at all (both sections are siblings inside it), so it
+    needed its own hook into "Browser back button" below rather than
+    falling out of the existing dialog/display machinery for free:
+    `showPastGamesSection()` pushes a `{ pastGames: true }` history entry
+    the same way `pushDisplayHistoryEntry()` does for a board, and the
+    popstate handler checks `#past-games-section`'s own `hidden` state
+    (right where it already checks `boardView.hidden`) to call
+    `showCurrentGamesSection()` instead of treating the Back press as a
+    no-op at the lobby's base state. The "&larr; Back to your games"
+    button (`#back-to-current-games-button`) doesn't call
+    `showCurrentGamesSection()` directly -- it calls `history.back()`,
+    the same delegation `#back-to-lobby-button` uses for boards, so the
+    popstate handler stays the single place that actually performs the
+    transition and the pushed history entry is never left orphaned.
 
     **Shared deck view (issue #197).** Until now, the board only ever
     showed a deck *count* (`Deck: N cards left`) and, for `custom`, the
