@@ -1,0 +1,15 @@
+-- Two frontend/rules-engine fixes, no schema change: (1) the New Game
+-- dialog's "Create game" button now guards against a rapid double-click
+-- submitting createGame() twice and creating two identical waiting games,
+-- and (2) Duplicity's repeat-eligibility is now snapshotted before the
+-- played card's own effect runs, fixing an incorrect (or incorrectly
+-- denied) repeat offer when Chaos reassigns Duplicity's own ownership as
+-- part of its own shuffle. This migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056 already did for their
+-- own schema-less changes -- MaintenanceGate compares the deployed
+-- VERSION file against this table on every request (see migration 0021's
+-- own docblock), so a VERSION bump with no matching schema_version update
+-- would show maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.6.1' WHERE id = 1;
