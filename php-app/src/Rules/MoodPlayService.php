@@ -224,7 +224,10 @@ final class MoodPlayService
             // Nothing to ask for this specific play (e.g. declined, or no
             // qualifying target/candidate) -- same as an ordinary no-op
             // afterPlaying().
-            $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, []);
+            $followUpDecisions = $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, []);
+            if ($followUpDecisions !== []) {
+                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices);
+            }
         } else {
             $effect->afterPlaying($state, $cardId, $playerId, $invocationChoices);
         }
@@ -240,6 +243,13 @@ final class MoodPlayService
      * answer -- called by GameService::respondToDecision() once a batch's
      * last row resolves. $answers is keyed by each PendingDecisionRequest's
      * own $key, one PlayerChoices per answer.
+     *
+     * If resolveDecisions() itself returns a non-empty follow-up (e.g.
+     * InstabilityEffect's second round, only askable once the first
+     * round's mutation has actually landed), this pauses again with a
+     * fresh PlayResult::pending() instead of continuing the chain --
+     * $invocationChoices is passed through unchanged, so a later round
+     * can still read whatever the first round's own choices bag carried.
      *
      * @param array<string, PlayerChoices> $answers
      */
@@ -262,7 +272,10 @@ final class MoodPlayService
             throw new IllegalPlayException("Effect '{$effectiveEffectKey}' has no pending decisions to resolve");
         }
 
-        $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, $answers);
+        $followUpDecisions = $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, $answers);
+        if ($followUpDecisions !== []) {
+            return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices);
+        }
 
         return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq);
     }
