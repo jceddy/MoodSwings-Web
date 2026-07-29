@@ -6,6 +6,7 @@ namespace MoodSwings\Auth;
 
 use DateTimeImmutable;
 use MoodSwings\Repository\EmailVerificationRepository;
+use MoodSwings\Repository\PasswordResetRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
 use PDOException;
@@ -16,11 +17,13 @@ final class AuthService
     public const SESSION_TTL_DAYS = 30;
     public const EMAIL_VERIFICATION_TTL_HOURS = 24;
     public const RESEND_MIN_INTERVAL_SECONDS = 60;
+    public const PASSWORD_RESET_TTL_HOURS = 1;
 
     public function __construct(
         private readonly UserRepository $users,
         private readonly SessionRepository $sessions,
         private readonly EmailVerificationRepository $emailVerifications,
+        private readonly PasswordResetRepository $passwordResets,
         private readonly int $resendMinIntervalSeconds = self::RESEND_MIN_INTERVAL_SECONDS,
     ) {
     }
@@ -133,6 +136,61 @@ final class AuthService
         $userId = (int) $verification['user_id'];
         $this->users->markEmailVerified($userId);
         $this->emailVerifications->deleteAllForUser($userId);
+
+        return $this->users->findById($userId);
+    }
+
+    /**
+     * Issues a password reset token for any known email, verified or not,
+     * invalidating any prior ones. Returns null when there's nothing to do
+     * (unknown email, or a request was made too recently) so the caller can
+     * respond identically in every case and avoid leaking account state.
+     *
+     * @return array{user: array, resetToken: string}|null
+     */
+    public function requestPasswordReset(string $email): ?array
+    {
+        $user = $this->users->findByEmail(trim($email));
+
+        if ($user === null) {
+            return null;
+        }
+
+        $userId = (int) $user['id'];
+        $lastSentAt = $this->passwordResets->mostRecentCreatedAtForUser($userId);
+
+        if ($lastSentAt !== null && (time() - $lastSentAt->getTimestamp()) < $this->resendMinIntervalSeconds) {
+            return null;
+        }
+
+        $this->passwordResets->deleteAllForUser($userId);
+
+        $token = bin2hex(random_bytes(32));
+        $expiresAt = new DateTimeImmutable('+' . self::PASSWORD_RESET_TTL_HOURS . ' hours');
+        $this->passwordResets->create($userId, hash('sha256', $token), $expiresAt);
+
+        return ['user' => $user, 'resetToken' => $token];
+    }
+
+    /**
+     * Consumes a password reset token, sets the new password, and logs the
+     * user out everywhere by deleting all of their sessions -- a password
+     * reset is also a signal that any existing session may be compromised.
+     */
+    public function resetPassword(string $token, string $newPassword): array
+    {
+        if (strlen($newPassword) < 8 || strlen($newPassword) > 72) {
+            throw new \InvalidArgumentException('Password must be between 8 and 72 characters.');
+        }
+
+        $userId = $this->passwordResets->consumeValid(hash('sha256', $token));
+
+        if ($userId === null) {
+            throw new InvalidPasswordResetTokenException('This password reset link is invalid or has expired.');
+        }
+
+        $this->users->updatePasswordHash($userId, password_hash($newPassword, PASSWORD_BCRYPT));
+        $this->sessions->deleteAllForUser($userId);
 
         return $this->users->findById($userId);
     }

@@ -369,9 +369,19 @@ too, proportional to the smaller card width.
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to
-  `/game/`. Links to `register.html`.
+  `/game/`. Links to `register.html` and `forgot-password.html`.
 - `register.html` — Registration form. On success, shows a message to check
   email for the verification link (login is blocked until verified).
+- `forgot-password.html` — Takes an email address and calls
+  `POST /app/forgot-password`; always shows the same generic success
+  message (enumeration-resistant, same reasoning as resending a
+  verification email) regardless of whether the address is registered.
+- `reset-password.html` — Reached via the link emailed by
+  `forgot-password.html`. Reads `?token=` from the URL on load but doesn't
+  submit it until the visitor actually chooses a new password (see
+  "Password reset" in `php-app/README.md` for why this page, unlike
+  `/verify-email`, never consumes the token on a bare page load). Missing
+  `?token=` disables the form and shows an error instead.
 - `maintenance.html` — Shown during a maintenance window (see "Maintenance
   mode" above); not linked from anywhere, reached only via `apiRequest()`'s
   redirect.
