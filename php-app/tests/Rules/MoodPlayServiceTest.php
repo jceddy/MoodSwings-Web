@@ -4721,6 +4721,61 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(3, $state->ownerOf(3));
     }
 
+    /**
+     * Ruled by the game's judge: Duplicity's "each time you play another
+     * mood, you may have that mood's after-playing effect happen an
+     * additional time" is judged at the moment the mood is played, not
+     * after that mood's own effect resolves. Chaos reassigns every in-play
+     * mood's owner (including Duplicity itself) as its OWN after-playing
+     * effect, so a naive implementation that recounts Duplicity ownership
+     * *after* the shuffle gets this backwards: here, the player playing
+     * Chaos does NOT own Duplicity beforehand (an opponent does), but the
+     * shuffle happens to deal that Duplicity to them anyway -- gaining
+     * control as a side effect of Chaos's own resolution must never
+     * retroactively grant a repeat of Chaos's own just-resolved shuffle.
+     */
+    public function testChaosDealingDuplicityToTheActingPlayerDoesNotRetroactivelyOfferARepeat(): void
+    {
+        $state = $this->boardState(hands: [1 => [37], 2 => [85]]); // Duplicity, Chaos
+        $state->moveHandToInPlay(1, 37); // player 1 owns Duplicity before player 2 ever plays Chaos
+        $state->startTurn(2);
+
+        // Deterministic with this seed: the post-shuffle deal (starting
+        // with acting player 2) hands Duplicity (37) to player 2 -- the
+        // very player who just played Chaos and never controlled Duplicity
+        // beforehand.
+        mt_srand(1);
+        $result = $this->plays->playMood($state, 2, 85, new PlayerChoices([]));
+
+        self::assertSame(2, $state->ownerOf(37), 'Chaos must have actually dealt Duplicity to player 2 for this test to be meaningful');
+        self::assertFalse($result->isPending, 'player 2 never controlled Duplicity before playing Chaos, so no repeat should ever be offered');
+    }
+
+    /**
+     * The mirror-image case, also from the same ruling: the player playing
+     * Chaos DOES own Duplicity beforehand, but Chaos's own shuffle deals
+     * that very Duplicity away to someone else. Per the ruling, it
+     * doesn't matter that they no longer control it by the time they're
+     * asked -- the opportunity already triggered at the moment they played
+     * Chaos, before the shuffle happened, so the repeat offer still stands.
+     */
+    public function testChaosDealingDuplicityAwayFromTheActingPlayerStillOffersItsAlreadyTriggeredRepeat(): void
+    {
+        $state = $this->boardState(hands: [2 => [37, 85]]); // Duplicity, Chaos -- both start with player 2
+        $state->moveHandToInPlay(2, 37); // player 2 (about to play Chaos) already owns Duplicity
+        $state->startTurn(2);
+
+        // Deterministic with this seed: the post-shuffle deal moves
+        // Duplicity (37) away from player 2, to another player.
+        mt_srand(95);
+        $result = $this->plays->playMood($state, 2, 85, new PlayerChoices([]));
+
+        self::assertNotSame(2, $state->ownerOf(37), 'Chaos must have actually taken Duplicity away from player 2 for this test to be meaningful');
+        self::assertTrue($result->isPending, 'player 2 controlled Duplicity at the moment they played Chaos, so the repeat offer must still stand even though they lost it as a result of that same play');
+        self::assertSame('duplicity_repeat', $result->pendingDecisions[0]->key);
+        self::assertSame(2, $result->pendingDecisions[0]->targetPlayerId);
+    }
+
     public function testExhilarationRequiresDiscardingOneOfYourOwnMoods(): void
     {
         $state = $this->boardState(hands: [1 => [89]]);
