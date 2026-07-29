@@ -447,3 +447,10 @@ half-migrated schema.
   `1.1.1` (a PATCH-level correction of `0048`'s own not-yet-shipped-when-
   written behavior, not a new feature in its own right). See "Browser
   push notifications" in `php-app/README.md`.
+- **Hesitation optional fix** (`0055`): corrects `cards.rules_text` for
+  id 41 -- the same "you may" got dropped from the 0003 catalog seed as
+  Rationalization's (`0030`), which made this after-playing ability look
+  mandatory too (`0030`'s own commit message wrongly assumed Hesitation
+  was already correct); `HesitationEffect` is fixed in the same change
+  to actually let a player decline (no `mode` submitted) instead of
+  throwing.

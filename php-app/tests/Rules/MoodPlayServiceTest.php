@@ -2543,6 +2543,17 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isInHand(3, 118));
     }
 
+    public function testHesitationDecliningLeavesInPlayMoodsUntouched(): void
+    {
+        $state = $this->boardState(hands: [1 => [41], 2 => [106]]); // Zeal, red
+        $state->moveHandToInPlay(2, 106);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 41, new PlayerChoices([]));
+
+        self::assertTrue($state->isInPlay(106));
+    }
+
     public function testNostalgiaReturnsDiscardCardAndGrantsAnUnconditionalExtraPlay(): void
     {
         $state = $this->boardState(hands: [1 => [128, 106]], discard: [9]);
