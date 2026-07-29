@@ -1056,6 +1056,51 @@ final class BoardState
         }
     }
 
+    private const DUPLICITY_ELIGIBLE_SOURCES_KEY = '__duplicity_eligible_sources';
+
+    /**
+     * MoodPlayService::resolveAfterPlayingChain() snapshots, right before
+     * $cardId's own afterPlaying()/resolveDecisions() can mutate anything,
+     * how many independent Duplicity-effective sources $playerId owns --
+     * see that method's own docblock for why the timing matters (e.g.
+     * Chaos reassigning Duplicity's own ownership as part of resolving
+     * itself must never retroactively grant or deny a repeat of THIS
+     * invocation). Piggybacks on $cardId's own effectState bag purely so
+     * it automatically survives a possible opponent-decision pause the
+     * same way any other effectState already does (persisted/reloaded via
+     * BoardStateRepository), but deliberately bypasses
+     * recordEffectStateChange() -- this is pure engine bookkeeping, never
+     * a real board fact a player chose or should ever see, and would
+     * otherwise leak into the event log's effect_state_changes (see
+     * GameService::withCardHistory()).
+     */
+    public function setDuplicityEligibleSources(int $cardId, int $count): void
+    {
+        $this->moodInPlay($cardId)->effectState[self::DUPLICITY_ELIGIBLE_SOURCES_KEY] = $count;
+    }
+
+    /**
+     * Deliberately tolerant of $cardId no longer being in play (unlike
+     * setEffectState()/effectState()'s own moodInPlay()-backed lookups) --
+     * some cards (e.g. Anger/Hate targeting themselves) discard or bottom
+     * *themselves* as part of resolving their own afterPlaying(), so by
+     * the time continueAfterPlayingChain() reads this back, $cardId can
+     * already be gone. 0 is also the semantically correct answer there:
+     * a card no longer in play obviously can't offer any further repeats
+     * of itself. Never explicitly cleared once read (unlike a real
+     * one-shot effectState marker) -- moving out of play discards the
+     * whole effectState bag on its own, and moving back into play always
+     * starts a fresh one (see moveHandToInPlay()/moveDiscardToInPlay()),
+     * so a stale value here is never re-read across two different plays
+     * of the same physical card.
+     */
+    public function duplicityEligibleSources(int $cardId): int
+    {
+        return isset($this->moodsInPlay[$cardId])
+            ? ($this->moodsInPlay[$cardId]->effectState[self::DUPLICITY_ELIGIBLE_SOURCES_KEY] ?? 0)
+            : 0;
+    }
+
     private function recordEffectStateChange(int $cardId, string $key, mixed $value, bool $cleared): void
     {
         $this->pendingEffectStateChanges[] = [

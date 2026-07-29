@@ -185,6 +185,16 @@ final class MoodPlayService
      * $topLevelChoices for the card's own afterPlaying(), or the answered
      * repeat-offer's own "choices" sub-bag for a repeat (see
      * resolveDuplicityRepeatOffer()).
+     *
+     * Duplicity's own repeat-eligibility is snapshotted here (via
+     * BoardState::setDuplicityEligibleSources()), before this invocation's
+     * own effect gets to mutate anything -- see continueAfterPlayingChain()'s
+     * docblock for why the timing matters. This has to happen whether the
+     * effect resolves synchronously below or pauses for an opponent's own
+     * decision first (RequiresOpponentDecision), since either way
+     * continueAfterPlayingChain() eventually needs this invocation's
+     * *pre*-mutation count, not whatever the count happens to be by the
+     * time it actually runs.
      */
     private function resolveAfterPlayingChain(
         BoardState $state,
@@ -201,6 +211,10 @@ final class MoodPlayService
 
         $effectiveEffectKey = $effectiveRow['effectKey'];
         $effect = $this->registry->for($effectiveEffectKey);
+
+        $duplicitySources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'duplicity');
+        $eligibleSources = $effectiveEffectKey === 'duplicity' ? $duplicitySources - 1 : $duplicitySources;
+        $state->setDuplicityEligibleSources($cardId, $eligibleSources);
 
         if ($effect instanceof RequiresOpponentDecision) {
             $pendingDecisions = $effect->pendingDecisionsFor($state, $cardId, $playerId, $invocationChoices);
@@ -263,9 +277,28 @@ final class MoodPlayService
      * (a real Duplicity, or a Creativity currently copying one) grants its
      * own independent repeat -- $invocationSeq already counts how many
      * repeats have happened so far (1 = after the first repeat, etc.), so
-     * comparing it against the current count of such moods in play caps
-     * the chain at exactly that many, however many there turn out to be,
-     * rather than the old hard "exactly one, ever" limit.
+     * comparing it against $eligibleSources caps the chain at exactly that
+     * many, however many there turn out to be, rather than the old hard
+     * "exactly one, ever" limit.
+     *
+     * $eligibleSources is resolveAfterPlayingChain()'s own snapshot of
+     * this invocation's Duplicity count, taken *before* this invocation's
+     * effect ran (BoardState::duplicityEligibleSources()) -- NOT a fresh
+     * recount taken here, after the mutation. This matters for a card like
+     * Chaos, which reassigns every in-play mood's owner (including
+     * Duplicity itself) as its OWN after-playing effect: per an official
+     * ruling, Duplicity's opportunity to repeat is judged at the moment
+     * the mood is played, not after that mood's own effect resolves, so
+     * gaining OR losing Duplicity control as a side effect of THIS SAME
+     * invocation must never change whether a repeat gets offered here.
+     * (It also doesn't matter whether the acting player still controls
+     * that Duplicity by the time they're actually asked to repeat --
+     * losing it after the fact doesn't retroactively cancel an
+     * opportunity that already triggered.) The count is still taken fresh
+     * per invocation, not once for the whole chain -- a later repeat's own
+     * snapshot naturally reflects whatever the previous invocation's
+     * effect just did, since that's the state as it stood right before
+     * THIS invocation's own mutation began.
      *
      * The printed text triggers on "ANOTHER mood" -- so a Duplicity-
      * effective source never offers to repeat its OWN just-played
@@ -273,11 +306,9 @@ final class MoodPlayService
      * Duplicity-effective source still can (e.g. playing the real
      * Duplicity while a Creativity is already copying one lets that
      * Creativity offer one repeat of the just-played Duplicity's own
-     * "grant an extra play" effect). Since the just-played card itself
-     * is already counted in $duplicitySources once it's a
-     * Duplicity-effective card in its own right, subtracting one from the
-     * eligible count in that case excludes only itself, not any other
-     * source.
+     * "grant an extra play" effect) -- see resolveAfterPlayingChain()'s
+     * own subtraction of one in that case, excluding only the just-played
+     * card itself, not any other source.
      *
      * Rather than a flat pre-submitted boolean (the old design), this is
      * itself a pending decision targeting the ACTING player -- see
@@ -297,8 +328,7 @@ final class MoodPlayService
         int $invocationSeq,
     ): PlayResult {
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
-        $duplicitySources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'duplicity');
-        $eligibleSources = $effectiveEffectKey === 'duplicity' ? $duplicitySources - 1 : $duplicitySources;
+        $eligibleSources = $state->duplicityEligibleSources($cardId);
 
         if ($invocationSeq < $eligibleSources) {
             // The repeat-offer's own answer is resolved directly by
