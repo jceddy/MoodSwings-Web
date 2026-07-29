@@ -2694,7 +2694,10 @@ are never included, only the requested game's.
 The lobby's "Download data" button (next to "View log") fetches this and
 hands it straight to the same `downloadFile()` helper the game log's own
 "download data" button already uses, saving it as
-`game-<id>-export.json`.
+`game-<id>-export.json`. Only shown for a `'completed'` game, matching
+"Watch replay"'s own gating -- a frontend-only restriction (the endpoint
+itself has no such check), since archiving is meant for a game that's
+truly done, not one whose data is still changing.
 
 ### Shared deck view (issue #197)
 
