@@ -1156,11 +1156,13 @@ too, proportional to the smaller card width.
     board as it stands *before* this play (the card being played itself
     isn't in play yet, from the browser's own point of view, until the
     request resolves) — but a card whose schema marks the field
-    `includes_self` (Anger is the first: "put any number of moods with
-    total value 5 or less into the discard pile," and Anger's own value
-    is 0) gets a synthetic option built directly from the card being
-    played instead, labeled "`<name>` (`color`, `value`) [self]" so it
-    isn't mistaken for some other in-play copy of the same card.
+    `includes_self` (Anger -- "put any number of moods with total value 5
+    or less into the discard pile," and Anger's own value is 0 -- and
+    Hate -- "put any mood on the bottom of the deck," no owner/other-
+    player restriction -- are the first two) gets a synthetic option
+    built directly from the card being played instead, labeled
+    "`<name>` (`color`, `value`) [self]" so it isn't mistaken for some
+    other in-play copy of the same card.
     A `type: 'grant_choice'` field (`grant_source_card_id`, prepended ahead
     of the card's own fields) appears only when 2+ outstanding play grants
     would each independently cover the card being played — most commonly
