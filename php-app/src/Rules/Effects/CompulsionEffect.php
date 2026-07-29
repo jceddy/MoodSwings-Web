@@ -51,13 +51,13 @@ final class CompulsionEffect extends AbstractMoodEffect implements RequiresOppon
         ];
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
     {
         // Missing here means pendingDecisionsFor() returned [] -- the
         // target's hand was already empty, so there was never anything to
         // ask; same no-op as today's original early return.
         if (!isset($answers[self::KEY])) {
-            return;
+            return [];
         }
 
         $targetPlayerId = $choices->requireInt('target_player_id');
@@ -68,5 +68,7 @@ final class CompulsionEffect extends AbstractMoodEffect implements RequiresOppon
         }
 
         $state->giveHandCardToPlayer($targetPlayerId, $playerId, $givenCardId);
+
+        return [];
     }
 }
