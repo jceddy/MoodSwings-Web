@@ -4786,11 +4786,23 @@ final class GameService
         return (int) $row['id'];
     }
 
-    /** @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}> */
+    /**
+     * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
+     */
     public function listGamesForUser(int $userId): array
     {
         $pdo = Connection::get();
 
+        // A 'completed' game moves to listPastGamesForUser() below (issue
+        // #99/#84's own "past games" split) -- EXCEPT one still belonging
+        // to a Quick/Winston/Grid Draft match that isn't itself fully
+        // decided yet (draft_matches.status only ever reaches 'completed'
+        // once a winner is set -- see draftMatchSummaryFor()'s own
+        // docblock), since a finished game 1 of an in-progress
+        // best-of-three match is still very much part of what's
+        // currently being played, not history. 'waiting'/'in_progress'/
+        // 'abandoned' games are never affected by this at all.
+        //
         // Waiting/in-progress games always sort above completed (or
         // abandoned) ones, regardless of recency -- a finished game is
         // never more actionable than an active one, no matter how old the
@@ -4800,11 +4812,43 @@ final class GameService
         $gameIdsStmt = $pdo->prepare(
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
+             LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
+               AND (g.status != 'completed' OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
              ORDER BY
                  (g.status IN ('waiting', 'in_progress')) DESC,
                  COALESCE(g.last_move_at, g.started_at, g.created_at) DESC,
                  g.id DESC"
+        );
+        $gameIdsStmt->execute(['user_id' => $userId]);
+        $gameIds = array_map(intval(...), $gameIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        return array_map(fn (int $gameId) => $this->gameSummaryFor($gameId, $userId), $gameIds);
+    }
+
+    /**
+     * The complement of listGamesForUser() above: every 'completed' game
+     * NOT still tied to an in-progress draft match -- see that method's
+     * own docblock for exactly where the line falls. Sorted
+     * most-recently-completed first, the natural order for a "past
+     * games" archive (as opposed to listGamesForUser()'s own
+     * actionability-first ordering, which has no reason to apply once
+     * nothing here is actionable at all).
+     *
+     * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
+     */
+    public function listPastGamesForUser(int $userId): array
+    {
+        $pdo = Connection::get();
+
+        $gameIdsStmt = $pdo->prepare(
+            "SELECT g.id FROM games g
+             JOIN game_players gp ON gp.game_id = g.id
+             LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
+             WHERE gp.user_id = :user_id
+               AND g.status = 'completed'
+               AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+             ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
         );
         $gameIdsStmt->execute(['user_id' => $userId]);
         $gameIds = array_map(intval(...), $gameIdsStmt->fetchAll(PDO::FETCH_COLUMN));

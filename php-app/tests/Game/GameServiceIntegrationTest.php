@@ -1356,11 +1356,10 @@ final class GameServiceIntegrationTest extends TestCase
         $creator = $this->insertUser('sortorder-alice');
         $bob = $this->insertUser('sortorder-bob');
 
-        // An old completed game -- most recently *active* of the three (its
-        // own completed_at/last_move_at are the newest timestamps here),
-        // but should still sort below both a stale waiting game and a
-        // stale in-progress one, since neither of those is actionable and
-        // this one no longer is.
+        // A completed game -- moved to listPastGamesForUser() (the "past
+        // games" split, issue #84) rather than sorting into this list at
+        // all, so it plays no further part in this test's own sort-order
+        // assertion below.
         $completedId = $this->games->createGame($creator, [$creator, $bob]);
         $this->games->startGame($completedId);
         $this->pdo->prepare(
@@ -1382,10 +1381,129 @@ final class GameServiceIntegrationTest extends TestCase
         $gameIds = array_column($this->games->listGamesForUser($creator), 'id');
 
         self::assertSame(
-            [$inProgressId, $waitingId, $completedId],
+            [$inProgressId, $waitingId],
             $gameIds,
-            'in-progress and waiting games must both sort above the completed one, regardless of raw recency',
+            'in-progress and waiting games sort by recency; the completed game is excluded entirely, not merely sorted last',
         );
+        self::assertSame(
+            [$completedId],
+            array_column($this->games->listPastGamesForUser($creator), 'id'),
+            'the completed game shows up in Past games instead',
+        );
+    }
+
+    /**
+     * The core "past games" split (issue #84): a plain, non-draft
+     * completed game (abandoned games are untouched, only 'completed'
+     * ones move) disappears from listGamesForUser() and appears in
+     * listPastGamesForUser() instead, with an identical summary shape --
+     * both share gameSummaryFor() for hydration, so no fields differ
+     * between the two lists.
+     */
+    public function testCompletedGameMovesFromListGamesForUserToListPastGamesForUser(): void
+    {
+        $creator = $this->insertUser('pastsplit-alice');
+        $bob = $this->insertUser('pastsplit-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($creator), 'id'));
+        self::assertSame([], array_column($this->games->listPastGamesForUser($creator), 'id'));
+
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $this->games->gamePlayerIdFor($gameId, $creator), 'id' => $gameId]);
+
+        self::assertSame([], array_column($this->games->listGamesForUser($creator), 'id'), 'completed game no longer appears in the main lobby list');
+        self::assertSame([], array_column($this->games->listGamesForUser($bob), 'id'), 'true for every participant, not just the winner');
+
+        $pastSummary = $this->games->listPastGamesForUser($creator)[0];
+        self::assertSame($gameId, $pastSummary['id']);
+        self::assertSame('completed', $pastSummary['status']);
+        self::assertNull($pastSummary['draft_match_id'], 'not a draft match game');
+    }
+
+    /**
+     * An 'abandoned' game is deliberately left out of scope for the "past
+     * games" split -- only 'completed' status moves. Confirms
+     * listGamesForUser() still includes it and listPastGamesForUser()
+     * does not.
+     */
+    public function testAbandonedGameStaysInListGamesForUserNotListPastGamesForUser(): void
+    {
+        $creator = $this->insertUser('abandonsplit-alice');
+        $bob = $this->insertUser('abandonsplit-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+        $this->pdo->prepare("UPDATE games SET status = 'abandoned' WHERE id = :id")->execute(['id' => $gameId]);
+
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($creator), 'id'));
+        self::assertSame([], array_column($this->games->listPastGamesForUser($creator), 'id'));
+    }
+
+    /**
+     * The user-requested exception to the "past games" split: a
+     * 'completed' game that's still part of a best-of-three draft match
+     * whose OTHER game hasn't finished yet must stay in the main lobby,
+     * grouped alongside its in-progress sibling -- only once the whole
+     * match is decided (draft_matches.status flips to 'completed', see
+     * listGamesForUser()'s own docblock) do both games move to Past
+     * games together.
+     */
+    public function testListGamesForUserKeepsACompletedDraftMatchGameVisibleWhileASiblingGameIsStillInProgress(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
+
+        // Game 1 just finished but the match (best-of-three, winsNeeded:
+        // 1 means 2-to-win) isn't decided yet -- game 1 must still be
+        // visible in the main lobby for both players, not moved to Past
+        // games.
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ([$winnerUserId, $loserUserId] as $userId) {
+            self::assertContains($gameId, array_column($this->games->listGamesForUser($userId), 'id'), "completed game 1 must stay in the main lobby for user {$userId} while the match is undecided");
+            self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($userId), 'id'), "and must NOT yet appear in Past games for user {$userId}");
+        }
+
+        // Now finish game 2 with the same winner, deciding the match.
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting' ORDER BY match_game_number DESC LIMIT 1"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        $this->submitFullQuickDraftDeck($nextGameId, $u1);
+        $this->submitFullQuickDraftDeck($nextGameId, $u2);
+        $this->games->startGame($nextGameId);
+        // Round 1 of game 2 starts frozen until the previous game's loser
+        // decides who goes first -- have them decline, which forces
+        // game 1's winner to go first (and therefore win again, per
+        // completeQuickDraftGameByPassing()'s own docblock), deciding
+        // the match 2-0 for the same player.
+        $this->games->setPlayFirstNextMatchGame($nextGameId, $loserUserId, false);
+        $secondWinnerUserId = $this->completeQuickDraftGameByPassing($nextGameId);
+        self::assertSame($winnerUserId, $secondWinnerUserId, 'sanity check: the match is decided 2-0 for the same player');
+
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status'], 'the match is now fully decided');
+
+        foreach ([$winnerUserId, $loserUserId] as $userId) {
+            self::assertNotContains($gameId, array_column($this->games->listGamesForUser($userId), 'id'), "game 1 moves out of the main lobby once the whole match is decided for user {$userId}");
+            self::assertNotContains($nextGameId, array_column($this->games->listGamesForUser($userId), 'id'), "game 2 moves out of the main lobby too for user {$userId}");
+            self::assertContains($gameId, array_column($this->games->listPastGamesForUser($userId), 'id'), "game 1 now appears in Past games for user {$userId}");
+            self::assertContains($nextGameId, array_column($this->games->listPastGamesForUser($userId), 'id'), "as does game 2 for user {$userId}");
+        }
     }
 
     /**
@@ -1409,7 +1527,10 @@ final class GameServiceIntegrationTest extends TestCase
             "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
         )->execute(['winner' => $winnerId, 'id' => $gameId]);
 
-        self::assertSame(['winnames-alice'], $this->games->listGamesForUser($creator)[0]['winner_usernames']);
+        // Now that it's completed, the game has moved to Past games (issue
+        // #84's "past games" split) rather than staying in this list.
+        self::assertSame([], $this->games->listGamesForUser($creator));
+        self::assertSame(['winnames-alice'], $this->games->listPastGamesForUser($creator)[0]['winner_usernames']);
     }
 
     /**
@@ -1433,7 +1554,7 @@ final class GameServiceIntegrationTest extends TestCase
             "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner, winner_team_id = 0 WHERE id = :id"
         )->execute(['winner' => $winnerRepresentative, 'id' => $gameId]);
 
-        $summary = $this->games->listGamesForUser($u1)[0];
+        $summary = $this->games->listPastGamesForUser($u1)[0];
         self::assertEqualsCanonicalizing(['winteam-alice', 'winteam-bob'], $summary['winner_usernames']);
     }
 
@@ -8319,14 +8440,31 @@ final class GameServiceIntegrationTest extends TestCase
                 $winnerUsername = $this->fetchUsername($winnerUserId);
                 $loserUserId = $winnerUserId === $u1 ? $u2 : $u1;
 
-                $finalWinnerSummary = $summaryForCurrent($winnerUserId);
+                // The match is now fully decided (draft_matches.status ==
+                // 'completed'), so every game in it -- including this
+                // final one -- has moved out of listGamesForUser() and
+                // into listPastGamesForUser() (issue #84's "past games"
+                // split), for both participants.
+                self::assertSame([], array_filter($this->games->listGamesForUser($winnerUserId), fn (array $s): bool => $s['draft_match_id'] === $draftMatchId));
+                self::assertSame([], array_filter($this->games->listGamesForUser($loserUserId), fn (array $s): bool => $s['draft_match_id'] === $draftMatchId));
+
+                $summaryForCurrentPast = function (int $userId) use ($currentGameId): array {
+                    foreach ($this->games->listPastGamesForUser($userId) as $summary) {
+                        if ($summary['id'] === $currentGameId) {
+                            return $summary;
+                        }
+                    }
+                    self::fail("game {$currentGameId} missing from listPastGamesForUser()");
+                };
+
+                $finalWinnerSummary = $summaryForCurrentPast($winnerUserId);
                 self::assertSame($draftMatchId, $finalWinnerSummary['draft_match_id']);
                 self::assertSame('completed', $finalWinnerSummary['draft_match']['status']);
                 self::assertSame(2, $finalWinnerSummary['draft_match']['your_wins']);
                 self::assertSame($matchWins[$loserUserId], $finalWinnerSummary['draft_match']['opponent_wins']);
                 self::assertSame($winnerUsername, $finalWinnerSummary['draft_match']['winner_username']);
 
-                $finalLoserSummary = $summaryForCurrent($loserUserId);
+                $finalLoserSummary = $summaryForCurrentPast($loserUserId);
                 self::assertSame('completed', $finalLoserSummary['draft_match']['status']);
                 self::assertSame($matchWins[$loserUserId], $finalLoserSummary['draft_match']['your_wins']);
                 self::assertSame(2, $finalLoserSummary['draft_match']['opponent_wins']);

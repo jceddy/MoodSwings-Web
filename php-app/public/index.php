@@ -875,6 +875,15 @@ if ($path === '/games' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'games' => $games->listGamesForUser((int) $currentUser['id'])]);
 }
 
+// "Past games" (issue #84): the complement of GET /games above -- every
+// completed game not still tied to an in-progress draft match. See
+// GameService::listPastGamesForUser()'s own docblock for exactly where
+// that line falls.
+if ($path === '/games/past' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    respond(200, ['status' => 'ok', 'games' => $games->listPastGamesForUser((int) $currentUser['id'])]);
+}
+
 if ($path === '/games/state' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     $gameId = (int) ($_GET['game_id'] ?? 0);

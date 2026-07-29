@@ -1065,6 +1065,7 @@
         document.getElementById('replay-controls').hidden = true;
         boardView.hidden = true;
         lobbyView.hidden = false;
+        showCurrentGamesSection();
         refreshLobby();
         // Picks up a game created by another player (or this same player,
         // from a second tab) without needing a hard reload -- the same
@@ -1743,17 +1744,16 @@
         return li;
     }
 
-    async function refreshLobby() {
-        const { ok, body } = await listGames();
-        const games = ok ? body.games : [];
-        const gamesList = document.getElementById('games-list');
-
-        // Groups every game sharing a draft_match_id into one entry (see
-        // buildMatchGroupRow()) instead of listing a Quick Draft match's
-        // up-to-3 games as unrelated rows -- each entry keeps its position
-        // at wherever the first (already-sorted) game belonging to it
-        // appears, so an active match still surfaces as high in the list
-        // as its most actionable game does.
+    // Groups every game sharing a draft_match_id into one entry (see
+    // buildMatchGroupRow()) instead of listing a Quick Draft match's
+    // up-to-3 games as unrelated rows -- each entry keeps its position at
+    // wherever the first (already-sorted) game belonging to it appears,
+    // so an active match still surfaces as high in the list as its most
+    // actionable game does. Shared by refreshLobby() and
+    // refreshPastGames() below -- draft_match_id grouping works
+    // identically for either list, the backend query is what decides
+    // which games (and which whole matches) belong in which one.
+    function groupGameEntries(games) {
         const matchGamesById = new Map();
         for (const game of games) {
             if (game.draft_match_id === null) {
@@ -1780,8 +1780,41 @@
             entries.push(() => buildMatchGroupRow(matchGames));
         }
 
-        renderList(gamesList, document.getElementById('games-empty'), entries, (buildEntry) => buildEntry());
+        return entries;
     }
+
+    async function refreshLobby() {
+        const { ok, body } = await listGames();
+        const games = ok ? body.games : [];
+        const gamesList = document.getElementById('games-list');
+        renderList(gamesList, document.getElementById('games-empty'), groupGameEntries(games), (buildEntry) => buildEntry());
+    }
+
+    // Past games (issue #84) -- fetched once when the "Past games" button
+    // is clicked, not on the lobby's own 4-second poll: a completed game
+    // never changes again, so there's nothing to keep re-fetching for
+    // while this section is open (unlike refreshLobby(), whose games can
+    // genuinely change turn-by-turn).
+    async function refreshPastGames() {
+        const { ok, body } = await listPastGames();
+        const games = ok ? body.games : [];
+        const pastGamesList = document.getElementById('past-games-list');
+        renderList(pastGamesList, document.getElementById('past-games-empty'), groupGameEntries(games), (buildEntry) => buildEntry());
+    }
+
+    function showPastGamesSection() {
+        document.getElementById('current-games-section').hidden = true;
+        document.getElementById('past-games-section').hidden = false;
+        refreshPastGames();
+    }
+
+    function showCurrentGamesSection() {
+        document.getElementById('past-games-section').hidden = true;
+        document.getElementById('current-games-section').hidden = false;
+    }
+
+    document.getElementById('past-games-button').addEventListener('click', showPastGamesSection);
+    document.getElementById('back-to-current-games-button').addEventListener('click', showCurrentGamesSection);
 
     // Routes through the browser's own back-navigation handling (see
     // "Browser back button" below) rather than calling showLobby()/
