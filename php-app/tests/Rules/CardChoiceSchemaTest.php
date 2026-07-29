@@ -373,6 +373,20 @@ final class CardChoiceSchemaTest extends TestCase
         self::assertTrue($fields[0]['includes_self']);
     }
 
+    /**
+     * Hate's printed text ("put any mood on the bottom of the deck") has
+     * no owner/other-player restriction either, so it's the second card
+     * (after Anger) whose target list should keep the card being played
+     * itself as a candidate -- see game.js's fieldOptions() and this
+     * flag's own docblock above.
+     */
+    public function testHateIncludesSelfAsATarget(): void
+    {
+        $fields = CardChoiceSchema::forEffectKey('hate');
+
+        self::assertTrue($fields[0]['includes_self']);
+    }
+
     public function testCrueltyIndecisivenessAndSuspicionHaveNoCountOrConstraintSinceTheyAllowAnyNumber(): void
     {
         foreach (['cruelty', 'indecisiveness', 'suspicion', 'doubt', 'thrill'] as $effectKey) {

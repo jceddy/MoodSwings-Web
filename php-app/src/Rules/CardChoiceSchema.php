@@ -66,7 +66,8 @@ namespace MoodSwings\Rules;
  *                           // itself), but wrong for the handful whose printed text has no reason to rule out
  *                           // targeting itself -- Anger ("put any number of moods with total value 5 or less
  *                           // into the discard pile," value 0, so discarding itself is not just legal but
- *                           // often efficient) is the first such card. Set true to have fieldOptions()
+ *                           // often efficient) and Hate ("put any mood on the bottom of the deck," no owner/
+ *                           // other-player restriction) are the first two such cards. Set true to have fieldOptions()
  *                           // synthesize a self entry directly from the card being played (labeled " [self]"
  *                           // so it isn't mistaken for some other in-play copy of the same card -- a duel
  *                           // deck, or two of the same custom card, can each be played independently in the
@@ -188,7 +189,7 @@ final class CardChoiceSchema
             ['key' => 'value', 'type' => 'value', 'required' => false, 'min' => 0, 'max' => 12, 'allow_extra_values' => true, 'label' => 'Value to suppress (every mood showing it)'],
         ],
         'hate' => [
-            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to move to the bottom of the deck'],
+            ['key' => 'target_mood_id', 'type' => 'mood', 'scope' => 'any', 'required' => false, 'label' => 'Mood to move to the bottom of the deck', 'includes_self' => true],
         ],
         'wrath' => [
             ['key' => 'discard_all_other_moods', 'type' => 'bool', 'required' => false, 'label' => 'Put every other mood in play into the discard pile'],
