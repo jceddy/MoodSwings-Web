@@ -1037,6 +1037,26 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame([99], $state->deck());
     }
 
+    /**
+     * Hate is already in play by the time its own afterPlaying() runs
+     * (MoodPlayService::playMood() moves the card into play before
+     * resolving its effect), and its printed text has no owner/other-
+     * player restriction on the mood it bottoms -- so targeting itself is
+     * legal. See CardChoiceSchema.php's own 'includes_self' docblock for
+     * why the frontend now offers this option too.
+     */
+    public function testHateCanBottomItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [66]], deck: [99]);
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 66, new PlayerChoices(['target_mood_id' => 66]));
+
+        self::assertFalse($state->isInPlay(66));
+        self::assertSame([66], $state->deck());
+        self::assertTrue($state->isInHand(1, 99));
+    }
+
     public function testWrathDiscardsAllOtherMoodsWhenConfirmed(): void
     {
         $state = $this->boardState(hands: [1 => [105], 2 => [9], 3 => [120]]);
