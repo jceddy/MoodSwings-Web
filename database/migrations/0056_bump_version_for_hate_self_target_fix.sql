@@ -1,0 +1,12 @@
+-- Let Hate target itself for its own "put any mood on the bottom of the
+-- deck" ability (game.js's fieldOptions() marks target_mood_id
+-- includes_self, mirroring Anger's own fix) -- frontend-only, no schema
+-- change. This migration exists purely to keep schema_version in sync
+-- with the VERSION bump, the same way 0024/0025/0026/0037/0040/0044/
+-- 0045/0046/0052 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request (see migration 0021's own docblock), so a VERSION
+-- bump with no matching schema_version update would show maintenance
+-- mode after deploy even though nothing about the schema actually
+-- changed.
+UPDATE schema_version SET version = '1.5.2' WHERE id = 1;
