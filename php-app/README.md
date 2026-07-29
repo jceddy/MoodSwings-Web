@@ -48,6 +48,8 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/register`     | `{"username", "email", "password", "phone_number"?}`             | Creates an unverified user and emails a verification link. Username: 3-32 chars (letters/numbers/`_`/`-`); email: valid format; password: 8-72 chars; phone (optional): 7-20 chars, digits/`+`/`-`/`.`/spaces/parens. `409` on duplicate username/email, `400` on validation failure, `502` if the verification email can't be sent (registration is rolled back so you can retry). |
 | GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with just a manual link (no auto-redirect) if the token is invalid/expired. |
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
+| POST   | `/forgot-password` | `{"email"}`                                                   | Issues a password reset link (valid for 1 hour), revoking any prior one, and emails it -- regardless of the account's verification status. Always returns the same generic `200` message whether or not the email is registered, for the same enumeration-resistance reason as `/resend-verification`; also rate-limited to once per 60 seconds per account. `400` on invalid email format, `502` if sending fails. Unlike `/verify-email`, the emailed link points at the static `reset-password.html` page rather than a GET route here -- see "Password reset" below for why. |
+| POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
 | GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. |
@@ -174,6 +176,42 @@ missing vs. genuinely unreachable) is logged to `src/maintenance-errors.log`
 (same non-web-accessible-location precedent as `mail-errors.log` above) so
 the two remain distinguishable after the fact, even though both produce
 the same generic client-facing message.
+
+## Password reset
+
+`POST /forgot-password` / `POST /reset-password` let a user recover their
+account without contacting support. Modeled directly on the existing email
+verification flow (`AuthService::resendVerificationEmail()`/`verifyEmail()`
+and `EmailVerificationRepository`), with the token itself generated and
+hashed the same way (`bin2hex(random_bytes(32))`, `hash('sha256', ...)`
+stored in a `CHAR(64)` column) via a new `password_resets` table/
+`PasswordResetRepository` — see `database/README.md`.
+
+The one deliberate difference from `/verify-email`: that route is a
+token-consuming `GET`, opened directly from the emailed link. A password
+reset link uses the same pattern instead but the token isn't consumed on
+`GET` — the emailed link points at the static frontend page
+`reset-password.html` (via `SiteUrl::root()`, not `APP_URL`, since it's a
+static page rather than a PHP route), which reads `?token=` from
+`location.search` on load but doesn't submit it anywhere until the user
+actually chooses a new password via `POST /reset-password`. A GET route
+would be vulnerable to corporate email-security scanners that pre-fetch
+links in inbound mail — since `PasswordResetRepository::consumeValid()`
+is single-use (same select-then-delete pattern as
+`DiscordOAuthStateRepository::consumeValid()`), a scanner's pre-fetch
+would silently burn the real token before the user ever opens the email.
+Because there's no new GET route, this feature also needs no
+`MaintenanceGate` carve-out (unlike `/verify-email`'s own exemption
+above).
+
+Requesting a reset works regardless of the account's verification status
+(unlike resending a verification email, which is a no-op once verified) —
+someone who never finished verifying can still recover access to change
+their password. `AuthService::resetPassword()` deletes every one of the
+user's sessions on success (`SessionRepository::deleteAllForUser()`), so
+a password reset also logs the account out everywhere, treating the
+reset request itself as a signal any existing session may be
+compromised.
 
 ## Rules engine
 

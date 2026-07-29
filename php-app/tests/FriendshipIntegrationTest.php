@@ -13,6 +13,7 @@ use MoodSwings\Friends\NotAuthorizedToRespondException;
 use MoodSwings\Friends\UserNotFoundException;
 use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\PasswordResetRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
 use PDO;
@@ -45,6 +46,7 @@ final class FriendshipIntegrationTest extends TestCase
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE email_verifications');
+        $pdo->exec('TRUNCATE TABLE password_resets');
         $pdo->exec('TRUNCATE TABLE sessions');
         $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
@@ -56,7 +58,13 @@ final class FriendshipIntegrationTest extends TestCase
         putenv("DB_USER={$user}");
         putenv("DB_PASSWORD={$password}");
 
-        $this->auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository(), 0);
+        $this->auth = new AuthService(
+            new UserRepository(),
+            new SessionRepository(),
+            new EmailVerificationRepository(),
+            new PasswordResetRepository(),
+            0
+        );
         $this->friendships = new FriendshipService(new UserRepository(), new FriendshipRepository());
     }
 

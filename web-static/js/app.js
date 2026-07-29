@@ -67,6 +67,14 @@ function logout() {
     return apiRequest('/logout', { method: 'POST' });
 }
 
+function requestPasswordReset(email) {
+    return apiRequest('/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+}
+
+function resetPassword(token, password) {
+    return apiRequest('/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
+}
+
 function listFriends() {
     return apiRequest('/friends');
 }

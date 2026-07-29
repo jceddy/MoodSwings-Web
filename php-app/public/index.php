@@ -9,6 +9,7 @@ use MoodSwings\Auth\DuplicateEmailException;
 use MoodSwings\Auth\DuplicateUsernameException;
 use MoodSwings\Auth\EmailNotVerifiedException;
 use MoodSwings\Auth\InvalidCredentialsException;
+use MoodSwings\Auth\InvalidPasswordResetTokenException;
 use MoodSwings\Auth\InvalidVerificationTokenException;
 use MoodSwings\Config;
 use MoodSwings\Database\Connection;
@@ -41,6 +42,7 @@ use MoodSwings\Repository\EmailVerificationRepository;
 use MoodSwings\Repository\FriendshipRepository;
 use MoodSwings\Repository\NotificationCooldownRepository;
 use MoodSwings\Repository\NotificationPreferenceRepository;
+use MoodSwings\Repository\PasswordResetRepository;
 use MoodSwings\Repository\PushSubscriptionRepository;
 use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
@@ -183,6 +185,23 @@ function sendVerificationEmail(array $user, string $token): void
 }
 
 /**
+ * Unlike sendVerificationEmail(), this links to a static frontend page
+ * rather than a token-consuming GET route: corporate email-security
+ * scanners that pre-fetch links in inbound mail would otherwise silently
+ * burn the single-use reset token before the real user ever opens it. The
+ * static page reads ?token= on load but only submits (and consumes) it
+ * when the user actually chooses a new password, via POST /reset-password.
+ *
+ * @throws \Throwable if the email fails to send
+ */
+function sendPasswordResetEmail(array $user, string $token): void
+{
+    $resetUrl = SiteUrl::root() . '/reset-password.html?token=' . urlencode($token);
+
+    (new Mailer())->sendPasswordResetEmail($user['email'], $user['username'], $resetUrl);
+}
+
+/**
  * Writes to a fixed, non-web-accessible file (src/ already has a
  * deny-all .htaccess) rather than PHP's ambient error_log destination,
  * which varies by host and isn't always what cPanel's error log UI shows.
@@ -227,7 +246,12 @@ if ($path !== '/health' && $path !== '/verify-email') {
     }
 }
 
-$auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository());
+$auth = new AuthService(
+    new UserRepository(),
+    new SessionRepository(),
+    new EmailVerificationRepository(),
+    new PasswordResetRepository()
+);
 
 if ($path === '/register' && $method === 'POST') {
     $body = requestBody();
@@ -312,6 +336,53 @@ if ($path === '/verify-email' && $method === 'GET') {
         );
     } catch (InvalidVerificationTokenException $e) {
         respondHtml(400, 'Verification failed - MoodSwings-Web', 'Verification failed', $e->getMessage());
+    }
+}
+
+if ($path === '/forgot-password' && $method === 'POST') {
+    $body = requestBody();
+    $email = (string) ($body['email'] ?? '');
+
+    if (filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        respond(400, ['status' => 'error', 'message' => 'A valid email address is required.']);
+    }
+
+    $result = $auth->requestPasswordReset($email);
+
+    if ($result !== null) {
+        try {
+            sendPasswordResetEmail($result['user'], $result['resetToken']);
+        } catch (\Throwable $e) {
+            logMailError('Failed to send password reset email: ' . $e->getMessage());
+            respond(502, [
+                'status' => 'error',
+                'message' => 'Could not send the password reset email. Please try again shortly.',
+            ]);
+        }
+    }
+
+    // Always the same response, whether or not an email was actually sent, so
+    // this endpoint can't be used to discover which addresses are registered.
+    respond(200, [
+        'status' => 'ok',
+        'message' => 'If an account with that email exists, a password reset link has been sent.',
+    ]);
+}
+
+if ($path === '/reset-password' && $method === 'POST') {
+    $body = requestBody();
+
+    try {
+        $user = $auth->resetPassword((string) ($body['token'] ?? ''), (string) ($body['password'] ?? ''));
+        respond(200, [
+            'status' => 'ok',
+            'message' => 'Your password has been reset. You can now log in with your new password.',
+            'user' => publicUser($user),
+        ]);
+    } catch (InvalidPasswordResetTokenException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
