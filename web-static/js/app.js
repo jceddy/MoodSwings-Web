@@ -108,6 +108,13 @@ function listGames() {
     return apiRequest('/games');
 }
 
+// "Past games" (issue #84) -- the complement of listGames() above: every
+// completed game not still tied to an in-progress draft match. See
+// GameService::listPastGamesForUser().
+function listPastGames() {
+    return apiRequest('/games/past');
+}
+
 function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId) {
     return apiRequest('/games', {
         method: 'POST',

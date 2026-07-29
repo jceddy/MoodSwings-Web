@@ -1,0 +1,13 @@
+-- New feature, no schema change: adds GET /games/past
+-- (GameService::listPastGamesForUser()) and excludes 'completed' games
+-- from GET /games (listGamesForUser()), except one still tied to an
+-- undecided best-of-three draft match -- a "Past games" lobby view
+-- (issue #84 prep). No new tables/columns -- this migration exists
+-- purely to keep schema_version in sync with the VERSION bump, the same
+-- way 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056/0058/0059/0060
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every
+-- request (see migration 0021's own docblock), so a VERSION bump with
+-- no matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.6.4' WHERE id = 1;

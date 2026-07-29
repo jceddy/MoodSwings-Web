@@ -568,9 +568,11 @@ too, proportional to the smaller card width.
     opponents themselves. The list itself is
     rendered in whatever order the API returns (no client-side re-sort) --
     `GET /games` always puts `waiting`/`in_progress` games above
-    `completed` ones regardless of recency, so a stalled active game never
-    gets buried below a long-finished one; see "Game timestamps" in
-    `php-app/README.md`. Status is also color-coded (issue #136) via a
+    `abandoned` ones regardless of recency, so a stalled active game never
+    gets buried below an abandoned one; see "Game timestamps" in
+    `php-app/README.md`. `completed` games don't appear in this list at
+    all (except one still tied to an undecided draft match) -- see
+    "Past games" below. Status is also color-coded (issue #136) via a
     `.lobby-status--<status>` class per row -- `waiting` reads in
     `--color-pending`, `in_progress` in a new `--color-info` (blue, added
     alongside the existing error/success/pending theme variables --
@@ -1581,6 +1583,37 @@ too, proportional to the smaller card width.
     `'completed'` -- same "actually done" gating as "Watch replay" right
     below it, rather than offering an archive snapshot of a game whose
     data is still actively changing.
+
+    **Past games (issue #84).** `GET /games` no longer returns every
+    `completed` game forever -- see "Past games" in `php-app/README.md`
+    for the exact split (the one exception: a completed game still part
+    of an undecided best-of-three draft match stays in the main list).
+    `#lobby-view` now holds two sibling `<div>`s, toggled in place rather
+    than as a separate history entry: `#current-games-section` (the
+    pre-existing "Your games" list, unchanged apart from no longer
+    showing most completed games) and a new `#past-games-section`
+    (initially `hidden`), each with its own `<ul>`/empty-state pair. A
+    "Past games" button (`#past-games-button`, next to "New game") calls
+    `showPastGamesSection()`, which hides the current-games `<div>`, shows
+    the past-games one, and fetches `GET /games/past`
+    (`listPastGames()`) into `#past-games-list` -- rendered through the
+    exact same `buildGameRow()`/`buildMatchGroupRow()` row-building and
+    match-grouping logic as the main list (`groupGameEntries()`, extracted
+    out of `refreshLobby()` so both views share it), so a decided draft
+    match still shows as one grouped row with its final score, and a
+    completed game's "Watch replay"/"Download data" buttons work
+    identically. A "&larr; Back to your games" button
+    (`#back-to-current-games-button`) calls `showCurrentGamesSection()` to
+    flip back. Deliberately NOT wired into the lobby's own 4-second poll
+    timer -- completed games never change underneath the viewer, so
+    `refreshPastGames()` only runs when the section is actually opened.
+    This toggle is implemented entirely within the existing `#lobby-view`
+    section rather than as a new top-level view, so it needs no
+    integration with the browser-history/back-button system described in
+    "Watch replay" above -- `showLobby()` always resets back to the
+    current-games sub-view on entry, so returning to the lobby from
+    anywhere never strands a player on a stale Past games view from an
+    earlier visit.
 
     **Shared deck view (issue #197).** Until now, the board only ever
     showed a deck *count* (`Deck: N cards left`) and, for `custom`, the

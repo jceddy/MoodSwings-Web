@@ -183,6 +183,15 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
+#past-games-button {
+    margin-left: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+#back-to-current-games-button {
+    margin-bottom: 0.5rem;
+}
+
 .field {
     margin-bottom: 1rem;
 }
