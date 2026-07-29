@@ -1934,6 +1934,9 @@
     document.getElementById('new-game-button').addEventListener('click', async () => {
         newGameError.hidden = true;
         newGameForm.reset();
+        const submitButton = document.getElementById('new-game-submit-button');
+        submitButton.disabled = false;
+        submitButton.textContent = 'Create game';
         updateDeckTypeAvailability();
 
         const { ok, body } = await listFriends();
@@ -1985,6 +1988,13 @@
             return;
         }
 
+        const submitButton = document.getElementById('new-game-submit-button');
+        // Disabled + relabeled immediately (not after the request settles) so
+        // a slow response can't be mistaken for a missed click and prompt a
+        // second, duplicate submission -- creating two identical games.
+        submitButton.disabled = true;
+        submitButton.textContent = 'Creating...';
+
         const partnerUserId = isTeamFormat ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
         const savedDecklistId = deckType === 'custom'
@@ -2022,6 +2032,8 @@
         );
 
         if (!ok) {
+            submitButton.disabled = false;
+            submitButton.textContent = 'Create game';
             newGameError.textContent = body.message || 'Could not create the game.';
             newGameError.hidden = false;
             return;
