@@ -67,10 +67,10 @@ final class ArroganceEffect extends AbstractMoodEffect implements RequiresOppone
         ];
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
     {
         if (!isset($answers[self::KEY])) {
-            return;
+            return [];
         }
 
         $opponentId = $choices->requireInt('opponent_player_id');
@@ -89,5 +89,7 @@ final class ArroganceEffect extends AbstractMoodEffect implements RequiresOppone
             'ownerId' => $opponentId,
             'heldByPlayerId' => $playerId,
         ]);
+
+        return [];
     }
 }

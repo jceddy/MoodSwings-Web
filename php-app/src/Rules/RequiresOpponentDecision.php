@@ -51,7 +51,19 @@ interface RequiresOpponentDecision
      * is keyed by each PendingDecisionRequest's own $key, one PlayerChoices
      * per answer (wrapping just that field's submitted value).
      *
+     * Returns any FOLLOW-UP decisions that only become askable now that
+     * this round's mutations have actually been applied -- e.g.
+     * InstabilityEffect, whose "give one of your own moods back" choice
+     * can't legally offer the mood it just received until that mood has
+     * actually changed ownership. Almost every implementer returns []
+     * (fully resolved, nothing further to ask); MoodPlayService pauses
+     * again with a fresh PlayResult::pending() for a non-empty return,
+     * the same way pendingDecisionsFor() itself pauses. A later round is
+     * told apart from the first purely by which keys $answers contains --
+     * see InstabilityEffect's own resolveDecisions() for the pattern.
+     *
      * @param array<string, PlayerChoices> $answers
+     * @return PendingDecisionRequest[]
      */
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void;
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array;
 }

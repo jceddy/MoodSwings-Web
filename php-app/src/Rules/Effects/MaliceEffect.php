@@ -61,10 +61,10 @@ final class MaliceEffect extends AbstractMoodEffect implements RequiresOpponentD
         ];
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
     {
         if (!isset($answers[self::KEY])) {
-            return;
+            return [];
         }
 
         $targetPlayerId = $choices->requireInt('target_player_id');
@@ -90,5 +90,7 @@ final class MaliceEffect extends AbstractMoodEffect implements RequiresOpponentD
         foreach ($targets as $targetCardId) {
             $state->moveInPlayToDiscard($targetCardId);
         }
+
+        return [];
     }
 }
