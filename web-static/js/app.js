@@ -315,6 +315,13 @@ function getGameLog(gameId, code) {
     return apiRequest(path);
 }
 
+// Download complete serialized game data (issue #99) -- unlike
+// getGameLog() above, this has no spectator/code path at all: seated
+// players only, see GameService::exportGameData()'s own docblock.
+function getGameExport(gameId) {
+    return apiRequest('/games/export?game_id=' + encodeURIComponent(gameId));
+}
+
 // Watch game replay (issue #240): the board reconstructed as of one
 // specific past event -- see GameService::replayStateAsOf(). code is only
 // ever passed while replaying via a share code rather than friendship,

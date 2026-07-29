@@ -1567,6 +1567,18 @@ too, proportional to the smaller card width.
     directly, so the secondary action reads as subordinate to the
     primary one instead of competing with it for the row's right edge.
 
+    **Download complete game data (issue #99).** A third lobby-row
+    button, "Download data" (next to "View log"), fetches the entirely
+    different `GET /games/export` (`GameService::exportGameData()`, see
+    `php-app/README.md`) -- a raw, complete dump of every DB row related
+    to the game (every play, decision batch, round score, team decision,
+    the requesting player's own note, and so on), not a repeat of the
+    curated event history "View log" already covers. Unlike "View log"'s
+    dialog, this has no preview UI of its own: `downloadGameExport()`
+    fetches the export and hands it straight to the same `downloadFile()`
+    helper "Download data" in the game-log dialog already uses, saving it
+    as `game-<id>-export.json`.
+
     **Shared deck view (issue #197).** Until now, the board only ever
     showed a deck *count* (`Deck: N cards left`) and, for `custom`, the
     deck's own name -- never its actual contents. A "View decklist"

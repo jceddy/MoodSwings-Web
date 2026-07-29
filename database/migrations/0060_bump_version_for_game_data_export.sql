@@ -1,0 +1,14 @@
+-- New feature, no schema change: adds GET /games/export
+-- (GameService::exportGameData()) -- a raw, complete dump of every DB row
+-- related to a game, across every table with any FK relationship to
+-- games.id, for offline archiving (issue #99), plus a "Download data"
+-- lobby-row button that fetches it. No new tables/columns -- this
+-- migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/0025/0026/0037/0040/0044/0045/0046/
+-- 0052/0056/0058/0059 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request (see migration 0021's own docblock), so a VERSION
+-- bump with no matching schema_version update would show maintenance
+-- mode after deploy even though nothing about the schema actually
+-- changed.
+UPDATE schema_version SET version = '1.6.3' WHERE id = 1;

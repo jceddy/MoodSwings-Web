@@ -976,6 +976,19 @@ if ($path === '/games/log' && $method === 'GET') {
     respond(200, ['status' => 'ok', 'events' => $games->fullEventLog($gameId)]);
 }
 
+// Issue #99 "download complete serialized game data": a raw, complete
+// per-table dump for offline archiving, deliberately narrower in audience
+// than GET /games/log above -- seated players only (requireGamePlayer(),
+// same gate GET /games/state uses), not spectators, since this is meant
+// as one player's own personal archive rather than a shareable view.
+if ($path === '/games/export' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    respond(200, ['status' => 'ok', 'export' => $games->exportGameData($gameId, $gamePlayerId)]);
+}
+
 // Issue #240 "watch game replay": the board reconstructed as of one
 // specific past event -- only ever available once a game is 'completed'
 // (see ReplayStateBuilder). Same no-per-viewer-customization reasoning,

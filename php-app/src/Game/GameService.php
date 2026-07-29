@@ -6393,6 +6393,171 @@ final class GameService
     }
 
     /**
+     * Every column this app has ever added a JSON-typed column for, keyed
+     * by table -- MySQL's JSON column type has no native PDO binding, so
+     * every such value comes back from a plain `SELECT *` as an
+     * escaped-string blob rather than a real nested value. Listed
+     * explicitly (rather than heuristically decoding any string that
+     * merely starts with '{'/'[') so a free-text column that happens to
+     * look like JSON -- game_notes.note_text, most plausibly -- is never
+     * silently reinterpreted; only exportGameData() below reads this map.
+     */
+    private const JSON_COLUMNS_BY_TABLE = [
+        'games' => ['custom_deck_card_ids', 'custom_duel_rarity_limits', 'custom_duel_duplicate_limits', 'custom_duel_even_color_distribution_rarities'],
+        'game_players' => ['custom_deck_card_ids'],
+        'game_rounds' => ['pending_play_grants'],
+        'game_cards' => ['effect_state'],
+        'game_events' => ['details'],
+        'game_pending_decision_batches' => ['top_level_choices', 'invocation_choices'],
+        'game_pending_decisions' => ['field', 'answer'],
+        'game_team_decisions' => ['candidate_game_player_ids'],
+        'game_initial_card_passes' => ['card_ids'],
+        'draft_matches' => ['pool_card_ids'],
+        'draft_match_players' => ['drafted_card_ids', 'deck_card_ids'],
+        'draft_round_picks' => ['drawn_card_ids', 'kept_from_draw_ids', 'kept_from_received_ids'],
+        'draft_winston_state' => ['remaining_deck_card_ids', 'pile_1_card_ids', 'pile_2_card_ids', 'pile_3_card_ids'],
+        'draft_grid_state' => ['remaining_deck_card_ids', 'grid_card_ids'],
+    ];
+
+    /**
+     * Every DB row related to $gameId, across every table with any FK
+     * relationship (direct or transitive) to `games.id` (issue #99) -- a
+     * raw, complete data dump meant for offline archiving before a game's
+     * data is eventually cleaned up (see issue #84), not the
+     * human-readable view fullEventLog() already provides (issue #98):
+     * that one is curated/rendered for display; this one preserves
+     * everything a player might want to keep, including internal
+     * bookkeeping (pending-decision batches, team decisions, the initial
+     * blind card pass) fullEventLog() never surfaces at all. Every
+     * JSON-typed column is decoded into a real nested value rather than
+     * left as an escaped string -- see JSON_COLUMNS_BY_TABLE -- so the
+     * exported file reads as ordinary nested JSON, not JSON-inside-JSON.
+     *
+     * $requestingGamePlayerId scopes `game_notes` to only the requesting
+     * player's own note, never another seated player's -- game_notes is a
+     * deliberately private per-seat scratchpad (see GameNoteRepository),
+     * and an export triggered by one player has no business revealing
+     * what a DIFFERENT player privately wrote to themselves.
+     *
+     * Quick/Winston/Grid Draft games additionally carry a `draft_match`
+     * section (via `games.draft_match_id`). A single `draft_matches` row
+     * is shared across up to 3 `games` rows in a best-of-three match (see
+     * migration 0027's own docblock), so this section reflects the WHOLE
+     * match's draft history, not just $gameId's own slice of it -- the
+     * sibling games' own `games`/`game_players`/etc rows are never
+     * included here, only $gameId's.
+     *
+     * @return array<string, mixed>
+     */
+    public function exportGameData(int $gameId, int $requestingGamePlayerId): array
+    {
+        $pdo = Connection::get();
+        $game = $this->decodeJsonColumns($this->fetchGame($gameId), 'games');
+
+        $notesStmt = $pdo->prepare('SELECT * FROM game_notes WHERE game_player_id = :game_player_id ORDER BY id ASC');
+        $notesStmt->execute(['game_player_id' => $requestingGamePlayerId]);
+        $notes = array_map(fn (array $row) => $this->decodeJsonColumns($row, 'game_notes'), $notesStmt->fetchAll());
+
+        $roundScoresStmt = $pdo->prepare(
+            'SELECT s.* FROM game_round_scores s
+             JOIN game_rounds r ON r.id = s.game_round_id
+             WHERE r.game_id = :game_id ORDER BY s.id ASC'
+        );
+        $roundScoresStmt->execute(['game_id' => $gameId]);
+
+        $pendingDecisionsStmt = $pdo->prepare(
+            'SELECT d.* FROM game_pending_decisions d
+             JOIN game_pending_decision_batches b ON b.id = d.batch_id
+             WHERE b.game_id = :game_id ORDER BY d.id ASC'
+        );
+        $pendingDecisionsStmt->execute(['game_id' => $gameId]);
+
+        $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        $draftMatch = null;
+        $draftMatchPlayers = [];
+        $draftRoundPicks = [];
+        $draftWinstonState = null;
+        $draftGridState = null;
+        if ($draftMatchId !== null) {
+            $matchStmt = $pdo->prepare('SELECT * FROM draft_matches WHERE id = :id');
+            $matchStmt->execute(['id' => $draftMatchId]);
+            $matchRow = $matchStmt->fetch();
+            $draftMatch = $matchRow !== false ? $this->decodeJsonColumns($matchRow, 'draft_matches') : null;
+
+            $draftMatchPlayers = $this->fetchAllForDraftMatch($pdo, 'draft_match_players', $draftMatchId);
+            $draftRoundPicks = $this->fetchAllForDraftMatch($pdo, 'draft_round_picks', $draftMatchId);
+            $draftWinstonState = $this->fetchOneForDraftMatch($pdo, 'draft_winston_state', $draftMatchId);
+            $draftGridState = $this->fetchOneForDraftMatch($pdo, 'draft_grid_state', $draftMatchId);
+        }
+
+        return [
+            'exported_at' => gmdate('c'),
+            'game' => $game,
+            'game_players' => $this->fetchAllForGame($pdo, 'game_players', $gameId),
+            'game_rounds' => $this->fetchAllForGame($pdo, 'game_rounds', $gameId),
+            'game_round_scores' => array_map(fn (array $row) => $this->decodeJsonColumns($row, 'game_round_scores'), $roundScoresStmt->fetchAll()),
+            'game_cards' => $this->fetchAllForGame($pdo, 'game_cards', $gameId),
+            'game_events' => $this->fetchAllForGame($pdo, 'game_events', $gameId),
+            'game_pending_decision_batches' => $this->fetchAllForGame($pdo, 'game_pending_decision_batches', $gameId),
+            'game_pending_decisions' => array_map(fn (array $row) => $this->decodeJsonColumns($row, 'game_pending_decisions'), $pendingDecisionsStmt->fetchAll()),
+            'game_team_decisions' => $this->fetchAllForGame($pdo, 'game_team_decisions', $gameId),
+            'game_initial_card_passes' => $this->fetchAllForGame($pdo, 'game_initial_card_passes', $gameId),
+            'game_notes' => $notes,
+            'draft_match' => $draftMatch,
+            'draft_match_players' => $draftMatchPlayers,
+            'draft_round_picks' => $draftRoundPicks,
+            'draft_winston_state' => $draftWinstonState,
+            'draft_grid_state' => $draftGridState,
+        ];
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function fetchAllForGame(PDO $pdo, string $table, int $gameId): array
+    {
+        // $table is always one of this method's own hardcoded call sites
+        // above, never externally supplied, so interpolating it directly
+        // into the query carries no injection risk.
+        $stmt = $pdo->prepare("SELECT * FROM {$table} WHERE game_id = :game_id ORDER BY id ASC");
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(fn (array $row) => $this->decodeJsonColumns($row, $table), $stmt->fetchAll());
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function fetchAllForDraftMatch(PDO $pdo, string $table, int $draftMatchId): array
+    {
+        $stmt = $pdo->prepare("SELECT * FROM {$table} WHERE draft_match_id = :draft_match_id ORDER BY id ASC");
+        $stmt->execute(['draft_match_id' => $draftMatchId]);
+
+        return array_map(fn (array $row) => $this->decodeJsonColumns($row, $table), $stmt->fetchAll());
+    }
+
+    /** @return array<string, mixed>|null */
+    private function fetchOneForDraftMatch(PDO $pdo, string $table, int $draftMatchId): ?array
+    {
+        $stmt = $pdo->prepare("SELECT * FROM {$table} WHERE draft_match_id = :draft_match_id");
+        $stmt->execute(['draft_match_id' => $draftMatchId]);
+        $row = $stmt->fetch();
+
+        return $row !== false ? $this->decodeJsonColumns($row, $table) : null;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     * @return array<string, mixed>
+     */
+    private function decodeJsonColumns(array $row, string $table): array
+    {
+        foreach (self::JSON_COLUMNS_BY_TABLE[$table] ?? [] as $key) {
+            if (isset($row[$key]) && is_string($row[$key])) {
+                $row[$key] = json_decode($row[$key], true);
+            }
+        }
+
+        return $row;
+    }
+
+    /**
      * Issue #240 "watch game replay": the board exactly as it looked
      * immediately after event $eventId finished, for a COMPLETED game only
      * -- see ReplayStateBuilder's own docblock for how the historical
