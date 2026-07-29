@@ -56,7 +56,7 @@ final class FuryEffect extends AbstractMoodEffect implements RequiresOpponentDec
         return $requests;
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         $targets = [];
         foreach ($state->activePlayerOrder() as $ownerId) {
@@ -77,8 +77,6 @@ final class FuryEffect extends AbstractMoodEffect implements RequiresOpponentDec
         foreach ($targets as $targetCardId) {
             $state->moveInPlayToDiscard($targetCardId);
         }
-
-        return [];
     }
 
     /** @return int[] */

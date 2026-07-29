@@ -57,10 +57,10 @@ final class IntimidationEffect extends AbstractMoodEffect implements RequiresOpp
         ];
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         if (!isset($answers[self::KEY])) {
-            return [];
+            return;
         }
 
         $targetPlayerId = $choices->requireInt('target_player_id');
@@ -72,7 +72,5 @@ final class IntimidationEffect extends AbstractMoodEffect implements RequiresOpp
 
         $state->giveHandCardToPlayer($targetPlayerId, $playerId, $revealedCardId);
         $state->grantExtraPlay(1, ['type' => 'specific_card_ids', 'values' => [$revealedCardId]], sourceCardId: $cardId);
-
-        return [];
     }
 }
