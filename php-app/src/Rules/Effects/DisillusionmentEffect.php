@@ -52,7 +52,7 @@ final class DisillusionmentEffect extends AbstractMoodEffect implements Requires
         return $requests;
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
     {
         $chosenColors = [];
         foreach ($this->queueOrder($state, $playerId) as $chosenPlayerId) {
@@ -82,6 +82,8 @@ final class DisillusionmentEffect extends AbstractMoodEffect implements Requires
                 $state->moveInPlayToDiscard($mood->cardId);
             }
         }
+
+        return [];
     }
 
     /** @return int[] every player at the table, starting after $playerId and wrapping to end with $playerId */

@@ -56,7 +56,7 @@ final class SuspicionEffect extends AbstractMoodEffect implements RequiresOppone
         return $requests;
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
     {
         $chosenPlayers = array_unique($choices->ints('player_ids'));
 
@@ -72,5 +72,7 @@ final class SuspicionEffect extends AbstractMoodEffect implements RequiresOppone
             }
             $state->moveHandToDiscard($chosenPlayerId, $discardedCardId);
         }
+
+        return [];
     }
 }

@@ -5169,8 +5169,15 @@ final class GameServiceIntegrationTest extends TestCase
         $firstRespondResult = $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => $candidate7Id]);
         self::assertTrue($firstRespondResult['pending_decision'] ?? false);
 
+        // The taken mood changes hands the moment p2 answers -- BEFORE p1
+        // is even asked what to give back, not held open until both
+        // answers are in. This is the whole point of the two-round split:
+        // by the time p1 answers, the just-received mood already shows up
+        // as one of their own moods, a genuinely legal "give it straight
+        // back" answer -- see testInstabilityCanGiveBackTheSameMoodItJustTook().
         $state = (new BoardStateRepository($registry))->load($gameId);
-        self::assertSame($p2, $state->ownerOf($candidate7Id)); // still p2's until p1 answers too
+        self::assertSame($p1, $state->ownerOf($candidate7Id));
+        self::assertSame($p2, $state->ownerOf($candidate3Id)); // the other candidate is untouched
 
         $finalRespondResult = $this->games->respondToDecision($gameId, $p1, ['given_mood_id' => $givenId]);
         self::assertArrayNotHasKey('pending_decision', $finalRespondResult);
@@ -5216,6 +5223,45 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p1, $state->ownerOf($candidate7Id));
         self::assertSame($p2, $state->ownerOf($instabilityId));
         self::assertTrue($state->isInPlay($instabilityId));
+    }
+
+    /**
+     * The bug this two-round split fixes: since the taken mood already
+     * changed hands by the time p1 is asked what to give back, handing
+     * that very same mood straight back is just "one of your moods", the
+     * same as any other -- not blocked the way it used to be.
+     */
+    public function testInstabilityCanGiveBackTheSameMoodItJustTookThroughARealRoundTrip(): void
+    {
+        $u1 = $this->insertUser('instabback1');
+        $u2 = $this->insertUser('instabback2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $instabilityId = $this->insertGameCard($gameId, 96, 'hand', $p1); // Instability
+        $keptId = $this->insertGameCard($gameId, 9, 'in_play', $p1); // p1's other mood
+        $candidate3Id = $this->insertGameCard($gameId, 3, 'in_play', $p2);
+        $candidate7Id = $this->insertGameCard($gameId, 7, 'in_play', $p2);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $instabilityId, [
+            'candidate_mood_ids' => [$candidate3Id, $candidate7Id],
+        ]);
+        $this->games->respondToDecision($gameId, $p2, ['taken_mood_id' => $candidate7Id]);
+        $finalRespondResult = $this->games->respondToDecision($gameId, $p1, ['given_mood_id' => $candidate7Id]);
+        self::assertArrayNotHasKey('pending_decision', $finalRespondResult);
+
+        $state = (new BoardStateRepository(DefaultEffectRegistry::build()))->load($gameId);
+        self::assertSame($p2, $state->ownerOf($candidate7Id)); // handed straight back
+        self::assertSame($p2, $state->ownerOf($candidate3Id)); // the other candidate is untouched
+        self::assertSame($p1, $state->ownerOf($keptId)); // unaffected -- not given away
     }
 
     /**

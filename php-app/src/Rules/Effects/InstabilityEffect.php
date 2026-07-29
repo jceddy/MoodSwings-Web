@@ -15,16 +15,30 @@ use MoodSwings\Rules\RequiresOpponentDecision;
  * Instability: "After playing this mood, you may choose two moods from
  * the same opponent. If you do, they choose one of those moods and give
  * it to you, then you give them one of your moods." Nothing in that text
- * excludes Instability itself from "one of your moods" -- giving it away
- * is a legal answer, same as BetrayalEffect's own identical situation --
- * but at the moment the up-front choices panel is filled out, Instability
- * is still sitting in hand, not yet in play, so a field sourced from the
- * board at that point could never legally offer it. Modeled as a second
- * RequiresOpponentDecision step targeting the acting player themselves
- * (KEY_GIVEN, resolved only after Instability has actually entered play),
- * the same way Betrayal defers its own self-give choice -- the first step
- * (KEY_TAKEN) still targets the opponent, who genuinely does answer it
- * themselves, choosing which of the two candidates to give up.
+ * excludes giving the very same mood straight back -- "one of your
+ * moods" includes it the instant it's actually yours, same as
+ * BetrayalEffect's own "may give itself away" situation -- but that's
+ * only true AFTER the first exchange has genuinely happened, matching the
+ * card's own "then" ordering. Modeled as two sequential
+ * RequiresOpponentDecision rounds rather than one parallel batch: round 1
+ * (KEY_TAKEN, targeting the opponent) asks which of the two candidates to
+ * give up; resolveDecisions() applies that transfer and returns a
+ * follow-up KEY_GIVEN request (targeting the acting player themselves,
+ * deferred for the same "not resolvable until the board reflects it yet"
+ * reason Betrayal/Pride defer their own self-targeting choices) only once
+ * the taken mood is actually the acting player's own -- so it's a
+ * genuinely legal, offerable answer to "one of your moods", not merely an
+ * unblocked exclusion.
+ *
+ * The two rounds are told apart purely by which key $answers contains --
+ * round 2 never re-submits KEY_TAKEN, so $opponentId (no longer present
+ * in round 2's own answers) is recovered by elimination over this
+ * invocation's own `candidate_mood_ids` choice: whichever of the two
+ * original candidates ISN'T owned by the acting player once round 1 has
+ * applied is necessarily still the opponent's, since nothing else can
+ * interleave and change that card's ownership mid-resolution (one open
+ * decision batch per game at a time, under the same per-game lock this
+ * whole pause/resume mechanism already relies on).
  */
 final class InstabilityEffect extends AbstractMoodEffect implements RequiresOpponentDecision
 {
@@ -65,6 +79,34 @@ final class InstabilityEffect extends AbstractMoodEffect implements RequiresOppo
                     'label' => 'Choose one of these two moods to give up',
                 ],
             ),
+        ];
+    }
+
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    {
+        if (isset($answers[self::KEY_GIVEN])) {
+            return $this->resolveGivenMood($state, $playerId, $choices, $answers);
+        }
+
+        if (!isset($answers[self::KEY_TAKEN])) {
+            return [];
+        }
+
+        return $this->resolveTakenMood($state, $playerId, $choices, $answers);
+    }
+
+    /** @param array<string, PlayerChoices> $answers */
+    private function resolveTakenMood(BoardState $state, int $playerId, PlayerChoices $choices, array $answers): array
+    {
+        $candidateMoodIds = $choices->ints('candidate_mood_ids');
+        $takenCardId = $answers[self::KEY_TAKEN]->requireInt(self::KEY_TAKEN);
+        if (!in_array($takenCardId, $candidateMoodIds, true)) {
+            throw new InvalidChoiceException("Card {$takenCardId} was not one of the offered candidates");
+        }
+
+        $state->giveInPlayToPlayer($takenCardId, $playerId);
+
+        return [
             new PendingDecisionRequest(
                 key: self::KEY_GIVEN,
                 targetPlayerId: $playerId,
@@ -74,31 +116,29 @@ final class InstabilityEffect extends AbstractMoodEffect implements RequiresOppo
                     'type' => 'mood',
                     'scope' => 'own',
                     'required' => true,
-                    'label' => 'Choose one of your moods to give in exchange (Instability itself is a valid choice)',
+                    'label' => 'Choose one of your moods to give in exchange (the mood you just received, or Instability itself, are valid choices)',
                 ],
             ),
         ];
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
+    /** @param array<string, PlayerChoices> $answers */
+    private function resolveGivenMood(BoardState $state, int $playerId, PlayerChoices $choices, array $answers): array
     {
-        if (!isset($answers[self::KEY_TAKEN])) {
-            return;
+        $opponentId = $playerId;
+        foreach ($choices->ints('candidate_mood_ids') as $candidateCardId) {
+            if ($state->ownerOf($candidateCardId) !== $playerId) {
+                $opponentId = $state->ownerOf($candidateCardId);
+                break;
+            }
         }
-
-        $candidateMoodIds = $choices->ints('candidate_mood_ids');
-        $takenCardId = $answers[self::KEY_TAKEN]->requireInt(self::KEY_TAKEN);
-        if (!in_array($takenCardId, $candidateMoodIds, true)) {
-            throw new InvalidChoiceException("Card {$takenCardId} was not one of the offered candidates");
-        }
-
-        $opponentId = $state->ownerOf($takenCardId);
-        $state->giveInPlayToPlayer($takenCardId, $playerId);
 
         $givenCardId = $answers[self::KEY_GIVEN]->requireInt(self::KEY_GIVEN);
-        if (!$state->isInPlay($givenCardId) || $state->ownerOf($givenCardId) !== $playerId || $givenCardId === $takenCardId) {
-            throw new InvalidChoiceException("Card {$givenCardId} is not one of player {$playerId}'s other moods in play");
+        if (!$state->isInPlay($givenCardId) || $state->ownerOf($givenCardId) !== $playerId) {
+            throw new InvalidChoiceException("Card {$givenCardId} is not one of player {$playerId}'s moods in play");
         }
         $state->giveInPlayToPlayer($givenCardId, $opponentId);
+
+        return [];
     }
 }
