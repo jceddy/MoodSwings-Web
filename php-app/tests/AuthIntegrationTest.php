@@ -9,8 +9,10 @@ use MoodSwings\Auth\DuplicateEmailException;
 use MoodSwings\Auth\DuplicateUsernameException;
 use MoodSwings\Auth\EmailNotVerifiedException;
 use MoodSwings\Auth\InvalidCredentialsException;
+use MoodSwings\Auth\InvalidPasswordResetTokenException;
 use MoodSwings\Auth\InvalidVerificationTokenException;
 use MoodSwings\Repository\EmailVerificationRepository;
+use MoodSwings\Repository\PasswordResetRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserRepository;
 use PDO;
@@ -42,6 +44,7 @@ final class AuthIntegrationTest extends TestCase
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE email_verifications');
+        $pdo->exec('TRUNCATE TABLE password_resets');
         $pdo->exec('TRUNCATE TABLE sessions');
         $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
@@ -55,7 +58,13 @@ final class AuthIntegrationTest extends TestCase
 
         // resendMinIntervalSeconds: 0 so tests can resend immediately after
         // registering; the default cooldown is covered by a dedicated test.
-        $this->auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository(), 0);
+        $this->auth = new AuthService(
+            new UserRepository(),
+            new SessionRepository(),
+            new EmailVerificationRepository(),
+            new PasswordResetRepository(),
+            0
+        );
     }
 
     /**
@@ -242,7 +251,12 @@ final class AuthIntegrationTest extends TestCase
     {
         // Uses the real default cooldown (unlike $this->auth, which disables
         // it above for test convenience) to confirm production behavior.
-        $auth = new AuthService(new UserRepository(), new SessionRepository(), new EmailVerificationRepository());
+        $auth = new AuthService(
+            new UserRepository(),
+            new SessionRepository(),
+            new EmailVerificationRepository(),
+            new PasswordResetRepository()
+        );
         $auth->register('kevin', 'kevin@example.com', 'correcthorsebattery', null);
 
         self::assertNull($auth->resendVerificationEmail('kevin@example.com'));
@@ -257,5 +271,86 @@ final class AuthIntegrationTest extends TestCase
         // The username and email are free again after cancellation.
         $reregistered = $this->auth->register('gina', 'gina@example.com', 'anotherpassword', null);
         self::assertSame('gina', $reregistered['user']['username']);
+    }
+
+    public function testRequestPasswordResetSendsTokenForKnownEmail(): void
+    {
+        $this->registerAndVerify('molly');
+
+        $result = $this->auth->requestPasswordReset('molly@example.com');
+
+        self::assertNotNull($result);
+        self::assertSame('molly', $result['user']['username']);
+        self::assertNotEmpty($result['resetToken']);
+    }
+
+    public function testRequestPasswordResetWorksForUnverifiedUser(): void
+    {
+        $this->auth->register('nora', 'nora@example.com', 'correcthorsebattery', null);
+
+        self::assertNotNull($this->auth->requestPasswordReset('nora@example.com'));
+    }
+
+    public function testRequestPasswordResetReturnsNullForUnknownEmail(): void
+    {
+        self::assertNull($this->auth->requestPasswordReset('nobody@example.com'));
+    }
+
+    public function testRequestPasswordResetRespectsDefaultCooldown(): void
+    {
+        // Uses the real default cooldown (unlike $this->auth, which disables
+        // it above for test convenience) to confirm production behavior.
+        $auth = new AuthService(
+            new UserRepository(),
+            new SessionRepository(),
+            new EmailVerificationRepository(),
+            new PasswordResetRepository()
+        );
+        $auth->register('oscar', 'oscar@example.com', 'correcthorsebattery', null);
+
+        self::assertNotNull($auth->requestPasswordReset('oscar@example.com'));
+        self::assertNull($auth->requestPasswordReset('oscar@example.com'));
+    }
+
+    public function testResetPasswordUpdatesHashAndConsumesToken(): void
+    {
+        $this->registerAndVerify('penny');
+        $reset = $this->auth->requestPasswordReset('penny@example.com');
+
+        $user = $this->auth->resetPassword($reset['resetToken'], 'brandnewpassword');
+        self::assertSame('penny', $user['username']);
+
+        $login = $this->auth->login('penny', 'brandnewpassword', null, null);
+        self::assertSame('penny', $login['user']['username']);
+
+        $this->expectException(InvalidPasswordResetTokenException::class);
+        $this->auth->resetPassword($reset['resetToken'], 'anotherpassword');
+    }
+
+    public function testResetPasswordRejectsInvalidToken(): void
+    {
+        $this->expectException(InvalidPasswordResetTokenException::class);
+        $this->auth->resetPassword(bin2hex(random_bytes(32)), 'brandnewpassword');
+    }
+
+    public function testResetPasswordRejectsShortPassword(): void
+    {
+        $this->registerAndVerify('quinn');
+        $reset = $this->auth->requestPasswordReset('quinn@example.com');
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->auth->resetPassword($reset['resetToken'], 'short');
+    }
+
+    public function testResetPasswordInvalidatesExistingSessions(): void
+    {
+        $this->registerAndVerify('rachel');
+        $login = $this->auth->login('rachel', 'correcthorsebattery', null, null);
+        self::assertNotNull($this->auth->currentUser($login['token']));
+
+        $reset = $this->auth->requestPasswordReset('rachel@example.com');
+        $this->auth->resetPassword($reset['resetToken'], 'brandnewpassword');
+
+        self::assertNull($this->auth->currentUser($login['token']));
     }
 }

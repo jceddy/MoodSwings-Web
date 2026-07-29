@@ -454,3 +454,10 @@ half-migrated schema.
   was already correct); `HesitationEffect` is fixed in the same change
   to actually let a player decline (no `mode` submitted) instead of
   throwing.
+- **Password reset** (`0057`): `password_resets` (`user_id`, `token_hash`
+  `CHAR(64)`, `expires_at`), the exact same shape as `email_verifications`
+  -- a single-use, expiring, hashed token tied to a user, consumed by
+  `PasswordResetRepository::consumeValid()`'s select-then-delete (the same
+  replay-proof pattern `discord_oauth_states` already uses, rather than
+  `email_verifications`'s separate lookup-then-later-delete calls). See
+  "Password reset" in `php-app/README.md`.

@@ -57,6 +57,12 @@ final class SessionRepository
         $stmt->execute(['token_hash' => $tokenHash]);
     }
 
+    public function deleteAllForUser(int $userId): void
+    {
+        $stmt = Connection::get()->prepare('DELETE FROM sessions WHERE user_id = :user_id');
+        $stmt->execute(['user_id' => $userId]);
+    }
+
     /**
      * Online/presence indicator (issue #110) -- the most recent
      * last_seen_at among each user's own currently-valid (non-expired)

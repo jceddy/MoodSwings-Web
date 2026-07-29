@@ -58,6 +58,12 @@ final class UserRepository
         $stmt->execute(['id' => $id]);
     }
 
+    public function updatePasswordHash(int $id, string $passwordHash): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET password_hash = :password_hash WHERE id = :id');
+        $stmt->execute(['password_hash' => $passwordHash, 'id' => $id]);
+    }
+
     /**
      * Online/presence indicator (issue #110) -- whether this user allows
      * their derived online/offline status to be shown to friends and
