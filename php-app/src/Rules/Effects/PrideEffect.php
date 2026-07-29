@@ -87,15 +87,15 @@ final class PrideEffect extends AbstractMoodEffect implements RequiresOpponentDe
         ];
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         if (!isset($answers[self::KEY])) {
-            return [];
+            return;
         }
 
         $chosenPlayerId = $answers[self::KEY]->int(self::KEY);
         if ($chosenPlayerId === null) {
-            return [];
+            return;
         }
 
         if (!in_array($chosenPlayerId, $state->activePlayerOrder(), true)) {
@@ -107,7 +107,5 @@ final class PrideEffect extends AbstractMoodEffect implements RequiresOpponentDe
         }
 
         $state->grantExtraPlay(1, ['requiresBehindPlayer' => $chosenPlayerId], sourceCardId: $cardId);
-
-        return [];
     }
 }

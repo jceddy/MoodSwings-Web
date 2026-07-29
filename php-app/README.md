@@ -445,9 +445,7 @@ one for Suspicion/Disillusionment's per-chosen-player queues, or
 Avoidance/Confusion/Fury's per-everyone-with-a-qualifying-card ones) instead
 of picking randomly; `resolveDecisions()` is the old post-decision
 mutation code, reading each answer by its own request key instead of
-`array_rand()`, and returning any further `PendingDecisionRequest`s that
-only become askable once this round's own mutation has landed (`[]` for
-every implementer except `InstabilityEffect` — see below). `MoodPlayService::playMood()` returns a `PlayResult`
+`array_rand()`. `MoodPlayService::playMood()` returns a `PlayResult`
 rather than `void`: `isPending: true` the moment any decision is
 outstanding, at which point the played card is already fully in play
 (cost paid, grant spent) but nothing past that point has happened yet —
@@ -531,46 +529,24 @@ included) with no candidate-exclusion placeholder, so nothing had to be
 taught that this one card's own decision is a legal answer to itself.
 
 `InstabilityEffect` reuses this exact same self-give pattern for the same
-reason, but its own two decisions have a genuine data dependency the other
-eleven implementers don't: the *second* choice ("give one of your own
-moods back") can't be legally offered — not merely excluded by a special
-case, but actually absent from the board — until the *first* choice's own
-mutation (the opponent handing over the taken mood) has actually happened,
-since "one of your moods" has to include whatever was just received.
-Bundling both into one `pendingDecisionsFor()` batch (the original design)
-got this wrong two ways at once: the taken mood's ownership transfer was
-deferred inside `resolveDecisions()` until *both* answers were already in,
-so even with the two requests correctly step-ordered, the acting player's
-own field was always computed and rendered against the *pre-transfer*
-board — and `resolveDecisions()` additionally had an explicit
-`$givenCardId === $takenCardId` exclusion blocking the one answer that
-would've been correct once the mood genuinely was theirs. `resolveDecisions()`
-is why `RequiresOpponentDecision`'s own return type is `array` (of
-`PendingDecisionRequest`s) rather than `void`: almost every implementer
-still returns `[]` (fully resolved), but `InstabilityEffect` now runs as
-two genuinely sequential rounds within that one method, told apart by
-which key `$answers` contains. Round 1 (`taken_mood_id` present) validates
-and applies the opponent's own choice — `$state->giveInPlayToPlayer()`
-runs immediately, right here, not deferred — then *returns* a new
-`PendingDecisionRequest` for `given_mood_id` (targeting the acting player,
-`type: mood, scope: own`, `required: true`) instead of that request ever
-having been part of the original batch. `MoodPlayService` treats a
-non-empty return from `resolveDecisions()` exactly like a non-empty
-return from `pendingDecisionsFor()` — pausing again with a fresh
-`PlayResult::pending()` — so `GameService::respondToDecision()` needed no
-changes at all: it already handles `$result->isPending` generically,
-writing a brand new `game_pending_decision_batches` row (same
-`invocation_seq`, since this isn't a Duplicity repeat) whose field is
-computed from the *already-mutated* board. By the time round 2 (`given_mood_id`
-present, `taken_mood_id` absent) actually runs, the just-received mood
-already shows up as one of the acting player's own moods like any other —
-handing it straight back is a legal, offered answer, not a special case
-to unblock. Round 2 recovers the opponent's id (no longer present in its
-own `$answers`) by elimination over this invocation's own
-`candidate_mood_ids` choice: whichever of the two original candidates
-*isn't* owned by the acting player is necessarily still the opponent's,
-since one game-wide lock and one open decision batch per round guarantee
-nothing else can interleave and change that card's ownership in between.
+reason, but as a *second* step in its own batch rather than Betrayal's
+only one: its printed text ("they choose one of those moods and give it
+to you, then you give them one of your moods") doesn't exclude Instability
+itself from "one of your moods" either, but `given_mood_id` used to be
+collected up front alongside `candidate_mood_ids` -- before Instability
+had actually entered play, so it could never legally be offered. Now
+`pendingDecisionsFor()` returns *two* `PendingDecisionRequest`s: step 0 is
+unchanged (`taken_mood_id`, targeting the opponent, choosing which
+candidate to give up), step 1 targets the *acting* player (`given_mood_id`,
+`type: mood, scope: own`, `required: true`) and is only answerable once
+step 0 resolves, by which point Instability is already in play and
+legitimately included as a candidate -- the same step-ordering/multiple-
+different-targets machinery Suspicion's/Disillusionment's own multi-player
+queues already exercise, just with two steps instead of several. Always
+asked once the exchange is initiated (no further "may" once two candidates
+are chosen), so `resolveDecisions()` only skips the whole thing when
+`pendingDecisionsFor()` itself already returned `[]` for a fully-declined
+play.
 
 `PrideEffect` is a twelfth implementer, self-targeted the same way as
 Betrayal/Instability's own deferred step, but for a different reason again:

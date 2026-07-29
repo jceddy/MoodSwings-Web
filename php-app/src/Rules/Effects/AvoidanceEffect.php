@@ -60,7 +60,7 @@ final class AvoidanceEffect extends AbstractMoodEffect implements RequiresOppone
         return $requests;
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         $direction = $choices->requireString('direction');
 
@@ -86,7 +86,5 @@ final class AvoidanceEffect extends AbstractMoodEffect implements RequiresOppone
         foreach ($transfers as $moodCardId => $recipientId) {
             $state->giveInPlayToPlayer($moodCardId, $recipientId);
         }
-
-        return [];
     }
 }

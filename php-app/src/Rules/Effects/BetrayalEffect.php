@@ -74,7 +74,7 @@ final class BetrayalEffect extends AbstractMoodEffect implements RequiresOpponen
         ];
     }
 
-    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): void
     {
         $targetCardId = $answers[self::KEY]->requireInt(self::KEY);
         if (!$state->isInPlay($targetCardId) || $state->ownerOf($targetCardId) !== $playerId) {
@@ -85,7 +85,5 @@ final class BetrayalEffect extends AbstractMoodEffect implements RequiresOpponen
 
         $state->giveInPlayToPlayer($targetCardId, $recipientPlayerId);
         $state->setEffectState($targetCardId, 'returnsToOwnerAfterScoring', ['sourceCardId' => $cardId, 'ownerId' => $playerId]);
-
-        return [];
     }
 }
