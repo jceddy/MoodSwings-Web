@@ -10297,4 +10297,112 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNotContains($waitingGameId, array_column($result, 'id'));
         self::assertNotContains($completedGameId, array_column($result, 'id'));
     }
+
+    /**
+     * Issue #99 "download complete serialized game data": a raw dump of
+     * every table with any FK relationship to this game, not just the
+     * curated human-readable view fullEventLog() (#98) already covers --
+     * see GameService::exportGameData()'s own docblock.
+     */
+    public function testExportGameDataIncludesEveryGameScopedTable(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
+
+        $this->games->playMood($gameId, $p1, $apathyId, []);
+        $round = $this->fetchRound($gameId);
+        $roundId = (int) $round['id'];
+
+        $this->pdo->prepare(
+            'INSERT INTO game_round_scores (game_round_id, game_player_id, score) VALUES (:round_id, :player_id, :score)'
+        )->execute(['round_id' => $roundId, 'player_id' => $p1, 'score' => 7]);
+
+        $this->pdo->prepare(
+            'INSERT INTO game_pending_decision_batches (game_id, game_round_id, played_card_id, initiating_game_player_id, top_level_choices, invocation_choices, resolved_at)
+             VALUES (:game_id, :round_id, :card_id, :initiator, \'{}\', \'{}\', NOW())'
+        )->execute(['game_id' => $gameId, 'round_id' => $roundId, 'card_id' => $apathyId, 'initiator' => $p1]);
+        $batchId = (int) $this->pdo->lastInsertId();
+
+        $this->pdo->prepare(
+            'INSERT INTO game_pending_decisions (batch_id, step_index, target_game_player_id, decision_type, field)
+             VALUES (:batch_id, 0, :target, \'export_test_decision\', \'{"key":"export_test_field"}\')'
+        )->execute(['batch_id' => $batchId, 'target' => $p2]);
+
+        $this->insertTeamDecision($gameId, $roundId, 0, 'turn_order', [$p1, $p2]);
+
+        $this->pdo->prepare(
+            'INSERT INTO game_initial_card_passes (game_id, game_player_id, card_ids) VALUES (:game_id, :player_id, :card_ids)'
+        )->execute(['game_id' => $gameId, 'player_id' => $p1, 'card_ids' => json_encode([$apathyId])]);
+
+        $this->games->saveNote($gameId, $p1, 'p1 own note');
+
+        $export = $this->games->exportGameData($gameId, $p1);
+
+        self::assertSame($gameId, (int) $export['game']['id']);
+        self::assertSame('standard', $export['game']['format']);
+
+        self::assertCount(3, $export['game_players']);
+        self::assertSame([$p1, $p2], array_slice(array_map('intval', array_column($export['game_players'], 'id')), 0, 2));
+
+        self::assertCount(1, $export['game_rounds']);
+        self::assertSame($roundId, (int) $export['game_rounds'][0]['id']);
+
+        self::assertCount(1, $export['game_round_scores']);
+        self::assertSame(7, (int) $export['game_round_scores'][0]['score']);
+        self::assertSame($p1, (int) $export['game_round_scores'][0]['game_player_id']);
+
+        self::assertGreaterThanOrEqual(5, count($export['game_cards']));
+
+        self::assertNotEmpty($export['game_events']);
+        self::assertIsArray($export['game_events'][0]['details']);
+
+        self::assertCount(1, $export['game_pending_decision_batches']);
+        self::assertSame([], $export['game_pending_decision_batches'][0]['top_level_choices']);
+        self::assertSame([], $export['game_pending_decision_batches'][0]['invocation_choices']);
+
+        self::assertCount(1, $export['game_pending_decisions']);
+        self::assertSame(['key' => 'export_test_field'], $export['game_pending_decisions'][0]['field']);
+
+        self::assertCount(1, $export['game_team_decisions']);
+        self::assertSame([$p1, $p2], $export['game_team_decisions'][0]['candidate_game_player_ids']);
+
+        self::assertCount(1, $export['game_initial_card_passes']);
+        self::assertSame([$apathyId], $export['game_initial_card_passes'][0]['card_ids']);
+
+        self::assertCount(1, $export['game_notes']);
+        self::assertSame('p1 own note', $export['game_notes'][0]['note_text']);
+
+        self::assertNull($export['draft_match']);
+        self::assertSame([], $export['draft_match_players']);
+        self::assertSame([], $export['draft_round_picks']);
+        self::assertNull($export['draft_winston_state']);
+        self::assertNull($export['draft_grid_state']);
+    }
+
+    public function testExportGameDataOnlyIncludesTheRequestingPlayersOwnNote(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2] = $this->buildThreePlayerFixture();
+
+        $this->games->saveNote($gameId, $p1, 'p1 private note');
+        $this->games->saveNote($gameId, $p2, 'p2 private note');
+
+        $export = $this->games->exportGameData($gameId, $p1);
+
+        self::assertCount(1, $export['game_notes']);
+        self::assertSame('p1 private note', $export['game_notes'][0]['note_text']);
+    }
+
+    public function testExportGameDataIncludesDraftMatchDataForADraftGame(): void
+    {
+        $u1 = $this->insertUser('export-draft-u1');
+        $u2 = $this->insertUser('export-draft-u2');
+
+        $gameId = $this->games->createGame($u1, [$u1, $u2], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $export = $this->games->exportGameData($gameId, $p1);
+
+        self::assertNotNull($export['draft_match']);
+        self::assertSame($export['game']['draft_match_id'], $export['draft_match']['id']);
+        self::assertCount(2, $export['draft_match_players']);
+    }
 }

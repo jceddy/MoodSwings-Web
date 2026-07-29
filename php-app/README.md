@@ -77,6 +77,7 @@ maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
+| GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
@@ -2641,6 +2642,59 @@ A typical game's event count (rarely more than a few hundred rows even
 for a long multiplayer game) is small enough that returning the whole
 thing in one response was judged simpler than adding pagination for a
 case that doesn't actually need it.
+
+### Download complete game data (issue #99)
+
+`GET /games/export` (`GameService::exportGameData()`) is a different
+scope than "Game log" above: that one is a curated, human-readable
+rendering of `game_events` alone; this one is a raw, complete dump of
+every DB row related to a game, across every table with any FK
+relationship (direct or transitive) to `games.id` --
+`game_players`/`game_rounds`/`game_round_scores`/`game_cards`/
+`game_events`/`game_pending_decision_batches`/`game_pending_decisions`/
+`game_team_decisions`/`game_initial_card_passes`, plus the requesting
+player's own `game_notes` row (never another seated player's -- see
+below) and, for a Quick/Winston/Grid Draft game, a `draft_match` section.
+Directly motivated by a future "clean up old completed/abandoned games"
+feature (issue #84): once that lands, this needs to already exist so a
+player who cares about a specific game has a way to keep an offline copy
+before it's gone.
+
+Access is deliberately narrower than every other "view this game" route:
+seated players only (`requireGamePlayer()`, the same gate `GET
+/games/state` uses), no spectator path at all -- this is meant as one
+player's own personal archive, not a shareable view.
+
+Every JSON-typed column (`game_cards.effect_state`,
+`game_events.details`, `game_pending_decisions.field`/`answer`, every
+`*_card_ids`/`*_game_player_ids` column, etc.) is decoded into a real
+nested value rather than left as an escaped string -- MySQL's `JSON`
+column type has no native PDO binding, so a plain `SELECT *` would
+otherwise return each of these as JSON-inside-JSON. Which columns get
+this treatment is an explicit per-table list
+(`GameService::JSON_COLUMNS_BY_TABLE`) rather than a heuristic ("decode
+any string starting with `{`/`[`"), specifically so a private note
+(`game_notes.note_text`) that happens to look like JSON is never
+misinterpreted.
+
+`game_notes` is scoped to only the *requesting* player's own note --
+it's a deliberately private per-seat scratchpad (see
+`GameNoteRepository`), and triggering an export has no business
+revealing what a different seated player privately wrote to themselves.
+
+For a Quick/Winston/Grid Draft game (`games.draft_match_id` set), the
+export additionally includes `draft_match`/`draft_match_players`/
+`draft_round_picks`/`draft_winston_state`/`draft_grid_state`. One
+`draft_matches` row is shared across up to 3 `games` rows in a
+best-of-three match (see migration 0027's own docblock), so this section
+reflects the *whole* match's draft history, not just the exported game's
+own slice of it -- the sibling games' own `games`/`game_players`/etc rows
+are never included, only the requested game's.
+
+The lobby's "Download data" button (next to "View log") fetches this and
+hands it straight to the same `downloadFile()` helper the game log's own
+"download data" button already uses, saving it as
+`game-<id>-export.json`.
 
 ### Shared deck view (issue #197)
 

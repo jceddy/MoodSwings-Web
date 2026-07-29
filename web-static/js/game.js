@@ -1645,6 +1645,12 @@
         const canPlay = game.status === 'waiting' || game.status === 'in_progress';
         actionsEl.appendChild(actionButton(canPlay ? 'Play' : 'View', () => showBoard(game.id)));
         actionsEl.appendChild(actionButton('View log', () => openGameLog(game.id)));
+        // Download complete game data (issue #99) -- a raw, complete
+        // per-table dump meant for offline archiving, unlike "View log"'s
+        // curated human-readable event history above (see
+        // GameService::exportGameData()'s own docblock for exactly how
+        // the two differ in scope).
+        actionsEl.appendChild(actionButton('Download data', () => downloadGameExport(game.id)));
         // Watch game replay (issue #240) -- only once a game is actually
         // 'completed' (see GameService::replayStateAsOf()'s own identical
         // requirement); a still-in-progress game has nothing finished to
@@ -2588,6 +2594,19 @@
         link.click();
         link.remove();
         URL.revokeObjectURL(url);
+    }
+
+    // Download complete game data (issue #99) -- fetches the raw per-table
+    // export and hands it straight to downloadFile() above, the same way
+    // the game-log dialog's own "download data" button already does for
+    // its narrower, human-curated event list.
+    async function downloadGameExport(gameId) {
+        const { ok, body } = await getGameExport(gameId);
+        if (!ok) {
+            window.alert('Could not download this game\'s data.');
+            return;
+        }
+        downloadFile('game-' + gameId + '-export.json', JSON.stringify(body.export, null, 2), 'application/json');
     }
 
     async function openGameLog(gameId) {
