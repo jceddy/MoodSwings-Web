@@ -1577,7 +1577,10 @@ too, proportional to the smaller card width.
     dialog, this has no preview UI of its own: `downloadGameExport()`
     fetches the export and hands it straight to the same `downloadFile()`
     helper "Download data" in the game-log dialog already uses, saving it
-    as `game-<id>-export.json`.
+    as `game-<id>-export.json`. Only shown once a game's own `status` is
+    `'completed'` -- same "actually done" gating as "Watch replay" right
+    below it, rather than offering an archive snapshot of a game whose
+    data is still actively changing.
 
     **Shared deck view (issue #197).** Until now, the board only ever
     showed a deck *count* (`Deck: N cards left`) and, for `custom`, the

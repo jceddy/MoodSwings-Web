@@ -1649,8 +1649,13 @@
         // per-table dump meant for offline archiving, unlike "View log"'s
         // curated human-readable event history above (see
         // GameService::exportGameData()'s own docblock for exactly how
-        // the two differ in scope).
-        actionsEl.appendChild(actionButton('Download data', () => downloadGameExport(game.id)));
+        // the two differ in scope). Only offered once a game is actually
+        // 'completed' -- archiving is meant for a game that's truly done,
+        // not a still-'waiting'/'in_progress' one whose data will keep
+        // changing.
+        if (game.status === 'completed') {
+            actionsEl.appendChild(actionButton('Download data', () => downloadGameExport(game.id)));
+        }
         // Watch game replay (issue #240) -- only once a game is actually
         // 'completed' (see GameService::replayStateAsOf()'s own identical
         // requirement); a still-in-progress game has nothing finished to
