@@ -2652,6 +2652,68 @@ only which list it's found in.
 the feature to exactly what was asked for; nothing currently reads
 `GET /games/past` and expects abandoned games there.
 
+### Cleanup cron (issue #84)
+
+Past games alone doesn't actually delete anything -- an old game just
+moves to a different list forever. `bin/expire_and_delete_stale_games.php`
+(meant to run once a day via cron) is the follow-up that actually cleans
+up the database, in two passes over the same staleness definition every
+other "how stale is this game" check in this file already uses
+(`COALESCE(last_move_at, started_at, created_at)`):
+
+1. **`GameService::deleteStaleCompletedGames(int $olderThanDays = 7)`** --
+   permanently `DELETE`s every `'completed'` game whose last activity is
+   older than `$olderThanDays`. An outcome that's already settled and
+   hasn't been looked at in over a week has nothing left worth keeping.
+   `DELETE FROM games` cascades (`ON DELETE CASCADE`, directly or
+   transitively via `game_players`/`game_rounds`/
+   `game_pending_decision_batches`) to every other per-game table --
+   `game_players`, `game_rounds`, `game_round_scores`, `game_cards`,
+   `game_events`, `game_pending_decision_batches`, `game_team_decisions`,
+   `game_initial_card_passes`, `game_notes` -- see `database/README.md`.
+   A Quick/Winston/Grid Draft match (`draft_matches`) has no FK pointing
+   back to `games`, so it's untouched by that cascade; this method
+   separately deletes any `draft_matches` row left with zero games still
+   referencing it (which itself cascades to
+   `draft_match_players`/`draft_round_picks`/`draft_winston_state`/
+   `draft_grid_state`), so a match never outlives every game that was
+   ever part of it.
+2. **`GameService::expireStaleActiveGames(int $olderThanDays = 7)`** --
+   any game NOT already `'completed'` (so `'waiting'`/`'in_progress'`/
+   `'abandoned'`) whose last activity is ALSO older than
+   `$olderThanDays` gets force-ended instead of deleted outright: a
+   `'game_expired'` event is logged (`describeEvent()` renders it as
+   "This game was automatically ended due to inactivity" -- its own
+   explicit `match` arm, since `acting_game_player_id`/`card_id` are both
+   `null` and the generic "{actor} played {card}" default would
+   otherwise misrender it) and `status` flips straight to `'completed'`
+   with `completed_at` set, but no winner (`winner_game_player_id`/
+   `winner_team_id` are both left `null`) -- `gameSummaryFor()`'s/the
+   board's own "Game over" line already handle a completed game with no
+   winner cleanly (same code path a resigned/tied game can already hit).
+   Deliberately does NOT try to gracefully wind down whatever mid-round
+   state the game was frozen in (an open `game_rounds` row, a pending
+   decision, cards still in hand/in play) the way `resignGame()` does for
+   a player-initiated resignation -- nobody is coming back to finish a
+   game this stale, so there's nothing left to reconcile, just a status
+   flip. The now-completed game composes automatically with everything
+   above: it moves straight to `GET /games/past` on its own (or stays in
+   `GET /games` if it's mid an undecided draft match, exactly like a
+   naturally-completed game 1 would), and will itself become eligible for
+   deletion by pass 1 above on some future run once it's been stale for
+   long enough in turn. Each candidate game is re-checked for staleness a
+   second time from inside `withGameLock()` right before mutating it, in
+   case a player's own action raced with the cron between the initial
+   `SELECT` and the lock being acquired.
+
+Both methods return an `int` count of games affected, and
+`bin/expire_and_delete_stale_games.php` prints a one-line summary.
+Example crontab line (once daily, 3am):
+
+```
+0 3 * * * /usr/bin/php /path/to/php-app/bin/expire_and_delete_stale_games.php >> /var/log/moodswings-game-cleanup.log 2>&1
+```
+
 ### Game log (issue #98)
 
 `GET /games/log` (`GameService::fullEventLog()`) returns a game's entire
