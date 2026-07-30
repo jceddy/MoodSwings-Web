@@ -2183,18 +2183,27 @@ their own sections below rather than repeated here):
   is 24 cards per seated player (48/72/96 for 2/3/4), and
   `quickDraftRounds()` is chosen per player count so everyone clears at
   least a 16-card pool: 4 rounds for 2 players (16 total), 3 rounds for
-  3 (18 total), 2 rounds for 4 (16 total). A fixed-size pool source
-  short of the target (`structure`'s 45) isn't padded at build time --
-  the existing discard-reshuffle top-up in `dealQuickDraftRound()`
-  already covers the shortfall generically as the draft proceeds,
-  exactly as it already did for a 2-player `structure` pool.
-  `jceddys_75` is the one exception: at exactly 4 players (96 needed),
-  `buildDraftPool()` itself swaps in `buildJceddys150DeckCardIds()`'s own
-  150-card pool instead of the plain 75-card one (see "jceddy's 150 Card
-  deck" below), so this specific case never needs the reshuffle top-up
-  either. `quickDraftMinCustomPoolSize()` (the floor for a `'custom'`
-  pool) is one structure-deck's worth (45) per 2 seated players, rounding
-  up -- 45 for 2p, 90 for 3-4p.
+  3 (18 total), 2 rounds for 4 (16 total). `structure`'s 45-card pool is
+  doubled (2 copies concatenated, then truncated down to the target if
+  over) for 3-4 players, same as Winston Draft's own `structure` handling
+  -- a single 45-card copy falls short of either target even with
+  `dealQuickDraftRound()`'s own discard-reshuffle top-up, since there's
+  nothing yet to reshuffle before round 1 is even dealt (this was a real
+  bug, not a deliberate design choice: an earlier version of this pool
+  source left `structure` undoubled for Quick Draft, silently producing a
+  4-player draft whose custom-pool floor -- see below -- a `structure`
+  pool of the same player count didn't itself have to meet). The doubled
+  90-card pool is still 6 cards short of the 4-player target (96) --
+  that residual gap is what the discard-reshuffle top-up actually
+  covers, not the entire 45-to-96 shortfall. `jceddys_75` is the one
+  pool source that never needs the reshuffle top-up at all: at exactly 4
+  players (96 needed), `buildDraftPool()` itself swaps in
+  `buildJceddys150DeckCardIds()`'s own 150-card pool instead of the plain
+  75-card one (see "jceddy's 150 Card deck" below), comfortably covering
+  that target outright. `quickDraftMinCustomPoolSize()` (the floor for a
+  `'custom'` pool) is one structure-deck's worth (45) per 2 seated
+  players, rounding up -- 45 for 2p, 90 for 3-4p -- matching exactly what
+  the doubled built-in `structure` pool source now actually produces.
 - **jceddy's 150 Card deck** (`buildJceddys150DeckCardIds()`,
   `JCEDDYS_150_DECK_RARITY_SPEC`) -- shared by Quick Draft's and Grid
   Draft's own 4-player `jceddys_75` pool sourcing (both go through the
