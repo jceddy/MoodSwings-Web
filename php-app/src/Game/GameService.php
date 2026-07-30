@@ -201,25 +201,60 @@ final class GameService
     private const QUICK_DRAFT_MIN_DECK_SIZE = 12;
 
     /**
-     * Winston Draft (issue #89, format 'draft' alongside 'quick_draft'):
-     * players alternately take-or-pass on 3 growing face-down piles dealt
-     * from a shared shuffled pool of up to this many cards (matching the
-     * physical rules' own "Total number of cards drafted: 45", the same
-     * size as MSW's own Structure deck) -- see initializeWinstonDraft()/
-     * submitWinstonDraftPick(). Unlike Quick Draft's fixed 16-per-player
-     * result, the number of cards each player ends up with here varies
-     * with how the draft unfolds, so there's no WINSTON_MAX_DECK_SIZE --
-     * only a floor (WINSTON_MIN_DECK_SIZE, matching the physical rules'
-     * "must have a minimum of twelve cards"). WINSTON_MIN_CUSTOM_POOL_SIZE
-     * equals the target size itself -- unlike Quick Draft's 45-vs-48 gap,
-     * there's no reshuffle-top-up mechanic to fall back on for an
-     * undersized pool, since the physical rules already define "the deck
-     * runs out" as a normal, expected event rather than something to
-     * avoid.
+     * Winston Draft (issue #89, format 'draft' alongside 'quick_draft';
+     * multiplayer support issue #189): players take-or-pass on 3 growing
+     * face-down piles, in seat-rotation turn order (2 players alternate,
+     * 3-4 players cycle through every seat -- see initializeWinstonDraft()/
+     * submitWinstonDraftPick()), dealt from a shared shuffled pool of
+     * winstonDraftPoolTargetSize($playerCount) cards. The 2-player target
+     * (45) matches the physical rules' own "Total number of cards
+     * drafted: 45" (the same size as MSW's own Structure deck); 3-4
+     * players scale up to 70/90 rather than a flat +15/player increment,
+     * so every additional seat still gets a meaningfully bigger shared
+     * pool to draft from over the same 3-pile structure. Unlike Quick
+     * Draft's fixed 16-per-player result, the number of cards each player
+     * ends up with here varies with how the draft unfolds, so there's no
+     * WINSTON_MAX_DECK_SIZE -- only a floor (WINSTON_MIN_DECK_SIZE,
+     * matching the physical rules' "must have a minimum of twelve
+     * cards"). winstonDraftMinCustomPoolSize() equals the target size
+     * itself -- unlike Quick Draft's 45-vs-48 gap, there's no
+     * reshuffle-top-up mechanic to fall back on for an undersized pool,
+     * since the physical rules already define "the deck runs out" as a
+     * normal, expected event rather than something to avoid. A player who
+     * ends up short of WINSTON_MIN_DECK_SIZE when the draft ends is
+     * dropped from the match entirely (see finalizeWinstonDraft()) rather
+     * than failing the whole match the way the original 2-player-only
+     * "the other player automatically wins" rule did -- with 3-4 players,
+     * one player's shortfall shouldn't cost everyone else their match.
      */
-    private const WINSTON_POOL_SIZE = 45;
-    private const WINSTON_MIN_CUSTOM_POOL_SIZE = 45;
     private const WINSTON_MIN_DECK_SIZE = 12;
+
+    /**
+     * Winston Draft's own per-player-count pool target -- 45/70/90 for
+     * 2/3/4 players (issue #189). Not a flat +15/player increment (that
+     * would be 45/60/75); the explicit jump to 70 and 90 keeps every
+     * additional seat meaningfully better-stocked, and specifically
+     * ensures jceddy's 75 Card deck's own 75 cards still cover a 3-player
+     * pool (70) without needing jceddy's 150 Card deck's own themed
+     * 150-card pool -- that swap only ever triggers at exactly 4 players
+     * (90 > 75), the same trigger point as Quick Draft's/Grid Draft's own
+     * jceddys_75 handling (see buildDraftPool()).
+     */
+    private static function winstonDraftPoolTargetSize(int $playerCount): int
+    {
+        return match ($playerCount) {
+            2 => 45,
+            3 => 70,
+            4 => 90,
+            default => throw new GameStateException("Winston Draft does not support {$playerCount} players"),
+        };
+    }
+
+    /** @see winstonDraftPoolTargetSize()'s own docblock for why this equals the target size itself. */
+    private static function winstonDraftMinCustomPoolSize(int $playerCount): int
+    {
+        return self::winstonDraftPoolTargetSize($playerCount);
+    }
 
     /**
      * Grid Draft (issue #188, format 'draft' alongside 'quick_draft'/
@@ -425,11 +460,10 @@ final class GameService
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
         if (self::isDuelShapedFormat($format)) {
-            // Quick Draft and Grid Draft both support 3-4 players now
-            // (issue #189) -- Winston Draft and 'duel' itself stay locked
-            // to exactly 2 until Winston Draft's own multiplayer variant
-            // (still being decided) is designed.
-            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft'], true)) {
+            // Quick Draft, Grid Draft, and Winston Draft all support 3-4
+            // players now (issue #189) -- 'duel' itself stays locked to
+            // exactly 2.
+            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft'], true)) {
                 if (count($userIds) < 2 || count($userIds) > 4) {
                     throw new GameStateException("A {$deckType} game must have 2-4 players");
                 }
@@ -500,7 +534,7 @@ final class GameService
         };
         $draftPoolCardIds = match ($deckType) {
             'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, count($userIds)),
-            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText),
+            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, count($userIds)),
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, count($userIds)),
             default => null,
         };
@@ -1556,9 +1590,16 @@ final class GameService
      * Assembles a draft match's shared card pool, per $poolSource --
      * 'random_48' ($targetSize random *distinct* catalog cards, singleton
      * like buildStructureDeckCardIds()), 'structure' (reuses
-     * buildStructureDeckCardIds() as-is -- its own 45-card pool), 'jceddys_75'
-     * (reuses buildJceddys75DeckCardIds() as-is -- its own 75-card pool --
-     * except at exactly 4 players, where buildJceddys150DeckCardIds()'s own
+     * buildStructureDeckCardIds() as-is -- its own 45-card pool, or two
+     * copies concatenated together when $doubleStructureForMultiplayer is
+     * true and $playerCount > 2, since Winston Draft is the only caller
+     * whose 3-4 player targets, 70/90, actually exceed a single 45-card
+     * copy and has no other top-up mechanism to fall back on -- Quick
+     * Draft's own 'structure' handling relies on its discard-reshuffle
+     * top-up instead, and Grid Draft rejects 'structure' outright, so
+     * both leave this flag false), 'jceddys_75' (reuses
+     * buildJceddys75DeckCardIds() as-is -- its own 75-card pool -- except
+     * at exactly 4 players, where buildJceddys150DeckCardIds()'s own
      * 150-card pool is used instead, since 75 falls short of every
      * 4-player target this pool source is ever used for), 'one_of_each'
      * (the full TOTAL_CARDS catalog), or 'custom' (parseDraftCustomPool()).
@@ -1567,20 +1608,23 @@ final class GameService
      * ignore the extra cards" (the repo owner's own words, for Quick
      * Draft's own 48 -- Winston Draft/Grid Draft reuse this exact same
      * logic with their own targets instead) -- so 'jceddys_75'/
-     * 'jceddys_150's 75/150, 'one_of_each's 133, and an oversized 'custom'
-     * pool all end up the same size as 'random_48'/'structure' before
-     * drafting ever starts. Shared by buildQuickDraftPool()/
-     * buildWinstonDraftPool()/buildGridDraftPool() below, parameterized
-     * only by target/minimum pool size and player count -- the pool
-     * assembly logic itself has nothing else format-specific about it.
+     * 'jceddys_150's 75/150, a doubled 'structure's 90, 'one_of_each's
+     * 133, and an oversized 'custom' pool all end up the same size as
+     * 'random_48' before drafting ever starts. Shared by
+     * buildQuickDraftPool()/buildWinstonDraftPool()/buildGridDraftPool()
+     * below, parameterized only by target/minimum pool size, player
+     * count, and the structure-doubling flag -- the pool assembly logic
+     * itself has nothing else format-specific about it.
      *
      * @return int[]
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize, int $playerCount): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false): array
     {
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomDraftCardIds($targetSize),
-            'structure' => $this->buildStructureDeckCardIds(),
+            'structure' => $doubleStructureForMultiplayer && $playerCount > 2
+                ? [...$this->buildStructureDeckCardIds(), ...$this->buildStructureDeckCardIds()]
+                : $this->buildStructureDeckCardIds(),
             'jceddys_75' => $playerCount === 4 ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
@@ -1657,10 +1701,17 @@ final class GameService
         );
     }
 
-    /** @return int[] Winston Draft's own WINSTON_POOL_SIZE-card pool -- see buildDraftPool(). Always exactly 2 players, so the jceddys_150 swap never triggers. */
-    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText): array
+    /** @return int[] Winston Draft's own winstonDraftPoolTargetSize($playerCount)-card pool -- see buildDraftPool(). */
+    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
     {
-        return $this->buildDraftPool($poolSource, $customPoolText, self::WINSTON_POOL_SIZE, self::WINSTON_MIN_CUSTOM_POOL_SIZE, 2);
+        return $this->buildDraftPool(
+            $poolSource,
+            $customPoolText,
+            self::winstonDraftPoolTargetSize($playerCount),
+            self::winstonDraftMinCustomPoolSize($playerCount),
+            $playerCount,
+            doubleStructureForMultiplayer: true,
+        );
     }
 
     /**
@@ -2207,7 +2258,7 @@ final class GameService
      * see notifyDraftUsersItsYourTurn()'s own docblock.
      *
      * @param int[] $poolCardIds
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4)
      */
     private function initializeWinstonDraft(int $gameId, int $draftMatchId, array $poolCardIds, array $userIds): void
     {
@@ -2269,11 +2320,15 @@ final class GameService
      * look moves to the next pile -- declining pile 3 triggers a
      * mandatory, unrevisable draw off whatever's left of the deck AFTER
      * pile 3's own replenish, seen only by the acting player and never
-     * revealed to their opponent). Either action can end the whole draft
-     * outright if it leaves the deck and all 3 piles simultaneously empty
-     * -- checked after every mutation, not just after a 'pass' on pile 3,
-     * since a 'take' when the deck's already empty can exhaust everything
-     * mid-turn without ever reaching pile 3.
+     * revealed to any other seated player). Either action can end the
+     * whole draft outright if it leaves the deck and all 3 piles
+     * simultaneously empty -- checked after every mutation, not just
+     * after a 'pass' on pile 3, since a 'take' when the deck's already
+     * empty can exhaust everything mid-turn without ever reaching pile 3.
+     * Turn order (issue #189) is a seat-index rotation
+     * (`($seatIndex + 1) % $playerCount`) rather than a fixed 2-player
+     * toggle -- mathematically identical for a 2-player match, so
+     * existing 2-player games are unaffected.
      *
      * @return array{action_completed:string, turn_advanced:bool, draft_completed:bool}
      */
@@ -2315,7 +2370,9 @@ final class GameService
             $lastDraftActionByUserId = (array) json_decode((string) $state['last_draft_action_by_user_id'], true);
 
             $userIds = $this->draftMatchUserIds($draftMatchId);
-            $opponentUserId = $userIds[0] === $userId ? $userIds[1] : $userIds[0];
+            $playerCount = count($userIds);
+            $seatIndex = array_search($userId, $userIds, true);
+            $nextSeatUserId = $userIds[($seatIndex + 1) % $playerCount];
 
             $turnEnds = false;
             $newlyDrafted = [];
@@ -2364,7 +2421,7 @@ final class GameService
                 return ['action_completed' => $action, 'turn_advanced' => false, 'draft_completed' => true];
             }
 
-            $nextPlayerUserId = $turnEnds ? $opponentUserId : $userId;
+            $nextPlayerUserId = $turnEnds ? $nextSeatUserId : $userId;
             $nextPileNumber = $turnEnds ? 1 : $currentPileNumber;
 
             $pdo->prepare(
@@ -2400,19 +2457,31 @@ final class GameService
      * written incrementally as it happened, so there's nothing left to
      * derive here.
      *
-     * If either player ended up short of WINSTON_MIN_DECK_SIZE total
-     * drafted cards, the physical rules are explicit that they
-     * automatically lose ("if you don't have twelve cards, you will
-     * automatically lose any game, so make sure you draft at least
-     * twelve") -- rather than let them limp into deck_building only to
-     * fail there, the WHOLE match completes right here with the other
-     * player credited as winner_user_id, and the match's own
-     * already-created game 1 (inserted back in createGame(), before the
-     * draft even started) is marked 'abandoned' instead of lingering
-     * forever in 'waiting' with no legal way to ever start it -- no games
-     * are actually played.
+     * The physical rules are explicit that a player short of
+     * WINSTON_MIN_DECK_SIZE total drafted cards automatically loses ("if
+     * you don't have twelve cards, you will automatically lose any game,
+     * so make sure you draft at least twelve"). For the original 2-player
+     * match that meant the whole match completing immediately with the
+     * other player as winner_user_id -- no games ever played. For 3-4
+     * players (issue #189), one player's own shortfall shouldn't cost
+     * everyone else their match: each short player is instead dropped
+     * from the match/game entirely (removeShortWinstonDraftPlayer()),
+     * as if they'd never been part of it -- no deck was ever submitted
+     * for them, so there's nothing of theirs left in the game to clean
+     * up beyond their own draft_match_players/game_players rows. The
+     * survivors then proceed to deck_building as an ordinary
+     * (N - short count)-player match, `draftGamesToWin()`/every other
+     * multiplayer-aware helper already deriving their own player count
+     * from draftMatchUserIds() fresh each time, so nothing needs to be
+     * told about the drop explicitly. Two edge cases collapse back to
+     * the original 2-player behavior exactly: if every player is short,
+     * there's no one left to play at all (match ends, no winner); if
+     * dropping the short players leaves exactly one player standing,
+     * there's no match left to play either -- that one survivor simply
+     * wins outright, the same as the original "the other player
+     * automatically wins" rule.
      *
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4)
      */
     private function finalizeWinstonDraft(int $gameId, int $draftMatchId, array $userIds): void
     {
@@ -2429,37 +2498,85 @@ final class GameService
             $draftedCounts,
             fn (int $count): bool => $count < self::WINSTON_MIN_DECK_SIZE
         ));
+        $survivingUserIds = array_values(array_diff($userIds, $shortUserIds));
 
-        if ($shortUserIds !== []) {
-            $winnerUserId = null;
-            foreach ($userIds as $candidateUserId) {
-                if (!in_array($candidateUserId, $shortUserIds, true)) {
-                    $winnerUserId = $candidateUserId;
-                    break;
-                }
-            }
-
+        if ($survivingUserIds === []) {
+            // Everyone came up short -- no one left to play at all.
             $pdo->prepare(
-                "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
-            )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
-
+                "UPDATE draft_matches SET status = 'completed', winner_user_id = NULL, completed_at = NOW() WHERE id = :id"
+            )->execute(['id' => $draftMatchId]);
             $pdo->prepare(
                 "UPDATE games SET status = 'abandoned' WHERE draft_match_id = :match_id AND match_game_number = 1"
             )->execute(['match_id' => $draftMatchId]);
 
-            // $winnerUserId stays null in the rare case BOTH players ended
-            // up short of WINSTON_MIN_DECK_SIZE -- winner_user_id itself
-            // is already null then too, so there's no winner/loser to
-            // record either.
-            if ($winnerUserId !== null) {
-                $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+            return;
+        }
+
+        if (count($survivingUserIds) === 1) {
+            // Only one player left standing -- there's no match left to
+            // play, so they simply win outright (the original 2-player
+            // "the other player automatically wins" rule, degenerated).
+            // recordMatchCompletionStats() runs BEFORE the short players'
+            // rows are removed below, so it still sees (and credits a
+            // match_loss to) every one of them, exactly like the original
+            // 2-player auto-loss always did.
+            $winnerUserId = $survivingUserIds[0];
+
+            $pdo->prepare(
+                "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
+            )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
+            $pdo->prepare(
+                "UPDATE games SET status = 'abandoned' WHERE draft_match_id = :match_id AND match_game_number = 1"
+            )->execute(['match_id' => $draftMatchId]);
+            $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+
+            foreach ($shortUserIds as $shortUserId) {
+                $this->removeShortWinstonDraftPlayer($gameId, $draftMatchId, $shortUserId);
             }
 
             return;
         }
 
+        // 2+ players survive -- each short player is dropped from the
+        // match entirely (as if they'd never been part of it) with no
+        // match_losses recorded for them, and the survivors proceed to
+        // deck_building as their own (N - short count)-player match; only
+        // ITS eventual real winner/losers get match stats recorded, via
+        // advanceDraftMatch()'s own existing recordMatchCompletionStats()
+        // call once that match actually completes.
+        foreach ($shortUserIds as $shortUserId) {
+            $this->removeShortWinstonDraftPlayer($gameId, $draftMatchId, $shortUserId);
+        }
+
         $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
-        $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
+        $this->notifyDraftUsersItsYourTurn($gameId, $survivingUserIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
+    }
+
+    /**
+     * Drops a Winston Draft player short of WINSTON_MIN_DECK_SIZE from
+     * the match entirely -- called once per short player from
+     * finalizeWinstonDraft() above, before the match ever reaches
+     * deck_building. Deletes their draft_match_players row (so
+     * draftMatchUserIds()/every player-count-derived helper simply never
+     * sees them again) and their game_players row for the match's own
+     * game 1 (the only game to exist yet -- nothing has been dealt for
+     * it, since startGame() hasn't run, so there's no game_cards/
+     * game_rounds row anywhere referencing that seat to clean up first,
+     * unlike resignGame()'s own mid-match removal of an already-playing
+     * seat). Leaving a gap in the remaining seats' own seat_order values
+     * is harmless -- every seat_order-ordered query already just orders
+     * by it rather than indexing arithmetically off of it.
+     */
+    private function removeShortWinstonDraftPlayer(int $gameId, int $draftMatchId, int $userId): void
+    {
+        $pdo = Connection::get();
+        $pdo->prepare('DELETE FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+
+        $gamePlayerId = $this->gamePlayerIdFor($gameId, $userId);
+        if ($gamePlayerId !== null) {
+            $pdo->prepare('DELETE FROM game_players WHERE id = :id')->execute(['id' => $gamePlayerId]);
+        }
     }
 
     // -- Grid Draft (issue #188) ----------------------------------------
@@ -6089,21 +6206,27 @@ final class GameService
             'draft_match_id' => $draftMatchId,
             'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             'status' => $match['status'],
-            'games_to_win' => self::DRAFT_GAMES_TO_WIN,
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
             'next_game_id' => $nextGameId,
             'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
             'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$uid]['wins'] ?? 0),
+                'is_you' => $uid === $viewerUserId,
+            ], $userIds),
             'drafting' => null,
             'deck_building' => null,
         ];
 
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $opponentUserId, $playersByUser);
+            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
                 $viewerUserId,
-                $opponentUserId !== null ? [$opponentUserId] : [],
+                array_values(array_diff($userIds, [$viewerUserId])),
                 self::WINSTON_MIN_DECK_SIZE,
                 null,
             );
@@ -6115,28 +6238,35 @@ final class GameService
     /**
      * getState()'s own view of Winston Draft's current pile/deck/turn
      * state for $viewerUserId. pile_sizes/remaining_deck_count/
-     * current_pile_number are always visible to both players -- a real
-     * stack of face-down cards is physically visible even though its
-     * *contents* aren't, so there's nothing to hide about how tall each
-     * pile is or whose turn it is. current_pile_cards (the actual card
-     * identities) is only ever populated when $viewerUserId is the
-     * current player -- the opponent never sees what's actually in the
-     * pile being looked at, exactly matching quickDraftDraftingStateFor()'s
-     * own "never expose the opponent's pack" contract. drafted_so_far is
-     * always $viewerUserId's own accumulated picks to date, never the
-     * opponent's. opponent_last_take_pile_number, opponent_last_drew_from_deck,
-     * and opponent_drafted_card_count are similarly safe to expose without
-     * ever revealing card identities: which numbered pile the opponent
-     * last claimed (or that they instead declined all 3 piles and took the
-     * mandatory top-of-deck draw), and how many cards they've drafted in
-     * total, are all things a real opponent watching across the table
-     * would already see for themselves (a taken pile's height and a
-     * rival's growing stack of face-down cards are physically visible),
-     * unlike what's actually printed on those cards.
+     * current_pile_number are always visible to every seated player -- a
+     * real stack of face-down cards is physically visible even though
+     * its *contents* aren't, so there's nothing to hide about how tall
+     * each pile is or whose turn it is (current_turn_username, issue
+     * #189, names whoever that actually is -- for a 3-4 player match,
+     * "not your turn" alone doesn't say whose turn it is the way it did
+     * for exactly 2). current_pile_cards (the actual card identities) is
+     * only ever populated when $viewerUserId is the current player -- no
+     * other seated player ever sees what's actually in the pile being
+     * looked at, exactly matching quickDraftDraftingStateFor()'s own
+     * "never expose the active player's own pack" contract.
+     * drafted_so_far is always $viewerUserId's own accumulated picks to
+     * date, never anyone else's. other_players (issue #189) covers every
+     * *other* seated player's own last_take_pile_number/
+     * last_drew_from_deck/drafted_card_count -- opponent_last_take_pile_number/
+     * opponent_last_drew_from_deck/opponent_drafted_card_count are kept
+     * as a single-value fallback (the first of them). None of this is
+     * unsafe to expose without revealing card identities: which numbered
+     * pile a player last claimed (or that they instead declined all 3
+     * piles and took the mandatory top-of-deck draw), and how many cards
+     * they've drafted in total, are all things a real opponent watching
+     * across the table would already see for themselves (a taken pile's
+     * height and a rival's growing stack of face-down cards are
+     * physically visible), unlike what's actually printed on those cards.
      *
+     * @param int[] $userIds the match's user ids (any count 2-4), in seat order
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      */
-    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, ?int $opponentUserId, array $playersByUser): array
+    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser): array
     {
         $stateStmt = Connection::get()->prepare('SELECT * FROM draft_winston_state WHERE draft_match_id = :id');
         $stateStmt->execute(['id' => $draftMatchId]);
@@ -6165,18 +6295,33 @@ final class GameService
             : [];
 
         $lastDraftActionByUserId = (array) json_decode((string) $winstonState['last_draft_action_by_user_id'], true);
-        $opponentLastAction = $opponentUserId !== null ? ($lastDraftActionByUserId[(string) $opponentUserId] ?? null) : null;
+
+        $otherUserIds = array_values(array_diff($userIds, [$viewerUserId]));
+        $otherPlayers = array_map(function (int $uid) use ($lastDraftActionByUserId, $draftedCardIdsFor, $playersByUser): array {
+            $lastAction = $lastDraftActionByUserId[(string) $uid] ?? null;
+
+            return [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'drafted_card_count' => count($draftedCardIdsFor($uid)),
+                'last_take_pile_number' => is_int($lastAction) ? $lastAction : null,
+                'last_drew_from_deck' => $lastAction === 'deck',
+            ];
+        }, $otherUserIds);
+        $firstOtherPlayer = $otherPlayers[0] ?? null;
 
         return [
             'is_your_turn' => $isYourTurn,
+            'current_turn_username' => $playersByUser[$currentPlayerUserId]['username'] ?? null,
             'current_pile_number' => $currentPileNumber,
             'pile_sizes' => $pileSizes,
             'remaining_deck_count' => count(json_decode((string) $winstonState['remaining_deck_card_ids'], true)),
             'current_pile_cards' => $currentPileCards,
             'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
-            'opponent_last_take_pile_number' => is_int($opponentLastAction) ? $opponentLastAction : null,
-            'opponent_last_drew_from_deck' => $opponentLastAction === 'deck',
-            'opponent_drafted_card_count' => $opponentUserId !== null ? count($draftedCardIdsFor($opponentUserId)) : 0,
+            'opponent_last_take_pile_number' => $firstOtherPlayer['last_take_pile_number'] ?? null,
+            'opponent_last_drew_from_deck' => $firstOtherPlayer['last_drew_from_deck'] ?? false,
+            'opponent_drafted_card_count' => $firstOtherPlayer['drafted_card_count'] ?? 0,
+            'other_players' => $otherPlayers,
         ];
     }
 

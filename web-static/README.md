@@ -799,8 +799,12 @@ too, proportional to the smaller card width.
     Draft reveals `#new-game-winston-draft-fields` instead -- the exact
     same shape one level down (`#new-game-winston-draft-pool-source`, same
     5 options, its own `WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording
-    reflecting its own 45-card target rather than Quick Draft's 48, and the
-    same Custom-pool file/textarea pair feeding
+    reflecting its own per-player-count target (45/70/90 for 2/3/4
+    players, issue #189 -- Structure's own fixed 45-card pool is doubled
+    for 3-4 players rather than reshuffle-topped-up, and `jceddys_75`
+    swaps to jceddy's 150 Card deck's own pool at exactly 4 players, same
+    as Quick Draft's and Grid Draft's own 4-player `jceddys_75` case), and
+    the same Custom-pool file/textarea pair feeding
     `winston_draft_custom_pool_text`) -- `updateWinstonDraftPoolSourceVisibility()`
     mirrors `updateQuickDraftPoolSourceVisibility()` exactly. Selecting
     Grid Draft reveals `#new-game-grid-draft-fields` instead -- the same
@@ -821,12 +825,14 @@ too, proportional to the smaller card width.
     kind of live drafting process; Quick Draft was the first, Winston
     Draft joined it next, Grid Draft joined after that -- see "Draft
     format" in `php-app/README.md`). `updateOpponentSelectionLimit()`
-    caps opponent selection at 1 (2 players total) for Duel, and for
-    Draft with any deck_type OTHER than Quick Draft/Grid Draft -- both
-    support 2-4 players (issue #189, `opponentSelectionMax()`), so up to
-    3 opponents may be checked once either is selected; switching away
-    from one (either to a different deck_type or a different format
-    entirely) re-caps the selection at 1 and un-checks any extras, keeping the
+    caps opponent selection at 1 (2 players total) for Duel, and at 3 (up
+    to 4 players total) for Draft (`opponentSelectionMax()`, format-only
+    now that Quick Draft, Winston Draft, and Grid Draft all three support
+    2-4 players -- the function used to also need the selected
+    `deck_type` back when Winston Draft was still locked to 2, but that
+    branching became dead code once it joined the other two, so it was
+    removed rather than left half-refactored); switching away from Draft
+    entirely re-caps the selection at 1 and un-checks any extras, keeping the
     first one checked. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
@@ -939,13 +945,13 @@ too, proportional to the smaller card width.
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead) for Winston Draft and a 2-player Quick Draft/Grid Draft match.
-    A 3-4 player Quick Draft or Grid Draft match (issue #189, always
+    ahead) for a 2-player Quick Draft/Winston Draft/Grid Draft match.
+    A 3-4 player match of any of the three (issue #189, always
     single-game -- `games_to_win` is 1) has more than one rival to show a
     score for, so it branches on `players.length > 2` instead and builds
     its text from `players` (every seated player's own username/wins/is_you,
-    populated identically by `quickDraftStateFor()`/`gridDraftStateFor()`
-    for any player count) -- "Single-game match -- you 0, Alice 0, Bob 1"
+    populated identically by `quickDraftStateFor()`/`winstonDraftStateFor()`/
+    `gridDraftStateFor()` for any player count) -- "Single-game match -- you 0, Alice 0, Bob 1"
     rather than the "Best of N"/leader-vs-opponent phrasing. No
     deck_type-specific label here (Quick Draft/Winston
     Draft/Grid Draft) -- that's already shown elsewhere on the board (the
@@ -1085,8 +1091,8 @@ too, proportional to the smaller card width.
       `GameService::winstonDraftDraftingStateFor()`), so there's no
       selection `Set` to manage: each of the 3 piles renders as a labeled
       stack showing its size (`drafting.pile_sizes`, always visible to
-      both players -- a real face-down stack's height is visible even when
-      its contents aren't), and only the *current* pile's cards
+      every seated player -- a real face-down stack's height is visible
+      even when its contents aren't), and only the *current* pile's cards
       (`drafting.current_pile_cards`, populated by the backend only when
       it's actually your turn) render as thumbnails inside it. `#winston-
       draft-take-button`/`#winston-draft-pass-button` (hidden entirely when
@@ -1094,17 +1100,26 @@ too, proportional to the smaller card width.
       declining there is a mandatory deck-draw, not a choice) call
       `submitWinstonDraftPick()` (`POST /games/draft/winston-pick`) with
       `action: 'take'`/`'pass'` -- no card selection needed, since taking a
-      pile claims it whole. `drafting.remaining_deck_count` and a
+      pile claims it whole; for 3-4 players the underlying turn order is
+      seat rotation rather than a fixed 2-player toggle, but the UI itself
+      needs no change for that -- it only ever cares whether it's currently
+      *your* turn. The status line reads whose turn it is by
+      `drafting.current_turn_username` when it isn't yours (issue #189 --
+      for a 3-4 player match, "not your turn" alone doesn't say whose turn
+      it actually is, the same convention Grid Draft's own status line
+      already uses). `drafting.remaining_deck_count` and a
       `#winston-draft-drafted-so-far` read-only list (your own accumulated
-      picks -- never your opponent's) round out the panel, along with a
-      `#winston-draft-opponent-info` line built from
-      `drafting.opponent_drafted_card_count` (how many cards the opponent
-      has drafted in total) and either `drafting.opponent_last_take_pile_number`
-      (which pile number -- never its contents -- they most recently
-      claimed) or `drafting.opponent_last_drew_from_deck` (`true` if they
-      instead most recently declined all 3 piles and took the mandatory
-      top-of-deck draw); neither is shown until the opponent has completed
-      at least one turn.
+      picks -- never anyone else's) round out the panel, along with an
+      `#winston-draft-other-players-info` container (issue #189 -- one line
+      per OTHER seated player, replacing the original singular
+      `#winston-draft-opponent-info` line) built from `drafting.other_players`
+      (each entry's own `username`/`drafted_card_count` and either
+      `last_take_pile_number` -- which pile number, never its contents,
+      that player most recently claimed -- or `last_drew_from_deck` --
+      `true` if they instead most recently declined all 3 piles and took
+      the mandatory top-of-deck draw); a given player's line is omitted
+      until they've completed at least one turn, exactly as the original
+      2-player version omitted the single opponent's line.
     - **Grid Draft's own drafting phase** (`#grid-draft-panel` >
       `#grid-draft-drafting`, `renderGridDraftDrafting()`, shown while
       `state.grid_draft.status` is `'drafting'`) -- like Winston Draft,

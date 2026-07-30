@@ -7934,19 +7934,15 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * Winston Draft and Grid Draft stay locked to exactly 2 players (issue
-     * #189's multiplayer support is Quick Draft-only for now) -- see
-     * testCreateGameAcceptsQuickDraftWithThreeOrFourPlayers() below for
-     * Quick Draft's own, now-permissive version of this same gate.
+     * Winston Draft now supports 2-4 players (issue #189) -- same 2-4
+     * gate as Quick Draft/Grid Draft, so only 5+ players is rejected.
      */
-    public function testCreateGameRejectsAWinstonDraftGameWithMoreThanTwoPlayers(): void
+    public function testCreateGameRejectsAWinstonDraftGameWithMoreThanFourPlayers(): void
     {
-        $u1 = $this->insertUser('drafttoomany1');
-        $u2 = $this->insertUser('drafttoomany2');
-        $u3 = $this->insertUser('drafttoomany3');
+        $userIds = $this->insertUsers('drafttoomany-' . uniqid(), 5);
 
         $this->expectException(GameStateException::class);
-        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48');
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48');
     }
 
     public function testCreateGameRejectsADraftGameWithFewerThanTwoPlayers(): void
@@ -9626,6 +9622,280 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->submitFullWinstonDraftDeck($gameId, $u1);
         $this->games->startGame($gameId);
+    }
+
+    // -- Winston Draft multiplayer (issue #189) ------------------------------
+
+    /**
+     * @param int $playerCount
+     * @return array{gameId:int, userIds:int[]}
+     */
+    private function buildMultiplayerWinstonDraftFixture(int $playerCount, string $poolSource = 'random_48', int $winsNeeded = 1): array
+    {
+        $userIds = $this->insertUsers('wdmp-' . uniqid() . '-', $playerCount);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            winsNeeded: $winsNeeded,
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: $poolSource,
+        );
+
+        return ['gameId' => $gameId, 'userIds' => $userIds];
+    }
+
+    /**
+     * N-player analog of driveWinstonDraftToDeckBuilding() -- same
+     * deterministic take-once-a-pile-has->=2-cards policy (or ->=1 once
+     * the shared deck is exhausted), driven directly off
+     * draft_winston_state rather than getState()'s own is_your_turn (no
+     * single "the other player" to derive a boolean from for 3-4
+     * players), so this works identically for any player count.
+     *
+     * @param int[] $userIds
+     */
+    private function driveMultiplayerWinstonDraftToDeckBuilding(int $gameId, array $userIds): void
+    {
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 2000; $i++) {
+            if ($this->fetchDraftMatch($draftMatchId)['status'] !== 'drafting') {
+                return;
+            }
+
+            $winstonState = $this->fetchWinstonState($draftMatchId);
+            $currentUserId = (int) $winstonState['current_player_user_id'];
+            $currentPileNumber = (int) $winstonState['current_pile_number'];
+            $currentPileSize = count(json_decode((string) $winstonState["pile_{$currentPileNumber}_card_ids"], true));
+            $deckExhausted = json_decode((string) $winstonState['remaining_deck_card_ids'], true) === [];
+
+            $action = ($currentPileSize >= 2 || ($deckExhausted && $currentPileSize >= 1)) ? 'take' : 'pass';
+            $this->games->submitWinstonDraftPick($gameId, $currentUserId, $action);
+        }
+
+        self::fail('Winston Draft did not complete within 2000 picks -- possible infinite loop');
+    }
+
+    public function testCreateGameAcceptsWinstonDraftWithThreeOrFourPlayers(): void
+    {
+        $threeUserIds = $this->insertUsers('wd3p-' . uniqid(), 3);
+        $threeGameId = $this->games->createGame($threeUserIds[0], $threeUserIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48');
+        self::assertIsInt($threeGameId);
+
+        $fourUserIds = $this->insertUsers('wd4p-' . uniqid(), 4);
+        $fourGameId = $this->games->createGame($fourUserIds[0], $fourUserIds, format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48');
+        self::assertIsInt($fourGameId);
+    }
+
+    public function testWinstonDraftMultiplayerPoolSizeIsFortyFiveSeventyNinety(): void
+    {
+        ['gameId' => $twoGameId] = $this->buildWinstonDraftFixture('one_of_each');
+        $twoPool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($twoGameId)['draft_match_id'])['pool_card_ids'], true);
+        self::assertCount(45, $twoPool);
+
+        ['gameId' => $threeGameId] = $this->buildMultiplayerWinstonDraftFixture(3, 'one_of_each');
+        $threePool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($threeGameId)['draft_match_id'])['pool_card_ids'], true);
+        self::assertCount(70, $threePool);
+
+        ['gameId' => $fourGameId] = $this->buildMultiplayerWinstonDraftFixture(4, 'one_of_each');
+        $fourPool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($fourGameId)['draft_match_id'])['pool_card_ids'], true);
+        self::assertCount(90, $fourPool);
+    }
+
+    public function testWinstonDraftThreeAndFourPlayerStructurePoolIsDoubledThenTruncated(): void
+    {
+        ['gameId' => $threeGameId] = $this->buildMultiplayerWinstonDraftFixture(3, 'structure');
+        $threePool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($threeGameId)['draft_match_id'])['pool_card_ids'], true);
+        // The 45-card Structure deck alone falls short of 3 players' own
+        // 70-card target -- unlike Grid Draft (which rejects 'structure'
+        // outright) or Quick Draft (which relies on a mid-draft discard
+        // top-up instead), Winston Draft doubles it to 90 first, same as
+        // jceddy's 75 Card deck's own doubling-to-150 pattern, then
+        // truncates down to 70.
+        self::assertCount(70, $threePool);
+
+        ['gameId' => $fourGameId] = $this->buildMultiplayerWinstonDraftFixture(4, 'structure');
+        $fourPool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($fourGameId)['draft_match_id'])['pool_card_ids'], true);
+        self::assertCount(90, $fourPool, '2 copies of the 45-card Structure deck is exactly 90 -- no truncation needed at 4 players');
+    }
+
+    public function testWinstonDraftFourPlayerJceddys75PoolUsesTheThemedJceddys150Pool(): void
+    {
+        ['gameId' => $gameId] = $this->buildMultiplayerWinstonDraftFixture(4, 'jceddys_75');
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $this->fetchGame($gameId)['draft_match_id'])['pool_card_ids'], true);
+
+        // Same swap as Quick Draft's/Grid Draft's own 4-player case --
+        // jceddy's 75 Card deck's own 75 cards fall short of 4 players'
+        // own 90-card target, so buildDraftPool() swaps in jceddy's 150
+        // Card deck's own 150-card pool before truncating down to 90.
+        self::assertCount(90, $poolCardIds);
+    }
+
+    public function testWinstonDraftThreePlayerJceddys75PoolStaysOnJceddys75(): void
+    {
+        ['gameId' => $gameId] = $this->buildMultiplayerWinstonDraftFixture(3, 'jceddys_75');
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $this->fetchGame($gameId)['draft_match_id'])['pool_card_ids'], true);
+
+        // 3 players only need 70 -- jceddy's 75 Card deck's own 75 cards
+        // already suffice without swapping to the 150-card pool, just
+        // truncated down by 3 like any other over-sized pool source.
+        self::assertCount(70, $poolCardIds);
+    }
+
+    public function testWinstonDraftThreePlayerFullDraftToGameCompletion(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(3);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+
+        $this->driveMultiplayerWinstonDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status'], 'a 70-card pool spread across 3 players should comfortably clear the 12-card floor for all of them');
+
+        foreach ($userIds as $userId) {
+            $state = $this->games->getState($gameId, $userId);
+            self::assertCount(2, $state['winston_draft']['deck_building']['other_players']);
+            self::assertCount(3, $state['winston_draft']['players']);
+            self::assertSame(1, $state['winston_draft']['games_to_win'], '3+ player Winston Draft matches are single-game');
+
+            $this->submitFullWinstonDraftDeck($gameId, $userId);
+        }
+
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeMultiplayerQuickDraftGameByPassing($gameId, $userIds);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+    }
+
+    public function testWinstonDraftFourPlayerFullDraftToGameCompletion(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(4);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+
+        $this->driveMultiplayerWinstonDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $state = $this->games->getState($gameId, $userId);
+            self::assertCount(3, $state['winston_draft']['deck_building']['other_players']);
+            self::assertCount(4, $state['winston_draft']['players']);
+            self::assertSame(1, $state['winston_draft']['games_to_win']);
+
+            $this->submitFullWinstonDraftDeck($gameId, $userId);
+        }
+
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeMultiplayerQuickDraftGameByPassing($gameId, $userIds);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+    }
+
+    /** Forces draft_winston_state's deck and piles 2/3 empty, with $lastPileCardIds left in pile 1 -- the next 'take'/'pass' on pile 1 will complete the draft. */
+    private function forceWinstonDraftDeckAndPilesEmpty(int $draftMatchId, array $lastPileCardIds): void
+    {
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->pdo->prepare(
+            'UPDATE draft_winston_state
+             SET remaining_deck_card_ids = :deck, pile_1_card_ids = :pile1, pile_2_card_ids = :pile2, pile_3_card_ids = :pile3, current_pile_number = 1, current_player_user_id = :current_player
+             WHERE draft_match_id = :match_id'
+        )->execute([
+            'deck' => json_encode([]),
+            'pile1' => json_encode($lastPileCardIds),
+            'pile2' => json_encode([]),
+            'pile3' => json_encode([]),
+            'current_player' => $currentPlayerUserId,
+            'match_id' => $draftMatchId,
+        ]);
+    }
+
+    public function testWinstonDraftFourPlayerDropsOneShortPlayerAndContinuesWithThreePlayers(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(4);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        [$shortUserId, $u2, $u3, $u4] = $userIds;
+
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode(range(1, 5)), 'match_id' => $draftMatchId, 'user_id' => $shortUserId]);
+        foreach ([$u2, $u3, $u4] as $okUserId) {
+            $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+                ->execute(['ids' => json_encode(range(6, 20)), 'match_id' => $draftMatchId, 'user_id' => $okUserId]);
+        }
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->forceWinstonDraftDeckAndPilesEmpty($draftMatchId, [50]);
+
+        $result = $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'take');
+        self::assertTrue($result['draft_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status'], 'only the short player is excluded -- the other 3 proceed to deck_building rather than the whole match ending');
+        self::assertNull($match['winner_user_id']);
+
+        $matchPlayerExists = function (int $userId) use ($draftMatchId): bool {
+            $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id');
+            $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+
+            return (int) $stmt->fetchColumn() > 0;
+        };
+
+        self::assertFalse($matchPlayerExists($shortUserId), 'the short player\'s own draft_match_players row is gone entirely');
+        foreach ([$u2, $u3, $u4] as $survivorUserId) {
+            self::assertTrue($matchPlayerExists($survivorUserId));
+        }
+        self::assertNull($this->games->gamePlayerIdFor($gameId, $shortUserId), 'the short player\'s own game_players row is gone entirely too');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not seated');
+        $this->games->getState($gameId, $shortUserId);
+    }
+
+    public function testWinstonDraftFourPlayerWithThreeShortPlayersLeavesOneWinnerOutright(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(4);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        [$winnerUserId, $short1, $short2, $short3] = $userIds;
+
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode(range(1, 20)), 'match_id' => $draftMatchId, 'user_id' => $winnerUserId]);
+        foreach ([$short1, $short2, $short3] as $shortUserId) {
+            $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+                ->execute(['ids' => json_encode([]), 'match_id' => $draftMatchId, 'user_id' => $shortUserId]);
+        }
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->forceWinstonDraftDeckAndPilesEmpty($draftMatchId, [50]);
+
+        $result = $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'take');
+        self::assertTrue($result['draft_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status'], 'only 1 player is left standing after dropping the 3 short ones -- no match left to play');
+        self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+
+        // The original 2-player auto-loss rule always recorded a
+        // match_loss for the short player -- this degenerate "only 1
+        // survivor" case reuses that exact path, so all 3 short players
+        // still get one too, even though their own rows are removed
+        // right afterward.
+        self::assertSame(1, $this->games->lifetimeStatsFor($winnerUserId)['match_wins']);
+        foreach ([$short1, $short2, $short3] as $shortUserId) {
+            self::assertSame(1, $this->games->lifetimeStatsFor($shortUserId)['match_losses']);
+        }
     }
 
     // -- Grid Draft (issue #188) ---------------------------------------------

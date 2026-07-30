@@ -1277,7 +1277,7 @@
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
         quick_draft: '2-4 players each draft their own deck live from a shared card pool (16 cards for 2 or 4 players, 18 for 3), trim it down to at least 12. A 2-player draft plays a best-of-three match, sideboarding freely between games; a 3-4 player draft plays a single game.',
-        winston_draft: 'Both players draft their own deck from a shared 45-card pool by taking or passing on 3 growing face-down piles, then trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
+        winston_draft: '2-4 players each draft their own deck from a shared pool (45/70/90 cards for 2/3/4 players) by taking or passing on 3 growing face-down piles, in turn order rotating through every seat. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game -- a player who ends up short of 12 cards is dropped from the match rather than ending it for everyone else.',
         grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/90 cards for 2/3/4 players) over 6 rounds: each round, 9 cards are dealt into a 3x3 grid, and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
@@ -1305,15 +1305,20 @@
 
     // Winston Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
     // same pool-source options, kept in sync with
-    // GameService::buildWinstonDraftPool()'s own 45-card target instead of
-    // Quick Draft's 48 (matching the physical rules' own "Total number of
-    // cards drafted: 45").
+    // GameService::winstonDraftPoolTargetSize()'s own per-player-count
+    // target (45/70/90 for 2/3/4 players, matching the physical rules' own
+    // "Total number of cards drafted: 45" for 2 players). Unlike Quick
+    // Draft/Grid Draft, the Structure deck IS offered here even though its
+    // own 45 cards fall short of the 3-4 player targets -- it's doubled
+    // first (2 copies concatenated) rather than rejected, since Winston
+    // Draft has no discard-reshuffle top-up to fall back on the way Quick
+    // Draft does.
     const WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
-        random_48: '45 random cards, no duplicates.',
-        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- matches the physical game\'s own "a normal deck" example exactly, no truncation needed.',
-        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to 45 before the draft begins.",
-        one_of_each: 'The full 133-card pool, randomly narrowed down to 45 before the draft begins.',
-        custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 45 if you provide more.',
+        random_48: 'Random cards, no duplicates (45/70/90 for 2/3/4 players).',
+        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- matches the physical game\'s own "a normal deck" example exactly for a 2-player draft (no truncation needed); doubled first for 3-4 players, since 45 alone falls short of their own larger targets.',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 90 needed.",
+        one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
+        custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
     };
 
     // Grid Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
@@ -1890,31 +1895,23 @@
     const newGameError = document.getElementById('new-game-error');
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
-    // 'duel' games, and 'draft' games for every deck_type except
-    // 'quick_draft'/'grid_draft', require exactly 2 players total
-    // (enforced server-side by GameService::isDuelShapedFormat()'s own
-    // check in createGame()), so at most 1 opponent may be chosen for
-    // those -- 'quick_draft' and 'grid_draft' both support 3-4 players
-    // (issue #189), so up to 3 opponents; every other format allows up to
-    // 3 as well. Re-run on every checkbox change and every
+    // 'duel' games require exactly 2 players total (enforced server-side
+    // by GameService::isDuelShapedFormat()'s own check in createGame()),
+    // so at most 1 opponent may be chosen for that -- every 'draft'
+    // deck_type (quick_draft/grid_draft/winston_draft) now supports 2-4
+    // players (issue #189), so up to 3 opponents; every other format
+    // allows up to 3 as well. Re-run on every checkbox change and every
     // format/deck-type-dropdown change, so switching to a 2-player-only
     // combination with 2+ opponents already checked un-checks the extras
     // (keeping the first one) rather than leaving a selection the server
     // would just reject.
-    function opponentSelectionMax(format, deckType) {
-        if (format === 'duel') {
-            return 1;
-        }
-        if (format === 'draft') {
-            return deckType === 'quick_draft' || deckType === 'grid_draft' ? 3 : 1;
-        }
-        return 3;
+    function opponentSelectionMax(format) {
+        return format === 'duel' ? 1 : 3;
     }
 
     function updateOpponentSelectionLimit() {
         const format = document.getElementById('new-game-format').value;
-        const deckType = document.getElementById('new-game-deck-type').value;
-        const maxOpponents = opponentSelectionMax(format, deckType);
+        const maxOpponents = opponentSelectionMax(format);
         const boxes = opponentCheckboxes.querySelectorAll('input');
 
         let checkedCount = 0;
@@ -3955,7 +3952,7 @@
         document.getElementById('winston-draft-drafting-title').textContent = 'Winston Draft';
         document.getElementById('winston-draft-drafting-status').textContent = drafting.is_your_turn
             ? 'Your turn -- looking at pile ' + drafting.current_pile_number + '.'
-            : "Waiting for your opponent's turn.";
+            : 'Waiting for ' + (drafting.current_turn_username || "your opponent") + "'s turn.";
 
         const pilesContainer = document.getElementById('winston-draft-piles');
         pilesContainer.innerHTML = '';
@@ -3995,16 +3992,24 @@
         // deck instead are all things a real opponent across the table
         // would already see for themselves (see
         // GameService::winstonDraftDraftingStateFor()'s own docblock).
-        const opponentInfo = document.getElementById('winston-draft-opponent-info');
-        let opponentLastActionText = '.';
-        if (drafting.opponent_last_drew_from_deck) {
-            opponentLastActionText = ', last declining all 3 piles and drawing from the deck instead.';
-        } else if (drafting.opponent_last_take_pile_number) {
-            opponentLastActionText = ', last taking pile ' + drafting.opponent_last_take_pile_number + '.';
-        }
-        opponentInfo.textContent = currentOpponentUsername + ' has drafted ' +
-            drafting.opponent_drafted_card_count + ' card' + (drafting.opponent_drafted_card_count === 1 ? '' : 's') +
-            ' so far' + opponentLastActionText;
+        // other_players (issue #189) covers every OTHER seated player --
+        // 1 for a 2-player match, up to 3 for 3-4 players -- each getting
+        // their own line rather than a single fixed "opponent" one.
+        const otherPlayersContainer = document.getElementById('winston-draft-other-players-info');
+        otherPlayersContainer.innerHTML = '';
+        (drafting.other_players || []).forEach((other) => {
+            let lastActionText = '.';
+            if (other.last_drew_from_deck) {
+                lastActionText = ', last declining all 3 piles and drawing from the deck instead.';
+            } else if (other.last_take_pile_number) {
+                lastActionText = ', last taking pile ' + other.last_take_pile_number + '.';
+            }
+            const p = document.createElement('p');
+            p.textContent = other.username + ' has drafted ' +
+                other.drafted_card_count + ' card' + (other.drafted_card_count === 1 ? '' : 's') +
+                ' so far' + lastActionText;
+            otherPlayersContainer.appendChild(p);
+        });
 
         const takeButton = document.getElementById('winston-draft-take-button');
         const passButton = document.getElementById('winston-draft-pass-button');
