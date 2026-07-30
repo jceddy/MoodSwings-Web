@@ -18,6 +18,10 @@ name: Deploy to Bluehost (dev)
 on:
   push:
     branches: [development]
+  # Lets a maintainer re-run a full deploy on demand (e.g. re-testing the
+  # migrate/health curl calls against the live dev host) without needing
+  # a new commit to trigger the push event above.
+  workflow_dispatch: {}
 
 env:
   # Must be >= the "php": ">=8.2" requirement in php-app/composer.json, and
@@ -191,22 +195,31 @@ jobs:
         # the same MIGRATION_DEPLOY_KEY secret as deploy.yml (production)
         # -- it's a shared deploy-automation credential rather than
         # something meaningfully different per environment, the same
-        # reasoning already applied to SMTP_*/VAPID_* above. -A/-H Accept
-        # below work around Bluehost's own bot-protection layer, which
-        # returns a 406 for a bare curl request (no User-Agent/Accept
-        # headers look like anything a real browser would send) --
-        # confirmed by curling /app/health the same bare way and getting
-        # rejected too, well before either request reaches this app's own
-        # PHP code.
+        # reasoning already applied to SMTP_*/VAPID_* above. Bluehost's own
+        # request layer is rejecting this with a 406 for reasons a plain
+        # User-Agent/Accept header didn't resolve -- printing the actual
+        # response headers and body here (rather than guessing at another
+        # header tweak blind) so the next failure is actually diagnosable.
         if: ${{ vars.DEV_SITE_URL != '' && env.MIGRATION_DEPLOY_KEY != '' }}
         env:
           SITE_URL: ${{ vars.DEV_SITE_URL }}
         run: |
-          curl -fsS -X POST \
+          set +e
+          http_status=$(curl -sS -o /tmp/migrate_response.txt -D /tmp/migrate_headers.txt -w "%{http_code}" -X POST \
             -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
             -H "Accept: application/json" \
             -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" \
-            "$SITE_URL/app/migrate"
+            "$SITE_URL/app/migrate")
+          echo "HTTP status: $http_status"
+          echo "--- response headers ---"
+          cat /tmp/migrate_headers.txt
+          echo "--- response body ---"
+          cat /tmp/migrate_response.txt
+          echo "-------------------------"
+          if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+            echo "Migration request failed with HTTP $http_status" >&2
+            exit 1
+          fi
 
       - name: Smoke test deployed health endpoint
         if: ${{ vars.DEV_SITE_URL != '' }}
