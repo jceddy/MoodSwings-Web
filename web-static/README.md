@@ -1098,11 +1098,22 @@ too, proportional to the smaller card width.
       (`drafting.current_pile_cards`, populated by the backend only when
       it's actually your turn) render as thumbnails inside it. `#winston-
       draft-take-button`/`#winston-draft-pass-button` (hidden entirely when
-      it isn't your turn; Pass itself is also hidden on pile 3, since
-      declining there is a mandatory deck-draw, not a choice) call
-      `submitWinstonDraftPick()` (`POST /games/draft/winston-pick`) with
-      `action: 'take'`/`'pass'` -- no card selection needed, since taking a
-      pile claims it whole; for 3-4 players the underlying turn order is
+      it isn't your turn) call `submitWinstonDraftPick()`
+      (`POST /games/draft/winston-pick`) with `action: 'take'`/`'pass'` --
+      no card selection needed, since taking a pile claims it whole.
+      Passing pile 3 is itself the mandatory deck-draw rather than "look
+      at another pile" (there isn't one), so its button label switches to
+      "Pass (draw from deck)"; if `drafting.remaining_deck_count` is 0 or
+      1 at that point, the pile's own "if able" replenish (which happens
+      before the mandatory draw -- see `GameService::submitWinstonDraftPick()`)
+      either doesn't fire or consumes the deck's last card itself, so the
+      draw comes up empty and the drafter gets nothing that round. The
+      click handler for `#winston-draft-pass-button` checks for exactly
+      this condition (`current_pile_number === 3 && remaining_deck_count <=
+      1`, only when it's actually your turn) and shows a `window.confirm()`
+      warning before submitting, so an accidental click doesn't cost a
+      drafter their pick without warning; for 3-4 players the underlying
+      turn order is
       seat rotation rather than a fixed 2-player toggle, but the UI itself
       needs no change for that -- it only ever cares whether it's currently
       *your* turn. The status line reads whose turn it is by
