@@ -1206,7 +1206,7 @@ if ($path === '/games/draft/pick' && $method === 'POST') {
     $body = requestBody();
     $gameId = (int) ($body['game_id'] ?? 0);
     $round = (int) ($body['round'] ?? 0);
-    $stage = (string) ($body['stage'] ?? '');
+    $stage = (int) ($body['stage'] ?? 0);
     $cardIds = array_map(intval(...), (array) ($body['card_ids'] ?? []));
 
     // Quick Draft's own picks are keyed by user_id, not game_player_id

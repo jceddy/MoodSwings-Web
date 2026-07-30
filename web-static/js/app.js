@@ -254,9 +254,12 @@ function deleteDecklist(id) {
     });
 }
 
-// Quick Draft (issue #88) -- see "Quick Draft" in web-static/README.md.
-// stage is 'draw' (keep 2 of your own just-dealt 6) or 'received' (keep 2
-// of the 4 cards you received from your opponent).
+// Quick Draft (issue #88; multiplayer support issue #189) -- see "Quick
+// Draft" in web-static/README.md. stage is a 1-based stage number
+// (1..total_stages, where total_stages is the match's own player count) --
+// which pile you're currently holding at that stage is entirely
+// server-derived from the seat-rotation math (see
+// GameService::submitQuickDraftPick()'s own docblock).
 function submitQuickDraftPick(gameId, round, stage, cardIds) {
     return apiRequest('/games/draft/pick', {
         method: 'POST',

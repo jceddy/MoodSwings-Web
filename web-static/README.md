@@ -816,14 +816,18 @@ too, proportional to the smaller card width.
     guaranteed `400` waiting to happen. Quick Draft, Winston Draft, and
     Grid Draft are all three only ever offered under the Draft format
     (`#new-game-format` has its own
-    Draft option, functionally identical to Duel -- same 2-player,
-    separate-per-player-deck engine, `updateOpponentSelectionLimit()` caps
-    it at 1 opponent the same way Duel is -- but restricted to deck types
-    that build a deck through some kind of live drafting process; Quick
-    Draft was the first, Winston Draft joined it next, Grid Draft joined
-    after that -- see "Draft
-    format" in
-    `php-app/README.md`). Polls `GET /games` every 4 seconds while the lobby is
+    Draft option, using the same separate-per-player-deck engine Duel
+    uses -- but restricted to deck types that build a deck through some
+    kind of live drafting process; Quick Draft was the first, Winston
+    Draft joined it next, Grid Draft joined after that -- see "Draft
+    format" in `php-app/README.md`). `updateOpponentSelectionLimit()`
+    caps opponent selection at 1 (2 players total) for Duel, and for
+    Draft with any deck_type OTHER than Quick Draft -- Quick Draft alone
+    supports 2-4 players (issue #189, `opponentSelectionMax()`), so up to
+    3 opponents may be checked once it's selected; switching away from
+    it (either to a different deck_type or a different format entirely)
+    re-caps the selection at 1 and un-checks any extras, keeping the
+    first one checked. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
     views is ever visible at once) — so a game another player just
@@ -928,14 +932,21 @@ too, proportional to the smaller card width.
     whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
     is non-null --
     all three share an identical outer shape, `your_wins`/`opponent_wins`/
-    `games_to_win`/`next_game_id`, even though their own `drafting`
+    `games_to_win`/`next_game_id`/`players`, even though their own `drafting`
     sub-shapes differ -- hidden for every other deck_type) sits just below
     the round-status line and is always shown once a `quick_draft`/
     `winston_draft`/`grid_draft` game
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead). No deck_type-specific label here (Quick Draft/Winston
+    ahead) for Winston Draft/Grid Draft and a 2-player Quick Draft match.
+    A 3-4 player Quick Draft match (issue #189, always single-game --
+    `games_to_win` is 1) has more than one rival to show a score for, so
+    it branches on `players.length > 2` instead and builds its text from
+    `players` (every seated player's own username/wins/is_you) --
+    "Single-game match -- you 0, Alice 0, Bob 1" rather than the
+    "Best of N"/leader-vs-opponent phrasing. No deck_type-specific label
+    here (Quick Draft/Winston
     Draft/Grid Draft) -- that's already shown elsewhere on the board (the
     title), so this line stays purely about the match's own progress. The same function also
     owns `#draft-match-next-game-button`, right next to the scoreline:
@@ -955,20 +966,29 @@ too, proportional to the smaller card width.
     from `state.quick_draft`:
     - **Drafting** (`#quick-draft-drafting`, `renderQuickDraftDrafting()`,
       shown while `state.quick_draft.status` is `'drafting'`) -- shows the
-      current round number and one of four stage messages
-      (`QUICK_DRAFT_STAGE_STATUS`) depending on `state.quick_draft.drafting.stage`:
-      `'draw'` (your own 6 just-dealt cards, keep 2), `'received'` (the 4
-      cards you actually received from your opponent, keep 2 — only
-      determined once both players have submitted `'draw'`), or one of the
-      two `awaiting_opponent_*` stages (an empty pack, a "waiting on your
-      opponent" message — transient, since the round/stage advances
-      automatically the moment they finish too). The pack itself
+      current round number and, since issue #189's multiplayer support,
+      builds its status text from `drafting.stage`/`drafting.total_stages`/
+      `drafting.status`/`drafting.pass_direction` rather than a fixed
+      4-entry `'draw'`/`awaiting_opponent_draw`/`'received'`/
+      `awaiting_opponent_received` string dictionary: `stage` is an
+      integer (1..`total_stages`, where `total_stages` is the match's own
+      player count -- 2 for the original 2-player shape), and `status` is
+      `'picking'` (act now -- `drafting.pack` is the pile you currently
+      hold) or `'awaiting_others'` (you've already made this stage's pick;
+      an empty pack, a "waiting on the other player(s)" message --
+      transient, since the round/stage advances automatically the moment
+      everyone else finishes too). For a 2-player match this degenerates
+      to exactly the original two-message sequence; for 3-4 players the
+      title also names the pass direction (`pass_direction`, `'right'`/
+      `'left'`, alternating every round). The pack itself
       (`#quick-draft-pack`) reuses the exact same click-thumbnail-to-open-
       `#card-detail-dialog`-with-a-`selection`-object picker pattern
       `renderInitialCardPass()` already established (a plain client-side
-      `Set`, capped at 2, never sent until `#quick-draft-pick-submit-button`
+      `Set`, capped at `QUICK_DRAFT_KEEP_PER_STAGE` (2), never sent until
+      `#quick-draft-pick-submit-button`
       is pressed, which calls `submitQuickDraftPick()` — `POST
-      /games/draft/pick`). That selection Set is keyed to the current
+      /games/draft/pick`, `stage` sent as the plain integer from
+      `drafting.stage`). That selection Set is keyed to the current
       `round:stage` pair (reset the moment either changes) rather than
       reset on every render, so it survives an ordinary 4-second poll
       mid-pick the same way `renderInitialCardPass()`'s own selection does.
@@ -985,11 +1005,17 @@ too, proportional to the smaller card width.
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
       the UI either. Its title/status text is built from
-      `deckBuilding.min_deck_size`/`max_deck_size` (14/16 for Quick Draft,
-      12/however-many-you-drafted for Winston Draft and Grid Draft alike),
-      never hardcoded, so
-      one function serves all three formats' own bounds correctly. All of your
-      own drafted cards
+      `deckBuilding.min_deck_size`/`max_deck_size` (12/16 or 12/18 for
+      Quick Draft depending on player count since issue #189 removed its
+      flat 16-card ceiling, 12/however-many-you-drafted for Winston Draft
+      and Grid Draft alike), never hardcoded, so
+      one function serves all three formats' own bounds correctly. The
+      "waiting for a deck" status text reads `deckBuilding.other_players`
+      (every other seated player's own username/submitted flag, issue
+      #189) when present rather than the single `opponent_submitted`
+      flag, so a 3-4 player Quick Draft match names every player still
+      owed a deck instead of only ever checking the first of them. All of
+      your own drafted cards
       (`deckBuilding.drafted_cards`) show as toggleable
       thumbnails (same picker pattern again, no 2-card cap this time — any
       count within that format's own min/max is valid), pre-seeded from your current

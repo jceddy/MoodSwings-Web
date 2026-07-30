@@ -59,6 +59,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE notification_preferences');
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE draft_round_picks');
+        $pdo->exec('TRUNCATE TABLE draft_pile_stage_picks');
         $pdo->exec('TRUNCATE TABLE draft_winston_state');
         $pdo->exec('TRUNCATE TABLE draft_grid_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
@@ -4057,11 +4058,11 @@ final class GameServiceIntegrationTest extends TestCase
         for ($round = 1; $round <= 4; $round++) {
             foreach ([$qU1, $qU2] as $userId) {
                 $pack = $games->getState($qGameId, $userId)['quick_draft']['drafting']['pack'];
-                $games->submitQuickDraftPick($qGameId, $userId, $round, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+                $games->submitQuickDraftPick($qGameId, $userId, $round, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
             }
             foreach ([$qU1, $qU2] as $userId) {
                 $pack = $games->getState($qGameId, $userId)['quick_draft']['drafting']['pack'];
-                $games->submitQuickDraftPick($qGameId, $userId, $round, 'received', [$pack[0]['card_id'], $pack[1]['card_id']]);
+                $games->submitQuickDraftPick($qGameId, $userId, $round, 2, [$pack[0]['card_id'], $pack[1]['card_id']]);
             }
         }
         self::assertSame('deck_building', $this->fetchDraftMatch((int) $this->fetchGame($qGameId)['draft_match_id'])['status']);
@@ -7832,17 +7833,17 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * Drives a full 4-round Quick Draft to completion for both $u1/$u2,
-     * always keeping the pack's first QUICK_DRAFT_KEEP_PER_STAGE cards at
-     * each stage -- exercised purely through the public API
-     * (submitQuickDraftPick()/getState()), the same surface the real
-     * frontend uses. The getState()-reported pack size is asserted at
-     * every single stage of every round (6 for 'draw', 4 for 'received') --
-     * this alone proves both the multiset-subtraction math (a wrong
-     * array_diff()-based passed/received computation would desync these
-     * counts the moment a duplicate catalog id was involved) and the
+     * Drives a full 4-round, 2-player Quick Draft to completion for both
+     * $u1/$u2, always keeping the pack's first QUICK_DRAFT_KEEP_PER_STAGE
+     * cards at each of the round's 2 stages -- exercised purely through
+     * the public API (submitQuickDraftPick()/getState()), the same
+     * surface the real frontend uses. The getState()-reported pack size is
+     * asserted at every single stage of every round (6 for stage 1, 4 for
+     * stage 2) -- this alone proves both the multiset-subtraction math (a
+     * wrong array_diff()-based passed/received computation would desync
+     * these counts the moment a duplicate catalog id was involved) and the
      * round-4 discard-reshuffle top-up path (a pool smaller than 48 would
-     * short round 4's draw pack below 6 without it).
+     * short round 4's stage-1 pack below 6 without it).
      */
     private function driveQuickDraftToDeckBuilding(int $gameId, int $u1, int $u2): void
     {
@@ -7851,20 +7852,22 @@ final class GameServiceIntegrationTest extends TestCase
                 $state = $this->games->getState($gameId, $userId);
                 self::assertSame('drafting', $state['quick_draft']['status']);
                 self::assertSame($round, $state['quick_draft']['drafting']['round']);
-                self::assertSame('draw', $state['quick_draft']['drafting']['stage']);
+                self::assertSame(1, $state['quick_draft']['drafting']['stage']);
+                self::assertSame('picking', $state['quick_draft']['drafting']['status']);
                 $pack = $state['quick_draft']['drafting']['pack'];
-                self::assertCount(6, $pack, "round {$round} draw pack for user {$userId}");
+                self::assertCount(6, $pack, "round {$round} stage 1 pack for user {$userId}");
 
-                $this->games->submitQuickDraftPick($gameId, $userId, $round, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+                $this->games->submitQuickDraftPick($gameId, $userId, $round, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
             }
 
             foreach ([$u1, $u2] as $userId) {
                 $state = $this->games->getState($gameId, $userId);
-                self::assertSame('received', $state['quick_draft']['drafting']['stage']);
+                self::assertSame(2, $state['quick_draft']['drafting']['stage']);
+                self::assertSame('picking', $state['quick_draft']['drafting']['status']);
                 $pack = $state['quick_draft']['drafting']['pack'];
-                self::assertCount(4, $pack, "round {$round} received pack for user {$userId}");
+                self::assertCount(4, $pack, "round {$round} stage 2 pack for user {$userId}");
 
-                $this->games->submitQuickDraftPick($gameId, $userId, $round, 'received', [$pack[0]['card_id'], $pack[1]['card_id']]);
+                $this->games->submitQuickDraftPick($gameId, $userId, $round, 2, [$pack[0]['card_id'], $pack[1]['card_id']]);
             }
         }
     }
@@ -7930,14 +7933,20 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
 
-    public function testCreateGameRejectsADraftGameWithMoreThanTwoPlayers(): void
+    /**
+     * Winston Draft and Grid Draft stay locked to exactly 2 players (issue
+     * #189's multiplayer support is Quick Draft-only for now) -- see
+     * testCreateGameAcceptsQuickDraftWithThreeOrFourPlayers() below for
+     * Quick Draft's own, now-permissive version of this same gate.
+     */
+    public function testCreateGameRejectsAWinstonDraftGameWithMoreThanTwoPlayers(): void
     {
         $u1 = $this->insertUser('drafttoomany1');
         $u2 = $this->insertUser('drafttoomany2');
         $u3 = $this->insertUser('drafttoomany3');
 
         $this->expectException(GameStateException::class);
-        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+        $this->games->createGame($u1, [$u1, $u2, $u3], format: 'draft', deckType: 'winston_draft', winstonDraftPoolSource: 'random_48');
     }
 
     public function testCreateGameRejectsADraftGameWithFewerThanTwoPlayers(): void
@@ -7946,6 +7955,31 @@ final class GameServiceIntegrationTest extends TestCase
 
         $this->expectException(GameStateException::class);
         $this->games->createGame($u1, [$u1], format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+    }
+
+    /** @return int[] */
+    private function insertUsers(string $prefix, int $count): array
+    {
+        return array_map(fn (int $i): int => $this->insertUser($prefix . $i), range(1, $count));
+    }
+
+    public function testCreateGameAcceptsQuickDraftWithThreeOrFourPlayers(): void
+    {
+        $threeUserIds = $this->insertUsers('qd3p-' . uniqid(), 3);
+        $threeGameId = $this->games->createGame($threeUserIds[0], $threeUserIds, format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+        self::assertIsInt($threeGameId);
+
+        $fourUserIds = $this->insertUsers('qd4p-' . uniqid(), 4);
+        $fourGameId = $this->games->createGame($fourUserIds[0], $fourUserIds, format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
+        self::assertIsInt($fourGameId);
+    }
+
+    public function testCreateGameRejectsQuickDraftWithMoreThanFourPlayers(): void
+    {
+        $userIds = $this->insertUsers('qd5p-' . uniqid(), 5);
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'quick_draft', quickDraftPoolSource: 'random_48');
     }
 
     public function testStartGameGivesEachDraftPlayerTheirOwnIndependentDeck(): void
@@ -8100,7 +8134,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('exactly 2 cards');
 
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id']]);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, [$pack[0]['card_id']]);
     }
 
     public function testSubmitQuickDraftPickRejectsACardNotInYourDrawnPack(): void
@@ -8119,9 +8153,9 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only keep cards you were actually dealt');
+        $this->expectExceptionMessage('only keep cards that are actually in the pile you currently hold');
 
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id'], $notInPack]);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, [$pack[0]['card_id'], $notInPack]);
     }
 
     public function testSubmitQuickDraftPickRejectsResubmittingTheSameStage(): void
@@ -8131,12 +8165,22 @@ final class GameServiceIntegrationTest extends TestCase
         $pack = $state['quick_draft']['drafting']['pack'];
         $keep = [$pack[0]['card_id'], $pack[1]['card_id']];
 
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', $keep);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, $keep);
 
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('already made your pick');
 
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', $keep);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, $keep);
+    }
+
+    public function testSubmitQuickDraftPickRejectsAnOutOfRangeStageNumber(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('stage must be between 1 and 2');
+
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 3, [1, 2]);
     }
 
     public function testSubmitQuickDraftPickRejectsReceivedStageBeforeDrawStage(): void
@@ -8144,9 +8188,9 @@ final class GameServiceIntegrationTest extends TestCase
         ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('must submit your draw pick before your received-card pick');
+        $this->expectExceptionMessage("stage 1 is not yet complete for every player");
 
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'received', [1, 2]);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 2, [1, 2]);
     }
 
     public function testSubmitQuickDraftPickRejectsReceivedStageBeforeTheOpponentHasSubmittedDraw(): void
@@ -8155,12 +8199,12 @@ final class GameServiceIntegrationTest extends TestCase
         $state = $this->games->getState($gameId, $u1);
         $pack = $state['quick_draft']['drafting']['pack'];
 
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage("opponent hasn't made their draw pick yet");
+        $this->expectExceptionMessage("stage 1 is not yet complete for every player");
 
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'received', [$pack[2]['card_id'], $pack[3]['card_id']]);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 2, [$pack[2]['card_id'], $pack[3]['card_id']]);
     }
 
     public function testStartGameRejectsAQuickDraftGameUntilBothPlayersHaveSubmittedADeck(): void
@@ -8171,7 +8215,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->submitFullQuickDraftDeck($gameId, $u1);
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
+        $this->expectExceptionMessage('cannot start until every player has submitted their drafted deck');
 
         $this->games->startGame($gameId);
     }
@@ -8813,19 +8857,19 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
 
         $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
 
         self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'u1 already submitted this round\'s draw stage -- only u2 is still owed');
         self::assertFalse($summaryFor($u1)['is_awaiting_your_response']);
         self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
 
         $pack = $this->games->getState($gameId, $u2)['quick_draft']['drafting']['pack'];
-        $this->games->submitQuickDraftPick($gameId, $u2, 1, 'draw', [$pack[0]['card_id'], $pack[1]['card_id']]);
+        $this->games->submitQuickDraftPick($gameId, $u2, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
 
         self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'both have their draw-stage picks in -- the received stage is now open and owed by both');
 
         $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
-        $this->games->submitQuickDraftPick($gameId, $u1, 1, 'received', [$pack[0]['card_id'], $pack[1]['card_id']]);
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 2, [$pack[0]['card_id'], $pack[1]['card_id']]);
 
         self::assertSame([$u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'u1 finished round 1 -- only u2 is still owed the received stage');
     }
@@ -8865,6 +8909,190 @@ final class GameServiceIntegrationTest extends TestCase
         $this->submitFullQuickDraftDeck($gameId, $u2);
 
         self::assertSame([], $summaryFor($u1)['awaiting_response_usernames'], 'both have submitted -- the game is ready for startGame(), nobody left to wait on');
+    }
+
+    // -- Multiplayer Quick Draft (issue #189) ---------------------------------
+
+    /**
+     * Drives a full N-player (N = count($userIds)) Quick Draft to
+     * deck_building, asserting the seat-rotation pile-passing math holds
+     * at every one of the round's N stages: total_stages equals the
+     * player count, the pass_direction alternates right/left/right per
+     * round, and every pack shrinks by exactly QUICK_DRAFT_KEEP_PER_STAGE
+     * cards stage over stage (2N+2, 2N, 2N-2, ..., down to 4 at the final
+     * stage) -- this alone proves the pile-owner/holder seat-rotation
+     * formula in submitQuickDraftPick() is correct for every stage of
+     * every round, not just the 2-stage case driveQuickDraftToDeckBuilding()
+     * already covers. Always keeps the pack's first
+     * QUICK_DRAFT_KEEP_PER_STAGE cards at each stage.
+     *
+     * @param int[] $userIds
+     */
+    private function driveMultiplayerQuickDraftToDeckBuilding(int $gameId, array $userIds): void
+    {
+        $playerCount = count($userIds);
+        $totalRounds = match ($playerCount) {
+            3 => 3,
+            4 => 2,
+        };
+        $pileSize = 2 * $playerCount + 2;
+
+        for ($round = 1; $round <= $totalRounds; $round++) {
+            $expectedDirection = $round % 2 === 1 ? 'right' : 'left';
+            $packSize = $pileSize;
+
+            for ($stage = 1; $stage <= $playerCount; $stage++) {
+                foreach ($userIds as $userId) {
+                    $state = $this->games->getState($gameId, $userId);
+                    self::assertSame('drafting', $state['quick_draft']['status']);
+                    self::assertSame($round, $state['quick_draft']['drafting']['round']);
+                    self::assertSame($totalRounds, $state['quick_draft']['drafting']['total_rounds']);
+                    self::assertSame($stage, $state['quick_draft']['drafting']['stage']);
+                    self::assertSame($playerCount, $state['quick_draft']['drafting']['total_stages']);
+                    self::assertSame($expectedDirection, $state['quick_draft']['drafting']['pass_direction']);
+                    self::assertSame('picking', $state['quick_draft']['drafting']['status']);
+                    $pack = $state['quick_draft']['drafting']['pack'];
+                    self::assertCount($packSize, $pack, "round {$round} stage {$stage} pack for user {$userId}");
+
+                    $this->games->submitQuickDraftPick($gameId, $userId, $round, $stage, [$pack[0]['card_id'], $pack[1]['card_id']]);
+                }
+
+                $packSize -= 2;
+            }
+        }
+    }
+
+    /**
+     * N-player analog of completeQuickDraftGameByPassing() -- every seated
+     * player passes in turn, in turn order; the round scores 0-0 for
+     * everyone, and RoundScorer::winner() breaks the tie in favor of
+     * whoever's turn was first this round, so this deterministically
+     * hands the game to $round['first_game_player_id'] regardless of
+     * player count.
+     *
+     * @param int[] $userIds
+     * @return int the winner's user_id
+     */
+    private function completeMultiplayerQuickDraftGameByPassing(int $gameId, array $userIds): int
+    {
+        $round = $this->fetchRound($gameId);
+        $firstGamePlayerId = (int) $round['first_game_player_id'];
+
+        $gameCompleted = false;
+        for ($i = 0; $i < count($userIds); $i++) {
+            $round = $this->fetchRound($gameId);
+            $currentTurnGamePlayerId = (int) $round['current_turn_game_player_id'];
+            $result = $this->games->pass($gameId, $currentTurnGamePlayerId);
+            if ($result['game_completed']) {
+                $gameCompleted = true;
+                self::assertSame($firstGamePlayerId, $result['winner_game_player_id']);
+                break;
+            }
+        }
+        self::assertTrue($gameCompleted, 'every seated player passing should complete the round/game');
+
+        $userIdStmt = $this->pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $userIdStmt->execute(['id' => $firstGamePlayerId]);
+
+        return (int) $userIdStmt->fetchColumn();
+    }
+
+    /**
+     * @param int $playerCount
+     * @return array{gameId:int, userIds:int[]}
+     */
+    private function buildMultiplayerQuickDraftFixture(int $playerCount): array
+    {
+        $userIds = $this->insertUsers('qdmp-' . uniqid() . '-', $playerCount);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            winsNeeded: 1,
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'random_48',
+        );
+
+        return ['gameId' => $gameId, 'userIds' => $userIds];
+    }
+
+    public function testQuickDraftThreePlayerFullDraftToGameCompletion(): void
+    {
+        ['gameId' => $gameId, 'userIds' => $userIds] = $this->buildMultiplayerQuickDraftFixture(3);
+
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $draftedCardIds = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            self::assertCount(18, $draftedCardIds, "user {$userId} should have drafted 3 rounds x 6 cards/round = 18 cards");
+
+            $state = $this->games->getState($gameId, $userId);
+            self::assertSame(12, $state['quick_draft']['deck_building']['min_deck_size']);
+            self::assertSame(18, $state['quick_draft']['deck_building']['max_deck_size'], 'max deck size is the full drafted pool, not a flat 16');
+            self::assertCount(2, $state['quick_draft']['deck_building']['other_players']);
+            self::assertCount(3, $state['quick_draft']['players']);
+            self::assertSame(1, $state['quick_draft']['games_to_win'], '3+ player Quick Draft matches are single-game');
+
+            $this->games->submitDraftDeck($gameId, $userId, $draftedCardIds);
+        }
+
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeMultiplayerQuickDraftGameByPassing($gameId, $userIds);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status'], 'the match completes after exactly 1 game for 3+ players');
+        self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+    }
+
+    public function testQuickDraftFourPlayerFullDraftToGameCompletion(): void
+    {
+        ['gameId' => $gameId, 'userIds' => $userIds] = $this->buildMultiplayerQuickDraftFixture(4);
+
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $draftedCardIds = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            self::assertCount(16, $draftedCardIds, "user {$userId} should have drafted 2 rounds x 8 cards/round = 16 cards");
+
+            $state = $this->games->getState($gameId, $userId);
+            self::assertSame(12, $state['quick_draft']['deck_building']['min_deck_size']);
+            self::assertSame(16, $state['quick_draft']['deck_building']['max_deck_size']);
+            self::assertCount(3, $state['quick_draft']['deck_building']['other_players']);
+            self::assertCount(4, $state['quick_draft']['players']);
+            self::assertSame(1, $state['quick_draft']['games_to_win']);
+
+            $this->games->submitDraftDeck($gameId, $userId, $draftedCardIds);
+        }
+
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeMultiplayerQuickDraftGameByPassing($gameId, $userIds);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertSame($winnerUserId, (int) $match['winner_user_id']);
+    }
+
+    public function testQuickDraftMultiplayerPoolSizeIsTwentyFourTimesPlayerCount(): void
+    {
+        ['gameId' => $threeGameId] = $this->buildMultiplayerQuickDraftFixture(3);
+        $threeDraftMatchId = (int) $this->fetchGame($threeGameId)['draft_match_id'];
+        $threePool = json_decode($this->fetchDraftMatch($threeDraftMatchId)['pool_card_ids'], true);
+        self::assertCount(72, $threePool);
+        self::assertCount(72, array_unique($threePool));
+
+        ['gameId' => $fourGameId] = $this->buildMultiplayerQuickDraftFixture(4);
+        $fourDraftMatchId = (int) $this->fetchGame($fourGameId)['draft_match_id'];
+        $fourPool = json_decode($this->fetchDraftMatch($fourDraftMatchId)['pool_card_ids'], true);
+        self::assertCount(96, $fourPool);
+        self::assertCount(96, array_unique($fourPool));
     }
 
     // -- Winston Draft (issue #89) -------------------------------------------
@@ -9394,7 +9622,7 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
+        $this->expectExceptionMessage('cannot start until every player has submitted their drafted deck');
 
         $this->submitFullWinstonDraftDeck($gameId, $u1);
         $this->games->startGame($gameId);
@@ -9901,7 +10129,7 @@ final class GameServiceIntegrationTest extends TestCase
         $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('cannot start until both players have submitted their drafted deck');
+        $this->expectExceptionMessage('cannot start until every player has submitted their drafted deck');
 
         $this->submitFullGridDraftDeck($gameId, $u1);
         $this->games->startGame($gameId);

@@ -1276,7 +1276,7 @@
         jceddys_75: 'A 75-card deck: for each color, 1 random mythic, 2 different random rares, 4 random uncommons (up to 2 copies of any one), and 8 random commons (up to 3 copies of any one).',
         custom: 'Upload or paste your own decklist: at least 15 cards, plus 15 more per player beyond the first two.',
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
-        quick_draft: 'Both players draft their own 16-card deck live from a shared card pool, trim it to 12-16 cards, then play a best-of-three match -- sideboarding freely between games.',
+        quick_draft: '2-4 players each draft their own deck live from a shared card pool (16 cards for 2 or 4 players, 18 for 3), trim it down to at least 12. A 2-player draft plays a best-of-three match, sideboarding freely between games; a 3-4 player draft plays a single game.',
         winston_draft: 'Both players draft their own deck from a shared 45-card pool by taking or passing on 3 growing face-down piles, then trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
         grid_draft: 'Both players draft their own deck from a shared 54-card pool over 6 rounds: each round, 9 cards are dealt into a 3x3 grid, and each player in turn takes a whole row or column. Trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
@@ -1284,13 +1284,20 @@
 
     // Plain-language explanation shown under Quick Draft's own Pool
     // dropdown -- kept in sync with GameService::buildQuickDraftPool()'s
-    // actual behavior for each pool_source.
+    // actual behavior for each pool_source. The pool's target size is
+    // 24 cards per seated player (48/72/96 for 2/3/4 players -- see
+    // GameService::quickDraftPoolTargetSize()), so these descriptions
+    // stay in generic terms rather than hardcoding the 2-player number;
+    // a pool source smaller than the target (the 45-card Structure deck,
+    // or an undersized custom pool) isn't padded here -- the draft itself
+    // tops back up from already-discarded cards as it goes, same as a
+    // physical 45-card box.
     const QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
-        random_48: '48 random cards, no duplicates.',
-        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- short of the 48 cards a full draft needs, so round 4 tops back up from already-discarded cards, same as a physical 45-card box.',
-        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to 48 before the draft begins.",
-        one_of_each: 'The full 133-card pool, randomly narrowed down to 48 before the draft begins.',
-        custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 48 if you provide more.',
+        random_48: 'Random cards, no duplicates (24 per seated player).',
+        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- for 3+ players, or a 2-player draft needing more than 45 cards, the draft tops back up from already-discarded cards as it goes, same as a physical 45-card box.',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size (or topped back up from discards if more players need more than 75).",
+        one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
+        custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
     };
 
     // Winston Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
@@ -1463,6 +1470,13 @@
         }
 
         updateDeckTypeDescription();
+        // deckType may have just changed (the fallback above, or simply
+        // switching format changes what "the currently selected deck
+        // type" means for opponentSelectionMax()) -- re-run so a
+        // 'draft'+'quick_draft' selection right after a format switch
+        // isn't left capped at 1 opponent from whatever deck_type was
+        // selected a moment ago.
+        updateOpponentSelectionLimit();
     }
 
     // Shows the partner picker only for Open Team Play, populated from
@@ -1869,17 +1883,30 @@
     const newGameError = document.getElementById('new-game-error');
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
-    // 'duel' and 'draft' games each require exactly 2 players total
-    // (enforced server-side by GameService::isDuelShapedFormat()'s own
-    // check in createGame()), so at most 1 opponent may be chosen for
-    // either -- every other format allows up to 3. Re-run on every
-    // checkbox change and every format-dropdown change, so switching to
-    // 'duel'/'draft' with 2+ opponents already checked un-checks the
-    // extras (keeping the first one) rather than leaving a selection the
-    // server would just reject.
+    // 'duel' games, and 'draft' games for every deck_type except
+    // 'quick_draft', require exactly 2 players total (enforced
+    // server-side by GameService::isDuelShapedFormat()'s own check in
+    // createGame()), so at most 1 opponent may be chosen for those --
+    // 'quick_draft' alone supports 3-4 players (issue #189), so up to 3
+    // opponents; every other format allows up to 3 as well. Re-run on
+    // every checkbox change and every format/deck-type-dropdown change,
+    // so switching to a 2-player-only combination with 2+ opponents
+    // already checked un-checks the extras (keeping the first one)
+    // rather than leaving a selection the server would just reject.
+    function opponentSelectionMax(format, deckType) {
+        if (format === 'duel') {
+            return 1;
+        }
+        if (format === 'draft') {
+            return deckType === 'quick_draft' ? 3 : 1;
+        }
+        return 3;
+    }
+
     function updateOpponentSelectionLimit() {
         const format = document.getElementById('new-game-format').value;
-        const maxOpponents = format === 'duel' || format === 'draft' ? 1 : 3;
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const maxOpponents = opponentSelectionMax(format, deckType);
         const boxes = opponentCheckboxes.querySelectorAll('input');
 
         let checkedCount = 0;
@@ -1902,6 +1929,7 @@
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
@@ -3256,10 +3284,19 @@
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
+                // other_players (issue #189) covers every OTHER seated
+                // player -- for a 3-4 player Quick Draft match,
+                // opponent_submitted alone only reflects the first of them,
+                // which would auto-start the game the moment just one of
+                // several other players has submitted.
+                const otherPlayers = draftState.status === 'deck_building' ? draftState.deck_building.other_players : null;
+                const everyOtherDeckSubmitted = otherPlayers
+                    ? otherPlayers.every((p) => p.submitted)
+                    : (draftState.status === 'deck_building' && draftState.deck_building.opponent_submitted);
                 autoStartGameIfReady(
                     draftState.status === 'deck_building'
                     && draftState.deck_building.you_submitted
-                    && draftState.deck_building.opponent_submitted
+                    && everyOtherDeckSubmitted
                 );
             } else {
                 document.getElementById('board-round-status').textContent = 'Waiting for the game to start.';
@@ -3762,25 +3799,37 @@
             return;
         }
 
-        // Quick Draft/Winston Draft are always exactly 2 players (see
-        // GameService::createGame()'s format === 'draft' guard), so the
-        // "other" seated player is always the opponent.
-        const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
-        const opponentUsername = opponent ? opponent.username : 'opponent';
-
-        // "<leader> n-m" convention: tied reads as "tied n-n" (no leader to
-        // name); otherwise whichever side is ahead is named first -- "you"
-        // or the opponent's own username -- with their own win count
-        // first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
-        const scoreText = draftState.your_wins === draftState.opponent_wins
-            ? 'tied ' + draftState.your_wins + '-' + draftState.opponent_wins
-            : draftState.your_wins > draftState.opponent_wins
-                ? 'you ' + draftState.your_wins + '-' + draftState.opponent_wins
-                : opponentUsername + ' ' + draftState.opponent_wins + '-' + draftState.your_wins;
-
         el.hidden = false;
-        el.textContent = 'Best of ' + (draftState.games_to_win * 2 - 1) + ' match, game ' +
-            (state.game.match_game_number || 1) + ', ' + scoreText;
+
+        // Winston Draft/Grid Draft, and 2-player Quick Draft, are always
+        // exactly 2 players -- keep their existing "you n-m"/"<opponent> n-m"
+        // phrasing verbatim. 3-4 player Quick Draft matches (issue #189)
+        // have more than one rival to show a score for, and are always a
+        // single game (games_to_win === 1) rather than a real best-of-three,
+        // so they get their own phrasing built from draftState.players
+        // (every seated player's own username/wins/is_you) instead.
+        if (draftState.players && draftState.players.length > 2) {
+            const scores = draftState.players
+                .map((p) => (p.is_you ? 'you' : p.username) + ' ' + p.wins)
+                .join(', ');
+            el.textContent = 'Single-game match -- ' + scores;
+        } else {
+            const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
+            const opponentUsername = opponent ? opponent.username : 'opponent';
+
+            // "<leader> n-m" convention: tied reads as "tied n-n" (no leader
+            // to name); otherwise whichever side is ahead is named first --
+            // "you" or the opponent's own username -- with their own win
+            // count first, e.g. "you 2-1"/"Dr Potato 2-1", never "1-2".
+            const scoreText = draftState.your_wins === draftState.opponent_wins
+                ? 'tied ' + draftState.your_wins + '-' + draftState.opponent_wins
+                : draftState.your_wins > draftState.opponent_wins
+                    ? 'you ' + draftState.your_wins + '-' + draftState.opponent_wins
+                    : opponentUsername + ' ' + draftState.opponent_wins + '-' + draftState.your_wins;
+
+            el.textContent = 'Best of ' + (draftState.games_to_win * 2 - 1) + ' match, game ' +
+                (state.game.match_game_number || 1) + ', ' + scoreText;
+        }
 
         // next_game_id is only ever set once this game has completed and
         // advanceDraftMatch() has already created the next one -- see
@@ -3801,17 +3850,32 @@
     let quickDraftPickSelection = new Set();
     let quickDraftPickSelectionKey = null;
 
-    const QUICK_DRAFT_STAGE_STATUS = {
-        draw: 'Choose 2 cards to keep from your 6 just-dealt cards -- the other 4 will be passed to your opponent. Tap a card to view it and select/de-select it.',
-        awaiting_opponent_draw: "You've kept your 2 -- your received cards aren't determined until your opponent also makes their own pick.",
-        received: 'Choose 2 cards to keep from the 4 cards you received from your opponent -- the other 2 are discarded. Tap a card to view it and select/de-select it.',
-        awaiting_opponent_received: "You've made both picks this round -- waiting for your opponent to finish theirs.",
-    };
+    // How many cards to keep at every stage -- mirrors GameService's own
+    // fixed QUICK_DRAFT_KEEP_PER_STAGE constant (unaffected by player
+    // count; only the pile size / stage count scale with it).
+    const QUICK_DRAFT_KEEP_PER_STAGE = 2;
 
+    // drafting.stage is a 1-based stage number (1..drafting.total_stages,
+    // where total_stages is the match's own player count -- see
+    // GameService::quickDraftDraftingStateFor()'s own docblock), and
+    // drafting.status is 'picking' (act now -- drafting.pack is the pile
+    // you currently hold) or 'awaiting_others' (you've already made this
+    // stage's pick; the round advances once every other seated player has
+    // too). For a 2-player match this is exactly the original "draw" then
+    // "received" 2-stage sequence; pass_direction is only worth surfacing
+    // once there's more than one other seat it could mean something
+    // different for.
     function renderQuickDraftDrafting(drafting) {
+        const stageLabel = drafting.total_stages > 2
+            ? 'stage ' + drafting.stage + ' of ' + drafting.total_stages + ' (passing ' + drafting.pass_direction + ')'
+            : (drafting.stage === 1 ? 'first pick' : 'second pick');
         document.getElementById('quick-draft-drafting-title').textContent =
-            'Draft round ' + drafting.round + ' of ' + drafting.total_rounds;
-        document.getElementById('quick-draft-drafting-status').textContent = QUICK_DRAFT_STAGE_STATUS[drafting.stage] || '';
+            'Draft round ' + drafting.round + ' of ' + drafting.total_rounds + ' -- ' + stageLabel;
+
+        document.getElementById('quick-draft-drafting-status').textContent = drafting.status === 'picking'
+            ? 'Choose ' + QUICK_DRAFT_KEEP_PER_STAGE + ' cards to keep from this ' + drafting.pack.length
+                + '-card pile -- the rest will be passed on. Tap a card to view it and select/de-select it.'
+            : "You've made your pick for this stage -- waiting on the other player(s) to finish theirs.";
 
         const selectionKey = drafting.round + ':' + drafting.stage;
         if (quickDraftPickSelectionKey !== selectionKey) {
@@ -3822,14 +3886,14 @@
         const packContainer = document.getElementById('quick-draft-pack');
         packContainer.innerHTML = '';
         const submitButton = document.getElementById('quick-draft-pick-submit-button');
-        const pickable = drafting.stage === 'draw' || drafting.stage === 'received';
+        const pickable = drafting.status === 'picking';
 
         drafting.pack.forEach((card, index) => {
             const selected = quickDraftPickSelection.has(index);
             const thumb = buildCardThumb(card, {
                 onClick: () => openCardDetail(card, null, {
                     selected,
-                    disabled: !selected && quickDraftPickSelection.size >= 2,
+                    disabled: !selected && quickDraftPickSelection.size >= QUICK_DRAFT_KEEP_PER_STAGE,
                     onToggle: () => {
                         if (quickDraftPickSelection.has(index)) {
                             quickDraftPickSelection.delete(index);
@@ -3845,7 +3909,7 @@
         });
 
         submitButton.hidden = !pickable;
-        submitButton.disabled = quickDraftPickSelection.size !== 2;
+        submitButton.disabled = quickDraftPickSelection.size !== QUICK_DRAFT_KEEP_PER_STAGE;
 
         renderList(document.getElementById('quick-draft-kept-so-far'), { hidden: true }, drafting.kept_so_far, (card) => {
             const li = document.createElement('li');
@@ -4137,18 +4201,28 @@
 
         if (deckBuilding.you_submitted) {
             statusEl.innerHTML = '';
-            if (deckBuilding.opponent_submitted) {
-                // The game auto-starts itself the moment both decks are in
+            // other_players (issue #189) covers every other seated player --
+            // 1 for Winston/Grid Draft and 2-player Quick Draft, up to 3 for
+            // a multiplayer Quick Draft match; opponent_submitted mirrors
+            // just the first of them, kept for back-compat but not used
+            // here once there's more than one to report on.
+            const others = deckBuilding.other_players || [];
+            const allOthersSubmitted = others.length > 0 ? others.every((p) => p.submitted) : deckBuilding.opponent_submitted;
+            if (allOthersSubmitted) {
+                // The game auto-starts itself the moment every deck is in
                 // (see autoStartGameIfReady()) -- this text is only ever on
                 // screen for the brief moment before that happens.
-                statusEl.textContent = 'Both decks are in -- starting the game...';
+                statusEl.textContent = others.length > 1 ? 'Every deck is in -- starting the game...' : 'Both decks are in -- starting the game...';
             } else {
                 const icon = document.createElement('span');
                 icon.className = 'waiting-icon';
                 icon.textContent = '⏳';
                 icon.setAttribute('aria-hidden', 'true');
                 statusEl.appendChild(icon);
-                statusEl.appendChild(document.createTextNode("Waiting for " + currentOpponentUsername + "'s deck submission"));
+                const waitingOn = others.length > 1
+                    ? others.filter((p) => !p.submitted).map((p) => p.username).join(', ')
+                    : currentOpponentUsername;
+                statusEl.appendChild(document.createTextNode("Waiting for " + waitingOn + "'s deck submission"));
             }
             picker.innerHTML = '';
             submitButton.hidden = true;
@@ -4283,9 +4357,14 @@
     function renderDraftPanel(state) {
         document.getElementById('draft-deck-building').hidden = false;
 
-        // Quick Draft/Winston Draft are always exactly 2 players (see
-        // GameService::createGame()'s format === 'draft' guard), so the
-        // "other" seated player is always the opponent.
+        // Winston Draft/Grid Draft, and 2-player Quick Draft, are always
+        // exactly 2 players (see GameService::createGame()'s format ===
+        // 'draft' guard), so the "other" seated player is always the
+        // opponent -- this is only ever used as a fallback by
+        // renderDraftDeckBuilding() when deckBuilding.other_players isn't
+        // present; a 3-4 player Quick Draft match (issue #189) always has
+        // that field, so this single-username value is never actually
+        // shown for one.
         const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
         currentOpponentUsername = opponent ? opponent.username : 'your opponent';
 
