@@ -831,13 +831,15 @@ too, proportional to the smaller card width.
     "72 random cards" for however many players are actually about to be
     seated. `jceddys_75`'s label similarly switches to noting jceddy's 150
     Card deck's own pool is used instead once a 4-player selection is
-    checked. Winston Draft's `structure` option additionally spells out
-    the 2-copies-combined-then-trimmed mechanic once 3+ players are
-    checked (`winstonStructureOptionLabel()`) -- unlike Quick Draft's own
-    `structure` option, which never needs to change wording since it
-    relies on discard-reshuffle top-up instead of doubling (see the
-    `QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS` docblock above), so a single
-    45-card copy genuinely is enough regardless of player count there.
+    checked. Both Quick Draft's and Winston Draft's own `structure`
+    options spell out the 2-copies-combined mechanic once 3+ players are
+    checked (`structureOptionLabel()`, shared by both) -- Quick Draft's
+    own `structure` pool source used to leave a single 45-card copy
+    undoubled for 3-4 players (a real backend bug, not a deliberate
+    design difference from Winston Draft -- fixed alongside this label;
+    see the `QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS` docblock above), so
+    this label now reflects the same doubling both formats actually
+    perform.
 
     Quick Draft, Winston Draft, and Grid Draft are all three only ever
     offered under the Draft format (`#new-game-format` has its own

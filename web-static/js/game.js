@@ -1287,17 +1287,22 @@
     // actual behavior for each pool_source. The pool's target size is
     // 24 cards per seated player (48/72/96 for 2/3/4 players -- see
     // GameService::quickDraftPoolTargetSize()), so these descriptions
-    // stay in generic terms rather than hardcoding the 2-player number;
-    // a pool source smaller than the target (the 45-card Structure deck,
-    // or an undersized custom pool) isn't padded here -- the draft itself
-    // tops back up from already-discarded cards as it goes, same as a
-    // physical 45-card box. jceddy's 75 Card deck is the one exception --
-    // at exactly 4 players (96 needed), buildDraftPool() swaps in
-    // jceddy's 150 Card deck's own 150-card pool instead, so this draft
-    // never needs the discard top-up for that specific case either.
+    // stay in generic terms rather than hardcoding the 2-player number.
+    // The 45-card Structure deck is doubled to 90 for 3-4 players (see
+    // buildQuickDraftPool()'s own doubleStructureForMultiplayer flag) --
+    // a single 45-card copy falls short of either target even with the
+    // draft's own mid-draft discard-reshuffle top-up, since there's
+    // nothing yet to reshuffle before round 1 is even dealt. That
+    // reshuffle top-up still covers whatever gap remains after doubling
+    // (6 cards, for a 4-player draft's 96-card target) or an undersized
+    // custom pool. jceddy's 75 Card deck is the one pool source that
+    // never needs the reshuffle top-up at all -- at exactly 4 players
+    // (96 needed), buildDraftPool() swaps in jceddy's 150 Card deck's
+    // own 150-card pool instead, comfortably covering that target
+    // outright.
     const QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
         random_48: 'Random cards, no duplicates (24 per seated player).',
-        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- for 3+ players, or a 2-player draft needing more than 45 cards, the draft tops back up from already-discarded cards as it goes, same as a physical 45-card box.',
+        structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- 2 copies combined (then trimmed) for 3-4 players, since a single copy falls short of their own larger targets; the draft still tops back up from already-discarded cards as it goes for whatever gap remains, same as a physical 45-card box.',
         jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 96 needed.",
         one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
         custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
@@ -1307,12 +1312,12 @@
     // same pool-source options, kept in sync with
     // GameService::winstonDraftPoolTargetSize()'s own per-player-count
     // target (45/70/90 for 2/3/4 players, matching the physical rules' own
-    // "Total number of cards drafted: 45" for 2 players). Unlike Quick
-    // Draft/Grid Draft, the Structure deck IS offered here even though its
-    // own 45 cards fall short of the 3-4 player targets -- it's doubled
-    // first (2 copies concatenated) rather than rejected, since Winston
-    // Draft has no discard-reshuffle top-up to fall back on the way Quick
-    // Draft does.
+    // "Total number of cards drafted: 45" for 2 players). Unlike Grid
+    // Draft (which rejects the Structure deck outright, since it has no
+    // top-up mechanism of any kind), the Structure deck IS offered here
+    // even though its own 45 cards fall short of the 3-4 player targets --
+    // doubled first (2 copies concatenated), same as Quick Draft's own
+    // 'structure' pool source.
     const WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
         random_48: 'Random cards, no duplicates (45/70/90 for 2/3/4 players).',
         structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- matches the physical game\'s own "a normal deck" example exactly for a 2-player draft (no truncation needed); doubled first for 3-4 players, since 45 alone falls short of their own larger targets.',
@@ -1371,19 +1376,40 @@
             : "jceddy's 75 Card deck (75 cards)";
     }
 
-    // Winston Draft's own 'structure' pool source label -- unlike Quick
-    // Draft (which tops a short 45-card Structure deck back up via
-    // mid-draft discard-reshuffle instead, so its own label never needs
-    // to change), Winston Draft has no such top-up mechanism and instead
-    // concatenates 2 copies of the Structure deck together for 3-4
-    // players (see buildDraftPool()'s $doubleStructureForMultiplayer) --
-    // a single 45-card copy would leave the draft short of even the
-    // 3-player target (70), let alone the 4-player one (90).
-    function winstonStructureOptionLabel(playerCount) {
-        return playerCount > 2
-            ? 'Structure deck (2 copies combined = 90 cards, trimmed to the ' +
-                WINSTON_DRAFT_POOL_TARGET_SIZES[playerCount] + ' needed)'
-            : 'Structure deck (45 cards)';
+    // Shared 'structure' pool source label for Quick Draft/Winston Draft
+    // (Grid Draft doesn't offer 'structure' at all -- see
+    // GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS above). Both formats
+    // concatenate 2 copies of the 45-card Structure deck together for 3-4
+    // players (see buildDraftPool()'s $doubleStructureForMultiplayer,
+    // passed true by both buildQuickDraftPool() and buildWinstonDraftPool()) --
+    // a single 45-card copy falls short of either format's own 3-4 player
+    // targets even with Quick Draft's mid-draft discard-reshuffle top-up,
+    // since there's nothing yet to reshuffle before the draft's first
+    // round is even dealt. The doubled 90-card pool is then truncated down
+    // to the target if it's over (matching buildDraftPool()'s own
+    // "ignore the extra cards" truncation rule -- Winston Draft's own
+    // 70-card 3-player target, or Quick Draft's 72-card one), but for
+    // Quick Draft's 96-card 4-player target specifically, 90 is actually
+    // *short* of it -- that residual 6-card gap is exactly what the
+    // draft's own discard-reshuffle top-up covers as it proceeds (Winston
+    // Draft's own 90-card 4-player target has no such gap, since it
+    // matches the doubled size exactly).
+    function structureOptionLabel(targetSizes, playerCount) {
+        if (playerCount <= 2) {
+            return 'Structure deck (45 cards)';
+        }
+
+        const doubled = 90;
+        const target = targetSizes[playerCount];
+        const poolSize = Math.min(doubled, target);
+
+        if (poolSize < target) {
+            return 'Structure deck (2 copies combined = ' + doubled + ' cards; the remaining '
+                + (target - poolSize) + ' comes from the draft\'s own discard reshuffle as it proceeds)';
+        }
+
+        return 'Structure deck (2 copies combined = ' + poolSize + ' cards'
+            + (poolSize < doubled ? ', trimmed from ' + doubled : '') + ')';
     }
 
     // Re-derives every draft deck_type's pool-source <option> labels for
@@ -1397,12 +1423,15 @@
         const quickSelect = document.getElementById('new-game-quick-draft-pool-source');
         quickSelect.querySelector('option[value="random_48"]').textContent =
             QUICK_DRAFT_POOL_TARGET_SIZES[playerCount] + ' random cards';
+        quickSelect.querySelector('option[value="structure"]').textContent =
+            structureOptionLabel(QUICK_DRAFT_POOL_TARGET_SIZES, playerCount);
         quickSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
 
         const winstonSelect = document.getElementById('new-game-winston-draft-pool-source');
         winstonSelect.querySelector('option[value="random_48"]').textContent =
             WINSTON_DRAFT_POOL_TARGET_SIZES[playerCount] + ' random cards';
-        winstonSelect.querySelector('option[value="structure"]').textContent = winstonStructureOptionLabel(playerCount);
+        winstonSelect.querySelector('option[value="structure"]').textContent =
+            structureOptionLabel(WINSTON_DRAFT_POOL_TARGET_SIZES, playerCount);
         winstonSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
 
         const gridSelect = document.getElementById('new-game-grid-draft-pool-source');

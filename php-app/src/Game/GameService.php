@@ -1631,12 +1631,17 @@ final class GameService
      * like buildStructureDeckCardIds()), 'structure' (reuses
      * buildStructureDeckCardIds() as-is -- its own 45-card pool, or two
      * copies concatenated together when $doubleStructureForMultiplayer is
-     * true and $playerCount > 2, since Winston Draft is the only caller
-     * whose 3-4 player targets, 70/90, actually exceed a single 45-card
-     * copy and has no other top-up mechanism to fall back on -- Quick
-     * Draft's own 'structure' handling relies on its discard-reshuffle
-     * top-up instead, and Grid Draft rejects 'structure' outright, so
-     * both leave this flag false), 'jceddys_75' (reuses
+     * true and $playerCount > 2 -- both Quick Draft and Winston Draft pass
+     * this for 3-4 players, since a single 45-card copy falls short of
+     * either format's own 3-4 player targets (72/96 and 70/90
+     * respectively); Quick Draft's own discard-reshuffle top-up still
+     * covers whatever gap remains after doubling (see
+     * quickDraftMinCustomPoolSize()'s own docblock -- its "2 structure
+     * decks for 3-4 players" floor is exactly what this doubling
+     * produces), it just no longer has to cover the *entire* 3-4 player
+     * shortfall starting from a single undoubled copy the way it
+     * mistakenly did before. Grid Draft rejects 'structure' outright
+     * instead, since it has no top-up mechanism of any kind), 'jceddys_75' (reuses
      * buildJceddys75DeckCardIds() as-is -- its own 75-card pool -- except
      * at exactly 4 players, where buildJceddys150DeckCardIds()'s own
      * 150-card pool is used instead, since 75 falls short of every
@@ -1718,16 +1723,22 @@ final class GameService
 
     /**
      * @return int[] Quick Draft's own quickDraftPoolTargetSize($playerCount)-card
-     *         pool -- see buildDraftPool(). A fixed-size pool source
-     *         (`'structure'`'s 45) that's short of the target isn't
-     *         padded here -- dealQuickDraftRound()'s existing
-     *         discard-reshuffle top-up already covers the shortfall
-     *         generically as the draft proceeds, exactly as it already
-     *         does for a 2-player 'structure' pool. `'jceddys_75'` is the
-     *         one exception: buildDraftPool() itself swaps in
-     *         buildJceddys150DeckCardIds()'s own 150-card pool at exactly
-     *         4 players, so this draft never needs the reshuffle top-up
-     *         for that specific case either.
+     *         pool -- see buildDraftPool(). `'structure'`'s 45-card pool is
+     *         doubled for 3-4 players (matching quickDraftMinCustomPoolSize()'s
+     *         own "2 structure decks for 3-4 players" floor) rather than
+     *         left at a single copy -- a single 45-card copy falls well
+     *         short of the 72/96-card targets even with
+     *         dealQuickDraftRound()'s own discard-reshuffle top-up
+     *         (nothing exists yet to reshuffle before the very first
+     *         round is dealt, so an undersized starting pool leaves round
+     *         1 itself short). The doubled 90-card pool is still short of
+     *         the 4-player target (96) by 6 -- that residual gap is
+     *         exactly what the reshuffle top-up is for, not the entire
+     *         3-4 player shortfall. `'jceddys_75'` is the one pool source
+     *         that never needs the reshuffle top-up at all: buildDraftPool()
+     *         itself swaps in buildJceddys150DeckCardIds()'s own 150-card
+     *         pool at exactly 4 players, comfortably covering that target
+     *         outright.
      */
     private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
     {
@@ -1737,6 +1748,7 @@ final class GameService
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
             $playerCount,
+            doubleStructureForMultiplayer: true,
         );
     }
 

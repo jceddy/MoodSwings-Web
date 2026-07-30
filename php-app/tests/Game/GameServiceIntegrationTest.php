@@ -9091,6 +9091,29 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(96, array_unique($fourPool));
     }
 
+    public function testQuickDraftThreeAndFourPlayerStructurePoolIsDoubled(): void
+    {
+        ['gameId' => $threeGameId] = $this->buildMultiplayerQuickDraftFixture(3, 'structure');
+        $threePool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($threeGameId)['draft_match_id'])['pool_card_ids'], true);
+        // A single 45-card Structure deck copy falls short of 3 players'
+        // own 72-card target even with dealQuickDraftRound()'s own
+        // discard-reshuffle top-up (there's nothing to reshuffle before
+        // round 1 is ever dealt) -- 2 copies combined (90) get truncated
+        // down to 72 instead, the same doubling Winston Draft's own
+        // 'structure' pool source already relies on.
+        self::assertCount(72, $threePool);
+
+        ['gameId' => $fourGameId] = $this->buildMultiplayerQuickDraftFixture(4, 'structure');
+        $fourPool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($fourGameId)['draft_match_id'])['pool_card_ids'], true);
+        // 2 combined copies (90) is still short of 4 players' own 96-card
+        // target by 6 -- that residual gap (not the whole 45-to-96
+        // shortfall) is what dealQuickDraftRound()'s discard-reshuffle
+        // top-up covers as the draft proceeds, exactly matching
+        // quickDraftMinCustomPoolSize(4)'s own 90-card floor for an
+        // equivalent custom pool.
+        self::assertCount(90, $fourPool);
+    }
+
     // -- Winston Draft (issue #89) -------------------------------------------
 
     /** @return array{gameId:int, u1:int, u2:int} */
