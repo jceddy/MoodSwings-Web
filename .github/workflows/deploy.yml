@@ -177,15 +177,29 @@ jobs:
         # curling a request that /migrate would just reject with a 403
         # anyway, so a deploy set up before this secret existed keeps
         # working exactly as it did before (falling back to applying
-        # database/migrations/ by hand -- see database/README.md).
+        # database/migrations/ by hand -- see database/README.md). -A/-H
+        # Accept below work around Bluehost's own bot-protection layer,
+        # which returns a 406 for a bare curl request (no User-Agent/
+        # Accept headers look like anything a real browser would send) --
+        # confirmed by curling /app/health the same bare way and getting
+        # rejected too, well before either request reaches this app's own
+        # PHP code.
         if: ${{ vars.SITE_URL != '' && env.MIGRATION_DEPLOY_KEY != '' }}
         env:
           SITE_URL: ${{ vars.SITE_URL }}
         run: |
-          curl -fsS -X POST -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" "$SITE_URL/app/migrate"
+          curl -fsS -X POST \
+            -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
+            -H "Accept: application/json" \
+            -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" \
+            "$SITE_URL/app/migrate"
 
       - name: Smoke test deployed health endpoint
         if: ${{ vars.SITE_URL != '' }}
         env:
           SITE_URL: ${{ vars.SITE_URL }}
-        run: curl -fsS "$SITE_URL/app/health"
+        run: |
+          curl -fsS \
+            -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
+            -H "Accept: application/json" \
+            "$SITE_URL/app/health"
