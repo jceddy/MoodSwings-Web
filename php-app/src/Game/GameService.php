@@ -4857,6 +4857,130 @@ final class GameService
     }
 
     /**
+     * Issue #84's cleanup cron, first pass -- see
+     * bin/expire_and_delete_stale_games.php. Permanently deletes every
+     * 'completed' game whose last activity (COALESCE(last_move_at,
+     * started_at, created_at) -- the same staleness definition
+     * listGamesForUser()'s own sort and expireStaleActiveGames() below
+     * both use) is older than $olderThanDays: an outcome that's already
+     * settled and hasn't been looked at in that long has nothing left
+     * worth keeping around. `DELETE FROM games` cascades to every other
+     * per-game table (game_players/game_rounds/game_round_scores/
+     * game_cards/game_events/game_pending_decision_batches/
+     * game_team_decisions/game_initial_card_passes/game_notes -- all
+     * ON DELETE CASCADE from games, or transitively via game_players/
+     * game_rounds/game_pending_decision_batches -- see
+     * database/README.md), so no manual per-table cleanup is needed for
+     * any of those. A Quick/Winston/Grid Draft match (draft_matches) has
+     * no FK pointing back to games, so it's never touched by that
+     * cascade -- once none of a match's own games are left referencing
+     * it (either deleted here, or genuinely never created), that match
+     * row (and its draft_match_players/draft_round_picks/
+     * draft_winston_state/draft_grid_state, all ON DELETE CASCADE from
+     * draft_matches) is deleted too, so a match doesn't outlive every
+     * game that was ever part of it.
+     *
+     * @return int how many games were deleted
+     */
+    public function deleteStaleCompletedGames(int $olderThanDays = 7): int
+    {
+        $pdo = Connection::get();
+
+        $idsStmt = $pdo->prepare(
+            "SELECT id FROM games
+             WHERE status = 'completed'
+               AND COALESCE(last_move_at, started_at, created_at) < (NOW() - INTERVAL :days DAY)"
+        );
+        $idsStmt->execute(['days' => $olderThanDays]);
+        $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        if ($gameIds === []) {
+            return 0;
+        }
+
+        $deleteStmt = $pdo->prepare('DELETE FROM games WHERE id = :id');
+        foreach ($gameIds as $gameId) {
+            $deleteStmt->execute(['id' => $gameId]);
+        }
+
+        $pdo->exec(
+            'DELETE dm FROM draft_matches dm
+             LEFT JOIN games g ON g.draft_match_id = dm.id
+             WHERE g.id IS NULL'
+        );
+
+        return count($gameIds);
+    }
+
+    /**
+     * Issue #84's cleanup cron, second pass -- see
+     * bin/expire_and_delete_stale_games.php and
+     * deleteStaleCompletedGames() above for the first. Any game NOT
+     * already 'completed' (so 'waiting'/'in_progress'/'abandoned') whose
+     * last activity is also older than $olderThanDays gets force-ended
+     * instead of deleted outright -- unlike the already-settled games
+     * above, there's no existing outcome to just discard, so the record
+     * is kept (logged with a 'game_expired' event and no winner --
+     * describeEvent()'s own new case below renders that plainly, and
+     * gameSummaryFor()'s winner_usernames/the board's own "Game over"
+     * line already tolerate a completed game with no winner cleanly) --
+     * it'll be picked up and deleted by deleteStaleCompletedGames() on
+     * some future run once IT has been stale for long enough in turn.
+     * Deliberately does NOT try to gracefully wind down whatever mid-round
+     * state the game was frozen in (an open game_rounds row, a pending
+     * decision, cards still sitting in hand/in_play) the way
+     * resignGame() does for a player-initiated resignation -- nobody is
+     * coming back to finish a game this stale, so there's nothing left to
+     * reconcile, just a status flip.
+     *
+     * @return int how many games were expired
+     */
+    public function expireStaleActiveGames(int $olderThanDays = 7): int
+    {
+        $pdo = Connection::get();
+
+        $idsStmt = $pdo->prepare(
+            "SELECT id FROM games
+             WHERE status != 'completed'
+               AND COALESCE(last_move_at, started_at, created_at) < (NOW() - INTERVAL :days DAY)"
+        );
+        $idsStmt->execute(['days' => $olderThanDays]);
+        $gameIds = array_map(intval(...), $idsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $expiredCount = 0;
+        foreach ($gameIds as $gameId) {
+            $expired = $this->withGameLock($gameId, function () use ($gameId, $olderThanDays): bool {
+                // Re-checked inside the lock in case a player's own
+                // action raced with this cron between the SELECT above
+                // and here -- astronomically unlikely at a 7-day-plus
+                // staleness threshold, but cheap to guard against
+                // terminating a game that just became active again.
+                $staleCheckStmt = Connection::get()->prepare(
+                    "SELECT 1 FROM games WHERE id = :id AND status != 'completed'
+                     AND COALESCE(last_move_at, started_at, created_at) < (NOW() - INTERVAL :days DAY)"
+                );
+                $staleCheckStmt->execute(['id' => $gameId, 'days' => $olderThanDays]);
+                if ($staleCheckStmt->fetchColumn() === false) {
+                    return false;
+                }
+
+                $this->logEvent($gameId, null, null, 'game_expired', null, []);
+                Connection::get()->prepare(
+                    "UPDATE games SET status = 'completed', completed_at = NOW() WHERE id = :id"
+                )->execute(['id' => $gameId]);
+
+                return true;
+            });
+
+            if ($expired) {
+                $expiredCount++;
+            }
+        }
+
+        return $expiredCount;
+    }
+
+    /**
      * Spectator mode (issue #128): every currently-'in_progress' game any
      * of $friendUserIds is seated in, that $viewerUserId is NOT seated in
      * -- the lobby's own games (listGamesForUser() above) never appear
@@ -6966,6 +7090,13 @@ final class GameService
             $row['event_type'] === 'team_turn_order_decided' => "{$actor} was chosen by their team to take this turn",
             $row['event_type'] === 'team_draw_recipient_decided' => "The losing team chose {$actor} to draw their shared card",
             $row['event_type'] === 'draft_match_first_player_decided' => "{$actor} will go first this game",
+            // Issue #84's cleanup cron (expireStaleActiveGames()) --
+            // acting_game_player_id/card_id are both null for this event,
+            // so it needs its own phrasing rather than falling through to
+            // the default "{actor} played {card}" template below, which
+            // would otherwise misleadingly render as "A player played a
+            // card".
+            $row['event_type'] === 'game_expired' => 'This game was automatically ended due to inactivity',
             default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 

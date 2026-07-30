@@ -1506,6 +1506,272 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    // -- Cleanup cron (issue #84) --------------------------------------------
+
+    private function markGameStale(int $gameId, int $daysAgo): void
+    {
+        $this->pdo->prepare(
+            'UPDATE games SET last_move_at = DATE_SUB(NOW(), INTERVAL :days DAY) WHERE id = :id'
+        )->execute(['days' => $daysAgo, 'id' => $gameId]);
+    }
+
+    private function fetchGameEvents(int $gameId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_events WHERE game_id = :game_id ORDER BY id ASC');
+        $stmt->execute(['game_id' => $gameId]);
+
+        return $stmt->fetchAll();
+    }
+
+    /** Unlike fetchGame() (declared to always return array), this tolerates a game that's been deleted entirely. */
+    private function gameRowStillExists(int $gameId): bool
+    {
+        $stmt = $this->pdo->prepare('SELECT 1 FROM games WHERE id = :id');
+        $stmt->execute(['id' => $gameId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /** Unlike fetchDraftMatch() (declared to always return array), this tolerates a match that's been deleted entirely. */
+    private function draftMatchRowStillExists(int $draftMatchId): bool
+    {
+        $stmt = $this->pdo->prepare('SELECT 1 FROM draft_matches WHERE id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetchColumn() !== false;
+    }
+
+    public function testDeleteStaleCompletedGamesDeletesOnlyCompletedGamesOlderThanTheThreshold(): void
+    {
+        $creator = $this->insertUser('deletestale-alice');
+        $bob = $this->insertUser('deletestale-bob');
+
+        // Stale completed -- should be deleted.
+        $staleCompletedId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($staleCompletedId);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $this->games->gamePlayerIdFor($staleCompletedId, $creator), 'id' => $staleCompletedId]);
+        $this->markGameStale($staleCompletedId, 8);
+
+        // Recently completed -- must survive.
+        $freshCompletedId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($freshCompletedId);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $this->games->gamePlayerIdFor($freshCompletedId, $creator), 'id' => $freshCompletedId]);
+        $this->markGameStale($freshCompletedId, 6);
+
+        // Stale but NOT completed -- must survive this pass (handled by
+        // expireStaleActiveGames() instead).
+        $staleInProgressId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($staleInProgressId);
+        $this->markGameStale($staleInProgressId, 30);
+
+        $deletedCount = $this->games->deleteStaleCompletedGames();
+
+        self::assertSame(1, $deletedCount);
+        self::assertFalse($this->gameRowStillExists($staleCompletedId), 'the stale completed game is gone');
+        self::assertTrue($this->gameRowStillExists($freshCompletedId), 'a recently completed game is untouched');
+        self::assertTrue($this->gameRowStillExists($staleInProgressId), 'a stale but non-completed game is untouched by this pass');
+    }
+
+    /**
+     * DELETE FROM games must cascade to every other per-game table --
+     * spot-checks game_players and game_events (the two furthest from
+     * games in the FK graph: game_events cascades via games directly,
+     * game_players also directly, and if either survived a deleted game
+     * that would mean the ON DELETE CASCADE chain documented on
+     * deleteStaleCompletedGames() itself was broken).
+     */
+    public function testDeleteStaleCompletedGamesCascadesToRelatedTables(): void
+    {
+        $creator = $this->insertUser('deletecascade-alice');
+        $bob = $this->insertUser('deletecascade-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+        $round = $this->fetchRound($gameId);
+        $this->games->pass($gameId, (int) $round['current_turn_game_player_id']);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $this->games->gamePlayerIdFor($gameId, $creator), 'id' => $gameId]);
+        $this->markGameStale($gameId, 8);
+
+        self::assertNotSame([], $this->fetchGameEvents($gameId), 'sanity check: the pass above already logged at least one event');
+
+        $this->games->deleteStaleCompletedGames();
+
+        $playersStmt = $this->pdo->prepare('SELECT COUNT(*) FROM game_players WHERE game_id = :id');
+        $playersStmt->execute(['id' => $gameId]);
+        self::assertSame(0, (int) $playersStmt->fetchColumn());
+        self::assertSame([], $this->fetchGameEvents($gameId));
+    }
+
+    public function testDeleteStaleCompletedGamesDeletesOrphanedDraftMatchButKeepsOneStillReferenced(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $matchWins = [$u1 => 0, $u2 => 0];
+        $matchWins[$winnerUserId]++;
+        self::assertSame(1, $matchWins[$winnerUserId], 'sanity check: only game 1 has been played so far');
+
+        $this->markGameStale($gameId, 8);
+
+        $this->games->deleteStaleCompletedGames();
+
+        self::assertFalse($this->gameRowStillExists($gameId), 'the stale completed game 1 is deleted');
+        self::assertTrue($this->draftMatchRowStillExists($draftMatchId), 'the match survives -- game 2 (still waiting) still references it');
+
+        // Now delete the whole match by staling out every remaining game.
+        $nextGameStmt = $this->pdo->prepare(
+            "SELECT id FROM games WHERE draft_match_id = :match_id AND status = 'waiting'"
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+
+        // A still-'waiting' game is not 'completed', so it's expired
+        // (not deleted) by the first pass -- expireStaleActiveGames()
+        // handles turning it into a deletable completed game.
+        $this->markGameStale($nextGameId, 8);
+        $this->games->expireStaleActiveGames();
+        $this->markGameStale($nextGameId, 8);
+        $this->games->deleteStaleCompletedGames();
+
+        self::assertFalse($this->gameRowStillExists($nextGameId), 'game 2 is now deleted too');
+        self::assertFalse($this->draftMatchRowStillExists($draftMatchId), 'the now-fully-orphaned draft match is cleaned up');
+    }
+
+    public function testExpireStaleActiveGamesCompletesWaitingInProgressAndAbandonedGamesPastTheThreshold(): void
+    {
+        $creator = $this->insertUser('expirestale-alice');
+        $bob = $this->insertUser('expirestale-bob');
+
+        $staleWaitingId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->markGameStale($staleWaitingId, 8);
+
+        $staleInProgressId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($staleInProgressId);
+        $this->markGameStale($staleInProgressId, 10);
+
+        $staleAbandonedId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->pdo->prepare("UPDATE games SET status = 'abandoned' WHERE id = :id")->execute(['id' => $staleAbandonedId]);
+        $this->markGameStale($staleAbandonedId, 30);
+
+        // A fresh in-progress game must survive.
+        $freshInProgressId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($freshInProgressId);
+
+        // A stale but already-completed game belongs to the OTHER pass.
+        $staleCompletedId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($staleCompletedId);
+        $this->pdo->prepare(
+            "UPDATE games SET status = 'completed', completed_at = NOW(), winner_game_player_id = :winner WHERE id = :id"
+        )->execute(['winner' => $this->games->gamePlayerIdFor($staleCompletedId, $creator), 'id' => $staleCompletedId]);
+        $this->markGameStale($staleCompletedId, 8);
+
+        $expiredCount = $this->games->expireStaleActiveGames();
+
+        self::assertSame(3, $expiredCount);
+
+        foreach ([$staleWaitingId, $staleInProgressId, $staleAbandonedId] as $gameId) {
+            $game = $this->fetchGame($gameId);
+            self::assertSame('completed', $game['status'], "game {$gameId} was force-completed");
+            self::assertNotNull($game['completed_at'], "game {$gameId} got a completed_at timestamp");
+            self::assertNull($game['winner_game_player_id'], "game {$gameId} has no winner -- nobody actually won it");
+
+            $events = $this->fetchGameEvents($gameId);
+            $lastEvent = end($events);
+            self::assertSame('game_expired', $lastEvent['event_type']);
+            self::assertNull($lastEvent['acting_game_player_id']);
+            self::assertNull($lastEvent['card_id']);
+        }
+
+        self::assertSame('in_progress', $this->fetchGame($freshInProgressId)['status'], 'a fresh in-progress game is untouched');
+        self::assertSame('completed', $this->fetchGame($staleCompletedId)['status'], 'an already-completed game is untouched by this pass');
+    }
+
+    /**
+     * describeEvent()'s own new 'game_expired' case (issue #84) -- a
+     * plain, actor-less/card-less description rather than the generic
+     * "{actor} played {card}" default every unrecognized event type would
+     * otherwise fall back to.
+     */
+    public function testExpireStaleActiveGamesLogsAHumanReadableEventDescription(): void
+    {
+        $creator = $this->insertUser('expiredescribe-alice');
+        $bob = $this->insertUser('expiredescribe-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+        $this->markGameStale($gameId, 8);
+
+        $this->games->expireStaleActiveGames();
+
+        $log = $this->games->fullEventLog($gameId);
+        $lastEntry = end($log);
+        self::assertSame('game_expired', $lastEntry['event_type']);
+        self::assertSame('This game was automatically ended due to inactivity', $lastEntry['description']);
+    }
+
+    /**
+     * The full picture for issue #84: a game force-completed by
+     * expireStaleActiveGames() immediately moves to Past games (not the
+     * main lobby) once it's no longer stale itself -- same "empty
+     * winner_usernames" handling a tie/no-winner completed game already
+     * gets everywhere else in the lobby list.
+     */
+    public function testExpiredGameMovesToListPastGamesForUserWithNoWinner(): void
+    {
+        $creator = $this->insertUser('expiretopast-alice');
+        $bob = $this->insertUser('expiretopast-bob');
+
+        $gameId = $this->games->createGame($creator, [$creator, $bob]);
+        $this->games->startGame($gameId);
+        $this->markGameStale($gameId, 8);
+
+        $this->games->expireStaleActiveGames();
+
+        self::assertSame([], array_column($this->games->listGamesForUser($creator), 'id'));
+        $pastSummary = $this->games->listPastGamesForUser($creator)[0];
+        self::assertSame($gameId, $pastSummary['id']);
+        self::assertSame('completed', $pastSummary['status']);
+        self::assertSame([], $pastSummary['winner_usernames']);
+    }
+
+    /**
+     * The exception this whole feature composes with automatically
+     * (issue #84's own carve-out, and this cron's second pass): a
+     * quick_draft game 1 force-expired mid-match must stay in the main
+     * lobby, grouped with its still-'waiting' sibling, exactly like a
+     * naturally-completed game 1 of an undecided match would -- since
+     * draft_matches.status is untouched by expireStaleActiveGames() and
+     * stays 'deck_building'.
+     */
+    public function testExpiredDraftMatchGameStaysInMainLobbyWhileMatchIsUndecided(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+        $this->markGameStale($gameId, 8);
+
+        $this->games->expireStaleActiveGames();
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        foreach ([$u1, $u2] as $userId) {
+            self::assertContains($gameId, array_column($this->games->listGamesForUser($userId), 'id'), "the force-expired match game stays in the main lobby for user {$userId}");
+            self::assertNotContains($gameId, array_column($this->games->listPastGamesForUser($userId), 'id'), "and not yet in Past games for user {$userId}");
+        }
+    }
+
     /**
      * The lobby's own "who won" line (issue #136) depends on
      * winner_usernames staying empty until there's actually a winner to
