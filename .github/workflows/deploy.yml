@@ -177,22 +177,39 @@ jobs:
         # curling a request that /migrate would just reject with a 403
         # anyway, so a deploy set up before this secret existed keeps
         # working exactly as it did before (falling back to applying
-        # database/migrations/ by hand -- see database/README.md). -A/-H
-        # Accept below work around Bluehost's own bot-protection layer,
-        # which returns a 406 for a bare curl request (no User-Agent/
-        # Accept headers look like anything a real browser would send) --
-        # confirmed by curling /app/health the same bare way and getting
-        # rejected too, well before either request reaches this app's own
-        # PHP code.
+        # database/migrations/ by hand -- see database/README.md). This
+        # used to 406 the same way deploy-dev.yml's own migrate step did --
+        # confirmed (via that workflow's diagnostic response-body capture)
+        # to be Bluehost's own mod_security layer rejecting a bodyless POST
+        # with no Content-Type, not a missing User-Agent/Accept header and
+        # not this app's own code. /migrate never reads the request body
+        # (only the X-Migration-Key header, see index.php), so a harmless
+        # empty JSON object is a safe, inert payload to satisfy it with.
+        # Diagnostic response capture kept here too (rather than `curl -f`
+        # swallowing the body) so any future failure is immediately
+        # readable from the job log instead of needing another round trip.
         if: ${{ vars.SITE_URL != '' && env.MIGRATION_DEPLOY_KEY != '' }}
         env:
           SITE_URL: ${{ vars.SITE_URL }}
         run: |
-          curl -fsS -X POST \
+          set +e
+          http_status=$(curl -sS -o /tmp/migrate_response.txt -D /tmp/migrate_headers.txt -w "%{http_code}" -X POST \
             -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
             -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
             -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" \
-            "$SITE_URL/app/migrate"
+            -d '{}' \
+            "$SITE_URL/app/migrate")
+          echo "HTTP status: $http_status"
+          echo "--- response headers ---"
+          cat /tmp/migrate_headers.txt
+          echo "--- response body ---"
+          cat /tmp/migrate_response.txt
+          echo "-------------------------"
+          if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+            echo "Migration request failed with HTTP $http_status" >&2
+            exit 1
+          fi
 
       - name: Smoke test deployed health endpoint
         if: ${{ vars.SITE_URL != '' }}
