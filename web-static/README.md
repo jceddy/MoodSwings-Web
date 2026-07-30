@@ -810,7 +810,9 @@ too, proportional to the smaller card width.
     Grid Draft reveals `#new-game-grid-draft-fields` instead -- the same
     shape again (`#new-game-grid-draft-pool-source`, its own
     `GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
-    per-player-count target (54/72/90 for 2/3/4 players), and the same
+    per-player-count target (54/72/96 for 2/3/4 players -- the 4-player
+    case uses a 4x4 grid over 4 rounds instead of the 3x3-over-6-rounds
+    the other player counts use), and the same
     Custom-pool file/textarea pair feeding `grid_draft_custom_pool_text`) --
     `updateGridDraftPoolSourceVisibility()` mirrors the other two exactly,
     except its own pool-source `<select>` has only 4 options, not 5:
@@ -1125,17 +1127,22 @@ too, proportional to the smaller card width.
       `state.grid_draft.status` is `'drafting'`) -- like Winston Draft,
       only one player acts at a time, so there's no card-selection `Set`
       either: the active player picks a whole row or column, never
-      individual cells. `#grid-draft-grid` renders all 9 cells of
-      `drafting.grid_cards` (always fully visible to every seated player --
-      unlike Winston Draft's face-down piles, a dealt grid is face-up on
-      the table) in the same row-major order `getState()` reports them in,
-      via a CSS grid (`#grid-draft-grid { grid-template-columns: repeat(3, ...) }`);
+      individual cells. `#grid-draft-grid` renders all `drafting.grid_size
+      ** 2` cells of `drafting.grid_cards` (always fully visible to every
+      seated player -- unlike Winston Draft's face-down piles, a dealt
+      grid is face-up on the table) in the same row-major order
+      `getState()` reports them in, via a CSS grid whose
+      `grid-template-columns` `renderGridDraftDrafting()` sets inline from
+      `drafting.grid_size` on every render (`#grid-draft-grid`'s own CSS
+      rule only supplies the common 3-column default -- `grid_size` is 4,
+      not 3, for exactly 4 players, see `GameService::gridDraftGridSize()`);
       a cell already taken and not yet refilled this round (`null` in
       `grid_cards`) renders as a plain dashed placeholder
       (`.grid-draft-cell--empty`) instead of a card thumbnail.
-      `#grid-draft-picks` renders 6 buttons (Row 1-3, Column 1-3), each
-      labeled with however many cells are actually still non-null along
-      that line (`gridDraftLineCells()`, a client-side mirror of
+      `#grid-draft-picks` renders 2 * `drafting.grid_size` buttons (Row
+      1-N, Column 1-N), each labeled with however many cells are actually
+      still non-null along that line (`gridDraftLineCells(axis, index,
+      gridSize)`, a client-side mirror of
       `GameService::submitGridDraftPick()`'s own cell-counting logic) --
       "Row 2 (3 cards)", "Column 1 (2 cards)", etc. A line with 0 cards
       left renders disabled rather than being sent to the server only to

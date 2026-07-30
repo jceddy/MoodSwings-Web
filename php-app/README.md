@@ -69,7 +69,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/decklists/delete` | `{"id"}`                                                      | Requires auth. Permanently deletes one of your own saved decklists. `404` if no such decklist, `403` if you don't own it. |
 | POST   | `/games/draft/pick` | `{"game_id", "round", "stage": int, "card_ids": [int, int]}` | Requires auth; `403` if you're not seated in that game. A `quick_draft` match's own per-round blind pick -- `stage` is an integer from 1 to the match's own player count (2 for a 2-player match, same as the old `'draw'`/`'received'` string enum; up to 4 for a multiplayer match, issue #189), identifying which of the round's per-player piles you're currently holding (server-derived from seat rotation, not something the client picks). `409` if the game isn't `quick_draft`, the match isn't currently drafting, `round` isn't the match's current round, `stage` is out of range, `card_ids` isn't exactly 2 cards you're actually eligible to keep for that stage, you've already submitted that stage, or the previous stage isn't yet complete for every seated player. See "Quick Draft" below. Returns `{"stage_completed", "round_advanced", "draft_completed"}`. |
 | POST   | `/games/draft/winston-pick` | `{"game_id", "action": "take"\|"pass"}`                  | Requires auth; `403` if you're not seated in that game. A `winston_draft` match's own pile take/pass -- no `card_ids`, since a pile is taken/passed as a whole and the server already knows whose turn it is and which pile is current. `409` if the game isn't `winston_draft`, the match isn't currently drafting, it isn't your turn, or `action` isn't `take`/`pass`. See "Winston Draft" below. Returns `{"action_completed", "turn_advanced", "draft_completed"}`. |
-| POST   | `/games/draft/grid-pick` | `{"game_id", "axis": "row"\|"column", "index": 0-2}`        | Requires auth; `403` if you're not seated in that game. A `grid_draft` match's own row/column pick against the current 3x3 grid. `409` if the game isn't `grid_draft`, the match isn't currently drafting, it isn't your turn, `axis`/`index` are invalid, or the chosen line has no cards left. See "Grid Draft" below. Returns `{"axis", "index", "cards_taken": [int], "round_completed", "turn_advanced", "draft_completed"}`. |
+| POST   | `/games/draft/grid-pick` | `{"game_id", "axis": "row"\|"column", "index": int}`        | Requires auth; `403` if you're not seated in that game. A `grid_draft` match's own row/column pick against the current grid -- 3x3 (`index` 0-2) for 2-3 players, 4x4 (`index` 0-3) for exactly 4 players. `409` if the game isn't `grid_draft`, the match isn't currently drafting, it isn't your turn, `axis`/`index` are invalid, or the chosen line has no cards left. See "Grid Draft" below. Returns `{"axis", "index", "cards_taken": [int], "round_completed", "turn_advanced", "draft_completed"}`. |
 | POST   | `/games/draft/deck` | `{"game_id", "card_ids": [int]}`                             | Requires auth; `403` if you're not seated in that game. A `quick_draft`/`winston_draft`/`grid_draft` match's own deck trim/sideboard -- used both for the initial trim and every later sideboard between the match's games. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, the match isn't currently `deck_building`, `card_ids` isn't within that format's min/max size (at least 12, at most however many you actually drafted -- 16 for `quick_draft` at 2/4 players, 18 at 3, since issue #189; varies by how the draft unfolded for `winston_draft`/`grid_draft`) or drawn from your own `drafted_card_ids`. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Only callable once a best-of-three draft match's game 2/3 has actually started -- the loser of the previous game doesn't have to decide who goes first until they can see their own opening hand, and round 1 stays frozen (nobody can play/pass) until they do. Lets them go first themselves (`play_first: true`) or leave the previous winner going first again (`play_first: false`); either answer permanently unfreezes the round. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, hasn't started yet, is game 1 of its match (nothing to base the choice on), the calling user wasn't the previous game's loser, or the decision was already made. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
@@ -1631,9 +1631,11 @@ one of these:
   `quick_draft`; `startGame()` reads it via the same
   `requireDraftDecksSubmitted()`.
 - `grid_draft` -- also `format: 'draft'` only: 2-4 players (issue #189)
-  each draft from a shared pool (54/72/90 cards for 2/3/4 players) by
-  taking a whole row or column of a 3x3 grid, dealt fresh over 6 rounds
-  (see "Grid Draft" below) -- same story again as `quick_draft`/
+  each draft from a shared pool (54/72/96 cards for 2/3/4 players) by
+  taking a whole row or column of a grid (3x3 for 2-3 players, 4x4 for
+  exactly 4), dealt fresh over 6 rounds (4 for exactly 4 players, so each
+  player picks first in exactly 1 round) (see "Grid Draft" below) -- same
+  story again as `quick_draft`/
   `winston_draft`: `deckCardIdsFor()` refuses to build this one too, and
   `startGame()` reads it via the same `requireDraftDecksSubmitted()`.
 - `one_of_each` -- the full 133-card pool, one copy of every printed card,
@@ -2413,22 +2415,36 @@ type, reusing the same `draft_matches`/`draft_match_players` tables and
 best-of-three/deck-building infrastructure as Quick Draft and Winston Draft
 (`games.deck_type = 'grid_draft'` is the only thing distinguishing which
 variant a match belongs to). What's genuinely different is the draft
-mechanic: a 3x3 grid of face-up cards, dealt fresh every round, with each
+mechanic: a grid of face-up cards, dealt fresh every round, with each
 player in turn taking an entire row or column.
 
-**The mechanic** -- a shared pool of exactly `gridDraftPoolTargetSize($playerCount)`
-cards (54/72/90 for 2/3/4 players) is shuffled once at the start of the
-match. Over exactly `GRID_DRAFT_ROUNDS` (6) rounds, `GRID_DRAFT_CARDS_PER_ROUND`
-(9) cards are dealt face-up into a 3x3 grid, refilled as the round's picks
-happen (see below) so the pool always runs out exactly when the 6th and
-final round is dealt, with no remainder to reshuffle or top up (unlike
-Quick Draft's round-4 top-up, or any pool-size shortfall handling at all).
-Round 1's first picker is chosen at random; every subsequent round, seats
-rotate one position (`($firstPickerSeatIndex + 1) % $playerCount`) so
-first-pick duty is shared evenly across the match. Each round has exactly
-`$playerCount` sequential picks, one per seated player in turn:
+**Grid size and rounds vary by player count** -- `gridDraftGridSize($playerCount)`
+is 4 for exactly 4 players, 3 otherwise (2-3 players), and
+`gridDraftRounds($playerCount)` is 4 for exactly 4 players, 6 otherwise.
+The 4-player case (4x4 grid over 4 rounds) was chosen specifically so that
+seat-rotation of who picks first (`($firstPickerSeatIndex + 1) % $playerCount`,
+see below) gives each of the 4 players first pick in exactly 1 of the 4
+rounds -- the original 3x3-over-6-rounds shape, kept for 2-3 players, would
+have given a 4th player first pick in only 1.5 rounds on average, an
+uneven distribution. `gridDraftCardsPerRound($playerCount)` is the grid's
+own cell count (`gridDraftGridSize($playerCount) ** 2` -- 9 or 16), and
+`gridDraftRefillBatchSize($playerCount)` (a row/column's own length) is
+just `gridDraftGridSize($playerCount)` again (3 or 4).
 
-1. Each pick takes an entire row or column -- however many of its 3 cells
+**The mechanic** -- a shared pool of exactly `gridDraftPoolTargetSize($playerCount)`
+cards (54/72/96 for 2/3/4 players) is shuffled once at the start of the
+match. Over exactly `gridDraftRounds($playerCount)` rounds,
+`gridDraftCardsPerRound($playerCount)` cards are dealt face-up into the
+grid, refilled as the round's picks happen (see below) so the pool always
+runs out exactly when the final round is dealt, with no remainder to
+reshuffle or top up (unlike Quick Draft's round-4 top-up, or any pool-size
+shortfall handling at all). Round 1's first picker is chosen at random;
+every subsequent round, seats rotate one position
+(`($firstPickerSeatIndex + 1) % $playerCount`) so first-pick duty is
+shared evenly across the match. Each round has exactly `$playerCount`
+sequential picks, one per seated player in turn:
+
+1. Each pick takes an entire row or column -- however many of its cells
    are still non-null (the grid's own cells are the only source of truth
    for this, no axis/index bookkeeping needed -- see below).
 2. **Refilling (issue #189)**: after a pick, the cells it just cleared are
@@ -2440,7 +2456,7 @@ first-pick duty is shared evenly across the match. Each round has exactly
    takes whatever's left with nothing ever refilled mid-round. For 3
    players, only the round's first pick refills; for 4, the first two
    picks do. This is the only mathematically consistent reading of the
-   spec's own stated pool sizes (54/72/90 -- i.e. 9/12/15 cards drawn per
+   spec's own stated pool sizes (54/72/96 -- i.e. 9/12/24 cards drawn per
    round for 2/3/4 players).
 3. Whatever remains in the grid at the round's end is simply discarded --
    never reshuffled back into the pool, unlike Winston Draft's own
@@ -2448,18 +2464,19 @@ first-pick duty is shared evenly across the match. Each round has exactly
 
 **Deriving a pick's card count** -- rather than store which axis/index a
 previous pick used and compare it against the current pick's own choice,
-each of the grid's 9 cells is tracked as JSON `null` the instant any
-player takes it (`draft_grid_state.grid_card_ids`, a 9-element row-major
-array, index = row * 3 + column). A pick's own card count is then just
-however many of its 3 target cells are still non-null at the moment it's
-made, derived purely by counting, with no axis-comparison logic anywhere
--- this generalized cleanly from 2 players to N without touching the
-overlap math at all. A pick that would take 0 cards (choosing a line
-already fully cleared and not yet refilled) is rejected with a `409`.
+each of the grid's cells is tracked as JSON `null` the instant any player
+takes it (`draft_grid_state.grid_card_ids`, a `gridDraftCardsPerRound($playerCount)`-element
+row-major array, index = row * `gridDraftGridSize($playerCount)` + column).
+A pick's own card count is then just however many of its target cells are
+still non-null at the moment it's made, derived purely by counting, with
+no axis-comparison logic anywhere -- this generalized cleanly from 2
+players to N without touching the overlap math at all. A pick that would
+take 0 cards (choosing a line already fully cleared and not yet refilled)
+is rejected with a `409`.
 
 **Data model** -- a new `draft_grid_state` table (migration `0034`, one row
 per match) holds: `remaining_deck_card_ids` (the not-yet-dealt portion of
-the pool), `current_round`, `grid_card_ids` (the current round's 9 cells,
+the pool), `current_round`, `grid_card_ids` (the current round's cells,
 row-major, `null` for a taken-and-not-yet-refilled cell),
 `first_picker_user_id` (whoever goes first *this* round),
 `picks_this_round` (migration `0060`, issue #189 -- how many picks have
@@ -2479,7 +2496,7 @@ uses is both simpler and just as safe here.
 **Pool building** -- `buildGridDraftPool()` wraps the same shared
 `buildDraftPool()` Quick Draft/Winston Draft use, parameterized with
 `gridDraftPoolTargetSize($playerCount)`/`gridDraftMinCustomPoolSize($playerCount)`
-(both 54/72/90 for 2/3/4 players). Unlike the other two draft variants, a
+(both 54/72/96 for 2/3/4 players). Unlike the other two draft variants, a
 pool source that comes up short of the target isn't merely allowed through
 and dealt with (there's no top-up mechanism to fall back on) --
 `buildGridDraftPool()` explicitly rejects any pool under the target with a
@@ -2494,14 +2511,15 @@ Draft's own 4-player `jceddys_75` pool goes through -- 2-3 players use the
 plain 75-card pool, already large enough.
 
 **The draft itself** (`submitGridDraftPick()`, `POST /games/draft/grid-pick
-{game_id, axis: 'row'|'column', index: 0-2}`) -- rejects the request if it
+{game_id, axis: 'row'|'column', index: int}`) -- rejects the request if it
 isn't `$userId`'s turn, the match isn't `'drafting'`, `axis`/`index` are
-invalid, or the chosen line has 0 cards left. Completing a round's last
-pick either deals the next round's fresh grid (rotating who picks first)
-or, after round 6, ends the draft and flips the match to `'deck_building'`
--- there's no auto-loss path the way Winston Draft has, since Grid Draft's
-mechanic always yields well above `GRID_DRAFT_MIN_DECK_SIZE` (12) cards per
-player.
+invalid (`index` must be within `0` to `gridDraftGridSize($playerCount) - 1`),
+or the chosen line has 0 cards left. Completing a round's last pick either
+deals the next round's fresh grid (rotating who picks first) or, after the
+match's final round (`gridDraftRounds($playerCount)`), ends the draft and
+flips the match to `'deck_building'` -- there's no auto-loss path the way
+Winston Draft has, since Grid Draft's mechanic always yields well above
+`GRID_DRAFT_MIN_DECK_SIZE` (12) cards per player.
 
 **State exposure** -- `getState()`'s `grid_draft` field (`null` for every
 other deck_type) mirrors `quick_draft`'s/`winston_draft`'s own shape (an
@@ -2511,12 +2529,15 @@ is `draftGamesToWin($playerCount)`, same as the other two draft variants).
 `drafting` (`gridDraftDraftingStateFor()`) is `is_your_turn`,
 `current_turn_username` (whoever `current_turn_user_id` actually is -- for
 a 3-4 player match, "not your turn" alone doesn't say whose turn it is),
-`current_round`, `total_rounds`, `first_picker_user_id`, `picks_this_round`,
-`total_picks_per_round` (the seated player count), `grid_cards` (all 9
-cells, always fully visible to every player -- unlike Winston Draft's
-face-down piles, a dealt grid is face-up on the table -- with a `null`
-entry for any cell already taken and not yet refilled this round),
-`remaining_deck_count`, `drafted_so_far` (your own accumulated picks), and
+`current_round`, `total_rounds` (`gridDraftRounds($playerCount)`),
+`grid_size` (`gridDraftGridSize($playerCount)` -- 4 for exactly 4 players,
+3 otherwise, so the frontend knows the grid's own dimensions),
+`first_picker_user_id`, `picks_this_round`, `total_picks_per_round` (the
+seated player count), `grid_cards` (all `grid_size ** 2` cells, always
+fully visible to every player -- unlike Winston Draft's face-down piles, a
+dealt grid is face-up on the table -- with a `null` entry for any cell
+already taken and not yet refilled this round), `remaining_deck_count`,
+`drafted_so_far` (your own accumulated picks), and
 `other_players_drafted_so_far` (issue #189 -- an array of every *other*
 seated player's own `user_id`/`username`/`drafted_so_far`, 1 entry for a
 2-player match, up to 3 for 3-4 players; `opponent_drafted_so_far` is kept

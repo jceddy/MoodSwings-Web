@@ -514,15 +514,19 @@ body.game-page {
     margin-bottom: 1rem;
 }
 
-/* Grid Draft's own 3x3 grid, laid out in the same row-major order
-   (index = row * 3 + column) getState() reports grid_cards in, so no
-   client-side re-ordering is needed between the two. Columns are sized to
-   their content (not 1fr/minmax(0,1fr)) so the grid hugs its own 3
-   card-widths plus gaps rather than stretching to fill whatever width its
-   container happens to have -- otherwise each column would grow to fill
-   the extra space, spreading the cards apart instead of keeping them
-   snug. An empty cell (its card already taken this round) gets a plain
-   dashed placeholder instead of a card thumbnail. */
+/* Grid Draft's own grid (3x3 for 2-3 players, 4x4 for exactly 4 -- see
+   GameService::gridDraftGridSize()), laid out in the same row-major order
+   (index = row * grid_size + column) getState() reports grid_cards in, so
+   no client-side re-ordering is needed between the two. grid-template-columns
+   below is only the 3-column default; renderGridDraftDrafting() overrides it
+   inline with drafting.grid_size on every render, so a 4-player match's 4x4
+   grid gets 4 columns instead. Columns are sized to their content (not
+   1fr/minmax(0,1fr)) so the grid hugs its own card-widths plus gaps rather
+   than stretching to fill whatever width its container happens to have --
+   otherwise each column would grow to fill the extra space, spreading the
+   cards apart instead of keeping them snug. An empty cell (its card already
+   taken this round) gets a plain dashed placeholder instead of a card
+   thumbnail. */
 #grid-draft-grid {
     display: grid;
     grid-template-columns: repeat(3, min-content);
@@ -532,7 +536,7 @@ body.game-page {
        of how its tracks are sized -- so min-content columns alone don't
        stop the grid ITSELF from stretching wide and leaving each column
        to center within extra leftover space. width: fit-content shrinks
-       the container down to what its 3 min-content columns plus gaps
+       the container down to what its min-content columns plus gaps
        actually need. */
     width: fit-content;
 }

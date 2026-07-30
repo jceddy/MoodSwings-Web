@@ -9998,11 +9998,12 @@ final class GameServiceIntegrationTest extends TestCase
 
     /**
      * N-player analog of driveGridDraftToDeckBuilding(): every pick always
-     * takes the first row (checked 0-2) or, failing that, the first column
-     * (0-2) that still has at least one card in it -- always a legal pick
-     * regardless of how many players/refills have already happened this
-     * round, so this drives any 2-4 player Grid Draft to completion without
-     * needing to hand-derive the exact refill pattern up front.
+     * takes the first row, or, failing that, the first column, that still
+     * has at least one card in it -- always a legal pick regardless of how
+     * many players/refills have already happened this round, or whether
+     * the match is on a 3x3 (2-3 players) or 4x4 (4 players) grid -- so
+     * this drives any 2-4 player Grid Draft to completion without needing
+     * to hand-derive the exact refill pattern up front.
      *
      * @param int[] $userIds
      */
@@ -10028,19 +10029,27 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * @param array<int, int|null> $grid a 9-cell row-major grid
+     * @param array<int, int|null> $grid a row-major grid, gridSize^2 cells
+     *        (gridSize derived from count($grid) -- 3x3 for 2-3 players, 4x4
+     *        for 4 players)
      * @return array{0:string, 1:int}
      */
     private function firstAvailableGridLine(array $grid): array
     {
-        for ($row = 0; $row < 3; $row++) {
-            if ($grid[$row * 3] !== null || $grid[$row * 3 + 1] !== null || $grid[$row * 3 + 2] !== null) {
-                return ['row', $row];
+        $gridSize = (int) sqrt(count($grid));
+
+        for ($row = 0; $row < $gridSize; $row++) {
+            for ($column = 0; $column < $gridSize; $column++) {
+                if ($grid[$row * $gridSize + $column] !== null) {
+                    return ['row', $row];
+                }
             }
         }
-        for ($column = 0; $column < 3; $column++) {
-            if ($grid[$column] !== null || $grid[$column + 3] !== null || $grid[$column + 6] !== null) {
-                return ['column', $column];
+        for ($column = 0; $column < $gridSize; $column++) {
+            for ($row = 0; $row < $gridSize; $row++) {
+                if ($grid[$row * $gridSize + $column] !== null) {
+                    return ['column', $column];
+                }
             }
         }
 
@@ -10511,7 +10520,7 @@ final class GameServiceIntegrationTest extends TestCase
 
         ['gameId' => $fourGameId] = $this->buildMultiplayerGridDraftFixture(4);
         $fourPool = json_decode($this->fetchDraftMatch((int) $this->fetchGame($fourGameId)['draft_match_id'])['pool_card_ids'], true);
-        self::assertCount(90, $fourPool, '4 players -- (9 + 3 + 3) cards/round x 6 rounds, refilled twice per round');
+        self::assertCount(96, $fourPool, '4 players -- a 4x4 grid: (16 + 4 + 4) cards/round x 4 rounds, refilled twice per round');
     }
 
     public function testGridDraftThreePlayerRefillsAfterOnlyTheFirstPickEachRound(): void
@@ -10550,19 +10559,39 @@ final class GameServiceIntegrationTest extends TestCase
         $firstPickerUserId = (int) $this->fetchGridState($draftMatchId)['current_turn_user_id'];
         $this->games->submitGridDraftPick($gameId, $firstPickerUserId, 'row', 0);
         $afterPick1 = $this->fetchGridState($draftMatchId);
-        self::assertCount(9, array_filter(json_decode((string) $afterPick1['grid_card_ids'], true), fn ($cell) => $cell !== null), 'pick 1 refills, so all 9 cells stay non-null');
+        self::assertCount(16, array_filter(json_decode((string) $afterPick1['grid_card_ids'], true), fn ($cell) => $cell !== null), 'pick 1 refills, so all 16 cells of the 4x4 grid stay non-null');
 
         // Pick 2 of 4 -- refills, since 2 <= max(4 - 2, 0) == 2.
         $secondPickerUserId = (int) $afterPick1['current_turn_user_id'];
         $this->games->submitGridDraftPick($gameId, $secondPickerUserId, 'column', 0);
         $afterPick2 = $this->fetchGridState($draftMatchId);
-        self::assertCount(9, array_filter(json_decode((string) $afterPick2['grid_card_ids'], true), fn ($cell) => $cell !== null), 'pick 2 also refills, so all 9 cells stay non-null');
+        self::assertCount(16, array_filter(json_decode((string) $afterPick2['grid_card_ids'], true), fn ($cell) => $cell !== null), 'pick 2 also refills, so all 16 cells stay non-null');
 
         // Pick 3 of 4 -- no refill, since 3 > max(4 - 2, 0) == 2.
         $thirdPickerUserId = (int) $afterPick2['current_turn_user_id'];
         $this->games->submitGridDraftPick($gameId, $thirdPickerUserId, 'row', 1);
         $afterPick3 = $this->fetchGridState($draftMatchId);
-        self::assertLessThan(9, count(array_filter(json_decode((string) $afterPick3['grid_card_ids'], true), fn ($cell) => $cell !== null)), 'pick 3 does not refill, so at least some cells are now empty');
+        self::assertLessThan(16, count(array_filter(json_decode((string) $afterPick3['grid_card_ids'], true), fn ($cell) => $cell !== null)), 'pick 3 does not refill, so at least some cells are now empty');
+    }
+
+    public function testGridDraftFourPlayerDealsSixteenCardGridOverFourRounds(): void
+    {
+        $fixture = $this->buildMultiplayerGridDraftFixture(4);
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['userIds'][0];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $gridState = $this->fetchGridState($draftMatchId);
+
+        // 96-card pool minus round 1's initial 16-card 4x4 grid == 80 left in the deck.
+        self::assertCount(16, json_decode((string) $gridState['grid_card_ids'], true));
+        self::assertCount(80, json_decode((string) $gridState['remaining_deck_card_ids'], true));
+
+        $state = $this->games->getState($gameId, $u1);
+        self::assertCount(16, $state['grid_draft']['drafting']['grid_cards']);
+        self::assertSame(4, $state['grid_draft']['drafting']['grid_size']);
+        self::assertSame(4, $state['grid_draft']['drafting']['total_rounds'], 'each of the 4 players picks first in exactly 1 of the 4 rounds');
+        self::assertSame(4, $state['grid_draft']['drafting']['total_picks_per_round']);
     }
 
     public function testGridDraftThreePlayerFullDraftToGameCompletion(): void
@@ -10632,9 +10661,9 @@ final class GameServiceIntegrationTest extends TestCase
         // jceddy's 75 Card deck's own pool source is swapped for jceddy's
         // 150 Card deck's own themed 150-card pool (10 Mythics/20 Rares/40
         // Uncommons/80 Commons, GameService::buildJceddys150DeckCardIds())
-        // before truncating down to 4 players' own 90-card target --
-        // without the swap, 75 would fall short of 90.
-        self::assertCount(90, $poolCardIds);
+        // before truncating down to 4 players' own 96-card target (a 4x4
+        // grid over 4 rounds) -- without the swap, 75 would fall short of 96.
+        self::assertCount(96, $poolCardIds);
     }
 
     public function testGridDraftThreePlayerJceddys75PoolStaysOnJceddys75(): void

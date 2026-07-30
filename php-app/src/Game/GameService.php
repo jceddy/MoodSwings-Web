@@ -258,21 +258,27 @@ final class GameService
 
     /**
      * Grid Draft (issue #188, format 'draft' alongside 'quick_draft'/
-     * 'winston_draft'; multiplayer support issue #189): a shared pool,
-     * dealt GRID_DRAFT_CARDS_PER_ROUND (9) at a time into a 3x3 grid over
-     * GRID_DRAFT_ROUNDS (6) rounds, every round dealt from a completely
-     * fresh 9-card grid regardless of player count. Each round, every
-     * seated player takes one turn (whoever's first rotates every round,
-     * see initializeGridDraft()/submitGridDraftPick()), taking an entire
-     * row or column -- always 3 cards for a player whose turn falls among
-     * the round's first playerCount-2 picks (the grid is refilled back to
-     * a full 9 immediately after each of those, see
+     * 'winston_draft'; multiplayer support issue #189; 4-player 4x4 grid
+     * issue #189 follow-up): a shared pool, dealt gridDraftCardsPerRound()
+     * cards at a time into an gridDraftGridSize() x gridDraftGridSize()
+     * grid over gridDraftRounds() rounds -- a 3x3 grid over 6 rounds for
+     * 2-3 players, or a 4x4 grid over exactly 4 rounds for 4 players
+     * specifically (chosen so each of the 4 players gets to pick first in
+     * exactly one round, rather than the uneven distribution 6 rounds
+     * would give 4 players -- see gridDraftRounds()'s own docblock), every
+     * round dealt from a completely fresh grid regardless of player
+     * count. Each round, every seated player takes one turn (whoever's
+     * first rotates every round, see initializeGridDraft()/
+     * submitGridDraftPick()), taking an entire row or column -- always a
+     * full line's worth of cards for a player whose turn falls among the
+     * round's first playerCount-2 picks (the grid is refilled back to
+     * full immediately after each of those, see
      * gridDraftCardsDrawnPerRound()'s own docblock), but possibly fewer
      * for the round's LAST TWO picks specifically, which never get
      * refilled -- the second (and, for 3-4 players, third/fourth) picker
-     * may get only 1-2 cards if their choice crosses a still-empty cell
-     * left by an unrefilled earlier pick this same round, derived purely
-     * by counting non-null cells, never a stored intersection flag.
+     * may get fewer cards if their choice crosses a still-empty cell left
+     * by an unrefilled earlier pick this same round, derived purely by
+     * counting non-null cells, never a stored intersection flag.
      * Whatever's left in the grid once the round's last pick is made is
      * simply discarded, never reshuffled back into the pool. This
      * degenerates cleanly to the original 2-player mechanic (its own
@@ -288,32 +294,65 @@ final class GameService
      * on for an undersized pool, so an insufficient pool is rejected
      * outright at draft-creation time instead.
      */
-    private const GRID_DRAFT_ROUNDS = 6;
-    private const GRID_DRAFT_CARDS_PER_ROUND = 9;
-    private const GRID_DRAFT_REFILL_BATCH_SIZE = 3;
     private const GRID_DRAFT_MIN_DECK_SIZE = 12;
 
     /**
+     * The grid's own side length: 4 (a 4x4, 16-cell grid) for exactly 4
+     * players, 3 (the original 3x3, 9-cell grid) for 2-3 players. Also
+     * doubles as gridDraftRefillBatchSize()'s own value, since a
+     * row/column always has exactly this many cells.
+     */
+    private static function gridDraftGridSize(int $playerCount): int
+    {
+        return $playerCount === 4 ? 4 : 3;
+    }
+
+    /**
+     * How many rounds Grid Draft plays: 4 for exactly 4 players (equal to
+     * the player count, so seat rotation -- see submitGridDraftPick() --
+     * gives each of the 4 players first pick in exactly one round), 6 for
+     * 2-3 players (also an even multiple of the player count: 3 rounds
+     * each for 2 players, 2 rounds each for 3).
+     */
+    private static function gridDraftRounds(int $playerCount): int
+    {
+        return $playerCount === 4 ? 4 : 6;
+    }
+
+    /** How many cells a freshly-dealt grid has: gridDraftGridSize()'s own square. */
+    private static function gridDraftCardsPerRound(int $playerCount): int
+    {
+        return self::gridDraftGridSize($playerCount) ** 2;
+    }
+
+    /** A row/column's own length -- see gridDraftGridSize()'s own docblock. */
+    private static function gridDraftRefillBatchSize(int $playerCount): int
+    {
+        return self::gridDraftGridSize($playerCount);
+    }
+
+    /**
      * How many cards Grid Draft draws from the pool over the course of
-     * one full round for $playerCount seated players: the round's
-     * initial 9-card grid, plus one GRID_DRAFT_REFILL_BATCH_SIZE (3)
+     * one full round for $playerCount seated players: the round's initial
+     * gridDraftCardsPerRound() grid, plus one gridDraftRefillBatchSize()
      * refill for every pick except the round's last two (see the
-     * GRID_DRAFT_* constants' shared docblock above) -- 9 for 2 players
-     * (no refills at all), 12 for 3 (one refill, after the first pick),
-     * 15 for 4 (two refills, after the first and second picks).
+     * GRID_DRAFT_* docblock above) -- 9 for 2 players (no refills at
+     * all), 12 for 3 (one refill, after the first pick), 24 for 4 (two
+     * refills of 4 cards each, after the first and second picks, against
+     * the larger 4x4 grid).
      */
     private static function gridDraftCardsDrawnPerRound(int $playerCount): int
     {
-        return self::GRID_DRAFT_CARDS_PER_ROUND + self::GRID_DRAFT_REFILL_BATCH_SIZE * max($playerCount - 2, 0);
+        return self::gridDraftCardsPerRound($playerCount) + self::gridDraftRefillBatchSize($playerCount) * max($playerCount - 2, 0);
     }
 
-    /** The full pool size Grid Draft needs for $playerCount players -- one gridDraftCardsDrawnPerRound() per round, for GRID_DRAFT_ROUNDS rounds. 54/72/90 for 2/3/4 players. */
+    /** The full pool size Grid Draft needs for $playerCount players -- one gridDraftCardsDrawnPerRound() per round, for gridDraftRounds() rounds. 54/72/96 for 2/3/4 players. */
     private static function gridDraftPoolTargetSize(int $playerCount): int
     {
-        return self::gridDraftCardsDrawnPerRound($playerCount) * self::GRID_DRAFT_ROUNDS;
+        return self::gridDraftCardsDrawnPerRound($playerCount) * self::gridDraftRounds($playerCount);
     }
 
-    /** @see GRID_DRAFT_ROUNDS's own docblock -- no top-up mechanic, so the floor is the same as the actual target size. */
+    /** @see gridDraftRounds()'s own docblock -- no top-up mechanic, so the floor is the same as the actual target size. */
     private static function gridDraftMinCustomPoolSize(int $playerCount): int
     {
         return self::gridDraftPoolTargetSize($playerCount);
@@ -1723,7 +1762,7 @@ final class GameService
      *         at all for handling a pool short of the target --
      *         initializeGridDraft()/submitGridDraftPick() always deal
      *         exactly gridDraftCardsDrawnPerRound($playerCount) cards per
-     *         round for exactly GRID_DRAFT_ROUNDS rounds. The 'structure'
+     *         round for exactly gridDraftRounds($playerCount) rounds. The 'structure'
      *         pool source (45 cards) is short of every player count's own
      *         target (54 at minimum, for 2 players), so it's rejected here
      *         rather than silently dealing a final round or two short of
@@ -2583,7 +2622,7 @@ final class GameService
 
     /**
      * Deals Grid Draft's own opening state for a freshly-created match:
-     * shuffles $poolCardIds, deals the first GRID_DRAFT_CARDS_PER_ROUND
+     * shuffles $poolCardIds, deals the first gridDraftCardsPerRound(count($userIds))
      * cards off the top into round 1's grid, and randomly picks who picks
      * first this round (rotates to the next seat every round thereafter --
      * see submitGridDraftPick()). Called once from createGame(), exactly
@@ -2599,7 +2638,7 @@ final class GameService
         $pool = $poolCardIds;
         shuffle($pool);
 
-        $grid = array_splice($pool, 0, self::GRID_DRAFT_CARDS_PER_ROUND);
+        $grid = array_splice($pool, 0, self::gridDraftCardsPerRound(count($userIds)));
         $firstPickerUserId = $userIds[array_rand($userIds)];
 
         Connection::get()->prepare(
@@ -2617,26 +2656,31 @@ final class GameService
     }
 
     /**
-     * @return int[] the 3 cell indices (row-major, 0-8) making up $axis
-     *         ('row' or 'column') number $index (0-2) of a 3x3 grid.
+     * @return int[] the $gridSize cell indices (row-major, 0-based) making
+     *         up $axis ('row' or 'column') number $index (0 to $gridSize-1)
+     *         of a $gridSize x $gridSize grid.
      */
-    private function gridDraftLineCells(string $axis, int $index): array
+    private function gridDraftLineCells(string $axis, int $index, int $gridSize): array
     {
-        return $axis === 'row'
-            ? [$index * 3, $index * 3 + 1, $index * 3 + 2]
-            : [$index, $index + 3, $index + 6];
+        $cells = [];
+        for ($i = 0; $i < $gridSize; $i++) {
+            $cells[] = $axis === 'row' ? $index * $gridSize + $i : $index + $i * $gridSize;
+        }
+
+        return $cells;
     }
 
     /**
-     * One player's row-or-column pick against Grid Draft's own current 3x3
+     * One player's row-or-column pick against Grid Draft's own current
+     * gridDraftGridSize($playerCount) x gridDraftGridSize($playerCount)
      * grid -- see php-app/README.md's "Grid Draft" section for the full
-     * mechanic, and the GRID_DRAFT_* constants' shared docblock above for
-     * the multiplayer refill rule this implements. $axis is 'row' or
-     * 'column', $index is 0-2.
+     * mechanic, and the gridDraft*() helper methods' shared docblock above
+     * for the multiplayer refill rule this implements. $axis is 'row' or
+     * 'column', $index is 0 to gridDraftGridSize($playerCount) - 1.
      *
-     * A pick's own cardsTaken is always all 3 cells UNLESS an earlier,
-     * unrefilled pick this same round already emptied one or more of
-     * them -- derived purely by counting non-null cells, never by
+     * A pick's own cardsTaken is always all of the line's cells UNLESS an
+     * earlier, unrefilled pick this same round already emptied one or more
+     * of them -- derived purely by counting non-null cells, never by
      * comparing axes/indices explicitly. A pick that would take 0 cards
      * (choosing a line every one of whose cells is already empty) is
      * rejected outright. picks_this_round tracks how many picks this
@@ -2646,8 +2690,8 @@ final class GameService
      * 1-indexed position is at most (playerCount - 2) -- i.e. every pick
      * except the round's last two -- then, if this WAS the round's final
      * pick, either deals the next round's fresh grid (rotating who picks
-     * first to the next seat) or, after round GRID_DRAFT_ROUNDS, ends the
-     * draft and moves the match to deck_building. The pool always
+     * first to the next seat) or, after round gridDraftRounds($playerCount),
+     * ends the draft and moves the match to deck_building. The pool always
      * divides evenly by gridDraftCardsDrawnPerRound($playerCount), so
      * there's never a short-final-round case to handle.
      *
@@ -2669,8 +2713,13 @@ final class GameService
             if (!in_array($axis, ['row', 'column'], true)) {
                 throw new GameStateException('axis must be "row" or "column"');
             }
-            if ($index < 0 || $index > 2) {
-                throw new GameStateException('index must be between 0 and 2');
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            $playerCount = count($userIds);
+            $gridSize = self::gridDraftGridSize($playerCount);
+
+            if ($index < 0 || $index >= $gridSize) {
+                throw new GameStateException("index must be between 0 and " . ($gridSize - 1));
             }
 
             $pdo = Connection::get();
@@ -2684,11 +2733,8 @@ final class GameService
                 throw new GameStateException("It's not your turn to draft");
             }
 
-            $userIds = $this->draftMatchUserIds($draftMatchId);
-            $playerCount = count($userIds);
-
             $grid = json_decode((string) $state['grid_card_ids'], true);
-            $cells = $this->gridDraftLineCells($axis, $index);
+            $cells = $this->gridDraftLineCells($axis, $index, $gridSize);
             $cardsTaken = [];
             $clearedCells = [];
             foreach ($cells as $cell) {
@@ -2748,7 +2794,7 @@ final class GameService
             // $grid is simply discarded (never reshuffled back into the pool).
             $currentRound = (int) $state['current_round'];
 
-            if ($currentRound >= self::GRID_DRAFT_ROUNDS) {
+            if ($currentRound >= self::gridDraftRounds($playerCount)) {
                 $pdo->prepare('DELETE FROM draft_grid_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
                 $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
                 $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
@@ -2763,7 +2809,7 @@ final class GameService
                 ];
             }
 
-            $nextGrid = array_splice($remainingDeck, 0, self::GRID_DRAFT_CARDS_PER_ROUND);
+            $nextGrid = array_splice($remainingDeck, 0, self::gridDraftCardsPerRound($playerCount));
             $firstPickerSeatIndex = array_search((int) $state['first_picker_user_id'], $userIds, true);
             $nextFirstPickerUserId = $userIds[($firstPickerSeatIndex + 1) % $playerCount];
 
@@ -6404,11 +6450,14 @@ final class GameService
 
     /**
      * getState()'s own view of Grid Draft's current grid/turn state for
-     * $viewerUserId. The 3x3 grid's cards are always fully visible to
-     * every seated player (unlike Winston Draft's face-down piles, a
-     * dealt grid is face-up on the table) -- grid_cards is a 9-element
-     * array in row-major order (index = row * 3 + column), with a null
-     * entry for any cell already taken (and not yet refilled) this round.
+     * $viewerUserId. The grid's cards are always fully visible to every
+     * seated player (unlike Winston Draft's face-down piles, a dealt grid
+     * is face-up on the table) -- grid_cards is a grid_size^2-element
+     * array in row-major order (index = row * grid_size + column), with a
+     * null entry for any cell already taken (and not yet refilled) this
+     * round. grid_size is gridDraftGridSize(count($userIds)) -- 4 for a
+     * 4-player match, 3 otherwise -- so the frontend knows the grid's own
+     * dimensions and can compute cell indices to match.
      * current_turn_username names whoever current_turn_user_id actually
      * is, for a 3-4 player match where "not your turn" alone doesn't say
      * whose turn it actually is (issue #189) -- 2-player matches can
@@ -6450,7 +6499,8 @@ final class GameService
             'is_your_turn' => $currentTurnUserId === $viewerUserId,
             'current_turn_username' => $playersByUser[$currentTurnUserId]['username'] ?? null,
             'current_round' => (int) $gridState['current_round'],
-            'total_rounds' => self::GRID_DRAFT_ROUNDS,
+            'total_rounds' => self::gridDraftRounds(count($userIds)),
+            'grid_size' => self::gridDraftGridSize(count($userIds)),
             'first_picker_user_id' => (int) $gridState['first_picker_user_id'],
             'picks_this_round' => (int) $gridState['picks_this_round'],
             'total_picks_per_round' => count($userIds),

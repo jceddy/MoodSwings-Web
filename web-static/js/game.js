@@ -1278,7 +1278,7 @@
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
         quick_draft: '2-4 players each draft their own deck live from a shared card pool (16 cards for 2 or 4 players, 18 for 3), trim it down to at least 12. A 2-player draft plays a best-of-three match, sideboarding freely between games; a 3-4 player draft plays a single game.',
         winston_draft: '2-4 players each draft their own deck from a shared pool (45/70/90 cards for 2/3/4 players) by taking or passing on 3 growing face-down piles, in turn order rotating through every seat. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game -- a player who ends up short of 12 cards is dropped from the match rather than ending it for everyone else.',
-        grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/90 cards for 2/3/4 players) over 6 rounds: each round, 9 cards are dealt into a 3x3 grid, and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
+        grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/96 cards for 2/3/4 players) over 6 rounds (4 for exactly 4 players, so each player picks first exactly once): each round, cards are dealt into a 3x3 grid (4x4 for exactly 4 players), and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1323,18 +1323,20 @@
 
     // Grid Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
     // kept in sync with GameService::gridDraftPoolTargetSize()'s own
-    // per-player-count target (54/72/90 for 2/3/4 players, issue #189). No
-    // 'structure' option -- the Structure deck's 45 cards fall short of
-    // even the 2-player 54-card requirement, and unlike Quick Draft there's
-    // no mid-draft top-up mechanism to cover the gap, so buildGridDraftPool()
+    // per-player-count target (54/72/96 for 2/3/4 players, issue #189; the
+    // 4-player case uses a 4x4 grid over 4 rounds instead of 3x3 over 6, so
+    // each of the 4 players picks first in exactly 1 round). No 'structure'
+    // option -- the Structure deck's 45 cards fall short of even the
+    // 2-player 54-card requirement, and unlike Quick Draft there's no
+    // mid-draft top-up mechanism to cover the gap, so buildGridDraftPool()
     // rejects it outright rather than silently dealing a short final round.
     // jceddy's 75 Card deck's own 75 cards are swapped for jceddy's 150
     // Card deck's own 150-card pool only at exactly 4 players (the only
-    // player count whose 90-card target exceeds 75) before narrowing back
+    // player count whose 96-card target exceeds 75) before narrowing back
     // down to the target size.
     const GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
-        random_48: 'Random cards, no duplicates (54/72/90 for 2/3/4 players).',
-        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 90 needed.",
+        random_48: 'Random cards, no duplicates (54/72/96 for 2/3/4 players).',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 96 needed.",
         one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
         custom: 'Paste or upload your own pool of at least 54 cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
     };
@@ -4058,10 +4060,12 @@
     // line with 0 cards left (the second pick choosing the exact same
     // line the first pick already fully cleared) is simply disabled
     // rather than left to round-trip a rejected request.
-    function gridDraftLineCells(axis, index) {
-        return axis === 'row'
-            ? [index * 3, index * 3 + 1, index * 3 + 2]
-            : [index, index + 3, index + 6];
+    function gridDraftLineCells(axis, index, gridSize) {
+        const cells = [];
+        for (let i = 0; i < gridSize; i++) {
+            cells.push(axis === 'row' ? index * gridSize + i : index + i * gridSize);
+        }
+        return cells;
     }
 
     function renderGridDraftDrafting(drafting) {
@@ -4074,6 +4078,9 @@
 
         const gridContainer = document.getElementById('grid-draft-grid');
         gridContainer.innerHTML = '';
+        // style.css hardcodes a 3-column layout for the common 3x3 grid;
+        // override it inline for the 4x4 grid dealt to a 4-player match.
+        gridContainer.style.gridTemplateColumns = 'repeat(' + drafting.grid_size + ', min-content)';
         drafting.grid_cards.forEach((card) => {
             const cellEl = document.createElement('div');
             cellEl.className = 'grid-draft-cell';
@@ -4094,8 +4101,8 @@
         ['row', 'column'].forEach((axis) => {
             const axisRow = document.createElement('div');
             axisRow.className = 'grid-draft-picks-row';
-            for (let index = 0; index < 3; index++) {
-                const cellsRemaining = gridDraftLineCells(axis, index)
+            for (let index = 0; index < drafting.grid_size; index++) {
+                const cellsRemaining = gridDraftLineCells(axis, index, drafting.grid_size)
                     .filter((cell) => drafting.grid_cards[cell] !== null).length;
 
                 const button = document.createElement('button');
