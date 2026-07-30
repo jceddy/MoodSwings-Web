@@ -67,6 +67,7 @@ jobs:
           DISCORD_CLIENT_SECRET: ${{ secrets.DEV_DISCORD_CLIENT_SECRET }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DEV_DISCORD_PUBLIC_KEY }}
           DISCORD_BOT_TOKEN: ${{ secrets.DEV_DISCORD_BOT_TOKEN }}
+          MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
         run: |
           set -euo pipefail
           rm -rf dist
@@ -101,6 +102,16 @@ jobs:
           cp -R php-app/src dist/src
           cp -R php-app/vendor dist/vendor
 
+          # Migration files, so the "Run database migrations" step below
+          # (a POST /migrate call against the just-deployed app, which has
+          # no shell access of its own) can find them via
+          # MigrationRunner -- see database/README.md's "Applying
+          # migrations". A sibling of dist/src, matching where
+          # MigrationRunner::defaultMigrationsDir() looks for it once
+          # deployed.
+          mkdir -p dist/database
+          cp -R database/migrations dist/database/migrations
+
           # Runtime config generated from repo secrets; never committed. Only
           # write a line when the secret/variable is actually set, so unset
           # optional ones (e.g. SMTP_PORT) fall back to Config::get()'s coded
@@ -133,10 +144,12 @@ jobs:
           write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
           write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"
           write_env_var DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
+          write_env_var MIGRATION_DEPLOY_KEY "$MIGRATION_DEPLOY_KEY"
 
-          # dist/, vendor/, and src/ all end up under the shared document
-          # root (no Bluehost document-root change required), so block
-          # direct HTTP access to the files that aren't meant to be served.
+          # dist/, vendor/, src/, and database/ all end up under the shared
+          # document root (no Bluehost document-root change required), so
+          # block direct HTTP access to the files that aren't meant to be
+          # served.
           cat > dist/.htaccess <<'HTACCESS'
           <FilesMatch "^\.env$">
               Require all denied
@@ -144,6 +157,7 @@ jobs:
           HTACCESS
           echo 'Require all denied' > dist/vendor/.htaccess
           echo 'Require all denied' > dist/src/.htaccess
+          echo 'Require all denied' > dist/database/.htaccess
 
       - name: Deploy to Bluehost via FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
@@ -156,6 +170,25 @@ jobs:
           exclude: |
             **/.git*
             **/.git*/**
+
+      - name: Run database migrations
+        # Both the deployed app's /migrate route AND this secret need to
+        # be present for this to do anything -- if MIGRATION_DEPLOY_KEY
+        # hasn't been set yet, this step is skipped entirely rather than
+        # curling a request that /migrate would just reject with a 403
+        # anyway, so a deploy set up before this secret existed keeps
+        # working exactly as it did before (falling back to applying
+        # database/migrations/ by hand -- see database/README.md). Shares
+        # the same MIGRATION_DEPLOY_KEY secret as deploy.yml (production)
+        # -- it's a shared deploy-automation credential rather than
+        # something meaningfully different per environment, the same
+        # reasoning already applied to SMTP_*/VAPID_* above.
+        if: ${{ vars.DEV_SITE_URL != '' && secrets.MIGRATION_DEPLOY_KEY != '' }}
+        env:
+          SITE_URL: ${{ vars.DEV_SITE_URL }}
+          MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
+        run: |
+          curl -fsS -X POST -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" "$SITE_URL/app/migrate"
 
       - name: Smoke test deployed health endpoint
         if: ${{ vars.DEV_SITE_URL != '' }}

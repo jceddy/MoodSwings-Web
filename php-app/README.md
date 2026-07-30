@@ -38,13 +38,14 @@ database.
 All responses are JSON with a `status` field (`ok` or `error`), except
 `/verify-email` — that one's opened directly from an emailed link by a
 human rather than called by our own JS, so it renders an HTML page
-instead. Every route except `/health` can also return `503` with
-`{"status": "maintenance", "message"}` (or, for `/verify-email`, an HTML
-maintenance page) — see "Maintenance mode" below.
+instead. Every route except `/health` and `/migrate` can also return `503`
+with `{"status": "maintenance", "message"}` (or, for `/verify-email`, an
+HTML maintenance page) — see "Maintenance mode" below.
 
 | Method | Path            | Body                                                          | Notes |
 | ------ | --------------- | -------------------------------------------------------------- | ----- |
 | GET    | `/health`       | —                                                                | Checks DB connectivity. Exempt from maintenance mode (see below) — always reflects real DB health, never `503` for a pending migration. |
+| POST   | `/migrate`      | —                                                                 | Requires an `X-Migration-Key` header matching the `MIGRATION_DEPLOY_KEY` secret (compared with `hash_equals()`); `403` if it's missing/wrong or the secret itself isn't configured. Applies any pending `database/migrations/*.sql` files via `MigrationRunner::applyPending()` -- called by `.github/workflows/deploy.yml`/`deploy-dev.yml` right after each deploy's file upload, since production/dev have no shell access of their own to run `bin/migrate.php` directly. Exempt from maintenance mode (see below), same reasoning as `/health`. Returns `{"applied": [string]}` (filenames actually applied this run, `[]` if already up to date); `500` with the underlying error message if a migration fails partway through. See "Auto-applying migrations on deploy" in `database/README.md`. |
 | POST   | `/register`     | `{"username", "email", "password", "phone_number"?}`             | Creates an unverified user and emails a verification link. Username: 3-32 chars (letters/numbers/`_`/`-`); email: valid format; password: 8-72 chars; phone (optional): 7-20 chars, digits/`+`/`-`/`.`/spaces/parens. `409` on duplicate username/email, `400` on validation failure, `502` if the verification email can't be sent (registration is rolled back so you can retry). |
 | GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with just a manual link (no auto-redirect) if the token is invalid/expired. |
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
@@ -133,31 +134,35 @@ not a browser.
 
 ## Maintenance mode
 
-Production applies database migrations by hand (see "Deployment" in the
-top-level README — GitHub Actions can't reach Bluehost's MySQL directly),
-typically shortly after a code deploy rather than atomically with it.
+Production applies database migrations automatically as part of each
+deploy, via `POST /migrate` (see "Auto-applying migrations on deploy" in
+`database/README.md`) — but that request lands moments after the file
+upload finishes, not atomically with it, and falls back to a manual
+phpMyAdmin paste entirely if `MIGRATION_DEPLOY_KEY` isn't configured.
 `src/Maintenance/MaintenanceGate.php` closes that gap: every request
-(except `/health`, see below) compares the deployed `VERSION` file against
-a `version` value stored in the `schema_version` table (`database/README.md`)
-and, on any mismatch, responds `503` with `{"status": "maintenance",
-"message": "..."}` instead of running the route — see `apiRequest()` in
-`web-static/js/app.js` for how the frontend reacts to that. A missing
-`schema_version` table (the state right after this feature's own migration
-deploys but before it's been applied) or any other DB error also triggers
-maintenance mode — self-bootstrapping, and exactly the condition this
-feature exists to catch. An unreadable `VERSION` file instead fails
-*open* (allows traffic), since blocking every user over an unrelated
-file-read glitch would be worse than the problem being solved. This makes
-`database/README.md`'s migration convention a hard requirement: any
-change that includes a migration must also bump `VERSION`, and the
-migration itself must update `schema_version` to match as its *last*
-statement.
+(except `/health`/`/migrate`, see below) compares the deployed `VERSION`
+file against a `version` value stored in the `schema_version` table
+(`database/README.md`) and, on any mismatch, responds `503` with
+`{"status": "maintenance", "message": "..."}` instead of running the
+route — see `apiRequest()` in `web-static/js/app.js` for how the frontend
+reacts to that. A missing `schema_version` table (the state right after
+this feature's own migration deploys but before it's been applied) or any
+other DB error also triggers maintenance mode — self-bootstrapping, and
+exactly the condition this feature exists to catch. An unreadable
+`VERSION` file instead fails *open* (allows traffic), since blocking every
+user over an unrelated file-read glitch would be worse than the problem
+being solved. This makes `database/README.md`'s migration convention a
+hard requirement: any change that includes a migration must also bump
+`VERSION`, and the migration itself must update `schema_version` to match
+as its *last* statement.
 
 `/health` is deliberately exempt — the deploy workflows' post-deploy smoke
 test (`curl -fsS ".../app/health"`, no `continue-on-error`) would hard-fail
-every migration-containing deploy otherwise, even though "deploy code,
-apply the migration by hand shortly after" is the documented, intentional
-workflow. `/verify-email` is also exempt from the generic JSON gate, but
+every migration-containing deploy otherwise. `/migrate` is exempt for a
+sharper reason: its entire purpose is to resolve the exact
+`VERSION`-vs-`schema_version` mismatch this gate checks for, so gating it
+behind that same check would make it unreachable exactly when it's
+needed. `/verify-email` is also exempt from the generic JSON gate, but
 not skipped — since it renders an HTML page for a human clicking an
 emailed link rather than JSON for our own JS, its own route block checks
 `MaintenanceGate::activeMessage()` itself and responds via `respondHtml()`
@@ -4018,6 +4023,17 @@ injected-string `check()` path — the two resolve `VERSION`'s location
 differently (see `MaintenanceGate`'s docblock), so this is the one test
 that would have caught the path-resolution bug an earlier draft of that
 class had.
+
+`MigrationRunnerTest` exercises `MigrationRunner::applyPending()` (shared
+by `bin/migrate.php` and `POST /migrate`, see "Maintenance mode" above and
+"Auto-applying migrations on deploy" in `database/README.md`) against its
+own scratch fixture directory rather than the real `database/migrations/`
+-- that directory only ever grows and every file in it is already applied
+to `TEST_DB` by the time any test runs, so there'd be nothing left to
+actually apply. Its fixture filenames are namespaced
+(`zzz_migration_runner_test_*`) so they can never collide with a real
+migration's own name, and clean themselves out of the shared
+`schema_migrations` table in `tearDown()`.
 
 The test suite truncates `users`/`sessions`/`email_verifications`/
 `friendships` in that database before each test, so never point it at a

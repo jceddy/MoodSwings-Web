@@ -13,6 +13,7 @@ use MoodSwings\Auth\InvalidPasswordResetTokenException;
 use MoodSwings\Auth\InvalidVerificationTokenException;
 use MoodSwings\Config;
 use MoodSwings\Database\Connection;
+use MoodSwings\Database\MigrationRunner;
 use MoodSwings\Deck\DecklistNotFoundException;
 use MoodSwings\Deck\DecklistValidationException;
 use MoodSwings\Deck\NotAuthorizedToAccessDecklistException;
@@ -229,16 +230,47 @@ if ($path === '/health' && $method === 'GET') {
     }
 }
 
-// /health is exempt above because the deploy workflows' post-deploy smoke
-// test (curl -fsS ".../app/health", no continue-on-error) would hard-fail
-// every migration-containing deploy otherwise -- "deploy code, apply the
-// migration by hand shortly after" is the documented, intentional
-// production workflow (see database/README.md). /verify-email is exempt
-// here too, but not skipped: unlike every other route it renders an HTML
-// page for a human clicking an emailed link rather than JSON for our own
-// JS, so its own route block below checks the gate itself and responds via
+/**
+ * Applies pending database/migrations/*.sql files (see MigrationRunner),
+ * called by the deploy workflows (.github/workflows/deploy*.yml) right
+ * after each deploy's file upload -- production has no shell access of
+ * its own to run bin/migrate.php directly (see "Applying migrations" in
+ * database/README.md), so this is the only way a schema-changing deploy
+ * gets its migration applied automatically rather than by hand via
+ * phpMyAdmin. Gated on MIGRATION_DEPLOY_KEY (an X-Migration-Key header,
+ * compared with hash_equals() to resist timing attacks) rather than any
+ * user session, since this runs from a CI job with no logged-in user at
+ * all; an unset/empty key fails closed rather than leaving this endpoint
+ * open by accident on a deploy that hasn't configured the secret yet.
+ */
+if ($path === '/migrate' && $method === 'POST') {
+    $expectedKey = Config::get('MIGRATION_DEPLOY_KEY', '') ?? '';
+    $providedKey = $_SERVER['HTTP_X_MIGRATION_KEY'] ?? '';
+
+    if ($expectedKey === '' || !hash_equals($expectedKey, $providedKey)) {
+        respond(403, ['status' => 'error', 'message' => 'Invalid or missing migration key']);
+    }
+
+    try {
+        $applied = MigrationRunner::applyPending(Connection::get());
+        respond(200, ['status' => 'ok', 'applied' => $applied]);
+    } catch (\Throwable $e) {
+        respond(500, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// /health and /migrate are exempt above because the deploy workflows'
+// post-deploy smoke test (curl -fsS ".../app/health", no
+// continue-on-error) and migration step both need to run regardless of
+// whether the deployed VERSION and schema_version currently agree --
+// /migrate's entire purpose is to resolve that exact mismatch, so gating
+// it behind the same check it exists to fix would make it unreachable
+// exactly when it's needed. /verify-email is exempt here too, but not
+// skipped: unlike every other route it renders an HTML page for a human
+// clicking an emailed link rather than JSON for our own JS, so its own
+// route block below checks the gate itself and responds via
 // respondHtml() instead of the generic JSON 503 here.
-if ($path !== '/health' && $path !== '/verify-email') {
+if ($path !== '/health' && $path !== '/migrate' && $path !== '/verify-email') {
     $maintenanceMessage = MaintenanceGate::activeMessage();
     if ($maintenanceMessage !== null) {
         header('Retry-After: 120');
