@@ -2163,7 +2163,7 @@ their own sections below rather than repeated here):
   records each pile's initial `drawn_card_ids` (unchanged); the old
   `kept_from_draw_ids`/`kept_from_received_ids`/`submitted_draw_at`/
   `submitted_received_at` columns (fixed at 2 stages) are replaced by a
-  new table, `draft_pile_stage_picks` (migration `0063`) -- one row per
+  new table, `draft_pile_stage_picks` (migration `0060`) -- one row per
   `(draft_match_id, round_number, pile_owner_user_id, stage_number)`,
   recording `holder_user_id` (whoever actually held the pile at that
   stage -- equal to `pile_owner_user_id` only at stage 1) and
@@ -2457,7 +2457,7 @@ per match) holds: `remaining_deck_card_ids` (the not-yet-dealt portion of
 the pool), `current_round`, `grid_card_ids` (the current round's 9 cells,
 row-major, `null` for a taken-and-not-yet-refilled cell),
 `first_picker_user_id` (whoever goes first *this* round),
-`picks_this_round` (migration `0064`, issue #189 -- how many picks have
+`picks_this_round` (migration `0060`, issue #189 -- how many picks have
 happened so far this round, reset to 0 at the start of every round;
 replaces the original `first_pick_axis`/`first_pick_index` columns, which
 only ever existed to derive a single "is this the round's first or second
