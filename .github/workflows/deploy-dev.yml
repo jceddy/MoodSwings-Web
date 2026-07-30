@@ -39,7 +39,7 @@ jobs:
       MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -169,7 +169,7 @@ jobs:
           echo 'Require all denied' > dist/database/.htaccess
 
       - name: Deploy to Bluehost via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
           server: ${{ secrets.DEV_FTP_SERVER }}
           username: ${{ secrets.DEV_FTP_USERNAME }}
