@@ -38,13 +38,14 @@ database.
 All responses are JSON with a `status` field (`ok` or `error`), except
 `/verify-email` — that one's opened directly from an emailed link by a
 human rather than called by our own JS, so it renders an HTML page
-instead. Every route except `/health` can also return `503` with
-`{"status": "maintenance", "message"}` (or, for `/verify-email`, an HTML
-maintenance page) — see "Maintenance mode" below.
+instead. Every route except `/health` and `/migrate` can also return `503`
+with `{"status": "maintenance", "message"}` (or, for `/verify-email`, an
+HTML maintenance page) — see "Maintenance mode" below.
 
 | Method | Path            | Body                                                          | Notes |
 | ------ | --------------- | -------------------------------------------------------------- | ----- |
 | GET    | `/health`       | —                                                                | Checks DB connectivity. Exempt from maintenance mode (see below) — always reflects real DB health, never `503` for a pending migration. |
+| POST   | `/migrate`      | —                                                                 | Requires an `X-Migration-Key` header matching the `MIGRATION_DEPLOY_KEY` secret (compared with `hash_equals()`); `403` if it's missing/wrong or the secret itself isn't configured. Applies any pending `database/migrations/*.sql` files via `MigrationRunner::applyPending()` -- called by `.github/workflows/deploy.yml`/`deploy-dev.yml` right after each deploy's file upload, since production/dev have no shell access of their own to run `bin/migrate.php` directly. Exempt from maintenance mode (see below), same reasoning as `/health`. Returns `{"applied": [string]}` (filenames actually applied this run, `[]` if already up to date); `500` with the underlying error message if a migration fails partway through. See "Auto-applying migrations on deploy" in `database/README.md`. |
 | POST   | `/register`     | `{"username", "email", "password", "phone_number"?}`             | Creates an unverified user and emails a verification link. Username: 3-32 chars (letters/numbers/`_`/`-`); email: valid format; password: 8-72 chars; phone (optional): 7-20 chars, digits/`+`/`-`/`.`/spaces/parens. `409` on duplicate username/email, `400` on validation failure, `502` if the verification email can't be sent (registration is rolled back so you can retry). |
 | GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with just a manual link (no auto-redirect) if the token is invalid/expired. |
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
@@ -58,7 +59,7 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel`/`draft` game doesn't seat *exactly* 2 players total, a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of 54 cards), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"?, "saved_decklist_id"?}`           | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, either as pasted/uploaded text or by referencing one of their own or a friend's shared saved decklists (see "Saved decklists" below), validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it. Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | GET    | `/cards/catalog` | —                                                                | Requires auth. Every printed card, hydrated the same way `/decklists/view` hydrates a saved decklist's cards (now including `rarity`, which no other card-view route needed until this one). Not scoped to a game/decklist -- the catalog itself is public knowledge, same reasoning as `/games/log`. Returns `{"cards": [...]}`. Powers the deck builder's (issue #93) own catalog-browsing panel -- see "Deck builder" below. |
 | GET    | `/decklists`    | —                                                                 | Requires auth. Returns `{"own": [...], "friends": [{"friend_id", "friend_username", "decklists": [...]}]}` -- summaries only (`id`/`name`/`card_count`/`sideboard_card_count`/`visibility`/`created_at`/`updated_at`, never card contents). `friends` only lists friends who have 1+ decks shared with you. See "Saved decklists" below. |
@@ -66,14 +67,14 @@ maintenance page) — see "Maintenance mode" below.
 | POST   | `/decklists`    | `{"name", "decklist_text"?, "card_ids"?, "sideboard_card_ids"?, "visibility"?}` | Requires auth. Saves a new decklist under your account -- either `decklist_text` (parsed the same way as "Custom decklists" below, capturing an optional Sideboard section too) or already-resolved `card_ids`/`sideboard_card_ids` (used by the draft formats' own "Save deck" button, see "Quick Draft" etc.). `visibility` is `private` (default) or `friends`. `400` if the name is blank, no cards were given, a card id doesn't exist, or `visibility` is invalid. Returns `{"decklist_id"}`. |
 | POST   | `/decklists/update` | `{"id", "name", "decklist_text"?, "card_ids"?, "sideboard_card_ids"?, "visibility"?}` | Requires auth. Overwrites an existing decklist's name/contents/visibility in place (no versioning). `404` if no such decklist, `403` if you don't own it, `400` for the same validation as create. |
 | POST   | `/decklists/delete` | `{"id"}`                                                      | Requires auth. Permanently deletes one of your own saved decklists. `404` if no such decklist, `403` if you don't own it. |
-| POST   | `/games/draft/pick` | `{"game_id", "round", "stage", "card_ids": [int, int]}`      | Requires auth; `403` if you're not seated in that game. A `quick_draft` match's own per-round blind pick -- `stage` is `draw` (keep 2 of your own just-dealt 6) or `received` (keep 2 of the 4 you received from your opponent, only submittable once both players have submitted `draw`). `409` if the game isn't `quick_draft`, the match isn't currently drafting, `round` isn't the match's current round, `card_ids` isn't exactly 2 cards you're actually eligible to keep for that stage, or you've already submitted that stage. See "Quick Draft" below. Returns `{"stage_completed", "round_advanced", "draft_completed"}`. |
+| POST   | `/games/draft/pick` | `{"game_id", "round", "stage": int, "card_ids": [int, int]}` | Requires auth; `403` if you're not seated in that game. A `quick_draft` match's own per-round blind pick -- `stage` is an integer from 1 to the match's own player count (2 for a 2-player match, same as the old `'draw'`/`'received'` string enum; up to 4 for a multiplayer match, issue #189), identifying which of the round's per-player piles you're currently holding (server-derived from seat rotation, not something the client picks). `409` if the game isn't `quick_draft`, the match isn't currently drafting, `round` isn't the match's current round, `stage` is out of range, `card_ids` isn't exactly 2 cards you're actually eligible to keep for that stage, you've already submitted that stage, or the previous stage isn't yet complete for every seated player. See "Quick Draft" below. Returns `{"stage_completed", "round_advanced", "draft_completed"}`. |
 | POST   | `/games/draft/winston-pick` | `{"game_id", "action": "take"\|"pass"}`                  | Requires auth; `403` if you're not seated in that game. A `winston_draft` match's own pile take/pass -- no `card_ids`, since a pile is taken/passed as a whole and the server already knows whose turn it is and which pile is current. `409` if the game isn't `winston_draft`, the match isn't currently drafting, it isn't your turn, or `action` isn't `take`/`pass`. See "Winston Draft" below. Returns `{"action_completed", "turn_advanced", "draft_completed"}`. |
-| POST   | `/games/draft/grid-pick` | `{"game_id", "axis": "row"\|"column", "index": 0-2}`        | Requires auth; `403` if you're not seated in that game. A `grid_draft` match's own row/column pick against the current 3x3 grid. `409` if the game isn't `grid_draft`, the match isn't currently drafting, it isn't your turn, `axis`/`index` are invalid, or the chosen line has no cards left. See "Grid Draft" below. Returns `{"axis", "index", "cards_taken": [int], "round_completed", "turn_advanced", "draft_completed"}`. |
-| POST   | `/games/draft/deck` | `{"game_id", "card_ids": [int]}`                             | Requires auth; `403` if you're not seated in that game. A `quick_draft`/`winston_draft`/`grid_draft` match's own deck trim/sideboard -- used both for the initial trim and every later sideboard between the match's games. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, the match isn't currently `deck_building`, `card_ids` isn't within that format's min/max size (12-16 for `quick_draft`; at least 12, at most however many you drafted, for `winston_draft`/`grid_draft`) or drawn from your own `drafted_card_ids`. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
+| POST   | `/games/draft/grid-pick` | `{"game_id", "axis": "row"\|"column", "index": int}`        | Requires auth; `403` if you're not seated in that game. A `grid_draft` match's own row/column pick against the current grid -- 3x3 (`index` 0-2) for 2-3 players, 4x4 (`index` 0-3) for exactly 4 players. `409` if the game isn't `grid_draft`, the match isn't currently drafting, it isn't your turn, `axis`/`index` are invalid, or the chosen line has no cards left. See "Grid Draft" below. Returns `{"axis", "index", "cards_taken": [int], "round_completed", "turn_advanced", "draft_completed"}`. |
+| POST   | `/games/draft/deck` | `{"game_id", "card_ids": [int]}`                             | Requires auth; `403` if you're not seated in that game. A `quick_draft`/`winston_draft`/`grid_draft` match's own deck trim/sideboard -- used both for the initial trim and every later sideboard between the match's games. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, the match isn't currently `deck_building`, `card_ids` isn't within that format's min/max size (at least 12, at most however many you actually drafted -- 16 for `quick_draft` at 2/4 players, 18 at 3, since issue #189; varies by how the draft unfolded for `winston_draft`/`grid_draft`) or drawn from your own `drafted_card_ids`. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Only callable once a best-of-three draft match's game 2/3 has actually started -- the loser of the previous game doesn't have to decide who goes first until they can see their own opening hand, and round 1 stays frozen (nobody can play/pass) until they do. Lets them go first themselves (`play_first: true`) or leave the previous winner going first again (`play_first: false`); either answer permanently unfreezes the round. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, hasn't started yet, is game 1 of its match (nothing to base the choice on), the calling user wasn't the previous game's loser, or the decision was already made. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
-| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress`/`abandoned` game, plus a `completed` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above `abandoned`/still-current-`completed` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username"}`, `winner_username` only set once the match's own status is `completed`) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
+| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress`/`abandoned` game, plus a `completed` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above `abandoned`/still-current-`completed` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username", "players"}`, `winner_username` only set once the match's own status is `completed`, `players` -- issue #189 -- every seated player's own `user_id`/`username`/`wins`/`is_you`, the field a 3-4 player Quick Draft match's own scoreline should actually be read from since `your_wins`/`opponent_wins` only ever reflect the first non-viewer seat) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/past`   | —                                                                 | Requires auth. The complement of `GET /games` above: every `completed` game NOT still tied to an undecided draft match -- i.e. exactly the games `GET /games` excludes. Same row shape as `GET /games` (`GameService::gameSummaryFor()` hydrates both), sorted most-recently-completed first rather than by actionability, since nothing here is actionable. See "Past games" below. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
@@ -133,31 +134,35 @@ not a browser.
 
 ## Maintenance mode
 
-Production applies database migrations by hand (see "Deployment" in the
-top-level README — GitHub Actions can't reach Bluehost's MySQL directly),
-typically shortly after a code deploy rather than atomically with it.
+Production applies database migrations automatically as part of each
+deploy, via `POST /migrate` (see "Auto-applying migrations on deploy" in
+`database/README.md`) — but that request lands moments after the file
+upload finishes, not atomically with it, and falls back to a manual
+phpMyAdmin paste entirely if `MIGRATION_DEPLOY_KEY` isn't configured.
 `src/Maintenance/MaintenanceGate.php` closes that gap: every request
-(except `/health`, see below) compares the deployed `VERSION` file against
-a `version` value stored in the `schema_version` table (`database/README.md`)
-and, on any mismatch, responds `503` with `{"status": "maintenance",
-"message": "..."}` instead of running the route — see `apiRequest()` in
-`web-static/js/app.js` for how the frontend reacts to that. A missing
-`schema_version` table (the state right after this feature's own migration
-deploys but before it's been applied) or any other DB error also triggers
-maintenance mode — self-bootstrapping, and exactly the condition this
-feature exists to catch. An unreadable `VERSION` file instead fails
-*open* (allows traffic), since blocking every user over an unrelated
-file-read glitch would be worse than the problem being solved. This makes
-`database/README.md`'s migration convention a hard requirement: any
-change that includes a migration must also bump `VERSION`, and the
-migration itself must update `schema_version` to match as its *last*
-statement.
+(except `/health`/`/migrate`, see below) compares the deployed `VERSION`
+file against a `version` value stored in the `schema_version` table
+(`database/README.md`) and, on any mismatch, responds `503` with
+`{"status": "maintenance", "message": "..."}` instead of running the
+route — see `apiRequest()` in `web-static/js/app.js` for how the frontend
+reacts to that. A missing `schema_version` table (the state right after
+this feature's own migration deploys but before it's been applied) or any
+other DB error also triggers maintenance mode — self-bootstrapping, and
+exactly the condition this feature exists to catch. An unreadable
+`VERSION` file instead fails *open* (allows traffic), since blocking every
+user over an unrelated file-read glitch would be worse than the problem
+being solved. This makes `database/README.md`'s migration convention a
+hard requirement: any change that includes a migration must also bump
+`VERSION`, and the migration itself must update `schema_version` to match
+as its *last* statement.
 
 `/health` is deliberately exempt — the deploy workflows' post-deploy smoke
 test (`curl -fsS ".../app/health"`, no `continue-on-error`) would hard-fail
-every migration-containing deploy otherwise, even though "deploy code,
-apply the migration by hand shortly after" is the documented, intentional
-workflow. `/verify-email` is also exempt from the generic JSON gate, but
+every migration-containing deploy otherwise. `/migrate` is exempt for a
+sharper reason: its entire purpose is to resolve the exact
+`VERSION`-vs-`schema_version` mismatch this gate checks for, so gating it
+behind that same check would make it unreachable exactly when it's
+needed. `/verify-email` is also exempt from the generic JSON gate, but
 not skipped — since it renders an HTML page for a human clicking an
 emailed link rather than JSON for our own JS, its own route block checks
 `MaintenanceGate::activeMessage()` itself and responds via `respondHtml()`
@@ -1625,12 +1630,14 @@ one of these:
   own deck lives on `draft_match_players.deck_card_ids` just as it does for
   `quick_draft`; `startGame()` reads it via the same
   `requireDraftDecksSubmitted()`.
-- `grid_draft` -- also `format: 'draft'` only: both players draft from a
-  shared 54-card pool by taking a whole row or column of a 3x3 grid, dealt
-  fresh over 6 rounds (see "Grid Draft" below) -- same story again as
-  `quick_draft`/`winston_draft`: `deckCardIdsFor()` refuses to build this
-  one too, and `startGame()` reads it via the same
-  `requireDraftDecksSubmitted()`.
+- `grid_draft` -- also `format: 'draft'` only: 2-4 players (issue #189)
+  each draft from a shared pool (54/72/96 cards for 2/3/4 players) by
+  taking a whole row or column of a grid (3x3 for 2-3 players, 4x4 for
+  exactly 4), dealt fresh over 6 rounds (4 for exactly 4 players, so each
+  player picks first in exactly 1 round) (see "Grid Draft" below) -- same
+  story again as `quick_draft`/
+  `winston_draft`: `deckCardIdsFor()` refuses to build this one too, and
+  `startGame()` reads it via the same `requireDraftDecksSubmitted()`.
 - `one_of_each` -- the full 133-card pool, one copy of every printed card,
   unchanged from the only option that existed before `deck_type` did.
 
@@ -1961,7 +1968,10 @@ rounds x 2 players), cheap to scan in full every time.
 time via `quick_draft_pool_source`) -- `random_48` (48 random *distinct*
 catalog cards), `structure` (reuses `buildStructureDeckCardIds()`'s own
 45-card pool as-is), `jceddys_75` (reuses `buildJceddys75DeckCardIds()`'s
-own 75-card pool as-is), `one_of_each` (the full 133-card catalog), or
+own 75-card pool as-is -- except at exactly 4 players, where
+`buildJceddys150DeckCardIds()`'s own 150-card pool is used instead, since
+75 falls short of every 4-player target this source is ever used for; see
+"Multiplayer" below), `one_of_each` (the full 133-card catalog), or
 `custom` (a pool of 45+ cards in the same decklist-line format `custom`
 decks use, parsed via the same `DecklistParser`, minimum 45 rather than
 that deck_type's player-count-scaled minimum, and with no use for
@@ -2125,6 +2135,105 @@ every row in a lobby listing would otherwise pay for and never use.
 `draft_match.winner_username` is only set once the match itself (not
 just the individual game) is `'completed'`.
 
+**Multiplayer (issue #189)** -- Quick Draft, Winston Draft, and Grid
+Draft all support 2-4 players (`createGame()`'s `isDuelShapedFormat()`
+gate widens specifically for `format: 'draft'` + `deck_type` in
+`['quick_draft', 'winston_draft', 'grid_draft']`; `'duel'` itself stays
+locked to exactly 2). Everything above still holds for a 2-player match;
+this section covers what changes for 3-4 (Winston Draft's own and Grid
+Draft's own multiplayer mechanics -- turn rotation, pool sizing, and
+each format's own take on the sub-12-card shortfall -- are covered in
+their own sections below rather than repeated here):
+
+- **Pile size and stage count generalize together.** A round no longer
+  deals a fixed 6-card pack with 2 fixed sub-steps -- every player is
+  dealt their own `quickDraftPileSize($playerCount)` = `2N + 2`-card
+  pile (8 for 3 players, 10 for 4), and each pile is worked through
+  exactly `$playerCount` **stages** (an integer 1..N, not the old
+  `'draw'`/`'received'` string enum) instead of 2 -- one keep-2 decision
+  per stage, made by a different seated player each time. Since a pile
+  loses 2 cards per stage and starts at `2N + 2`, it always empties to
+  exactly 2 (discarded) after N stages -- meaning every pile completes
+  one full lap of every seated player before running out, degenerating
+  cleanly to the original 2-stage behavior at N=2.
+- **Seat rotation, not opponent lookup.** With only 2 players "pass to
+  the other one" needed no bookkeeping; with 3-4, whose pile a player
+  holds at a given stage is real seat-index arithmetic
+  (`submitQuickDraftPick()`'s own docblock has the formula), and the
+  direction alternates right/left/right per round
+  (`quickDraftPassDirection()`). Because every pile advances in
+  lockstep, "stage" is a single round-wide counter: nobody can act on
+  stage N+1 until every pile has finished stage N, generalizing the
+  original "received cards aren't determined until both players submit
+  their draw pick" gate.
+- **New schema for N-stage picks.** `draft_round_picks` still only
+  records each pile's initial `drawn_card_ids` (unchanged); the old
+  `kept_from_draw_ids`/`kept_from_received_ids`/`submitted_draw_at`/
+  `submitted_received_at` columns (fixed at 2 stages) are replaced by a
+  new table, `draft_pile_stage_picks` (migration `0060`) -- one row per
+  `(draft_match_id, round_number, pile_owner_user_id, stage_number)`,
+  recording `holder_user_id` (whoever actually held the pile at that
+  stage -- equal to `pile_owner_user_id` only at stage 1) and
+  `kept_card_ids`. `finalizeQuickDraft()` now unions every
+  `kept_card_ids` a player was ever the `holder_user_id` for, across
+  every stage of every round, into their `drafted_card_ids` -- most of
+  what a player nets comes from piles other seats passed to them, not
+  just their own.
+- **Pool size scales with player count.** `quickDraftPoolTargetSize()`
+  is 24 cards per seated player (48/72/96 for 2/3/4), and
+  `quickDraftRounds()` is chosen per player count so everyone clears at
+  least a 16-card pool: 4 rounds for 2 players (16 total), 3 rounds for
+  3 (18 total), 2 rounds for 4 (16 total). A fixed-size pool source
+  short of the target (`structure`'s 45) isn't padded at build time --
+  the existing discard-reshuffle top-up in `dealQuickDraftRound()`
+  already covers the shortfall generically as the draft proceeds,
+  exactly as it already did for a 2-player `structure` pool.
+  `jceddys_75` is the one exception: at exactly 4 players (96 needed),
+  `buildDraftPool()` itself swaps in `buildJceddys150DeckCardIds()`'s own
+  150-card pool instead of the plain 75-card one (see "jceddy's 150 Card
+  deck" below), so this specific case never needs the reshuffle top-up
+  either. `quickDraftMinCustomPoolSize()` (the floor for a `'custom'`
+  pool) is one structure-deck's worth (45) per 2 seated players, rounding
+  up -- 45 for 2p, 90 for 3-4p.
+- **jceddy's 150 Card deck** (`buildJceddys150DeckCardIds()`,
+  `JCEDDYS_150_DECK_RARITY_SPEC`) -- shared by Quick Draft's and Grid
+  Draft's own 4-player `jceddys_75` pool sourcing (both go through the
+  same `buildDraftPool()`). Not a literal doubling of jceddy's 75 Card
+  deck's own 75-card pool (which would just duplicate the same 75 card
+  ids) -- its own themed 150-card construction, every one of jceddy's 75
+  Card deck's own per-color count/max-copies pairs doubled: 2 Mythics, 4
+  *different* Rares, 8 Uncommons (up to 2 copies of any one), and 16
+  Commons (up to 3 copies of any one) per color, 30 cards per color, 150
+  total across the same 5 colors (10 Mythics/20 Rares/40 Uncommons/80
+  Commons overall) -- matching the spec given for issue #189.
+- **No fixed max deck size.** `submitDraftDeck()`/`quickDraftStateFor()`
+  no longer cap Quick Draft's own deck at a flat 16 -- like Winston
+  Draft and Grid Draft, the max is simply however many cards that player
+  actually drafted (16 for 2p/4p, 18 for 3p). A player is always free to
+  trim further down to the shared `QUICK_DRAFT_MIN_DECK_SIZE` (12) floor.
+- **3-4 player matches are single-game.** `draftGamesToWin($playerCount)`
+  returns 1 for more than 2 players (still 2 for exactly 2) -- the
+  `draft_matches`/`draft_match_players` wrapper is reused as-is rather
+  than duplicated, just with a games-to-win of 1, so a 3-4 player match
+  completes the moment its one game does; `advanceDraftMatch()`,
+  `draftMatchSummaryFor()`, and `quickDraftStateFor()` all read this
+  instead of the flat `DRAFT_GAMES_TO_WIN` constant.
+- **API shape.** `POST /games/draft/pick`'s `stage` field is now an
+  integer (1..the match's own player count) instead of the string
+  `'draw'`/`'received'`. `getState()`'s `quick_draft` field gains a
+  `players` array (every seated player's own `user_id`/`username`/
+  `wins`/`is_you`) alongside the existing `your_wins`/`opponent_wins`
+  (kept, but only ever reflect the first non-viewer seat for 3-4
+  players -- a multiplayer-aware frontend should read `players`
+  instead); `quick_draft.drafting` gains `total_stages`/`pass_direction`
+  and replaces the old `stage`/`awaiting_opponent_*` string enum with an
+  integer `stage` plus a `status` of `'picking'`/`'awaiting_others'`;
+  `quick_draft.deck_building` gains `other_players` (every other seated
+  player's own `user_id`/`username`/`submitted`), with
+  `opponent_submitted` kept as a single-value fallback from the first of
+  them. `draft_match` (the lobby-grouping summary) gains the same
+  `players` array.
+
 ### Winston Draft
 
 `deck_type: 'winston_draft'` (issue #89) is the second `format: 'draft'`
@@ -2138,11 +2247,12 @@ draft mechanic itself: instead of Quick Draft's simultaneous blind
 pack-passing, Winston Draft is a strictly alternating, single-active-
 player pile game with zero simultaneity.
 
-**The mechanic** -- a shared pool (`WINSTON_POOL_SIZE = 45`, matching the
-physical rules' own "Total number of cards drafted: 45" and the Structure
-deck's own size) is shuffled and dealt into 3 face-down piles of 1 card
-each, off the top of the remaining deck. Players strictly alternate turns;
-each turn always starts at Pile 1, then 2, then 3, in fixed order:
+**The mechanic** -- a shared pool (`winstonDraftPoolTargetSize($playerCount)`
+-- 45/70/90 for 2/3/4 players, the 2-player case matching the physical
+rules' own "Total number of cards drafted: 45" and the Structure deck's
+own size) is shuffled and dealt into 3 face-down piles of 1 card each, off
+the top of the remaining deck. Players strictly alternate turns; each
+turn always starts at Pile 1, then 2, then 3, in fixed order:
 
 1. Look at the current pile (only the active player sees its contents --
    its *size* is visible to both players even face-down, like a real
@@ -2183,62 +2293,110 @@ simpler and just as safe here.
 
 **Pool building** -- `buildWinstonDraftPool()` is a thin wrapper around the
 same `buildDraftPool()` Quick Draft's own `buildQuickDraftPool()` uses,
-parameterized with `WINSTON_POOL_SIZE`/`WINSTON_MIN_CUSTOM_POOL_SIZE` (both
-45) instead of Quick Draft's 48/45 -- same 5 pool sources
-(`random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`). No
-reshuffle-top-up mechanic is needed the way Quick Draft's 45-vs-48 gap
-needed one: Winston's minimum *is* its target size, and the physical rules
-already treat "the deck runs out" as a normal, expected event rather than
-a shortfall to correct.
+parameterized with `winstonDraftPoolTargetSize($playerCount)`/
+`winstonDraftMinCustomPoolSize($playerCount)` (45/70/90 for 2/3/4 players,
+the latter equal to the former -- there's no reshuffle-top-up mechanic the
+way Quick Draft's 45-vs-48 gap needed one, so an undersized custom pool is
+rejected outright at creation time) instead of Quick Draft's own flat
+48/45 -- same 5 pool sources
+(`random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`). Two of
+those sources need help reaching the larger 3-4 player targets, both
+handled inside the shared `buildDraftPool()` rather than duplicated here:
+`structure`'s own fixed 45-card pool is doubled (2 copies concatenated,
+then narrowed back down to the target) whenever `$playerCount > 2` --
+passed as `buildDraftPool()`'s `$doubleStructureForMultiplayer` flag, set
+`true` only by Winston Draft's own call site, so Quick Draft's and Grid
+Draft's own `structure`/`grid_draft` handling is completely unaffected --
+and `jceddys_75` swaps to `buildJceddys150DeckCardIds()`'s own 150-card
+pool at exactly 4 players, the same swap Quick Draft's and Grid Draft's
+own 4-player `jceddys_75` case already gets (see "jceddy's 150 Card deck"
+above). No reshuffle-top-up mechanic is needed for the base case either:
+Winston's minimum *is* its target size, and the physical rules already
+treat "the deck runs out" as a normal, expected event rather than a
+shortfall to correct.
 
 **The draft itself** (`submitWinstonDraftPick()`, `POST
 /games/draft/winston-pick {game_id, action: 'take'|'pass'}`) -- no
 `card_ids` needed, since a pile is taken/passed as a whole and the server
 already knows both whose turn it is and which pile is current. Rejects
 the request if it isn't `$userId`'s turn or the match isn't `'drafting'`.
+For 3-4 players, whoever acts next is seat-index rotation
+(`$seatIndex = array_search($userId, $userIds, true)`, next is
+`$userIds[($seatIndex + 1) % $playerCount]`) rather than a fixed
+2-player toggle -- mathematically identical to the original toggle when
+`$playerCount === 2`, so existing 2-player games are unaffected. The pile
+mechanic itself (3 fixed piles, take/pass across them in order, mandatory
+auto-draw on declining pile 3) is unchanged for any player count -- only
+whose turn it is generalizes.
 
-**Auto-loss for a short draft** (`finalizeWinstonDraft()`) -- the physical
-rules are explicit: "If you don't have twelve cards, you will automatically
-lose any game." The moment the draft ends, if either player's own
-`drafted_card_ids` came up short of `WINSTON_MIN_DECK_SIZE` (12), the whole
-match completes immediately -- `draft_matches.status = 'completed'` with
-the *other* player as `winner_user_id` -- skipping `deck_building` and
-every game entirely. The match's own game-1 row (already inserted
-synchronously back at `createGame()` time, before the draft even starts)
-is marked `status = 'abandoned'` rather than left stuck `'waiting'`
-forever with no legal way to ever start it. No dedicated frontend handling
-was needed for this path -- it reuses the exact same "match/game
-completed, show the winner" rendering the lobby and board already use for
-every other format.
+**Short players at 3-4 (issue #189)** (`finalizeWinstonDraft()`) -- the
+physical rules are explicit for 2 players: "If you don't have twelve
+cards, you will automatically lose any game." For 3-4, only the players
+who actually came up short of `WINSTON_MIN_DECK_SIZE` (12) are excluded --
+the rest proceed to `deck_building` as a smaller match, rather than the
+whole match ending the moment even one player is short:
+- **0 short players** -- proceeds to `deck_building` exactly as before,
+  for any player count.
+- **Exactly 1 survivor** (either the original 2-player case, or 3-4
+  players minus everyone-but-one coming up short) -- degenerates to the
+  original rule: the match completes immediately with the survivor as
+  `winner_user_id`, and the match's own game-1 row (already inserted
+  synchronously back at `createGame()` time) is marked `'abandoned'`
+  rather than left stuck `'waiting'` forever. `recordMatchCompletionStats()`
+  runs *before* the short players' rows are removed (see below), so they
+  still get `match_losses` credited exactly as a 2-player auto-loss
+  always has.
+- **2+ survivors** -- no match-level outcome is recorded at all (there's
+  no winner yet); each short player is removed via
+  `removeShortWinstonDraftPlayer()`, which deletes their
+  `draft_match_players` and `game_players` rows outright (safe because
+  game 1 hasn't started yet at this point -- no `game_cards`/`game_rounds`
+  row anywhere references that seat, and every `seat_order`-driven query
+  already orders by the column rather than indexing arithmetically off
+  its value, so the gap it leaves behind is harmless). The survivors then
+  proceed to `deck_building` as a genuine (N - short-count)-player match,
+  as if the short players were never part of it -- no stats are
+  attributed to them for this outcome.
+
+No dedicated frontend handling was needed for either terminal path (0 or
+1 survivor) -- both reuse the exact same "match/game completed, show the
+winner" rendering the lobby and board already use for every other format;
+the 2+-survivors path likewise reuses the existing `deck_building`
+rendering unchanged, just for fewer seats than the match started with.
 
 **State exposure** -- `getState()`'s `winston_draft` field (`null` for
 every other deck_type) mirrors `quick_draft`'s own shape (an always-present
 match scoreline plus whichever of `drafting`/`deck_building` is currently
-live) but with genuinely different `drafting` contents
-(`winstonDraftDraftingStateFor()`): `is_your_turn`, `current_pile_number`,
-`pile_sizes` (an array of 3 ints, always visible to both players),
-`remaining_deck_count`, `current_pile_cards` (populated only when it's
-your turn -- `[]` otherwise, never leaking the pile you can't currently
-see), `drafted_so_far` (always your own accumulated picks, never your
-opponent's), `opponent_last_take_pile_number` (`null` unless the
-opponent's own most recent turn-ending action was a *take*; otherwise the
-pile number -- 1, 2, or 3 -- they took), `opponent_last_drew_from_deck`
-(`true` if the opponent's own most recent turn-ending action was instead
-declining all 3 piles and taking the mandatory top-of-deck draw), and
-`opponent_drafted_card_count` (how many cards the opponent has drafted in
-total so far). All three are safe to expose without ever revealing what's
-actually on any card: which numbered pile the opponent last claimed (or
-that they declined everything and drew from the deck instead), and how
-many cards they've accumulated, are all things a real opponent watching
-across the table would already see for themselves (a taken pile's height
-and a rival's growing stack of face-down cards are physically visible,
-unlike what's printed on them). Tracked on
+live), plus a `players` array (every seated player's own `user_id`/
+`username`/`wins`/`is_you`) and `games_to_win` now resolved via the same
+`draftGamesToWin($playerCount)` helper Quick Draft uses, rather than a
+hardcoded constant. `drafting` (`winstonDraftDraftingStateFor()`) has
+genuinely different contents from Quick Draft's own: `is_your_turn`,
+`current_turn_username` (whichever seated player acts next -- for 3-4
+players, "not your turn" alone doesn't say whose turn it actually is),
+`current_pile_number`, `pile_sizes` (an array of 3 ints, always visible to
+every player), `remaining_deck_count`, `current_pile_cards` (populated
+only when it's your turn -- `[]` otherwise, never leaking the pile you
+can't currently see), `drafted_so_far` (always your own accumulated
+picks, never anyone else's), and an `other_players` array (issue #189 --
+every OTHER seated player's own `user_id`/`username`/
+`drafted_card_count`/`last_take_pile_number`/`last_drew_from_deck`),
+alongside the original singular `opponent_last_take_pile_number`/
+`opponent_last_drew_from_deck`/`opponent_drafted_card_count` fields kept
+as a backward-compatible fallback (derived from `other_players[0]`). All
+of these are safe to expose without ever revealing what's actually on any
+card: which numbered pile a player last claimed (or that they declined
+everything and drew from the deck instead), and how many cards they've
+accumulated, are all things a real opponent watching across the table
+would already see for themselves (a taken pile's height and a rival's
+growing stack of face-down cards are physically visible, unlike what's
+printed on them). Tracked on
 `draft_winston_state.last_draft_action_by_user_id` (a JSON map, `user_id
 => pile_number | "deck"`, migration `0035`, widened by `0036`) rather
 than a single "the last action, whoever it was" column -- turns strictly
-alternate and either player can pass any number of times before
-eventually ending their turn, so from either player's own perspective
-"the opponent's last action" can be several turns back, and only a
+rotate through every seat and any player can pass any number of times
+before eventually ending their turn, so from another player's own
+perspective "their last action" can be several turns back, and only a
 per-user_id lookup answers that correctly. `submitWinstonDraftPick()`
 updates this map on both turn-ending outcomes: a `'take'` records the
 pile number, and a `'pass'` on pile 3 (which always ends the turn, take
@@ -2248,7 +2406,7 @@ turn. `deck_building` is the exact same shared shape Quick Draft uses
 (`draftDeckBuildingStateFor()`), just called with `WINSTON_MIN_DECK_SIZE`
 (12) and no fixed max -- `max_deck_size` resolves to however many cards
 that specific player actually drafted, since the total varies by how the
-pile draft unfolds (unlike Quick Draft's guaranteed 16 per player).
+pile draft unfolds (unlike Quick Draft's guaranteed-per-player count).
 
 ### Grid Draft
 
@@ -2257,96 +2415,143 @@ type, reusing the same `draft_matches`/`draft_match_players` tables and
 best-of-three/deck-building infrastructure as Quick Draft and Winston Draft
 (`games.deck_type = 'grid_draft'` is the only thing distinguishing which
 variant a match belongs to). What's genuinely different is the draft
-mechanic: a 3x3 grid of face-up cards, dealt fresh every round, with each
+mechanic: a grid of face-up cards, dealt fresh every round, with each
 player in turn taking an entire row or column.
 
-**The mechanic** -- a shared pool of exactly `GRID_DRAFT_POOL_SIZE` (54)
-cards is shuffled once at the start of the match. Over exactly
-`GRID_DRAFT_ROUNDS` (6) rounds, `GRID_DRAFT_CARDS_PER_ROUND` (9) cards are
-dealt face-up into a 3x3 grid -- 6 x 9 = 54, so the pool always runs out
-exactly when the 6th and final round is dealt, with no remainder to
+**Grid size and rounds vary by player count** -- `gridDraftGridSize($playerCount)`
+is 4 for exactly 4 players, 3 otherwise (2-3 players), and
+`gridDraftRounds($playerCount)` is 4 for exactly 4 players, 6 otherwise.
+The 4-player case (4x4 grid over 4 rounds) was chosen specifically so that
+seat-rotation of who picks first (`($firstPickerSeatIndex + 1) % $playerCount`,
+see below) gives each of the 4 players first pick in exactly 1 of the 4
+rounds -- the original 3x3-over-6-rounds shape, kept for 2-3 players, would
+have given a 4th player first pick in only 1.5 rounds on average, an
+uneven distribution. `gridDraftCardsPerRound($playerCount)` is the grid's
+own cell count (`gridDraftGridSize($playerCount) ** 2` -- 9 or 16), and
+`gridDraftRefillBatchSize($playerCount)` (a row/column's own length) is
+just `gridDraftGridSize($playerCount)` again (3 or 4).
+
+**The mechanic** -- a shared pool of exactly `gridDraftPoolTargetSize($playerCount)`
+cards (54/72/96 for 2/3/4 players) is shuffled once at the start of the
+match. Over exactly `gridDraftRounds($playerCount)` rounds,
+`gridDraftCardsPerRound($playerCount)` cards are dealt face-up into the
+grid, refilled as the round's picks happen (see below) so the pool always
+runs out exactly when the final round is dealt, with no remainder to
 reshuffle or top up (unlike Quick Draft's round-4 top-up, or any pool-size
 shortfall handling at all). Round 1's first picker is chosen at random;
-every subsequent round the *other* player picks first, alternating for the
-rest of the match. Each round:
+every subsequent round, seats rotate one position
+(`($firstPickerSeatIndex + 1) % $playerCount`) so first-pick duty is
+shared evenly across the match. Each round has exactly `$playerCount`
+sequential picks, one per seated player in turn:
 
-1. The first picker takes an entire row or column -- always all 3 cards,
-   since nothing has been taken from a freshly-dealt grid yet.
-2. The second picker takes a row or column of whatever's left -- 2 cards
-   if their choice crosses the first picker's own row/column (they share
-   exactly one cell), or a full 3 if it doesn't.
-3. Whatever remains in the grid (3 cells, always) is simply discarded --
+1. Each pick takes an entire row or column -- however many of its cells
+   are still non-null (the grid's own cells are the only source of truth
+   for this, no axis/index bookkeeping needed -- see below).
+2. **Refilling (issue #189)**: after a pick, the cells it just cleared are
+   immediately refilled with fresh cards from the deck, *except* for the
+   round's last two picks -- `picksThisRound <= max($playerCount - 2, 0)`.
+   For 2 players this is never true past pick 1 (`max(0, 0) == 0`), so a
+   2-player round still behaves exactly as before: the first pick always
+   takes a full row/column from a freshly-dealt grid, and the second pick
+   takes whatever's left with nothing ever refilled mid-round. For 3
+   players, only the round's first pick refills; for 4, the first two
+   picks do. This is the only mathematically consistent reading of the
+   spec's own stated pool sizes (54/72/96 -- i.e. 9/12/24 cards drawn per
+   round for 2/3/4 players).
+3. Whatever remains in the grid at the round's end is simply discarded --
    never reshuffled back into the pool, unlike Winston Draft's own
    pile-and-deck cards.
 
-**Deriving the second pick's card count** -- rather than store which
-axis/index the first pick used and compare it against the second pick's
-own choice, each of the grid's 9 cells is tracked as JSON `null` the
-instant either player takes it (`draft_grid_state.grid_card_ids`, a
-9-element row-major array, index = row * 3 + column). The second pick's
-own card count is then just however many of its own 3 target cells are
-still non-null -- 2 if it crosses the first pick's line, 3 if it doesn't --
-derived purely by counting, with no axis-comparison logic anywhere. A
-second pick that would take 0 cards (choosing the exact same line the
-first pick already fully cleared) is rejected with a `409`.
+**Deriving a pick's card count** -- rather than store which axis/index a
+previous pick used and compare it against the current pick's own choice,
+each of the grid's cells is tracked as JSON `null` the instant any player
+takes it (`draft_grid_state.grid_card_ids`, a `gridDraftCardsPerRound($playerCount)`-element
+row-major array, index = row * `gridDraftGridSize($playerCount)` + column).
+A pick's own card count is then just however many of its target cells are
+still non-null at the moment it's made, derived purely by counting, with
+no axis-comparison logic anywhere -- this generalized cleanly from 2
+players to N without touching the overlap math at all. A pick that would
+take 0 cards (choosing a line already fully cleared and not yet refilled)
+is rejected with a `409`.
 
 **Data model** -- a new `draft_grid_state` table (migration `0034`, one row
 per match) holds: `remaining_deck_card_ids` (the not-yet-dealt portion of
-the pool), `current_round`, `grid_card_ids` (the current round's 9 cells,
-row-major, `null` for a taken cell), `first_picker_user_id` (whoever goes
-first *this* round), `current_turn_user_id` (whoever acts next --
-`first_picker_user_id` until they've picked, then the other player, then
-next round's own `first_picker_user_id`), and `first_pick_axis`/
-`first_pick_index` (the first pick's own choice, both `null` exactly when
-it's still the first pick of the round). Like Winston Draft (and unlike
-Quick Draft's simultaneous blind picks), Grid Draft has no simultaneity --
-exactly one player acts at a time -- so a plain mutable row behind the same
-per-game `withGameLock()` every draft mutation already uses is both
-simpler and just as safe here.
+the pool), `current_round`, `grid_card_ids` (the current round's cells,
+row-major, `null` for a taken-and-not-yet-refilled cell),
+`first_picker_user_id` (whoever goes first *this* round),
+`picks_this_round` (migration `0060`, issue #189 -- how many picks have
+happened so far this round, reset to 0 at the start of every round;
+replaces the original `first_pick_axis`/`first_pick_index` columns, which
+only ever existed to derive a single "is this the round's first or second
+pick" boolean and were never read by the actual overlap math above -- a
+plain N-generalizable counter does the same job for any player count), and
+`current_turn_user_id` (whoever acts next -- advanced by seat-index
+rotation, `($seatIndex + 1) % $playerCount`, the same formula degenerating
+to the original 2-player toggle when `$playerCount == 2`). Like Winston
+Draft (and unlike Quick Draft's simultaneous blind picks), Grid Draft has
+no simultaneity -- exactly one player acts at a time -- so a plain mutable
+row behind the same per-game `withGameLock()` every draft mutation already
+uses is both simpler and just as safe here.
 
 **Pool building** -- `buildGridDraftPool()` wraps the same shared
 `buildDraftPool()` Quick Draft/Winston Draft use, parameterized with
-`GRID_DRAFT_POOL_SIZE`/`GRID_DRAFT_MIN_CUSTOM_POOL_SIZE` (both 54). Unlike
-the other two draft variants, a pool source that comes up short of 54 isn't
-merely allowed through and dealt with (there's no top-up mechanism to fall
-back on) -- `buildGridDraftPool()` explicitly rejects any pool under 54
-cards with a `409`. This specifically excludes the `'structure'` pool
-source (45 cards, short of 54) from Grid Draft, even though the same
-`pool_source` enum column is shared with Quick Draft/Winston Draft, both of
-which accept it fine.
+`gridDraftPoolTargetSize($playerCount)`/`gridDraftMinCustomPoolSize($playerCount)`
+(both 54/72/96 for 2/3/4 players). Unlike the other two draft variants, a
+pool source that comes up short of the target isn't merely allowed through
+and dealt with (there's no top-up mechanism to fall back on) --
+`buildGridDraftPool()` explicitly rejects any pool under the target with a
+`409`. This specifically excludes the `'structure'` pool source (45 cards,
+short even of the 2-player 54 minimum) from Grid Draft, even though the
+same `pool_source` enum column is shared with Quick Draft/Winston Draft,
+both of which accept it fine. `jceddys_75` doesn't need this rejection at
+4 players -- `buildDraftPool()` itself already swaps in jceddy's 150 Card
+deck's own 150-card pool for that case (see "jceddy's 150 Card deck" in
+"Quick Draft"'s own "Multiplayer" section above), the same swap Quick
+Draft's own 4-player `jceddys_75` pool goes through -- 2-3 players use the
+plain 75-card pool, already large enough.
 
 **The draft itself** (`submitGridDraftPick()`, `POST /games/draft/grid-pick
-{game_id, axis: 'row'|'column', index: 0-2}`) -- rejects the request if it
+{game_id, axis: 'row'|'column', index: int}`) -- rejects the request if it
 isn't `$userId`'s turn, the match isn't `'drafting'`, `axis`/`index` are
-invalid, or the chosen line has 0 cards left. Completing a round's second
-pick either deals the next round's fresh grid (alternating who picks
-first) or, after round 6, ends the draft and flips the match to
-`'deck_building'` -- there's no auto-loss path the way Winston Draft has,
-since Grid Draft's mechanic always yields well above `GRID_DRAFT_MIN_DECK_SIZE`
-(12) cards per player (15-18 typically, since the first-picker role is
-split evenly 3-3 across the 6 rounds).
+invalid (`index` must be within `0` to `gridDraftGridSize($playerCount) - 1`),
+or the chosen line has 0 cards left. Completing a round's last pick either
+deals the next round's fresh grid (rotating who picks first) or, after the
+match's final round (`gridDraftRounds($playerCount)`), ends the draft and
+flips the match to `'deck_building'` -- there's no auto-loss path the way
+Winston Draft has, since Grid Draft's mechanic always yields well above
+`GRID_DRAFT_MIN_DECK_SIZE` (12) cards per player.
 
 **State exposure** -- `getState()`'s `grid_draft` field (`null` for every
 other deck_type) mirrors `quick_draft`'s/`winston_draft`'s own shape (an
-always-present match scoreline plus whichever of `drafting`/`deck_building`
-is currently live). `drafting` (`gridDraftDraftingStateFor()`) is
-`is_your_turn`, `current_round`, `total_rounds`, `first_picker_user_id`,
-`grid_cards` (all 9 cells, always fully visible to both players -- unlike
-Winston Draft's face-down piles, a dealt grid is face-up on the table --
-with a `null` entry for any cell already taken this round),
-`first_pick` (`null` until the round's first pick has been made, then
-`{axis, index}`), `remaining_deck_count`, `drafted_so_far` (your own
-accumulated picks), and `opponent_drafted_so_far` (your opponent's own
-accumulated picks). Unlike Quick Draft's/Winston Draft's own
-`drafted_so_far` (each strictly the viewer's own picks, never the
-opponent's -- their drawn packs/piles are genuinely hidden), Grid Draft is
-open information end to end: every card either player has ever drafted was
-already visible to both of them the moment it was dealt into the face-up
-grid, so there's no game-integrity reason to hide either player's own
-drafted-so-far list from the other. `deck_building` is the same shared
+always-present match scoreline, a `players` array for every seated player,
+plus whichever of `drafting`/`deck_building` is currently live; `games_to_win`
+is `draftGamesToWin($playerCount)`, same as the other two draft variants).
+`drafting` (`gridDraftDraftingStateFor()`) is `is_your_turn`,
+`current_turn_username` (whoever `current_turn_user_id` actually is -- for
+a 3-4 player match, "not your turn" alone doesn't say whose turn it is),
+`current_round`, `total_rounds` (`gridDraftRounds($playerCount)`),
+`grid_size` (`gridDraftGridSize($playerCount)` -- 4 for exactly 4 players,
+3 otherwise, so the frontend knows the grid's own dimensions),
+`first_picker_user_id`, `picks_this_round`, `total_picks_per_round` (the
+seated player count), `grid_cards` (all `grid_size ** 2` cells, always
+fully visible to every player -- unlike Winston Draft's face-down piles, a
+dealt grid is face-up on the table -- with a `null` entry for any cell
+already taken and not yet refilled this round), `remaining_deck_count`,
+`drafted_so_far` (your own accumulated picks), and
+`other_players_drafted_so_far` (issue #189 -- an array of every *other*
+seated player's own `user_id`/`username`/`drafted_so_far`, 1 entry for a
+2-player match, up to 3 for 3-4 players; `opponent_drafted_so_far` is kept
+as a single-value fallback, the first of them). Unlike Quick Draft's/
+Winston Draft's own `drafted_so_far` (each strictly the viewer's own picks,
+never anyone else's -- their drawn packs/piles are genuinely hidden), Grid
+Draft is open information end to end: every card any player has ever
+drafted was already visible to everyone else the moment it was dealt into
+the face-up grid, so there's no game-integrity reason to hide anyone's own
+drafted-so-far list from anyone else. `deck_building` is the same shared
 shape Quick Draft/Winston Draft use (`draftDeckBuildingStateFor()`), called
 with `GRID_DRAFT_MIN_DECK_SIZE` (12) and no fixed max, same rationale as
-Winston Draft's own open-ended range.
+Winston Draft's own open-ended range -- and, for 3-4 players, the same
+`other_players` array Quick Draft's own multiplayer support added.
 
 ### Open Team Play
 
@@ -2936,6 +3141,20 @@ live participant in every other sense a card effect can reach:
   fewer than 2 players are still active (nowhere to pass to) -- both of
   those effects treat `null` as "nothing to give this player," the same
   as an ordinary empty hand/no-moods skip.
+- **`activeNeighbor()`'s `'left'`/`'right'` match a real table, not raw
+  seat-index direction.** `'left'` is the next seat forward in seat order
+  (index + 1); `'right'` is the previous seat (index - 1). This matches
+  `GameService::rotate()`'s own "ascending seat_order is clockwise"
+  convention: at a physical round table, the next player clockwise from
+  you (i.e. the next player to act) sits at your own left hand -- the
+  same reason the positional in-play board (issue #124,
+  `inPlayZoneAssignments()` in `game.js`) draws that same next-turn-order
+  seat at the viewer's own screen-left. Before a fix, `activeNeighbor()`
+  had these backwards (`'right'` was next-turn-order), so choosing
+  "right" on Avoidance/Confusion/Rationalization sent the pass to
+  whoever the board showed on the viewer's *left*, and vice versa --
+  reported as a board-rendering bug, but the board was already correct;
+  the rules engine's own left/right labels were inverted relative to it.
 - The frontend's own `fieldOptions()` (`case 'player'` in `game.js`)
   additionally filters out any player already flagged `resigned` in
   `getState()`'s response, so a resigned player never even appears as a
@@ -3839,6 +4058,17 @@ injected-string `check()` path — the two resolve `VERSION`'s location
 differently (see `MaintenanceGate`'s docblock), so this is the one test
 that would have caught the path-resolution bug an earlier draft of that
 class had.
+
+`MigrationRunnerTest` exercises `MigrationRunner::applyPending()` (shared
+by `bin/migrate.php` and `POST /migrate`, see "Maintenance mode" above and
+"Auto-applying migrations on deploy" in `database/README.md`) against its
+own scratch fixture directory rather than the real `database/migrations/`
+-- that directory only ever grows and every file in it is already applied
+to `TEST_DB` by the time any test runs, so there'd be nothing left to
+actually apply. Its fixture filenames are namespaced
+(`zzz_migration_runner_test_*`) so they can never collide with a real
+migration's own name, and clean themselves out of the shared
+`schema_migrations` table in `tearDown()`.
 
 The test suite truncates `users`/`sessions`/`email_verifications`/
 `friendships` in that database before each test, so never point it at a

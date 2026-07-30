@@ -19,8 +19,10 @@ use MoodSwings\Rules\RequiresOpponentDecision;
  * do) -- so every player with at least one mood in play gets their own
  * queued decision (see RequiresOpponentDecision, and Confusion's
  * identical mechanic applied to hand cards instead), including the
- * acting player themselves. 'right' is defined as moving forward through
- * seat order (wrapping), 'left' as backward; all transfers are computed
+ * acting player themselves. Direction is resolved via
+ * BoardState::activeNeighbor() -- see its own docblock for the exact
+ * left/right convention (matching a real table: 'left' moves forward
+ * through seat order, 'right' backward); all transfers are computed
  * against everyone's ORIGINAL moods and only applied once every answer is
  * in, matching the printed text's simultaneous exchange -- nobody's
  * choice is affected by a mood they're about to receive from this same

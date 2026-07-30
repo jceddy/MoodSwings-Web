@@ -75,11 +75,13 @@ alongside `index.html`) to render the version indicator described in
 bump `VERSION`.** The deployed app compares `VERSION` against a version
 value stored in the database (`schema_version`, see `database/README.md`)
 on every request, and shows a maintenance page on any mismatch — see
-`MaintenanceGate` in `php-app/README.md`. This exists because production
-has no CI access to the database (migrations are applied by hand, see
-"Deployment" below); without it, a deploy that shipped code depending on a
-not-yet-applied migration would run silently against a stale schema instead
-of visibly blocking traffic until the migration catches up.
+`MaintenanceGate` in `php-app/README.md`. This exists because production's
+GitHub Actions runner has no direct access to the database (it can only
+reach it indirectly, by asking the already-deployed app to apply pending
+migrations itself — see "Deployment" below); without this check, a deploy
+that shipped code depending on a not-yet-applied migration would run
+silently against a stale schema for however long that request takes,
+instead of visibly blocking traffic until the migration catches up.
 
 ## Deployment
 
@@ -148,6 +150,14 @@ rather than assuming the first sign of change is already the final state.
      `php-app/README.md` for the full setup checklist and why the
      Interactions Endpoint URL itself has to be set in the portal
      separately, after this app is deployed.
+   - `MIGRATION_DEPLOY_KEY` — lets each deploy apply its own pending
+     `database/migrations/*.sql` files automatically (any sufficiently
+     random string, e.g. `openssl rand -hex 32`). Shared with
+     `deploy-dev.yml` (dev), same reasoning as `SMTP_*`/`VAPID_*` above.
+     See "Auto-applying migrations on deploy" in `database/README.md` for
+     how this is used; optional in the sense that skipping it just falls
+     back to applying migrations by hand (step 5 below), not a hard
+     requirement to get a deploy working at all.
 4. Optionally add these **variables** (same Settings page, "Variables" tab):
    - `FTP_SERVER_DIR` — remote path to deploy into. Defaults to
      `/public_html/` if unset.
@@ -156,23 +166,31 @@ rather than assuming the first sign of change is already the final state.
      in the registration email.
    - `SITE_URL` — your live site's base URL (e.g. `https://example.com`),
      domain root only, no `/app`. If set, the workflow curls
-     `$SITE_URL/app/health` after each deploy as a smoke test; the app
-     itself also reads it (via `.env`) to build links back into the
-     static frontend, e.g. the post-Discord-link redirect to `/game/` --
-     see `siteRootUrl()` in `php-app/README.md`'s "Discord" section. If
-     unset, the app derives it from `APP_URL` instead, so this is optional
-     but recommended.
-5. Create the database itself and apply its migrations — this repo's GitHub
-   Actions runner cannot reach Bluehost's MySQL directly, so run each file
-   in `database/migrations/` (in order) yourself via phpMyAdmin's SQL tab in
-   cPanel (or Bluehost's Remote MySQL feature if you prefer a local client).
-   See [`database/README.md`](database/README.md) for details.
+     `$SITE_URL/app/health` after each deploy as a smoke test (and, if
+     `MIGRATION_DEPLOY_KEY` is also set, `POST`s to `$SITE_URL/app/migrate`
+     just before that to apply any pending migration); the app itself also
+     reads it (via `.env`) to build links back into the static frontend,
+     e.g. the post-Discord-link redirect to `/game/` -- see
+     `siteRootUrl()` in `php-app/README.md`'s "Discord" section. If unset,
+     the app derives it from `APP_URL` instead, so this is optional but
+     recommended.
+5. Create the database itself. A brand-new database still needs its
+   initial schema applied by hand — this repo's GitHub Actions runner
+   cannot reach Bluehost's MySQL directly, so run each file in
+   `database/migrations/` (in order) yourself via phpMyAdmin's SQL tab in
+   cPanel (or Bluehost's Remote MySQL feature if you prefer a local
+   client), or paste `database/consolidated/`'s merged script in one go.
+   See [`database/README.md`](database/README.md) for details. Every
+   *later* migration, once the app is deployed and `MIGRATION_DEPLOY_KEY`
+   is set, applies itself automatically on the deploy that introduces it.
 
 Once secrets are set and `main` has the schema-backed database ready, a push
-to `main` deploys automatically. Deploys only push application files —
-whenever a PR adds a new file under `database/migrations/`, apply it to the
-production database yourself before (or right after) that PR's changes go
-live, the same way as the initial setup above.
+to `main` deploys automatically, applying any pending migration along the
+way. If `MIGRATION_DEPLOY_KEY` isn't set, deploys still only push
+application files — whenever a PR adds a new file under
+`database/migrations/`, apply it to the production database yourself
+before (or right after) that PR's changes go live, the same way as the
+initial setup above.
 
 ### Development environment setup
 
@@ -199,7 +217,11 @@ emails going out from the same already-configured sender isn't a concern.
    in `php-app/README.md`), since a Discord Application can only ever
    point its Interactions Endpoint/OAuth2 redirect at one URL.
 3. Add the **variables**: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev
-   domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL).
+   domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL). No
+   separate `DEV_MIGRATION_DEPLOY_KEY` is needed — `deploy-dev.yml` reuses
+   the same `MIGRATION_DEPLOY_KEY` secret from production's own step 3
+   above, so if that's already set, dev's migrations already auto-apply
+   too.
 4. Create a **separate** database for the dev domain (do not point it at
    the production database) and apply `database/migrations/` to it the same
    way as production's step 5 — the two environments' data should stay
@@ -209,9 +231,11 @@ emails going out from the same already-configured sender isn't a concern.
    migrations" in `database/README.md`.
 
 Once these are set, a push to `development` (i.e. any feature PR merging
-into it) deploys automatically to the dev domain. As with production,
-apply any new migration to the dev database yourself when a PR merges into
-`development` — before, or right after, its own dev deploy goes live.
+into it) deploys automatically to the dev domain, applying any pending
+migration along the way (via the shared `MIGRATION_DEPLOY_KEY`). If that
+secret isn't set, apply any new migration to the dev database yourself
+when a PR merges into `development` instead — before, or right after, its
+own dev deploy goes live.
 
 ## Credits
 

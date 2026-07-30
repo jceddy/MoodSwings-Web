@@ -19,13 +19,26 @@ This applies whichever migrations in `migrations/` haven't been run yet,
 tracked in a `schema_migrations` table, and is safe to re-run at any time —
 already-applied migrations are skipped.
 
-**Production (Bluehost, no shell access):** apply new migration files
-manually via phpMyAdmin's SQL tab, in filename order — each one is a plain
-`.sql` file you can paste and run directly. `0001_baseline.sql` is the
-schema as of when this migrations workflow was introduced; if your database
-was already provisioned before this (i.e. you'd previously run the old
-`schema.sql`), you don't need to run it — just start from whatever
-migration comes next.
+**Production (Bluehost, no shell access):** applies automatically as part
+of every deploy. Neither `deploy.yml` nor `deploy-dev.yml`'s own GitHub
+Actions runner can reach Bluehost's MySQL directly, so instead each
+workflow's "Run database migrations" step, right after the file upload,
+sends a `POST /migrate` request (`X-Migration-Key` header) to the
+already-deployed app itself — which *can* reach its own database — and
+`MigrationRunner::applyPending()` runs there exactly as `composer migrate`
+would locally (see "Auto-applying migrations on deploy" below for how this
+is wired up and secured). This step is skipped, falling back to the
+manual path below, if the `MIGRATION_DEPLOY_KEY` secret described there
+isn't set yet (e.g. a fork that hasn't done that one-time setup) or the
+relevant `SITE_URL`/`DEV_SITE_URL` variable is unset.
+
+**Manual fallback (or initial setup, before the app's first deploy ever
+runs):** apply migration files yourself via phpMyAdmin's SQL tab, in
+filename order — each one is a plain `.sql` file you can paste and run
+directly. `0001_baseline.sql` is the schema as of when this migrations
+workflow was introduced; if your database was already provisioned before
+this (i.e. you'd previously run the old `schema.sql`), you don't need to
+run it — just start from whatever migration comes next.
 
 **Standing up a brand-new database** (e.g. the dev domain's own database —
 see "Development environment setup" in the top-level README): rather than
@@ -85,12 +98,55 @@ on `;`.
 SET version = 'X.Y.Z' WHERE id = 1;` matching that same bump** (see
 "Application/system" below and `MaintenanceGate` in `php-app/README.md`).
 This must be the file's **last statement** — MySQL/InnoDB DDL isn't
-transactional (every `ALTER`/`CREATE` implicitly commits on its own), and
-production migrations are pasted by hand into phpMyAdmin with no
-atomicity guarantee, so a partial/failed paste needs to leave
+transactional (every `ALTER`/`CREATE` implicitly commits on its own),
+whether the statements ultimately run via a hand-pasted phpMyAdmin paste
+or the auto-apply path below, so a partial/failed run needs to leave
 `schema_version` still reporting the *old* version (keeping the app in
 maintenance mode) rather than falsely reporting the new one against a
 half-migrated schema.
+
+## Auto-applying migrations on deploy
+
+`php-app/src/Database/MigrationRunner.php` holds the actual apply-pending-
+migrations logic (scan `database/migrations/*.sql`, skip whatever's
+already recorded in `schema_migrations`, run the rest in filename order,
+record each as it applies) — shared by two callers:
+
+- **`bin/migrate.php`** (`composer migrate`) — the local/CI-less path
+  described above, unchanged in behavior from before this class existed.
+- **`POST /migrate`** (`php-app/public/index.php`) — an HTTP-triggered
+  path for production/dev, since neither has shell access of its own to
+  run `bin/migrate.php` directly. Both `.github/workflows/deploy.yml` and
+  `deploy-dev.yml` call this right after their own file-upload step, via
+  `curl -X POST -H "X-Migration-Key: ..." "$SITE_URL/app/migrate"`. Gated
+  on an `X-Migration-Key` header matching the `MIGRATION_DEPLOY_KEY`
+  secret (compared with `hash_equals()`), since this runs from a CI job
+  with no logged-in user session to authenticate with instead; an
+  unset/empty key fails closed (`403`) rather than leaving this endpoint
+  open on a deploy that hasn't configured the secret yet. Exempted from
+  `MaintenanceGate` (alongside `/health`) for the same reason `/health`
+  is: `/migrate`'s entire purpose is to resolve a deployed-VERSION-vs-
+  `schema_version` mismatch, so gating it behind the very check it exists
+  to fix would make it unreachable exactly when it's needed.
+
+**One-time setup:** add a `MIGRATION_DEPLOY_KEY` repository secret (any
+sufficiently random string — e.g. `openssl rand -hex 32`) in **Settings →
+Secrets and variables → Actions**. Both `deploy.yml` and `deploy-dev.yml`
+read the same one (like `SMTP_*`/`VAPID_*` above, it's a shared
+deploy-automation credential rather than something meaningfully different
+per environment). Until this secret is set, the "Run database migrations"
+step in both workflows is skipped entirely, and the manual phpMyAdmin path
+above remains the only way migrations reach the deployed database — so
+setting this up is optional, not a breaking requirement for existing
+deployments.
+
+**How the migration files themselves reach the deployed app:**
+`database/migrations/` is copied to `dist/database/migrations` during
+"Assemble deploy artifact" (a sibling of `dist/src`/`dist/vendor`, matching
+where `MigrationRunner`'s own path-resolution looks for it once deployed —
+see that class's docblock), with the same `Require all denied` `.htaccess`
+`dist/vendor`/`dist/src` already get, since these files are read directly
+off disk by `MigrationRunner`, never served over HTTP.
 
 ## Layout
 

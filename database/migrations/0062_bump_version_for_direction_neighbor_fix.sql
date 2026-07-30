@@ -1,0 +1,20 @@
+-- Rules-engine fix, no schema change: BoardState::activeNeighbor()'s
+-- 'left'/'right' labels were inverted relative to the positional in-play
+-- board (issue #124), which draws the next-player-in-turn-order seat at
+-- the viewer's own screen-left -- matching a real round table, where
+-- turn order runs clockwise and the next player to act sits at your own
+-- left hand. Before this fix, 'right' meant next-in-turn-order (the seat
+-- shown on the viewer's left) and 'left' meant previous-in-turn-order
+-- (shown on the viewer's right), so choosing "right" on Avoidance,
+-- Confusion, or Rationalization's rotate mode sent the pass to whoever
+-- the board displayed on the viewer's left, and vice versa. 'left' now
+-- means next-in-turn-order and 'right' means previous-in-turn-order,
+-- matching the board exactly. This migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056/0058/0059/0061
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every
+-- request (see migration 0021's own docblock), so a VERSION bump with
+-- no matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.10.1' WHERE id = 1;

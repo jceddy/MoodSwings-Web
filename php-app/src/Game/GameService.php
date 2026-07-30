@@ -120,6 +120,26 @@ final class GameService
     ];
 
     /**
+     * jceddy's 150 Card deck's own per-color spec -- used only for a
+     * 4-player Quick Draft/Grid Draft 'jceddys_75' pool (the one player
+     * count whose own target pool size, 96/90, exceeds jceddy's 75 Card
+     * deck's 75 cards). Not a literal doubling of the 75-card pool (which
+     * would just duplicate the same 75 card ids) -- its own themed
+     * 150-card construction, every one of JCEDDYS_75_DECK_RARITY_SPEC's
+     * count/max_copies pairs doubled: 2 Mythics, 4 *different* Rares, 8
+     * Uncommons (up to 2 copies of any one), and 16 Commons (up to 3
+     * copies of any one) per color -- 30 cards per color, 150 total across
+     * JCEDDYS_75_DECK_COLORS (10 Mythics/20 Rares/40 Uncommons/80 Commons
+     * overall). See buildJceddys150DeckCardIds().
+     */
+    private const JCEDDYS_150_DECK_RARITY_SPEC = [
+        'mythic' => ['count' => 2, 'max_copies' => 1],
+        'rare' => ['count' => 4, 'max_copies' => 1],
+        'uncommon' => ['count' => 8, 'max_copies' => 2],
+        'common' => ['count' => 16, 'max_copies' => 3],
+    ];
+
+    /**
      * Default for $gameLockTimeoutSeconds below: how long playMood()/
      * pass()/respondToDecision() wait to acquire a game's lock (see
      * withGameLock()) before giving up. Generous relative to how long a
@@ -147,72 +167,261 @@ final class GameService
     private const SCORING_DECISION_TYPES = [self::ENTHUSIASM_DECISION_TYPE, self::PASSION_DECISION_TYPE];
 
     /**
-     * Quick Draft (issue #88, format 'draft' only): a shared pool of up to
-     * this many cards, drafted over QUICK_DRAFT_ROUNDS rounds -- each round
-     * both players draw QUICK_DRAFT_DRAW_PER_ROUND cards, keep
-     * QUICK_DRAFT_KEEP_PER_STAGE from their own draw and pass the rest to
-     * their opponent, then keep QUICK_DRAFT_KEEP_PER_STAGE more from what
-     * they receive (see dealQuickDraftRound()/submitQuickDraftPick()) --
-     * QUICK_DRAFT_ROUNDS * QUICK_DRAFT_KEEP_PER_STAGE * 2 = 16 cards
-     * drafted per player. QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE is the floor for
-     * a 'custom' pool (smaller than that and a full draft can't be dealt
-     * even with dealQuickDraftRound()'s own discard-reshuffle top-up).
+     * Quick Draft (issue #88, format 'draft' only; multiplayer 2-4 player
+     * support added for issue #189): a shared pool of quickDraftPoolTargetSize()
+     * cards, drafted over quickDraftRounds() rounds. Each round, every
+     * player is dealt their own quickDraftPileSize() pile; each of that
+     * pile's quickDraftPileSize()/QUICK_DRAFT_KEEP_PER_STAGE "takes" is
+     * made by a different player in turn (the pile's original owner first,
+     * then whoever it's passed to, and so on) -- since quickDraftPileSize()
+     * = 2 * playerCount + 2, that's exactly playerCount takes before only 2
+     * cards (discarded) remain, meaning every pile completes exactly one
+     * full lap of every seated player. See submitQuickDraftPick()'s own
+     * docblock for the seat-rotation math this relies on, and
+     * dealQuickDraftRound()/finalizeQuickDraft() for how a round's dealing
+     * and a match's final drafted_card_ids are derived. Every player nets
+     * 2 * playerCount cards per round, and quickDraftRounds() is chosen per
+     * player count so every player clears at least a 16-card pool (2p: 4
+     * rounds = 16; 3p: 3 rounds = 18; 4p: 2 rounds = 16) to build a
+     * QUICK_DRAFT_MIN_DECK_SIZE-card deck from -- unlike the original
+     * 2-player-only version, there's no fixed max deck size: a player's
+     * deck can be as large as everything they actually drafted (see
+     * submitDraftDeck()).
+     *
+     * quickDraftMinCustomPoolSize() is the floor for a 'custom' pool
+     * (smaller than that and a full draft can't be dealt even with
+     * dealQuickDraftRound()'s own discard-reshuffle top-up) -- one
+     * structure-deck's worth (45) per 2 seated players, rounding up,
+     * mirroring the "1 structure deck for 2 players, 2 for 3-4" pool
+     * variation.
      */
-    private const QUICK_DRAFT_POOL_SIZE = 48;
-    private const QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE = 45;
-    private const QUICK_DRAFT_ROUNDS = 4;
-    private const QUICK_DRAFT_DRAW_PER_ROUND = 6;
+    private const QUICK_DRAFT_POOL_SIZE_PER_PLAYER = 24;
+    private const QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE_PER_TWO_PLAYERS = 45;
     private const QUICK_DRAFT_KEEP_PER_STAGE = 2;
     private const QUICK_DRAFT_MIN_DECK_SIZE = 12;
-    private const QUICK_DRAFT_MAX_DECK_SIZE = 16;
 
     /**
-     * Winston Draft (issue #89, format 'draft' alongside 'quick_draft'):
-     * players alternately take-or-pass on 3 growing face-down piles dealt
-     * from a shared shuffled pool of up to this many cards (matching the
-     * physical rules' own "Total number of cards drafted: 45", the same
-     * size as MSW's own Structure deck) -- see initializeWinstonDraft()/
-     * submitWinstonDraftPick(). Unlike Quick Draft's fixed 16-per-player
-     * result, the number of cards each player ends up with here varies
-     * with how the draft unfolds, so there's no WINSTON_MAX_DECK_SIZE --
-     * only a floor (WINSTON_MIN_DECK_SIZE, matching the physical rules'
-     * "must have a minimum of twelve cards"). WINSTON_MIN_CUSTOM_POOL_SIZE
-     * equals the target size itself -- unlike Quick Draft's 45-vs-48 gap,
-     * there's no reshuffle-top-up mechanic to fall back on for an
-     * undersized pool, since the physical rules already define "the deck
-     * runs out" as a normal, expected event rather than something to
-     * avoid.
+     * Winston Draft (issue #89, format 'draft' alongside 'quick_draft';
+     * multiplayer support issue #189): players take-or-pass on 3 growing
+     * face-down piles, in seat-rotation turn order (2 players alternate,
+     * 3-4 players cycle through every seat -- see initializeWinstonDraft()/
+     * submitWinstonDraftPick()), dealt from a shared shuffled pool of
+     * winstonDraftPoolTargetSize($playerCount) cards. The 2-player target
+     * (45) matches the physical rules' own "Total number of cards
+     * drafted: 45" (the same size as MSW's own Structure deck); 3-4
+     * players scale up to 70/90 rather than a flat +15/player increment,
+     * so every additional seat still gets a meaningfully bigger shared
+     * pool to draft from over the same 3-pile structure. Unlike Quick
+     * Draft's fixed 16-per-player result, the number of cards each player
+     * ends up with here varies with how the draft unfolds, so there's no
+     * WINSTON_MAX_DECK_SIZE -- only a floor (WINSTON_MIN_DECK_SIZE,
+     * matching the physical rules' "must have a minimum of twelve
+     * cards"). winstonDraftMinCustomPoolSize() equals the target size
+     * itself -- unlike Quick Draft's 45-vs-48 gap, there's no
+     * reshuffle-top-up mechanic to fall back on for an undersized pool,
+     * since the physical rules already define "the deck runs out" as a
+     * normal, expected event rather than something to avoid. A player who
+     * ends up short of WINSTON_MIN_DECK_SIZE when the draft ends is
+     * dropped from the match entirely (see finalizeWinstonDraft()) rather
+     * than failing the whole match the way the original 2-player-only
+     * "the other player automatically wins" rule did -- with 3-4 players,
+     * one player's shortfall shouldn't cost everyone else their match.
      */
-    private const WINSTON_POOL_SIZE = 45;
-    private const WINSTON_MIN_CUSTOM_POOL_SIZE = 45;
     private const WINSTON_MIN_DECK_SIZE = 12;
 
     /**
-     * Grid Draft (issue #188, format 'draft' alongside 'quick_draft'/
-     * 'winston_draft'): a shared pool of exactly this many cards, dealt 9
-     * at a time into a 3x3 grid over GRID_DRAFT_ROUNDS rounds (54 / 9 = 6
-     * exactly, so the pool always runs out precisely when the last round
-     * is dealt -- see initializeGridDraft()/submitGridDraftPick()). Each
-     * round, whoever picks first takes an entire row or column (always 3
-     * cards); the other player then takes a row or column of what's left,
-     * getting only 2 cards if it crosses the first pick's own row/column,
-     * or a full 3 if it doesn't -- whatever's left in the grid afterward
-     * is simply discarded, never reshuffled back into the pool. Like
-     * Winston Draft, the number of cards each player ends up with varies
-     * (15-18 typically), so there's no max deck size, only
-     * GRID_DRAFT_MIN_DECK_SIZE. GRID_DRAFT_MIN_CUSTOM_POOL_SIZE equals the
-     * target size itself, for the same reason as Winston's own -- no
-     * reshuffle-top-up mechanic exists to fall back on for an undersized
-     * pool.
+     * Winston Draft's own per-player-count pool target -- 45/70/90 for
+     * 2/3/4 players (issue #189). Not a flat +15/player increment (that
+     * would be 45/60/75); the explicit jump to 70 and 90 keeps every
+     * additional seat meaningfully better-stocked, and specifically
+     * ensures jceddy's 75 Card deck's own 75 cards still cover a 3-player
+     * pool (70) without needing jceddy's 150 Card deck's own themed
+     * 150-card pool -- that swap only ever triggers at exactly 4 players
+     * (90 > 75), the same trigger point as Quick Draft's/Grid Draft's own
+     * jceddys_75 handling (see buildDraftPool()).
      */
-    private const GRID_DRAFT_POOL_SIZE = 54;
-    private const GRID_DRAFT_MIN_CUSTOM_POOL_SIZE = 54;
-    private const GRID_DRAFT_ROUNDS = 6;
-    private const GRID_DRAFT_CARDS_PER_ROUND = 9;
+    private static function winstonDraftPoolTargetSize(int $playerCount): int
+    {
+        return match ($playerCount) {
+            2 => 45,
+            3 => 70,
+            4 => 90,
+            default => throw new GameStateException("Winston Draft does not support {$playerCount} players"),
+        };
+    }
+
+    /** @see winstonDraftPoolTargetSize()'s own docblock for why this equals the target size itself. */
+    private static function winstonDraftMinCustomPoolSize(int $playerCount): int
+    {
+        return self::winstonDraftPoolTargetSize($playerCount);
+    }
+
+    /**
+     * Grid Draft (issue #188, format 'draft' alongside 'quick_draft'/
+     * 'winston_draft'; multiplayer support issue #189; 4-player 4x4 grid
+     * issue #189 follow-up): a shared pool, dealt gridDraftCardsPerRound()
+     * cards at a time into an gridDraftGridSize() x gridDraftGridSize()
+     * grid over gridDraftRounds() rounds -- a 3x3 grid over 6 rounds for
+     * 2-3 players, or a 4x4 grid over exactly 4 rounds for 4 players
+     * specifically (chosen so each of the 4 players gets to pick first in
+     * exactly one round, rather than the uneven distribution 6 rounds
+     * would give 4 players -- see gridDraftRounds()'s own docblock), every
+     * round dealt from a completely fresh grid regardless of player
+     * count. Each round, every seated player takes one turn (whoever's
+     * first rotates every round, see initializeGridDraft()/
+     * submitGridDraftPick()), taking an entire row or column -- always a
+     * full line's worth of cards for a player whose turn falls among the
+     * round's first playerCount-2 picks (the grid is refilled back to
+     * full immediately after each of those, see
+     * gridDraftCardsDrawnPerRound()'s own docblock), but possibly fewer
+     * for the round's LAST TWO picks specifically, which never get
+     * refilled -- the second (and, for 3-4 players, third/fourth) picker
+     * may get fewer cards if their choice crosses a still-empty cell left
+     * by an unrefilled earlier pick this same round, derived purely by
+     * counting non-null cells, never a stored intersection flag.
+     * Whatever's left in the grid once the round's last pick is made is
+     * simply discarded, never reshuffled back into the pool. This
+     * degenerates cleanly to the original 2-player mechanic (its own
+     * "second pick might get only 2 cards" quirk): with only 2 players,
+     * EVERY pick is among "the round's last two," so nothing ever
+     * refills mid-round, exactly as it always has.
+     *
+     * Like Winston Draft, the number of cards each player ends up with
+     * varies, so there's no max deck size, only GRID_DRAFT_MIN_DECK_SIZE.
+     * GRID_DRAFT_MIN_CUSTOM_POOL_SIZE (see gridDraftMinCustomPoolSize())
+     * equals the target pool size itself, for the same reason as
+     * Winston's own -- no reshuffle-top-up mechanic exists to fall back
+     * on for an undersized pool, so an insufficient pool is rejected
+     * outright at draft-creation time instead.
+     */
     private const GRID_DRAFT_MIN_DECK_SIZE = 12;
 
-    /** Shared best-of-three threshold for every draft-based deck_type's own match. */
+    /**
+     * The grid's own side length: 4 (a 4x4, 16-cell grid) for exactly 4
+     * players, 3 (the original 3x3, 9-cell grid) for 2-3 players. Also
+     * doubles as gridDraftRefillBatchSize()'s own value, since a
+     * row/column always has exactly this many cells.
+     */
+    private static function gridDraftGridSize(int $playerCount): int
+    {
+        return $playerCount === 4 ? 4 : 3;
+    }
+
+    /**
+     * How many rounds Grid Draft plays: 4 for exactly 4 players (equal to
+     * the player count, so seat rotation -- see submitGridDraftPick() --
+     * gives each of the 4 players first pick in exactly one round), 6 for
+     * 2-3 players (also an even multiple of the player count: 3 rounds
+     * each for 2 players, 2 rounds each for 3).
+     */
+    private static function gridDraftRounds(int $playerCount): int
+    {
+        return $playerCount === 4 ? 4 : 6;
+    }
+
+    /** How many cells a freshly-dealt grid has: gridDraftGridSize()'s own square. */
+    private static function gridDraftCardsPerRound(int $playerCount): int
+    {
+        return self::gridDraftGridSize($playerCount) ** 2;
+    }
+
+    /** A row/column's own length -- see gridDraftGridSize()'s own docblock. */
+    private static function gridDraftRefillBatchSize(int $playerCount): int
+    {
+        return self::gridDraftGridSize($playerCount);
+    }
+
+    /**
+     * How many cards Grid Draft draws from the pool over the course of
+     * one full round for $playerCount seated players: the round's initial
+     * gridDraftCardsPerRound() grid, plus one gridDraftRefillBatchSize()
+     * refill for every pick except the round's last two (see the
+     * GRID_DRAFT_* docblock above) -- 9 for 2 players (no refills at
+     * all), 12 for 3 (one refill, after the first pick), 24 for 4 (two
+     * refills of 4 cards each, after the first and second picks, against
+     * the larger 4x4 grid).
+     */
+    private static function gridDraftCardsDrawnPerRound(int $playerCount): int
+    {
+        return self::gridDraftCardsPerRound($playerCount) + self::gridDraftRefillBatchSize($playerCount) * max($playerCount - 2, 0);
+    }
+
+    /** The full pool size Grid Draft needs for $playerCount players -- one gridDraftCardsDrawnPerRound() per round, for gridDraftRounds() rounds. 54/72/96 for 2/3/4 players. */
+    private static function gridDraftPoolTargetSize(int $playerCount): int
+    {
+        return self::gridDraftCardsDrawnPerRound($playerCount) * self::gridDraftRounds($playerCount);
+    }
+
+    /** @see gridDraftRounds()'s own docblock -- no top-up mechanic, so the floor is the same as the actual target size. */
+    private static function gridDraftMinCustomPoolSize(int $playerCount): int
+    {
+        return self::gridDraftPoolTargetSize($playerCount);
+    }
+
+    /**
+     * Shared best-of-three threshold for every draft-based deck_type's own
+     * match -- still the right number for every 2-player draft match
+     * (Quick Draft, Winston Draft, Grid Draft alike). Quick Draft's 3-4
+     * player matches are single-game instead (issue #189 -- the
+     * draft_matches/draft_match_players wrapper is still reused, just with
+     * an effective games-to-win of 1), so anything that needs this
+     * threshold for a possibly-multiplayer match should go through
+     * draftGamesToWin() rather than reading this constant directly.
+     */
     private const DRAFT_GAMES_TO_WIN = 2;
+
+    /** @see DRAFT_GAMES_TO_WIN's own docblock. */
+    private function draftGamesToWin(int $playerCount): int
+    {
+        return $playerCount > 2 ? 1 : self::DRAFT_GAMES_TO_WIN;
+    }
+
+    /**
+     * Quick Draft's own per-player-count constants -- see the
+     * QUICK_DRAFT_* constants' shared docblock above for the mechanic
+     * these implement.
+     */
+    private static function quickDraftPileSize(int $playerCount): int
+    {
+        return 2 * $playerCount + 2;
+    }
+
+    private static function quickDraftRounds(int $playerCount): int
+    {
+        return match ($playerCount) {
+            2 => 4,
+            3 => 3,
+            4 => 2,
+            default => throw new GameStateException("Quick Draft supports 2-4 players, not {$playerCount}"),
+        };
+    }
+
+    private static function quickDraftPoolTargetSize(int $playerCount): int
+    {
+        return self::QUICK_DRAFT_POOL_SIZE_PER_PLAYER * $playerCount;
+    }
+
+    private static function quickDraftMinCustomPoolSize(int $playerCount): int
+    {
+        return (int) ceil($playerCount / 2) * self::QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE_PER_TWO_PLAYERS;
+    }
+
+    /**
+     * Which way a round's piles pass: +1 (to the next seat, "right") on odd
+     * rounds, -1 ("left") on even rounds -- alternates every round per the
+     * issue #189 spec. Meaningless (but harmless) for 2 players, where
+     * "the one other seat" is the same regardless of direction.
+     */
+    private static function quickDraftPassDirection(int $roundNumber): int
+    {
+        return $roundNumber % 2 === 1 ? 1 : -1;
+    }
+
+    /** Positive-result modulo (PHP's % can return negative for a negative dividend). */
+    private static function mod(int $dividend, int $divisor): int
+    {
+        return (($dividend % $divisor) + $divisor) % $divisor;
+    }
 
     /** In-game notepad (issue #258) -- a note's max length, in characters. */
     private const MAX_NOTE_LENGTH = 20000;
@@ -289,8 +498,17 @@ final class GameService
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
-        if (self::isDuelShapedFormat($format) && count($userIds) !== 2) {
-            throw new GameStateException("A {$format} game must have exactly 2 players");
+        if (self::isDuelShapedFormat($format)) {
+            // Quick Draft, Grid Draft, and Winston Draft all support 3-4
+            // players now (issue #189) -- 'duel' itself stays locked to
+            // exactly 2.
+            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft'], true)) {
+                if (count($userIds) < 2 || count($userIds) > 4) {
+                    throw new GameStateException("A {$deckType} game must have 2-4 players");
+                }
+            } elseif (count($userIds) !== 2) {
+                throw new GameStateException("A {$format} game must have exactly 2 players");
+            }
         }
         if (self::isTeamFormat($format)) {
             if (count($userIds) !== self::TEAM_PLAYER_COUNT) {
@@ -354,9 +572,9 @@ final class GameService
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
-            'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText),
-            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText),
-            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText),
+            'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, count($userIds)),
+            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, count($userIds)),
+            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, count($userIds)),
             default => null,
         };
 
@@ -803,7 +1021,7 @@ final class GameService
         }
 
         if (array_diff($playerIds, array_keys($cardIdsByPlayer)) !== []) {
-            throw new GameStateException("Game {$gameId} cannot start until both players have submitted their drafted deck");
+            throw new GameStateException("Game {$gameId} cannot start until every player has submitted their drafted deck");
         }
 
         return $cardIdsByPlayer;
@@ -1353,6 +1571,36 @@ final class GameService
     }
 
     /**
+     * Assembles jceddy's 150 Card deck's own 150-card pool --
+     * JCEDDYS_150_DECK_RARITY_SPEC's own docblock covers why this exists
+     * (a themed 4-player-sized analog of jceddys_75, not a literal
+     * doubling of it); this mirrors buildJceddys75DeckCardIds()'s own
+     * per-color assembly exactly, just against the doubled spec. The
+     * catalog's smallest per-color rarity count (3 Mythics) comfortably
+     * covers every cap here (2 distinct Mythics needed at most), so
+     * randomCardIdsWithCopyLimit() below never has to fall back to fewer
+     * cards than promised.
+     *
+     * @return int[]
+     */
+    private function buildJceddys150DeckCardIds(): array
+    {
+        $pdo = Connection::get();
+
+        $cardIds = [];
+        foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
+            foreach (self::JCEDDYS_150_DECK_RARITY_SPEC as $rarity => $spec) {
+                $cardIds = [
+                    ...$cardIds,
+                    ...$this->randomCardIdsWithCopyLimit($pdo, $color, $rarity, $spec['count'], $spec['max_copies']),
+                ];
+            }
+        }
+
+        return $cardIds;
+    }
+
+    /**
      * $count random card ids matching $color/$rarity, allowing up to
      * $maxCopies repeats of any single id -- built by expanding that
      * color/rarity's own card pool into $maxCopies copies of each id,
@@ -1381,28 +1629,42 @@ final class GameService
      * Assembles a draft match's shared card pool, per $poolSource --
      * 'random_48' ($targetSize random *distinct* catalog cards, singleton
      * like buildStructureDeckCardIds()), 'structure' (reuses
-     * buildStructureDeckCardIds() as-is -- its own 45-card pool), 'jceddys_75'
-     * (reuses buildJceddys75DeckCardIds() as-is -- its own 75-card pool),
-     * 'one_of_each' (the full TOTAL_CARDS catalog), or 'custom'
-     * (parseDraftCustomPool()). Whatever the source produces, anything
-     * over $targetSize is randomly truncated down to it -- "if more than
-     * 48 cards are in the pool, just ignore the extra cards" (the repo
-     * owner's own words, for Quick Draft's own 48 -- Winston Draft reuses
-     * this exact same logic with its own 45-card target instead) -- so
-     * 'jceddys_75's 75, 'one_of_each's 133, and an oversized 'custom' pool
-     * all end up the same size as 'random_48'/'structure' before drafting
-     * ever starts. Shared by buildQuickDraftPool()/buildWinstonDraftPool()
-     * below, parameterized only by target/minimum pool size -- the pool
-     * assembly logic itself has nothing format-specific about it.
+     * buildStructureDeckCardIds() as-is -- its own 45-card pool, or two
+     * copies concatenated together when $doubleStructureForMultiplayer is
+     * true and $playerCount > 2, since Winston Draft is the only caller
+     * whose 3-4 player targets, 70/90, actually exceed a single 45-card
+     * copy and has no other top-up mechanism to fall back on -- Quick
+     * Draft's own 'structure' handling relies on its discard-reshuffle
+     * top-up instead, and Grid Draft rejects 'structure' outright, so
+     * both leave this flag false), 'jceddys_75' (reuses
+     * buildJceddys75DeckCardIds() as-is -- its own 75-card pool -- except
+     * at exactly 4 players, where buildJceddys150DeckCardIds()'s own
+     * 150-card pool is used instead, since 75 falls short of every
+     * 4-player target this pool source is ever used for), 'one_of_each'
+     * (the full TOTAL_CARDS catalog), or 'custom' (parseDraftCustomPool()).
+     * Whatever the source produces, anything over $targetSize is randomly
+     * truncated down to it -- "if more than 48 cards are in the pool, just
+     * ignore the extra cards" (the repo owner's own words, for Quick
+     * Draft's own 48 -- Winston Draft/Grid Draft reuse this exact same
+     * logic with their own targets instead) -- so 'jceddys_75'/
+     * 'jceddys_150's 75/150, a doubled 'structure's 90, 'one_of_each's
+     * 133, and an oversized 'custom' pool all end up the same size as
+     * 'random_48' before drafting ever starts. Shared by
+     * buildQuickDraftPool()/buildWinstonDraftPool()/buildGridDraftPool()
+     * below, parameterized only by target/minimum pool size, player
+     * count, and the structure-doubling flag -- the pool assembly logic
+     * itself has nothing else format-specific about it.
      *
      * @return int[]
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false): array
     {
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomDraftCardIds($targetSize),
-            'structure' => $this->buildStructureDeckCardIds(),
-            'jceddys_75' => $this->buildJceddys75DeckCardIds(),
+            'structure' => $doubleStructureForMultiplayer && $playerCount > 2
+                ? [...$this->buildStructureDeckCardIds(), ...$this->buildStructureDeckCardIds()]
+                : $this->buildStructureDeckCardIds(),
+            'jceddys_75' => $playerCount === 4 ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
             default => throw new GameStateException("Unknown pool source \"{$poolSource}\""),
@@ -1454,43 +1716,74 @@ final class GameService
         return $parsed['cardIds'];
     }
 
-    /** @return int[] Quick Draft's own QUICK_DRAFT_POOL_SIZE-card pool -- see buildDraftPool(). */
-    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText): array
+    /**
+     * @return int[] Quick Draft's own quickDraftPoolTargetSize($playerCount)-card
+     *         pool -- see buildDraftPool(). A fixed-size pool source
+     *         (`'structure'`'s 45) that's short of the target isn't
+     *         padded here -- dealQuickDraftRound()'s existing
+     *         discard-reshuffle top-up already covers the shortfall
+     *         generically as the draft proceeds, exactly as it already
+     *         does for a 2-player 'structure' pool. `'jceddys_75'` is the
+     *         one exception: buildDraftPool() itself swaps in
+     *         buildJceddys150DeckCardIds()'s own 150-card pool at exactly
+     *         4 players, so this draft never needs the reshuffle top-up
+     *         for that specific case either.
+     */
+    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
     {
-        return $this->buildDraftPool($poolSource, $customPoolText, self::QUICK_DRAFT_POOL_SIZE, self::QUICK_DRAFT_MIN_CUSTOM_POOL_SIZE);
+        return $this->buildDraftPool(
+            $poolSource,
+            $customPoolText,
+            self::quickDraftPoolTargetSize($playerCount),
+            self::quickDraftMinCustomPoolSize($playerCount),
+            $playerCount,
+        );
     }
 
-    /** @return int[] Winston Draft's own WINSTON_POOL_SIZE-card pool -- see buildDraftPool(). */
-    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText): array
+    /** @return int[] Winston Draft's own winstonDraftPoolTargetSize($playerCount)-card pool -- see buildDraftPool(). */
+    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
     {
-        return $this->buildDraftPool($poolSource, $customPoolText, self::WINSTON_POOL_SIZE, self::WINSTON_MIN_CUSTOM_POOL_SIZE);
+        return $this->buildDraftPool(
+            $poolSource,
+            $customPoolText,
+            self::winstonDraftPoolTargetSize($playerCount),
+            self::winstonDraftMinCustomPoolSize($playerCount),
+            $playerCount,
+            doubleStructureForMultiplayer: true,
+        );
     }
 
     /**
-     * @return int[] Grid Draft's own GRID_DRAFT_POOL_SIZE-card pool -- see
-     *         buildDraftPool(). Unlike Quick Draft (which tops up a
-     *         short pool by reshuffling discards back in mid-draft) or
-     *         Winston Draft (whose own 45-card target already matches
+     * @return int[] Grid Draft's own gridDraftPoolTargetSize($playerCount)-card
+     *         pool -- see buildDraftPool(). Unlike Quick Draft (which tops
+     *         up a short pool by reshuffling discards back in mid-draft)
+     *         or Winston Draft (whose own 45-card target already matches
      *         the 'structure' pool exactly), Grid Draft has no mechanism
-     *         at all for handling a pool short of GRID_DRAFT_POOL_SIZE --
+     *         at all for handling a pool short of the target --
      *         initializeGridDraft()/submitGridDraftPick() always deal
-     *         exactly 9 cards per round for exactly GRID_DRAFT_ROUNDS
-     *         rounds. The 'structure' pool source (45 cards) is short of
-     *         54, so it's rejected here rather than silently dealing a
-     *         final round or two short of 9 cards.
+     *         exactly gridDraftCardsDrawnPerRound($playerCount) cards per
+     *         round for exactly gridDraftRounds($playerCount) rounds. The 'structure'
+     *         pool source (45 cards) is short of every player count's own
+     *         target (54 at minimum, for 2 players), so it's rejected here
+     *         rather than silently dealing a final round or two short of
+     *         cards -- 'jceddys_75' doesn't need this rejection at 4
+     *         players, since buildDraftPool() itself already swaps in the
+     *         150-card 'jceddys_150' pool for that case.
      */
-    private function buildGridDraftPool(string $poolSource, ?string $customPoolText): array
+    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
     {
-        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, self::GRID_DRAFT_POOL_SIZE, self::GRID_DRAFT_MIN_CUSTOM_POOL_SIZE);
+        $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        if (count($cardIds) < self::GRID_DRAFT_POOL_SIZE) {
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
+
+        if (count($cardIds) < $targetSize) {
             throw new GameStateException(
                 'The "' . $poolSource . '" pool source has only ' . count($cardIds)
-                . ' cards, but Grid Draft requires exactly ' . self::GRID_DRAFT_POOL_SIZE
+                . " cards, but Grid Draft with {$playerCount} players requires exactly {$targetSize}"
             );
         }
 
-        return $cardIds;
+        return array_values($cardIds);
     }
 
     /**
@@ -1544,108 +1837,118 @@ final class GameService
         return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
     }
 
-    /**
-     * @return array<int, array<int, array{drawn:int[], kept_from_draw:?int[], kept_from_received:?int[]}>>
-     *         round_number => user_id => that player's pick data for the round
-     */
+    /** @return array<int, array<int, int[]>> round_number => pile_owner_user_id => that pile's original dealt cards */
     private function loadDraftRoundPicks(int $draftMatchId): array
     {
         $stmt = Connection::get()->prepare(
-            'SELECT round_number, user_id, drawn_card_ids, kept_from_draw_ids, kept_from_received_ids
-             FROM draft_round_picks WHERE draft_match_id = :id ORDER BY round_number ASC'
+            'SELECT round_number, user_id, drawn_card_ids FROM draft_round_picks WHERE draft_match_id = :id ORDER BY round_number ASC'
         );
         $stmt->execute(['id' => $draftMatchId]);
 
-        $picksByRound = [];
+        $drawnByRound = [];
         foreach ($stmt->fetchAll() as $row) {
-            $picksByRound[(int) $row['round_number']][(int) $row['user_id']] = [
-                'drawn' => array_map(intval(...), json_decode((string) $row['drawn_card_ids'], true)),
-                'kept_from_draw' => $row['kept_from_draw_ids'] !== null
-                    ? array_map(intval(...), json_decode((string) $row['kept_from_draw_ids'], true))
-                    : null,
-                'kept_from_received' => $row['kept_from_received_ids'] !== null
-                    ? array_map(intval(...), json_decode((string) $row['kept_from_received_ids'], true))
-                    : null,
-            ];
+            $drawnByRound[(int) $row['round_number']][(int) $row['user_id']] =
+                array_map(intval(...), json_decode((string) $row['drawn_card_ids'], true));
         }
 
-        return $picksByRound;
+        return $drawnByRound;
     }
 
     /**
-     * Everything dealQuickDraftRound()/finalizeQuickDraft()/getState() need
-     * to derive from the round picks dealt so far -- passed (= drawn minus
-     * kept_from_draw), received (= the OPPONENT's own passed cards that
-     * same round), and discarded (= received minus kept_from_received) are
-     * deliberately never stored (see migration 0027's own docblock);
-     * they're recomputed here every time instead, the same "derive from
-     * source rows" approach BoardStateRepository already takes for board
-     * state generally.
+     * @return array<int, array<int, array<int, array{holder_user_id:int, kept_card_ids:int[]}>>>
+     *         round_number => pile_owner_user_id => stage_number => that stage's pick
+     */
+    private function loadDraftPileStagePicks(int $draftMatchId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT round_number, pile_owner_user_id, stage_number, holder_user_id, kept_card_ids
+             FROM draft_pile_stage_picks WHERE draft_match_id = :id'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+
+        $picks = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $picks[(int) $row['round_number']][(int) $row['pile_owner_user_id']][(int) $row['stage_number']] = [
+                'holder_user_id' => (int) $row['holder_user_id'],
+                'kept_card_ids' => array_map(intval(...), json_decode((string) $row['kept_card_ids'], true)),
+            ];
+        }
+
+        return $picks;
+    }
+
+    /**
+     * Everything dealQuickDraftRound() needs to derive from the round picks
+     * dealt so far -- every card any pile has ever been dealt
+     * (allDrawnCardIds), and every card discarded by a pile that's
+     * finished all of its stages this match (allDiscardedCardIds, used to
+     * top a short pool back up -- see dealQuickDraftRound()). A pile's
+     * discard is only knowable once every one of its playerCount stages
+     * has a row (only then is "everything that was ever kept from it"
+     * fully known) -- an in-progress pile contributes nothing to
+     * allDiscardedCardIds yet.
      *
-     * @param int[] $userIds exactly the match's 2 user ids
-     * @return array{picksByRound: array, allDrawnCardIds: int[], allDiscardedCardIds: int[]}
+     * @param int[] $userIds the match's user ids (any count 2-4)
+     * @return array{allDrawnCardIds: int[], allDiscardedCardIds: int[]}
      */
     private function draftDerivedState(int $draftMatchId, array $userIds): array
     {
-        $picksByRound = $this->loadDraftRoundPicks($draftMatchId);
-        [$userA, $userB] = $userIds;
+        $playerCount = count($userIds);
+        $drawnByRound = $this->loadDraftRoundPicks($draftMatchId);
+        $stagePicksByRound = $this->loadDraftPileStagePicks($draftMatchId);
 
         $allDrawnCardIds = [];
         $allDiscardedCardIds = [];
 
-        foreach ($picksByRound as $picks) {
-            foreach ($picks as $pick) {
-                $allDrawnCardIds = [...$allDrawnCardIds, ...$pick['drawn']];
+        foreach ($drawnByRound as $roundNumber => $drawnByOwner) {
+            foreach ($drawnByOwner as $drawn) {
+                $allDrawnCardIds = [...$allDrawnCardIds, ...$drawn];
             }
 
-            if (!isset($picks[$userA], $picks[$userB])) {
-                continue;
-            }
+            foreach ($drawnByOwner as $pileOwnerUserId => $drawn) {
+                $stagesForPile = $stagePicksByRound[$roundNumber][$pileOwnerUserId] ?? [];
+                if (count($stagesForPile) < $playerCount) {
+                    continue;
+                }
 
-            $passedByA = $picks[$userA]['kept_from_draw'] !== null
-                ? $this->multisetSubtract($picks[$userA]['drawn'], $picks[$userA]['kept_from_draw'])
-                : null;
-            $passedByB = $picks[$userB]['kept_from_draw'] !== null
-                ? $this->multisetSubtract($picks[$userB]['drawn'], $picks[$userB]['kept_from_draw'])
-                : null;
-
-            if ($passedByA !== null && $picks[$userB]['kept_from_received'] !== null) {
-                $allDiscardedCardIds = [...$allDiscardedCardIds, ...$this->multisetSubtract($passedByA, $picks[$userB]['kept_from_received'])];
-            }
-            if ($passedByB !== null && $picks[$userA]['kept_from_received'] !== null) {
-                $allDiscardedCardIds = [...$allDiscardedCardIds, ...$this->multisetSubtract($passedByB, $picks[$userA]['kept_from_received'])];
+                $keptAcrossStages = [];
+                foreach ($stagesForPile as $stage) {
+                    $keptAcrossStages = [...$keptAcrossStages, ...$stage['kept_card_ids']];
+                }
+                $allDiscardedCardIds = [...$allDiscardedCardIds, ...$this->multisetSubtract($drawn, $keptAcrossStages)];
             }
         }
 
-        return ['picksByRound' => $picksByRound, 'allDrawnCardIds' => $allDrawnCardIds, 'allDiscardedCardIds' => $allDiscardedCardIds];
+        return ['allDrawnCardIds' => $allDrawnCardIds, 'allDiscardedCardIds' => $allDiscardedCardIds];
     }
 
     /**
-     * Deals $roundNumber for a Quick Draft match: both players draw
-     * QUICK_DRAFT_DRAW_PER_ROUND fresh cards from whatever of the pool
-     * hasn't been drawn in an earlier round. If the remaining pool would be
-     * short of what this round needs (only possible for a pool smaller
-     * than QUICK_DRAFT_POOL_SIZE -- the 'structure' source's 45, or a
-     * 45-47 card 'custom' pool), tops it back up first by randomly pulling
-     * enough already-discarded cards (from any earlier round, either
-     * player) back in -- replicating the physical game's own "reshuffle 3
-     * discards back in before the last draw" workaround for a 45-card box,
-     * generalized to whatever the actual shortfall is. Called once from
-     * createGame() (round 1) and once from submitQuickDraftPick() each time
-     * a round's stage 'received' fully resolves for both players (rounds
-     * 2-4). Notifies both players their new round is dealt and ready for
-     * their draw-stage pick -- see notifyDraftUsersItsYourTurn()'s own
-     * docblock.
+     * Deals $roundNumber for a Quick Draft match: every player draws their
+     * own fresh quickDraftPileSize($playerCount)-card pile from whatever of
+     * the pool hasn't been drawn in an earlier round. If the remaining
+     * pool would be short of what this round needs (only possible for a
+     * pool smaller than quickDraftPoolTargetSize($playerCount) -- the
+     * 'structure'/'jceddys_75' sources, or an undersized 'custom' pool),
+     * tops it back up first by randomly pulling enough already-discarded
+     * cards (from any earlier round, any player) back in -- replicating
+     * the physical game's own "reshuffle 3 discards back in before the
+     * last draw" workaround for a 45-card box, generalized to whatever the
+     * actual shortfall is. Called once from createGame() (round 1) and
+     * once from submitQuickDraftPick() each time a round's final stage
+     * fully resolves for every player (later rounds). Notifies every
+     * player their new round is dealt and ready for their first pick --
+     * see notifyDraftUsersItsYourTurn()'s own docblock.
      *
      * @param int[] $poolCardIds the match's full configured pool
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4)
      */
     private function dealQuickDraftRound(int $gameId, int $draftMatchId, int $roundNumber, array $poolCardIds, array $userIds): void
     {
+        $pileSize = self::quickDraftPileSize(count($userIds));
         $derived = $this->draftDerivedState($draftMatchId, $userIds);
         $remainingPool = $this->multisetSubtract($poolCardIds, $derived['allDrawnCardIds']);
 
-        $neededThisRound = count($userIds) * self::QUICK_DRAFT_DRAW_PER_ROUND;
+        $neededThisRound = count($userIds) * $pileSize;
         if (count($remainingPool) < $neededThisRound) {
             $shortfall = $neededThisRound - count($remainingPool);
             $discardPool = $derived['allDiscardedCardIds'];
@@ -1660,7 +1963,7 @@ final class GameService
              VALUES (:match_id, :user_id, :round, :drawn)'
         );
         foreach ($userIds as $userId) {
-            $drawnCardIds = array_splice($remainingPool, 0, self::QUICK_DRAFT_DRAW_PER_ROUND);
+            $drawnCardIds = array_splice($remainingPool, 0, $pileSize);
             $insert->execute([
                 'match_id' => $draftMatchId,
                 'user_id' => $userId,
@@ -1673,25 +1976,37 @@ final class GameService
     }
 
     /**
-     * Round 4's stage 'received' resolving for both players ends the draft
-     * itself: each player's final 16-card drafted_card_ids is the union of
-     * their own kept_from_draw/kept_from_received across all 4 rounds, and
-     * the match moves on to 'deck_building' (the initial 16-to-14/15/16
-     * trim -- see submitDraftDeck()).
+     * The final round's last stage resolving for every player ends the
+     * draft itself: each player's final drafted_card_ids is the union of
+     * every kept_card_ids they were ever the holder_user_id for, across
+     * every stage of every round -- not just from piles they themselves
+     * originally owned, since most of what a player nets over the draft
+     * comes from piles passed to them by other seats. The match moves on
+     * to 'deck_building' (the initial drafted-pool-to-deck trim -- see
+     * submitDraftDeck()).
      *
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4)
      */
     private function finalizeQuickDraft(int $draftMatchId, array $userIds): void
     {
-        $picksByRound = $this->loadDraftRoundPicks($draftMatchId);
+        $stagePicksByRound = $this->loadDraftPileStagePicks($draftMatchId);
         $pdo = Connection::get();
 
-        foreach ($userIds as $userId) {
-            $draftedCardIds = [];
-            foreach ($picksByRound as $picks) {
-                $draftedCardIds = [...$draftedCardIds, ...$picks[$userId]['kept_from_draw'], ...$picks[$userId]['kept_from_received']];
+        $draftedCardIdsByUser = array_fill_keys($userIds, []);
+        foreach ($stagePicksByRound as $pilesByOwner) {
+            foreach ($pilesByOwner as $stages) {
+                foreach ($stages as $stage) {
+                    if (isset($draftedCardIdsByUser[$stage['holder_user_id']])) {
+                        $draftedCardIdsByUser[$stage['holder_user_id']] = [
+                            ...$draftedCardIdsByUser[$stage['holder_user_id']],
+                            ...$stage['kept_card_ids'],
+                        ];
+                    }
+                }
             }
+        }
 
+        foreach ($draftedCardIdsByUser as $userId => $draftedCardIds) {
             $pdo->prepare(
                 'UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id'
             )->execute([
@@ -1706,24 +2021,47 @@ final class GameService
     }
 
     /**
-     * One player's submission for one of a Quick Draft round's two blind
-     * sub-steps: stage 'draw' (keep QUICK_DRAFT_KEEP_PER_STAGE of your own
-     * just-dealt cards, passing the rest to your opponent) or stage
-     * 'received' (once BOTH players have submitted stage 'draw' -- only
-     * then are "the cards you received" determined -- keep
-     * QUICK_DRAFT_KEEP_PER_STAGE of those, discarding the rest). Each
-     * stage is a one-time, unrevisable submission (mirrors
-     * submitInitialCardPass()'s own "your choice is locked the moment you
-     * submit it" contract) -- neither player can see the other's choice
-     * for a stage until they've submitted their own for it. Once both
-     * players have submitted stage 'received' for the current round, this
-     * either deals the next round or, for round QUICK_DRAFT_ROUNDS,
-     * finalizes the draft (see finalizeQuickDraft()).
+     * One player's submission for one stage (1..playerCount) of a Quick
+     * Draft round. Every round deals $playerCount piles (one per seated
+     * player, quickDraftPileSize($playerCount) cards each); each pile is
+     * then handled in $playerCount successive stages, one keep-
+     * QUICK_DRAFT_KEEP_PER_STAGE-cards decision per stage, by a different
+     * seat each time -- the pile's own original owner at stage 1, then
+     * whoever it's passed to at stage 2, and so on, one full lap of every
+     * seat before it runs out (see the QUICK_DRAFT_* constants' shared
+     * docblock for why that's exactly $playerCount stages, no more or
+     * fewer). Because every pile starts its lap at a different seat but
+     * moves in lockstep, at any given stage number EVERY seated player is
+     * simultaneously holding (and picking from) exactly one pile -- so
+     * "stage" is a single round-wide counter, not something tracked
+     * per-pile or per-player: a stage > 1 pick isn't available to anyone
+     * until every pile has finished the previous stage (only then is
+     * "which pile does each player now hold, and what's actually left in
+     * it" determined for everyone at once) -- directly generalizing the
+     * original 2-player 'draw'-then-'received' gate (received cards
+     * weren't determined until both players had made their draw pick).
+     *
+     * Which pile a given player holds at a given stage, and conversely
+     * which player holds a given pile at a given stage, is pure seat-index
+     * arithmetic: with $userIds providing each player's seat index (their
+     * array position) and quickDraftPassDirection($roundNumber) giving the
+     * round's pass direction (+1/-1), the pile a player at seat $s holds
+     * at stage $n was originally owned by whoever sits at seat
+     * mod($s - ($n - 1) * $direction, $playerCount) -- i.e. walking
+     * backwards $n - 1 steps (against the pass direction) from the
+     * player's own seat lands on the pile's origin seat. Each stage is a
+     * one-time, unrevisable submission (mirrors submitInitialCardPass()'s
+     * own "your choice is locked the moment you submit it" contract) --
+     * nobody can see what's in a pile until they're actually the one
+     * holding it. Once every pile has finished stage $playerCount, the
+     * round itself is done: this either deals the next round or, for the
+     * match's final round (quickDraftRounds($playerCount)), finalizes the
+     * draft (see finalizeQuickDraft()).
      *
      * @param int[] $cardIds exactly QUICK_DRAFT_KEEP_PER_STAGE catalog card ids to keep
-     * @return array{stage_completed:string, round_advanced:bool, draft_completed:bool}
+     * @return array{stage_completed:int, round_advanced:bool, draft_completed:bool}
      */
-    public function submitQuickDraftPick(int $gameId, int $userId, int $roundNumber, string $stage, array $cardIds): array
+    public function submitQuickDraftPick(int $gameId, int $userId, int $roundNumber, int $stageNumber, array $cardIds): array
     {
         $game = $this->fetchGame($gameId);
         if ($game['deck_type'] !== 'quick_draft' || $game['draft_match_id'] === null) {
@@ -1731,7 +2069,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $roundNumber, $stage, $cardIds): array {
+        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $roundNumber, $stageNumber, $cardIds): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -1739,120 +2077,110 @@ final class GameService
             if ($roundNumber !== (int) $match['current_round']) {
                 throw new GameStateException("Round {$roundNumber} is not this match's current draft round");
             }
-            if (!in_array($stage, ['draw', 'received'], true)) {
-                throw new GameStateException('stage must be "draw" or "received"');
-            }
 
             $userIds = $this->draftMatchUserIds($draftMatchId);
+            $playerCount = count($userIds);
             if (!in_array($userId, $userIds, true)) {
                 throw new GameStateException("User {$userId} is not part of this draft match");
             }
-            $opponentId = $userIds[0] === $userId ? $userIds[1] : $userIds[0];
+            if ($stageNumber < 1 || $stageNumber > $playerCount) {
+                throw new GameStateException("stage must be between 1 and {$playerCount}");
+            }
+
+            $direction = self::quickDraftPassDirection($roundNumber);
+            $seatIndex = array_search($userId, $userIds, true);
+            $pileOwnerUserId = $userIds[self::mod($seatIndex - ($stageNumber - 1) * $direction, $playerCount)];
 
             $pdo = Connection::get();
-            $pickStmt = $pdo->prepare(
-                'SELECT * FROM draft_round_picks WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
+
+            if ($stageNumber > 1) {
+                $prevStageCountStmt = $pdo->prepare(
+                    'SELECT COUNT(*) FROM draft_pile_stage_picks
+                     WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
+                );
+                $prevStageCountStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'stage' => $stageNumber - 1]);
+                if ((int) $prevStageCountStmt->fetchColumn() < $playerCount) {
+                    throw new GameStateException("Round {$roundNumber}'s stage " . ($stageNumber - 1) . ' is not yet complete for every player');
+                }
+            }
+
+            $existingStmt = $pdo->prepare(
+                'SELECT id FROM draft_pile_stage_picks
+                 WHERE draft_match_id = :match_id AND round_number = :round AND pile_owner_user_id = :owner AND stage_number = :stage'
             );
-            $pickStmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId, 'round' => $roundNumber]);
-            $pick = $pickStmt->fetch();
-            if ($pick === false) {
-                throw new GameStateException('No draft cards have been dealt to you for this round yet');
+            $existingStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'owner' => $pileOwnerUserId, 'stage' => $stageNumber]);
+            if ($existingStmt->fetchColumn() !== false) {
+                throw new GameStateException("You've already made your pick for this round's stage {$stageNumber}");
+            }
+
+            $drawnStmt = $pdo->prepare(
+                'SELECT drawn_card_ids FROM draft_round_picks WHERE draft_match_id = :match_id AND user_id = :owner AND round_number = :round'
+            );
+            $drawnStmt->execute(['match_id' => $draftMatchId, 'owner' => $pileOwnerUserId, 'round' => $roundNumber]);
+            $drawnJson = $drawnStmt->fetchColumn();
+            if ($drawnJson === false) {
+                throw new GameStateException('No draft cards have been dealt for this round yet');
+            }
+            $availableCardIds = array_map(intval(...), json_decode((string) $drawnJson, true));
+
+            if ($stageNumber > 1) {
+                $priorStagesStmt = $pdo->prepare(
+                    'SELECT kept_card_ids FROM draft_pile_stage_picks
+                     WHERE draft_match_id = :match_id AND round_number = :round AND pile_owner_user_id = :owner AND stage_number < :stage'
+                );
+                $priorStagesStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'owner' => $pileOwnerUserId, 'stage' => $stageNumber]);
+                foreach ($priorStagesStmt->fetchAll(PDO::FETCH_COLUMN) as $keptJson) {
+                    $availableCardIds = $this->multisetSubtract($availableCardIds, array_map(intval(...), json_decode((string) $keptJson, true)));
+                }
             }
 
             $cardIds = array_values(array_map(intval(...), $cardIds));
             if (count($cardIds) !== self::QUICK_DRAFT_KEEP_PER_STAGE) {
                 throw new GameStateException('You must choose exactly ' . self::QUICK_DRAFT_KEEP_PER_STAGE . ' cards');
             }
-
-            if ($stage === 'draw') {
-                if ($pick['kept_from_draw_ids'] !== null) {
-                    throw new GameStateException("You've already made your pick from this round's draw");
-                }
-
-                $drawnCardIds = array_map(intval(...), json_decode((string) $pick['drawn_card_ids'], true));
-                if ($this->multisetSubtract($cardIds, $drawnCardIds) !== []) {
-                    throw new GameStateException('You can only keep cards you were actually dealt this round');
-                }
-
-                $pdo->prepare(
-                    'UPDATE draft_round_picks SET kept_from_draw_ids = :kept, submitted_draw_at = NOW()
-                     WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
-                )->execute([
-                    'kept' => json_encode($cardIds),
-                    'match_id' => $draftMatchId,
-                    'user_id' => $userId,
-                    'round' => $roundNumber,
-                ]);
-
-                // The received-card pack for BOTH players is only
-                // determined once BOTH have made their draw pick -- if
-                // this submission is the second one, that just became
-                // true for the first time, so both players now have a new
-                // action waiting on them (quickDraftAwaitingResponseUsernames()'s
-                // own $bothSubmittedDraw condition, mirrored here).
-                $bothDrawnStmt = $pdo->prepare(
-                    'SELECT COUNT(*) FROM draft_round_picks
-                     WHERE draft_match_id = :match_id AND round_number = :round AND kept_from_draw_ids IS NOT NULL'
-                );
-                $bothDrawnStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber]);
-                if ((int) $bothDrawnStmt->fetchColumn() >= count($userIds)) {
-                    $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft round {$roundNumber} received cards are ready for your pick.", 'draft-pick');
-                }
-
-                return ['stage_completed' => 'draw', 'round_advanced' => false, 'draft_completed' => false];
-            }
-
-            // stage === 'received'
-            if ($pick['kept_from_draw_ids'] === null) {
-                throw new GameStateException('You must submit your draw pick before your received-card pick');
-            }
-            if ($pick['kept_from_received_ids'] !== null) {
-                throw new GameStateException("You've already made your pick from this round's received cards");
-            }
-
-            $opponentPickStmt = $pdo->prepare(
-                'SELECT * FROM draft_round_picks WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
-            );
-            $opponentPickStmt->execute(['match_id' => $draftMatchId, 'user_id' => $opponentId, 'round' => $roundNumber]);
-            $opponentPick = $opponentPickStmt->fetch();
-            if ($opponentPick === false || $opponentPick['kept_from_draw_ids'] === null) {
-                throw new GameStateException("Your opponent hasn't made their draw pick yet -- received cards aren't determined until they do");
-            }
-
-            $opponentDrawnCardIds = array_map(intval(...), json_decode((string) $opponentPick['drawn_card_ids'], true));
-            $opponentKeptFromDraw = array_map(intval(...), json_decode((string) $opponentPick['kept_from_draw_ids'], true));
-            $receivedCardIds = $this->multisetSubtract($opponentDrawnCardIds, $opponentKeptFromDraw);
-
-            if ($this->multisetSubtract($cardIds, $receivedCardIds) !== []) {
-                throw new GameStateException('You can only keep cards you actually received this round');
+            if ($this->multisetSubtract($cardIds, $availableCardIds) !== []) {
+                throw new GameStateException('You can only keep cards that are actually in the pile you currently hold');
             }
 
             $pdo->prepare(
-                'UPDATE draft_round_picks SET kept_from_received_ids = :kept, submitted_received_at = NOW()
-                 WHERE draft_match_id = :match_id AND user_id = :user_id AND round_number = :round'
+                'INSERT INTO draft_pile_stage_picks (draft_match_id, round_number, pile_owner_user_id, stage_number, holder_user_id, kept_card_ids, submitted_at)
+                 VALUES (:match_id, :round, :owner, :stage, :holder, :kept, NOW())'
             )->execute([
-                'kept' => json_encode($cardIds),
                 'match_id' => $draftMatchId,
-                'user_id' => $userId,
                 'round' => $roundNumber,
+                'owner' => $pileOwnerUserId,
+                'stage' => $stageNumber,
+                'holder' => $userId,
+                'kept' => json_encode($cardIds),
             ]);
 
-            $bothDoneStmt = $pdo->prepare(
-                'SELECT COUNT(*) FROM draft_round_picks
-                 WHERE draft_match_id = :match_id AND round_number = :round AND kept_from_received_ids IS NOT NULL'
+            $stageCountStmt = $pdo->prepare(
+                'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
             );
-            $bothDoneStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber]);
-            $bothDone = (int) $bothDoneStmt->fetchColumn() >= count($userIds);
+            $stageCountStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'stage' => $stageNumber]);
+            $stageComplete = (int) $stageCountStmt->fetchColumn() >= $playerCount;
 
-            if (!$bothDone) {
-                return ['stage_completed' => 'received', 'round_advanced' => false, 'draft_completed' => false];
+            if (!$stageComplete) {
+                return ['stage_completed' => $stageNumber, 'round_advanced' => false, 'draft_completed' => false];
             }
 
-            if ($roundNumber >= self::QUICK_DRAFT_ROUNDS) {
+            if ($stageNumber < $playerCount) {
+                // Every pile just finished this stage -- everyone's next
+                // pile (and what's actually left in it) is now determined,
+                // same notification role as the original 2-player "both
+                // submitted draw, received cards are ready" nudge.
+                $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft round {$roundNumber} stage " . ($stageNumber + 1) . ' is ready for your pick.', 'draft-pick');
+
+                return ['stage_completed' => $stageNumber, 'round_advanced' => false, 'draft_completed' => false];
+            }
+
+            // Every pile has finished all $playerCount stages -- the round itself is done.
+            $totalRounds = self::quickDraftRounds($playerCount);
+            if ($roundNumber >= $totalRounds) {
                 $this->finalizeQuickDraft($draftMatchId, $userIds);
                 $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
 
-                return ['stage_completed' => 'received', 'round_advanced' => false, 'draft_completed' => true];
+                return ['stage_completed' => $stageNumber, 'round_advanced' => false, 'draft_completed' => true];
             }
 
             $poolCardIds = array_map(intval(...), json_decode((string) $match['pool_card_ids'], true));
@@ -1860,7 +2188,7 @@ final class GameService
             $pdo->prepare('UPDATE draft_matches SET current_round = :round WHERE id = :id')
                 ->execute(['round' => $roundNumber + 1, 'id' => $draftMatchId]);
 
-            return ['stage_completed' => 'received', 'round_advanced' => true, 'draft_completed' => false];
+            return ['stage_completed' => $stageNumber, 'round_advanced' => true, 'draft_completed' => false];
         });
     }
 
@@ -1869,13 +2197,14 @@ final class GameService
      * games) a draft player's own current deck -- chosen from their fixed
      * drafted_card_ids (never expanded or replaced -- only which of those
      * are IN the deck this game changes). Shared by Quick Draft, Winston
-     * Draft, and Grid Draft: Quick Draft's own deck size window is fixed
-     * (QUICK_DRAFT_MIN_DECK_SIZE-QUICK_DRAFT_MAX_DECK_SIZE, since every
-     * player always drafts exactly 16 cards); Winston Draft and Grid Draft
-     * each have only a floor (WINSTON_MIN_DECK_SIZE / GRID_DRAFT_MIN_DECK_SIZE)
-     * and no fixed ceiling, since the total cards drafted varies by how
-     * the draft unfolds -- the max is simply however many cards that
-     * player actually drafted. The very first call (right after drafting
+     * Draft, and Grid Draft: each has only a floor (QUICK_DRAFT_MIN_DECK_SIZE /
+     * WINSTON_MIN_DECK_SIZE / GRID_DRAFT_MIN_DECK_SIZE) and no fixed
+     * ceiling -- the max is simply however many cards that player actually
+     * drafted (varies by how the draft unfolds for Winston/Grid Draft;
+     * varies by player count for Quick Draft since issue #189's
+     * multiplayer support -- 16 for 2p/4p, 18 for 3p -- deliberately not
+     * capped below that: "smart players will always cut down to the
+     * minimum, regardless"). The very first call (right after drafting
      * finishes) and every later sideboard call are the same operation
      * against the same 'deck_building' status -- there's no "first trim"
      * vs. "a sideboard" distinction worth making, since both just
@@ -1895,7 +2224,7 @@ final class GameService
             'winston_draft' => self::WINSTON_MIN_DECK_SIZE,
             'grid_draft' => self::GRID_DRAFT_MIN_DECK_SIZE,
         };
-        $maxDeckSize = $game['deck_type'] === 'quick_draft' ? self::QUICK_DRAFT_MAX_DECK_SIZE : null;
+        $maxDeckSize = null;
 
         $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $deckCardIds, $minDeckSize, $maxDeckSize): void {
             $match = $this->fetchDraftMatch($draftMatchId);
@@ -1968,7 +2297,7 @@ final class GameService
      * see notifyDraftUsersItsYourTurn()'s own docblock.
      *
      * @param int[] $poolCardIds
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4)
      */
     private function initializeWinstonDraft(int $gameId, int $draftMatchId, array $poolCardIds, array $userIds): void
     {
@@ -2030,11 +2359,15 @@ final class GameService
      * look moves to the next pile -- declining pile 3 triggers a
      * mandatory, unrevisable draw off whatever's left of the deck AFTER
      * pile 3's own replenish, seen only by the acting player and never
-     * revealed to their opponent). Either action can end the whole draft
-     * outright if it leaves the deck and all 3 piles simultaneously empty
-     * -- checked after every mutation, not just after a 'pass' on pile 3,
-     * since a 'take' when the deck's already empty can exhaust everything
-     * mid-turn without ever reaching pile 3.
+     * revealed to any other seated player). Either action can end the
+     * whole draft outright if it leaves the deck and all 3 piles
+     * simultaneously empty -- checked after every mutation, not just
+     * after a 'pass' on pile 3, since a 'take' when the deck's already
+     * empty can exhaust everything mid-turn without ever reaching pile 3.
+     * Turn order (issue #189) is a seat-index rotation
+     * (`($seatIndex + 1) % $playerCount`) rather than a fixed 2-player
+     * toggle -- mathematically identical for a 2-player match, so
+     * existing 2-player games are unaffected.
      *
      * @return array{action_completed:string, turn_advanced:bool, draft_completed:bool}
      */
@@ -2076,7 +2409,9 @@ final class GameService
             $lastDraftActionByUserId = (array) json_decode((string) $state['last_draft_action_by_user_id'], true);
 
             $userIds = $this->draftMatchUserIds($draftMatchId);
-            $opponentUserId = $userIds[0] === $userId ? $userIds[1] : $userIds[0];
+            $playerCount = count($userIds);
+            $seatIndex = array_search($userId, $userIds, true);
+            $nextSeatUserId = $userIds[($seatIndex + 1) % $playerCount];
 
             $turnEnds = false;
             $newlyDrafted = [];
@@ -2125,7 +2460,7 @@ final class GameService
                 return ['action_completed' => $action, 'turn_advanced' => false, 'draft_completed' => true];
             }
 
-            $nextPlayerUserId = $turnEnds ? $opponentUserId : $userId;
+            $nextPlayerUserId = $turnEnds ? $nextSeatUserId : $userId;
             $nextPileNumber = $turnEnds ? 1 : $currentPileNumber;
 
             $pdo->prepare(
@@ -2161,19 +2496,31 @@ final class GameService
      * written incrementally as it happened, so there's nothing left to
      * derive here.
      *
-     * If either player ended up short of WINSTON_MIN_DECK_SIZE total
-     * drafted cards, the physical rules are explicit that they
-     * automatically lose ("if you don't have twelve cards, you will
-     * automatically lose any game, so make sure you draft at least
-     * twelve") -- rather than let them limp into deck_building only to
-     * fail there, the WHOLE match completes right here with the other
-     * player credited as winner_user_id, and the match's own
-     * already-created game 1 (inserted back in createGame(), before the
-     * draft even started) is marked 'abandoned' instead of lingering
-     * forever in 'waiting' with no legal way to ever start it -- no games
-     * are actually played.
+     * The physical rules are explicit that a player short of
+     * WINSTON_MIN_DECK_SIZE total drafted cards automatically loses ("if
+     * you don't have twelve cards, you will automatically lose any game,
+     * so make sure you draft at least twelve"). For the original 2-player
+     * match that meant the whole match completing immediately with the
+     * other player as winner_user_id -- no games ever played. For 3-4
+     * players (issue #189), one player's own shortfall shouldn't cost
+     * everyone else their match: each short player is instead dropped
+     * from the match/game entirely (removeShortWinstonDraftPlayer()),
+     * as if they'd never been part of it -- no deck was ever submitted
+     * for them, so there's nothing of theirs left in the game to clean
+     * up beyond their own draft_match_players/game_players rows. The
+     * survivors then proceed to deck_building as an ordinary
+     * (N - short count)-player match, `draftGamesToWin()`/every other
+     * multiplayer-aware helper already deriving their own player count
+     * from draftMatchUserIds() fresh each time, so nothing needs to be
+     * told about the drop explicitly. Two edge cases collapse back to
+     * the original 2-player behavior exactly: if every player is short,
+     * there's no one left to play at all (match ends, no winner); if
+     * dropping the short players leaves exactly one player standing,
+     * there's no match left to play either -- that one survivor simply
+     * wins outright, the same as the original "the other player
+     * automatically wins" rule.
      *
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4)
      */
     private function finalizeWinstonDraft(int $gameId, int $draftMatchId, array $userIds): void
     {
@@ -2190,66 +2537,114 @@ final class GameService
             $draftedCounts,
             fn (int $count): bool => $count < self::WINSTON_MIN_DECK_SIZE
         ));
+        $survivingUserIds = array_values(array_diff($userIds, $shortUserIds));
 
-        if ($shortUserIds !== []) {
-            $winnerUserId = null;
-            foreach ($userIds as $candidateUserId) {
-                if (!in_array($candidateUserId, $shortUserIds, true)) {
-                    $winnerUserId = $candidateUserId;
-                    break;
-                }
-            }
-
+        if ($survivingUserIds === []) {
+            // Everyone came up short -- no one left to play at all.
             $pdo->prepare(
-                "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
-            )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
-
+                "UPDATE draft_matches SET status = 'completed', winner_user_id = NULL, completed_at = NOW() WHERE id = :id"
+            )->execute(['id' => $draftMatchId]);
             $pdo->prepare(
                 "UPDATE games SET status = 'abandoned' WHERE draft_match_id = :match_id AND match_game_number = 1"
             )->execute(['match_id' => $draftMatchId]);
 
-            // $winnerUserId stays null in the rare case BOTH players ended
-            // up short of WINSTON_MIN_DECK_SIZE -- winner_user_id itself
-            // is already null then too, so there's no winner/loser to
-            // record either.
-            if ($winnerUserId !== null) {
-                $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+            return;
+        }
+
+        if (count($survivingUserIds) === 1) {
+            // Only one player left standing -- there's no match left to
+            // play, so they simply win outright (the original 2-player
+            // "the other player automatically wins" rule, degenerated).
+            // recordMatchCompletionStats() runs BEFORE the short players'
+            // rows are removed below, so it still sees (and credits a
+            // match_loss to) every one of them, exactly like the original
+            // 2-player auto-loss always did.
+            $winnerUserId = $survivingUserIds[0];
+
+            $pdo->prepare(
+                "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
+            )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
+            $pdo->prepare(
+                "UPDATE games SET status = 'abandoned' WHERE draft_match_id = :match_id AND match_game_number = 1"
+            )->execute(['match_id' => $draftMatchId]);
+            $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+
+            foreach ($shortUserIds as $shortUserId) {
+                $this->removeShortWinstonDraftPlayer($gameId, $draftMatchId, $shortUserId);
             }
 
             return;
         }
 
+        // 2+ players survive -- each short player is dropped from the
+        // match entirely (as if they'd never been part of it) with no
+        // match_losses recorded for them, and the survivors proceed to
+        // deck_building as their own (N - short count)-player match; only
+        // ITS eventual real winner/losers get match stats recorded, via
+        // advanceDraftMatch()'s own existing recordMatchCompletionStats()
+        // call once that match actually completes.
+        foreach ($shortUserIds as $shortUserId) {
+            $this->removeShortWinstonDraftPlayer($gameId, $draftMatchId, $shortUserId);
+        }
+
         $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
-        $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
+        $this->notifyDraftUsersItsYourTurn($gameId, $survivingUserIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
+    }
+
+    /**
+     * Drops a Winston Draft player short of WINSTON_MIN_DECK_SIZE from
+     * the match entirely -- called once per short player from
+     * finalizeWinstonDraft() above, before the match ever reaches
+     * deck_building. Deletes their draft_match_players row (so
+     * draftMatchUserIds()/every player-count-derived helper simply never
+     * sees them again) and their game_players row for the match's own
+     * game 1 (the only game to exist yet -- nothing has been dealt for
+     * it, since startGame() hasn't run, so there's no game_cards/
+     * game_rounds row anywhere referencing that seat to clean up first,
+     * unlike resignGame()'s own mid-match removal of an already-playing
+     * seat). Leaving a gap in the remaining seats' own seat_order values
+     * is harmless -- every seat_order-ordered query already just orders
+     * by it rather than indexing arithmetically off of it.
+     */
+    private function removeShortWinstonDraftPlayer(int $gameId, int $draftMatchId, int $userId): void
+    {
+        $pdo = Connection::get();
+        $pdo->prepare('DELETE FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+
+        $gamePlayerId = $this->gamePlayerIdFor($gameId, $userId);
+        if ($gamePlayerId !== null) {
+            $pdo->prepare('DELETE FROM game_players WHERE id = :id')->execute(['id' => $gamePlayerId]);
+        }
     }
 
     // -- Grid Draft (issue #188) ----------------------------------------
 
     /**
      * Deals Grid Draft's own opening state for a freshly-created match:
-     * shuffles $poolCardIds, deals the first GRID_DRAFT_CARDS_PER_ROUND
+     * shuffles $poolCardIds, deals the first gridDraftCardsPerRound(count($userIds))
      * cards off the top into round 1's grid, and randomly picks who picks
-     * first this round (alternates every round thereafter -- see
-     * submitGridDraftPick()). Called once from createGame(), exactly
+     * first this round (rotates to the next seat every round thereafter --
+     * see submitGridDraftPick()). Called once from createGame(), exactly
      * where initializeWinstonDraft()/dealQuickDraftRound() are called for
      * the other two draft deck_types. Notifies whoever picks first that
      * it's their pick -- see notifyDraftUsersItsYourTurn()'s own docblock.
      *
      * @param int[] $poolCardIds
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4)
      */
     private function initializeGridDraft(int $gameId, int $draftMatchId, array $poolCardIds, array $userIds): void
     {
         $pool = $poolCardIds;
         shuffle($pool);
 
-        $grid = array_splice($pool, 0, self::GRID_DRAFT_CARDS_PER_ROUND);
+        $grid = array_splice($pool, 0, self::gridDraftCardsPerRound(count($userIds)));
         $firstPickerUserId = $userIds[array_rand($userIds)];
 
         Connection::get()->prepare(
             'INSERT INTO draft_grid_state
-                (draft_match_id, remaining_deck_card_ids, current_round, grid_card_ids, first_picker_user_id, current_turn_user_id)
-             VALUES (:match_id, :deck, 1, :grid, :first_picker, :first_picker)'
+                (draft_match_id, remaining_deck_card_ids, current_round, grid_card_ids, first_picker_user_id, current_turn_user_id, picks_this_round)
+             VALUES (:match_id, :deck, 1, :grid, :first_picker, :first_picker, 0)'
         )->execute([
             'match_id' => $draftMatchId,
             'deck' => json_encode(array_values($pool)),
@@ -2261,33 +2656,44 @@ final class GameService
     }
 
     /**
-     * @return int[] the 3 cell indices (row-major, 0-8) making up $axis
-     *         ('row' or 'column') number $index (0-2) of a 3x3 grid.
+     * @return int[] the $gridSize cell indices (row-major, 0-based) making
+     *         up $axis ('row' or 'column') number $index (0 to $gridSize-1)
+     *         of a $gridSize x $gridSize grid.
      */
-    private function gridDraftLineCells(string $axis, int $index): array
+    private function gridDraftLineCells(string $axis, int $index, int $gridSize): array
     {
-        return $axis === 'row'
-            ? [$index * 3, $index * 3 + 1, $index * 3 + 2]
-            : [$index, $index + 3, $index + 6];
+        $cells = [];
+        for ($i = 0; $i < $gridSize; $i++) {
+            $cells[] = $axis === 'row' ? $index * $gridSize + $i : $index + $i * $gridSize;
+        }
+
+        return $cells;
     }
 
     /**
-     * One player's row-or-column pick against Grid Draft's own current 3x3
+     * One player's row-or-column pick against Grid Draft's own current
+     * gridDraftGridSize($playerCount) x gridDraftGridSize($playerCount)
      * grid -- see php-app/README.md's "Grid Draft" section for the full
-     * mechanic. $axis is 'row' or 'column', $index is 0-2.
+     * mechanic, and the gridDraft*() helper methods' shared docblock above
+     * for the multiplayer refill rule this implements. $axis is 'row' or
+     * 'column', $index is 0 to gridDraftGridSize($playerCount) - 1.
      *
-     * The round's first pick always yields all 3 cells (nothing has been
-     * taken from a freshly-dealt grid yet); the second pick yields
-     * whichever of its own 3 cells are still non-null -- 2 if it crosses
-     * the first pick's own row/column, 3 if it doesn't -- derived purely
-     * by counting, never by comparing axes/indices explicitly. A pick
-     * that would take 0 cards (the second pick choosing the exact same
-     * line the first pick already fully cleared) is rejected outright.
-     * Completing a round's second pick either deals the next round's
-     * fresh grid (alternating who picks first) or, after round
-     * GRID_DRAFT_ROUNDS, ends the draft and moves the match to
-     * deck_building -- the pool always divides evenly (54 / 9 = 6), so
-     * there's never a short-final-round or reshuffle case to handle.
+     * A pick's own cardsTaken is always all of the line's cells UNLESS an
+     * earlier, unrefilled pick this same round already emptied one or more
+     * of them -- derived purely by counting non-null cells, never by
+     * comparing axes/indices explicitly. A pick that would take 0 cards
+     * (choosing a line every one of whose cells is already empty) is
+     * rejected outright. picks_this_round tracks how many picks this
+     * round has already seen (0 at the start of every round); the pick
+     * that just completes it (raising the count to the match's own
+     * player count) refills the cells it took only if this pick's own
+     * 1-indexed position is at most (playerCount - 2) -- i.e. every pick
+     * except the round's last two -- then, if this WAS the round's final
+     * pick, either deals the next round's fresh grid (rotating who picks
+     * first to the next seat) or, after round gridDraftRounds($playerCount),
+     * ends the draft and moves the match to deck_building. The pool always
+     * divides evenly by gridDraftCardsDrawnPerRound($playerCount), so
+     * there's never a short-final-round case to handle.
      *
      * @return array{axis:string, index:int, cards_taken:int[], round_completed:bool, turn_advanced:bool, draft_completed:bool}
      */
@@ -2307,8 +2713,13 @@ final class GameService
             if (!in_array($axis, ['row', 'column'], true)) {
                 throw new GameStateException('axis must be "row" or "column"');
             }
-            if ($index < 0 || $index > 2) {
-                throw new GameStateException('index must be between 0 and 2');
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            $playerCount = count($userIds);
+            $gridSize = self::gridDraftGridSize($playerCount);
+
+            if ($index < 0 || $index >= $gridSize) {
+                throw new GameStateException("index must be between 0 and " . ($gridSize - 1));
             }
 
             $pdo = Connection::get();
@@ -2323,14 +2734,14 @@ final class GameService
             }
 
             $grid = json_decode((string) $state['grid_card_ids'], true);
-            $isSecondPick = $state['first_pick_axis'] !== null;
-
-            $cells = $this->gridDraftLineCells($axis, $index);
+            $cells = $this->gridDraftLineCells($axis, $index, $gridSize);
             $cardsTaken = [];
+            $clearedCells = [];
             foreach ($cells as $cell) {
                 if ($grid[$cell] !== null) {
                     $cardsTaken[] = (int) $grid[$cell];
                     $grid[$cell] = null;
+                    $clearedCells[] = $cell;
                 }
             }
 
@@ -2340,25 +2751,34 @@ final class GameService
 
             $this->appendDraftedCardIds($draftMatchId, $userId, $cardsTaken);
 
-            $userIds = $this->draftMatchUserIds($draftMatchId);
-            $opponentUserId = $userIds[0] === $userId ? $userIds[1] : $userIds[0];
+            $picksThisRound = (int) $state['picks_this_round'] + 1;
+            $remainingDeck = array_map(intval(...), json_decode((string) $state['remaining_deck_card_ids'], true));
 
-            if (!$isSecondPick) {
-                // First pick of the round -- the round isn't over yet;
-                // just hand the turn to the other player for the second pick.
+            if ($picksThisRound <= max($playerCount - 2, 0)) {
+                $refillCardIds = array_splice($remainingDeck, 0, count($clearedCells));
+                foreach ($clearedCells as $i => $cell) {
+                    $grid[$cell] = $refillCardIds[$i];
+                }
+            }
+
+            if ($picksThisRound < $playerCount) {
+                // Round isn't over yet -- hand the turn to the next seat.
+                $seatIndex = array_search($userId, $userIds, true);
+                $nextTurnUserId = $userIds[($seatIndex + 1) % $playerCount];
+
                 $pdo->prepare(
                     'UPDATE draft_grid_state
-                     SET grid_card_ids = :grid, current_turn_user_id = :next_turn, first_pick_axis = :axis, first_pick_index = :index
+                     SET grid_card_ids = :grid, remaining_deck_card_ids = :deck, current_turn_user_id = :next_turn, picks_this_round = :picks
                      WHERE draft_match_id = :match_id'
                 )->execute([
                     'grid' => json_encode($grid),
-                    'next_turn' => $opponentUserId,
-                    'axis' => $axis,
-                    'index' => $index,
+                    'deck' => json_encode(array_values($remainingDeck)),
+                    'next_turn' => $nextTurnUserId,
+                    'picks' => $picksThisRound,
                     'match_id' => $draftMatchId,
                 ]);
 
-                $this->notifyDraftUsersItsYourTurn($gameId, [$opponentUserId], "Game #{$gameId}'s Grid Draft is ready for your pick.", 'draft-pick');
+                $this->notifyDraftUsersItsYourTurn($gameId, [$nextTurnUserId], "Game #{$gameId}'s Grid Draft is ready for your pick.", 'draft-pick');
 
                 return [
                     'axis' => $axis,
@@ -2370,11 +2790,11 @@ final class GameService
                 ];
             }
 
-            // Second pick -- the round is over; whatever's left in $grid is
-            // simply discarded (never reshuffled back into the pool).
+            // Round's last pick -- the round is over; whatever's left in
+            // $grid is simply discarded (never reshuffled back into the pool).
             $currentRound = (int) $state['current_round'];
 
-            if ($currentRound >= self::GRID_DRAFT_ROUNDS) {
+            if ($currentRound >= self::gridDraftRounds($playerCount)) {
                 $pdo->prepare('DELETE FROM draft_grid_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
                 $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
                 $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
@@ -2389,15 +2809,14 @@ final class GameService
                 ];
             }
 
-            $remainingDeck = array_map(intval(...), json_decode((string) $state['remaining_deck_card_ids'], true));
-            $nextGrid = array_splice($remainingDeck, 0, self::GRID_DRAFT_CARDS_PER_ROUND);
-            $nextFirstPickerUserId = (int) $state['first_picker_user_id'] === $userIds[0] ? $userIds[1] : $userIds[0];
+            $nextGrid = array_splice($remainingDeck, 0, self::gridDraftCardsPerRound($playerCount));
+            $firstPickerSeatIndex = array_search((int) $state['first_picker_user_id'], $userIds, true);
+            $nextFirstPickerUserId = $userIds[($firstPickerSeatIndex + 1) % $playerCount];
 
             $pdo->prepare(
                 'UPDATE draft_grid_state
                  SET remaining_deck_card_ids = :deck, current_round = :round, grid_card_ids = :grid,
-                     first_picker_user_id = :first_picker, current_turn_user_id = :first_picker,
-                     first_pick_axis = NULL, first_pick_index = NULL
+                     first_picker_user_id = :first_picker, current_turn_user_id = :first_picker, picks_this_round = 0
                  WHERE draft_match_id = :match_id'
             )->execute([
                 'deck' => json_encode(array_values($remainingDeck)),
@@ -4037,7 +4456,7 @@ final class GameService
         $winsStmt->execute(['match_id' => $draftMatchId, 'user_id' => $winnerUserId]);
         $winnerMatchWins = (int) $winsStmt->fetchColumn();
 
-        if ($winnerMatchWins >= self::DRAFT_GAMES_TO_WIN) {
+        if ($winnerMatchWins >= $this->draftGamesToWin(count($this->draftMatchUserIds($draftMatchId)))) {
             $pdo->prepare(
                 "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
             )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
@@ -4876,9 +5295,9 @@ final class GameService
      * cascade -- once none of a match's own games are left referencing
      * it (either deleted here, or genuinely never created), that match
      * row (and its draft_match_players/draft_round_picks/
-     * draft_winston_state/draft_grid_state, all ON DELETE CASCADE from
-     * draft_matches) is deleted too, so a match doesn't outlive every
-     * game that was ever part of it.
+     * draft_pile_stage_picks/draft_winston_state/draft_grid_state, all
+     * ON DELETE CASCADE from draft_matches) is deleted too, so a match
+     * doesn't outlive every game that was ever part of it.
      *
      * @return int how many games were deleted
      */
@@ -5406,36 +5825,48 @@ final class GameService
     }
 
     /**
-     * draftAwaitingResponseUsernames()'s own quick_draft piece --
-     * mirrors quickDraftDraftingStateFor()'s per-viewer 'stage'
-     * derivation (draw / awaiting_opponent_draw / received /
-     * awaiting_opponent_received), generalized to every seated player
-     * at once: a player is "awaited" if their own next action (this
-     * round's draw-stage keep, or its received-stage keep once BOTH
-     * players' draw-stage picks exist so the received pack is actually
-     * determined) hasn't been submitted yet.
+     * draftAwaitingResponseUsernames()'s own quick_draft piece -- mirrors
+     * quickDraftDraftingStateFor()'s own "current stage" derivation,
+     * generalized to every seated player at once: finds the round's
+     * current stage (the lowest stage_number not yet complete for every
+     * pile), then reports whoever hasn't yet submitted the pick for
+     * whichever pile they hold at that stage -- see submitQuickDraftPick()'s
+     * own docblock for the seat-rotation math behind "whichever pile they
+     * hold".
      *
-     * @param array<int, string> $usernamesByUserId
+     * @param array<int, string> $usernamesByUserId keyed by user_id, any order
      * @return string[]
      */
     private function quickDraftAwaitingResponseUsernames(int $draftMatchId, int $currentRound, array $usernamesByUserId): array
     {
-        $picksThisRound = $this->loadDraftRoundPicks($draftMatchId)[$currentRound] ?? [];
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $playerCount = count($userIds);
+        $direction = self::quickDraftPassDirection($currentRound);
+        $stagePicksThisRound = $this->loadDraftPileStagePicks($draftMatchId)[$currentRound] ?? [];
 
-        $bothSubmittedDraw = true;
-        foreach ($usernamesByUserId as $userId => $username) {
-            if (($picksThisRound[$userId]['kept_from_draw'] ?? null) === null) {
-                $bothSubmittedDraw = false;
+        $currentStage = null;
+        for ($stage = 1; $stage <= $playerCount; $stage++) {
+            $completedPiles = 0;
+            foreach ($stagePicksThisRound as $stagesForPile) {
+                if (isset($stagesForPile[$stage])) {
+                    $completedPiles++;
+                }
+            }
+            if ($completedPiles < $playerCount) {
+                $currentStage = $stage;
                 break;
             }
         }
 
+        if ($currentStage === null) {
+            return [];
+        }
+
         $usernames = [];
-        foreach ($usernamesByUserId as $userId => $username) {
-            $keptFromDraw = $picksThisRound[$userId]['kept_from_draw'] ?? null;
-            $keptFromReceived = $picksThisRound[$userId]['kept_from_received'] ?? null;
-            if ($keptFromDraw === null || ($keptFromReceived === null && $bothSubmittedDraw)) {
-                $usernames[] = $username;
+        foreach ($userIds as $seatIndex => $userId) {
+            $pileOwnerUserId = $userIds[self::mod($seatIndex - ($currentStage - 1) * $direction, $playerCount)];
+            if (!isset($stagePicksThisRound[$pileOwnerUserId][$currentStage]) && isset($usernamesByUserId[$userId])) {
+                $usernames[] = $usernamesByUserId[$userId];
             }
         }
 
@@ -5446,15 +5877,21 @@ final class GameService
      * The match-level scoreline shared by listGamesForUser()'s own
      * per-game 'draft_match' entries (so the lobby can group a match's
      * up-to-3 games together and, once it's done, show who won) --
-     * {status, your_wins, opponent_wins, games_to_win, winner_username}.
-     * winner_username is null except once status is 'completed'
-     * (draft_matches.winner_user_id is null until then). Shared by every
-     * draft-based deck_type (only ever reads draft_match_players.wins/
-     * draft_matches.status/winner_user_id, nothing pack/pile-specific). A
-     * separate, leaner query from quickDraftStateFor()'s/
-     * winstonDraftStateFor()'s own draft_match_players read below -- those
-     * also need drafted/deck/previous_deck card ids for the
-     * deck-building sub-state, which would be wasted work here.
+     * {status, your_wins, opponent_wins, games_to_win, winner_username,
+     * players}. winner_username is null except once status is 'completed'
+     * (draft_matches.winner_user_id is null until then). your_wins/
+     * opponent_wins/games_to_win are kept for every 2-player draft match
+     * (Winston/Grid Draft, and 2-player Quick Draft) exactly as before;
+     * opponent_wins is only ever the first non-viewer seat for a 3-4
+     * player Quick Draft match, so 'players' (every seated player's own
+     * user_id/username/wins/is_you) is what a multiplayer-aware frontend
+     * should actually render from. Shared by every draft-based deck_type
+     * (only ever reads draft_match_players.wins/draft_matches.status/
+     * winner_user_id, nothing pack/pile-specific). A separate, leaner
+     * query from quickDraftStateFor()'s/winstonDraftStateFor()'s own
+     * draft_match_players read below -- those also need drafted/deck/
+     * previous_deck card ids for the deck-building sub-state, which would
+     * be wasted work here.
      *
      * @return array<string, mixed>
      */
@@ -5470,28 +5907,37 @@ final class GameService
             }
         }
 
-        $winsStmt = Connection::get()->prepare(
-            'SELECT user_id, wins FROM draft_match_players WHERE draft_match_id = :id'
+        $rowsStmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, dmp.wins, u.username FROM draft_match_players dmp
+             JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
         );
-        $winsStmt->execute(['id' => $draftMatchId]);
-        $winsByUser = [];
-        foreach ($winsStmt->fetchAll() as $row) {
-            $winsByUser[(int) $row['user_id']] = (int) $row['wins'];
+        $rowsStmt->execute(['id' => $draftMatchId]);
+        $rowsByUser = [];
+        foreach ($rowsStmt->fetchAll() as $row) {
+            $rowsByUser[(int) $row['user_id']] = $row;
         }
 
-        $winnerUsername = null;
-        if ($match['winner_user_id'] !== null) {
-            $winnerStmt = Connection::get()->prepare('SELECT username FROM users WHERE id = :id');
-            $winnerStmt->execute(['id' => (int) $match['winner_user_id']]);
-            $winnerUsername = $winnerStmt->fetchColumn() ?: null;
+        $winnerUsername = $match['winner_user_id'] !== null
+            ? ($rowsByUser[(int) $match['winner_user_id']]['username'] ?? null)
+            : null;
+
+        $players = [];
+        foreach ($userIds as $userId) {
+            $players[] = [
+                'user_id' => $userId,
+                'username' => $rowsByUser[$userId]['username'] ?? null,
+                'wins' => (int) ($rowsByUser[$userId]['wins'] ?? 0),
+                'is_you' => $userId === $viewerUserId,
+            ];
         }
 
         return [
             'status' => $match['status'],
-            'your_wins' => $winsByUser[$viewerUserId] ?? 0,
-            'opponent_wins' => $opponentUserId !== null ? ($winsByUser[$opponentUserId] ?? 0) : 0,
-            'games_to_win' => self::DRAFT_GAMES_TO_WIN,
+            'your_wins' => (int) ($rowsByUser[$viewerUserId]['wins'] ?? 0),
+            'opponent_wins' => $opponentUserId !== null ? (int) ($rowsByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
             'winner_username' => $winnerUsername,
+            'players' => $players,
         ];
     }
 
@@ -5523,8 +5969,8 @@ final class GameService
         }
 
         $playersStmt = Connection::get()->prepare(
-            'SELECT user_id, wins, drafted_card_ids, deck_card_ids, previous_deck_card_ids
-             FROM draft_match_players WHERE draft_match_id = :id'
+            'SELECT dmp.user_id, dmp.wins, dmp.drafted_card_ids, dmp.deck_card_ids, dmp.previous_deck_card_ids, u.username
+             FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
         );
         $playersStmt->execute(['id' => $draftMatchId]);
         $playersByUser = [];
@@ -5544,14 +5990,25 @@ final class GameService
             }
         }
 
+        $players = [];
+        foreach ($userIds as $userId) {
+            $players[] = [
+                'user_id' => $userId,
+                'username' => $playersByUser[$userId]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$userId]['wins'] ?? 0),
+                'is_you' => $userId === $viewerUserId,
+            ];
+        }
+
         $state = [
             'draft_match_id' => $draftMatchId,
             'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             'status' => $match['status'],
-            'games_to_win' => self::DRAFT_GAMES_TO_WIN,
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
             'next_game_id' => $nextGameId,
             'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
             'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => $players,
             'drafting' => null,
             'deck_building' => null,
         ];
@@ -5559,12 +6016,16 @@ final class GameService
         if ($match['status'] === 'drafting') {
             $state['drafting'] = $this->quickDraftDraftingStateFor($draftMatchId, (int) $match['current_round'], $viewerUserId, $userIds);
         } elseif ($match['status'] === 'deck_building') {
+            // Quick Draft's own max deck size is always however many
+            // cards this player actually drafted (issue #189 -- no longer
+            // a flat 16, since a 3-player match's own pool nets 18) -- see
+            // submitDraftDeck()'s matching change.
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
                 $viewerUserId,
-                $opponentUserId,
+                array_values(array_diff($userIds, [$viewerUserId])),
                 self::QUICK_DRAFT_MIN_DECK_SIZE,
-                self::QUICK_DRAFT_MAX_DECK_SIZE,
+                null,
             );
         }
 
@@ -5573,19 +6034,28 @@ final class GameService
 
     /**
      * getState()'s own 'deck_building' sub-state, shared identically by
-     * Quick Draft and Winston Draft (quickDraftStateFor()/
-     * winstonDraftStateFor()) -- only their own min/max deck size differ.
-     * $maxDeckSize is nullable: Winston Draft has no fixed ceiling (the
-     * total cards drafted varies by how the pile draft unfolds), so
+     * Quick Draft, Winston Draft, and Grid Draft (quickDraftStateFor()/
+     * winstonDraftStateFor()/gridDraftStateFor()) -- only their own min/max
+     * deck size, and how many other players there are, differ.
+     * $maxDeckSize is nullable: Winston Draft/Grid Draft, and (since issue
+     * #189) Quick Draft too, have no fixed ceiling -- the total cards
+     * drafted varies by player count and/or how the draft unfolds -- so
      * passing null caps it at however many cards $viewerUserId actually
-     * drafted instead of a shared constant.
+     * drafted instead of a shared constant. $otherUserIds is every OTHER
+     * seated player (1 for a 2-player match, up to 3 for a multiplayer
+     * Quick Draft match) -- 'opponent_submitted' is kept, populated from
+     * whichever of them comes first in $otherUserIds, purely so an
+     * unchanged 2-player frontend keeps working verbatim; 'other_players'
+     * (every one of them, with their own username/submitted flag) is what
+     * a multiplayer-aware frontend should actually render from.
      *
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
+     * @param int[] $otherUserIds
      */
     private function draftDeckBuildingStateFor(
         array $playersByUser,
         int $viewerUserId,
-        ?int $opponentUserId,
+        array $otherUserIds,
         int $minDeckSize,
         ?int $maxDeckSize,
     ): array {
@@ -5605,8 +6075,15 @@ final class GameService
         $previousDeckCardIds = $viewerRow !== null && $viewerRow['previous_deck_card_ids'] !== null
             ? array_map(intval(...), json_decode((string) $viewerRow['previous_deck_card_ids'], true))
             : null;
-        $opponentSubmitted = $opponentUserId !== null
-            && ($playersByUser[$opponentUserId]['deck_card_ids'] ?? null) !== null;
+
+        $otherPlayers = [];
+        foreach ($otherUserIds as $otherUserId) {
+            $otherPlayers[] = [
+                'user_id' => $otherUserId,
+                'username' => $playersByUser[$otherUserId]['username'] ?? null,
+                'submitted' => ($playersByUser[$otherUserId]['deck_card_ids'] ?? null) !== null,
+            ];
+        }
 
         return [
             'drafted_cards' => $this->serializeCatalogCards($draftedCardIds),
@@ -5615,73 +6092,107 @@ final class GameService
             'min_deck_size' => $minDeckSize,
             'max_deck_size' => $maxDeckSize ?? count($draftedCardIds),
             'you_submitted' => $deckCardIds !== null,
-            'opponent_submitted' => $opponentSubmitted,
+            'opponent_submitted' => $otherPlayers[0]['submitted'] ?? false,
+            'other_players' => $otherPlayers,
         ];
     }
 
     /**
-     * getState()'s own view of the current draft round for $viewerUserId --
-     * 'stage' is one of 'draw' (haven't submitted this round's draw pick
-     * yet -- 'pack' is your own 6 just-dealt cards), 'awaiting_opponent_draw'
-     * (you've submitted, but received cards aren't determined until your
-     * opponent also submits their own draw pick), 'received' (both of you
-     * have submitted the draw stage -- 'pack' is the 4 cards you actually
-     * received), or 'awaiting_opponent_received' (you've submitted both
-     * stages already; this round advances automatically the moment your
-     * opponent also finishes stage 'received', so this state is normally
-     * brief). 'kept_so_far' is every card $viewerUserId has kept in this
-     * match's draft so far, across every round including whatever's
-     * already resolved this round -- never the opponent's own kept/passed/
-     * received cards, which stay fully invisible until the draft ends and
-     * both full 16-card drafted_card_ids are each player's own private
-     * data on draft_match_players.
+     * getState()'s own view of the current draft round for $viewerUserId.
+     * 'stage' is the round's current stage number (1..total_stages, where
+     * total_stages = the match's player count -- see submitQuickDraftPick()'s
+     * own docblock for why); 'status' is 'picking' (viewer hasn't yet
+     * submitted their pick for whichever pile they currently hold --
+     * 'pack' is that pile's actual remaining contents) or 'awaiting_others'
+     * (viewer has already submitted this stage's pick, or the round has
+     * fully resolved and just hasn't advanced yet -- either way there's
+     * nothing for them to act on right now, so 'pack' is empty). This
+     * generalizes the original 2-player 'draw'/'awaiting_opponent_draw'/
+     * 'received'/'awaiting_opponent_received' enum, which was really just
+     * this same picking/awaiting_others distinction spelled out for
+     * exactly 2 stages. 'kept_so_far' is every card $viewerUserId has kept
+     * in this match's draft so far (across every prior round, plus
+     * whatever's already resolved this round) -- never any other player's
+     * own kept/passed/discarded cards, which stay fully invisible until
+     * the draft ends and every player's full drafted_card_ids is their own
+     * private data on draft_match_players.
      *
-     * @param int[] $userIds exactly the match's 2 user ids
+     * @param int[] $userIds the match's user ids (any count 2-4), in seat order
      */
     private function quickDraftDraftingStateFor(int $draftMatchId, int $currentRound, int $viewerUserId, array $userIds): array
     {
-        $opponentUserId = $userIds[0] === $viewerUserId ? ($userIds[1] ?? $userIds[0]) : $userIds[0];
-        $picksByRound = $this->loadDraftRoundPicks($draftMatchId);
+        $playerCount = count($userIds);
+        $direction = self::quickDraftPassDirection($currentRound);
+        $seatIndex = array_search($viewerUserId, $userIds, true);
+
+        $drawnByRound = $this->loadDraftRoundPicks($draftMatchId);
+        $stagePicksByRound = $this->loadDraftPileStagePicks($draftMatchId);
 
         $keptSoFar = [];
-        foreach ($picksByRound as $roundNumber => $picks) {
+        foreach ($stagePicksByRound as $roundNumber => $pilesByOwner) {
             if ($roundNumber >= $currentRound) {
                 continue;
             }
-            $pick = $picks[$viewerUserId] ?? null;
-            if ($pick !== null) {
-                $keptSoFar = [...$keptSoFar, ...($pick['kept_from_draw'] ?? []), ...($pick['kept_from_received'] ?? [])];
+            foreach ($pilesByOwner as $stagesForPile) {
+                foreach ($stagesForPile as $stage) {
+                    if ($stage['holder_user_id'] === $viewerUserId) {
+                        $keptSoFar = [...$keptSoFar, ...$stage['kept_card_ids']];
+                    }
+                }
             }
         }
 
-        $viewerPick = $picksByRound[$currentRound][$viewerUserId] ?? null;
-        $opponentPick = $picksByRound[$currentRound][$opponentUserId] ?? null;
+        $stagePicksThisRound = $stagePicksByRound[$currentRound] ?? [];
 
-        $stage = 'draw';
-        $pack = [];
-
-        if ($viewerPick !== null) {
-            if ($viewerPick['kept_from_draw'] === null) {
-                $stage = 'draw';
-                $pack = $viewerPick['drawn'];
-            } elseif ($viewerPick['kept_from_received'] === null) {
-                if ($opponentPick !== null && $opponentPick['kept_from_draw'] !== null) {
-                    $stage = 'received';
-                    $pack = $this->multisetSubtract($opponentPick['drawn'], $opponentPick['kept_from_draw']);
-                } else {
-                    $stage = 'awaiting_opponent_draw';
+        // The round's current stage: the lowest stage number not yet
+        // complete for every pile. null once every pile has finished
+        // every stage (the round is fully resolved but hasn't advanced
+        // yet -- normally brief, since the same submission that completes
+        // the last pile's last stage also triggers the advance).
+        $currentStage = null;
+        for ($stage = 1; $stage <= $playerCount; $stage++) {
+            $completedPiles = 0;
+            foreach ($stagePicksThisRound as $stagesForPile) {
+                if (isset($stagesForPile[$stage])) {
+                    $completedPiles++;
                 }
-            } else {
-                $stage = 'awaiting_opponent_received';
             }
+            if ($completedPiles < $playerCount) {
+                $currentStage = $stage;
+                break;
+            }
+        }
 
-            $keptSoFar = [...$keptSoFar, ...($viewerPick['kept_from_draw'] ?? []), ...($viewerPick['kept_from_received'] ?? [])];
+        $pileOwnerUserId = $currentStage !== null
+            ? $userIds[self::mod($seatIndex - ($currentStage - 1) * $direction, $playerCount)]
+            : null;
+        $viewerSubmittedCurrentStage = $pileOwnerUserId !== null && isset($stagePicksThisRound[$pileOwnerUserId][$currentStage]);
+
+        $status = 'awaiting_others';
+        $pack = [];
+        if ($pileOwnerUserId !== null && !$viewerSubmittedCurrentStage) {
+            $status = 'picking';
+            $pack = $drawnByRound[$currentRound][$pileOwnerUserId] ?? [];
+            for ($priorStage = 1; $priorStage < $currentStage; $priorStage++) {
+                $pack = $this->multisetSubtract($pack, $stagePicksThisRound[$pileOwnerUserId][$priorStage]['kept_card_ids'] ?? []);
+            }
+        }
+
+        foreach ($stagePicksThisRound as $stagesForPile) {
+            foreach ($stagesForPile as $stage) {
+                if ($stage['holder_user_id'] === $viewerUserId) {
+                    $keptSoFar = [...$keptSoFar, ...$stage['kept_card_ids']];
+                }
+            }
         }
 
         return [
             'round' => $currentRound,
-            'total_rounds' => self::QUICK_DRAFT_ROUNDS,
-            'stage' => $stage,
+            'total_rounds' => self::quickDraftRounds($playerCount),
+            'stage' => $currentStage ?? $playerCount,
+            'total_stages' => $playerCount,
+            'pass_direction' => $direction === 1 ? 'right' : 'left',
+            'status' => $status,
             'pack' => $this->serializeCatalogCards($pack),
             'kept_so_far' => $this->serializeCatalogCards($keptSoFar),
         ];
@@ -5716,8 +6227,8 @@ final class GameService
         }
 
         $playersStmt = Connection::get()->prepare(
-            'SELECT user_id, wins, drafted_card_ids, deck_card_ids, previous_deck_card_ids
-             FROM draft_match_players WHERE draft_match_id = :id'
+            'SELECT dmp.user_id, dmp.wins, dmp.drafted_card_ids, dmp.deck_card_ids, dmp.previous_deck_card_ids, u.username
+             FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
         );
         $playersStmt->execute(['id' => $draftMatchId]);
         $playersByUser = [];
@@ -5741,21 +6252,27 @@ final class GameService
             'draft_match_id' => $draftMatchId,
             'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             'status' => $match['status'],
-            'games_to_win' => self::DRAFT_GAMES_TO_WIN,
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
             'next_game_id' => $nextGameId,
             'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
             'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$uid]['wins'] ?? 0),
+                'is_you' => $uid === $viewerUserId,
+            ], $userIds),
             'drafting' => null,
             'deck_building' => null,
         ];
 
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $opponentUserId, $playersByUser);
+            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
                 $viewerUserId,
-                $opponentUserId,
+                array_values(array_diff($userIds, [$viewerUserId])),
                 self::WINSTON_MIN_DECK_SIZE,
                 null,
             );
@@ -5767,28 +6284,35 @@ final class GameService
     /**
      * getState()'s own view of Winston Draft's current pile/deck/turn
      * state for $viewerUserId. pile_sizes/remaining_deck_count/
-     * current_pile_number are always visible to both players -- a real
-     * stack of face-down cards is physically visible even though its
-     * *contents* aren't, so there's nothing to hide about how tall each
-     * pile is or whose turn it is. current_pile_cards (the actual card
-     * identities) is only ever populated when $viewerUserId is the
-     * current player -- the opponent never sees what's actually in the
-     * pile being looked at, exactly matching quickDraftDraftingStateFor()'s
-     * own "never expose the opponent's pack" contract. drafted_so_far is
-     * always $viewerUserId's own accumulated picks to date, never the
-     * opponent's. opponent_last_take_pile_number, opponent_last_drew_from_deck,
-     * and opponent_drafted_card_count are similarly safe to expose without
-     * ever revealing card identities: which numbered pile the opponent
-     * last claimed (or that they instead declined all 3 piles and took the
-     * mandatory top-of-deck draw), and how many cards they've drafted in
-     * total, are all things a real opponent watching across the table
-     * would already see for themselves (a taken pile's height and a
-     * rival's growing stack of face-down cards are physically visible),
-     * unlike what's actually printed on those cards.
+     * current_pile_number are always visible to every seated player -- a
+     * real stack of face-down cards is physically visible even though
+     * its *contents* aren't, so there's nothing to hide about how tall
+     * each pile is or whose turn it is (current_turn_username, issue
+     * #189, names whoever that actually is -- for a 3-4 player match,
+     * "not your turn" alone doesn't say whose turn it is the way it did
+     * for exactly 2). current_pile_cards (the actual card identities) is
+     * only ever populated when $viewerUserId is the current player -- no
+     * other seated player ever sees what's actually in the pile being
+     * looked at, exactly matching quickDraftDraftingStateFor()'s own
+     * "never expose the active player's own pack" contract.
+     * drafted_so_far is always $viewerUserId's own accumulated picks to
+     * date, never anyone else's. other_players (issue #189) covers every
+     * *other* seated player's own last_take_pile_number/
+     * last_drew_from_deck/drafted_card_count -- opponent_last_take_pile_number/
+     * opponent_last_drew_from_deck/opponent_drafted_card_count are kept
+     * as a single-value fallback (the first of them). None of this is
+     * unsafe to expose without revealing card identities: which numbered
+     * pile a player last claimed (or that they instead declined all 3
+     * piles and took the mandatory top-of-deck draw), and how many cards
+     * they've drafted in total, are all things a real opponent watching
+     * across the table would already see for themselves (a taken pile's
+     * height and a rival's growing stack of face-down cards are
+     * physically visible), unlike what's actually printed on those cards.
      *
+     * @param int[] $userIds the match's user ids (any count 2-4), in seat order
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      */
-    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, ?int $opponentUserId, array $playersByUser): array
+    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser): array
     {
         $stateStmt = Connection::get()->prepare('SELECT * FROM draft_winston_state WHERE draft_match_id = :id');
         $stateStmt->execute(['id' => $draftMatchId]);
@@ -5817,18 +6341,33 @@ final class GameService
             : [];
 
         $lastDraftActionByUserId = (array) json_decode((string) $winstonState['last_draft_action_by_user_id'], true);
-        $opponentLastAction = $opponentUserId !== null ? ($lastDraftActionByUserId[(string) $opponentUserId] ?? null) : null;
+
+        $otherUserIds = array_values(array_diff($userIds, [$viewerUserId]));
+        $otherPlayers = array_map(function (int $uid) use ($lastDraftActionByUserId, $draftedCardIdsFor, $playersByUser): array {
+            $lastAction = $lastDraftActionByUserId[(string) $uid] ?? null;
+
+            return [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'drafted_card_count' => count($draftedCardIdsFor($uid)),
+                'last_take_pile_number' => is_int($lastAction) ? $lastAction : null,
+                'last_drew_from_deck' => $lastAction === 'deck',
+            ];
+        }, $otherUserIds);
+        $firstOtherPlayer = $otherPlayers[0] ?? null;
 
         return [
             'is_your_turn' => $isYourTurn,
+            'current_turn_username' => $playersByUser[$currentPlayerUserId]['username'] ?? null,
             'current_pile_number' => $currentPileNumber,
             'pile_sizes' => $pileSizes,
             'remaining_deck_count' => count(json_decode((string) $winstonState['remaining_deck_card_ids'], true)),
             'current_pile_cards' => $currentPileCards,
             'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
-            'opponent_last_take_pile_number' => is_int($opponentLastAction) ? $opponentLastAction : null,
-            'opponent_last_drew_from_deck' => $opponentLastAction === 'deck',
-            'opponent_drafted_card_count' => $opponentUserId !== null ? count($draftedCardIdsFor($opponentUserId)) : 0,
+            'opponent_last_take_pile_number' => $firstOtherPlayer['last_take_pile_number'] ?? null,
+            'opponent_last_drew_from_deck' => $firstOtherPlayer['last_drew_from_deck'] ?? false,
+            'opponent_drafted_card_count' => $firstOtherPlayer['drafted_card_count'] ?? 0,
+            'other_players' => $otherPlayers,
         ];
     }
 
@@ -5855,8 +6394,8 @@ final class GameService
         }
 
         $playersStmt = Connection::get()->prepare(
-            'SELECT user_id, wins, drafted_card_ids, deck_card_ids, previous_deck_card_ids
-             FROM draft_match_players WHERE draft_match_id = :id'
+            'SELECT dmp.user_id, dmp.wins, dmp.drafted_card_ids, dmp.deck_card_ids, dmp.previous_deck_card_ids, u.username
+             FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
         );
         $playersStmt->execute(['id' => $draftMatchId]);
         $playersByUser = [];
@@ -5880,21 +6419,27 @@ final class GameService
             'draft_match_id' => $draftMatchId,
             'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
             'status' => $match['status'],
-            'games_to_win' => self::DRAFT_GAMES_TO_WIN,
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
             'next_game_id' => $nextGameId,
             'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
             'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$uid]['wins'] ?? 0),
+                'is_you' => $uid === $viewerUserId,
+            ], $userIds),
             'drafting' => null,
             'deck_building' => null,
         ];
 
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $opponentUserId, $playersByUser);
+            $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
                 $viewerUserId,
-                $opponentUserId,
+                array_values(array_diff($userIds, [$viewerUserId])),
                 self::GRID_DRAFT_MIN_DECK_SIZE,
                 null,
             );
@@ -5905,24 +6450,32 @@ final class GameService
 
     /**
      * getState()'s own view of Grid Draft's current grid/turn state for
-     * $viewerUserId. The 3x3 grid's cards are always fully visible to both
-     * players (unlike Winston Draft's face-down piles, a dealt grid is
-     * face-up on the table) -- grid_cards is a 9-element array in row-major
-     * order (index = row * 3 + column), with a null entry for any cell
-     * already taken this round. first_pick is null until the round's first
-     * pick has been made, then {axis, index} -- the frontend uses it to
-     * highlight which line is no longer available to pick as a whole and
-     * to grey out the exact-same-line choice for the second picker (see
-     * submitGridDraftPick()'s own "0 cards" rejection). Grid Draft is
-     * open information end to end -- every card either player has ever
-     * drafted was visible to both of them the moment it was dealt into a
-     * face-up grid -- so, unlike Quick Draft's/Winston Draft's own
-     * drafted_so_far (each strictly the viewer's own picks, never the
-     * opponent's), this also exposes opponent_drafted_so_far.
+     * $viewerUserId. The grid's cards are always fully visible to every
+     * seated player (unlike Winston Draft's face-down piles, a dealt grid
+     * is face-up on the table) -- grid_cards is a grid_size^2-element
+     * array in row-major order (index = row * grid_size + column), with a
+     * null entry for any cell already taken (and not yet refilled) this
+     * round. grid_size is gridDraftGridSize(count($userIds)) -- 4 for a
+     * 4-player match, 3 otherwise -- so the frontend knows the grid's own
+     * dimensions and can compute cell indices to match.
+     * current_turn_username names whoever current_turn_user_id actually
+     * is, for a 3-4 player match where "not your turn" alone doesn't say
+     * whose turn it actually is (issue #189) -- 2-player matches can
+     * still derive the exact same "your turn"/"opponent's turn" contract
+     * they always have from is_your_turn alone. Grid Draft is open
+     * information end to end -- every card any player has ever drafted
+     * was visible to everyone the moment it was dealt into a face-up grid
+     * -- so, unlike Quick Draft's/Winston Draft's own drafted_so_far
+     * (each strictly the viewer's own picks, never anyone else's), this
+     * also exposes every other seated player's own drafted_so_far via
+     * other_players_drafted_so_far ({user_id, username, drafted_so_far}
+     * per other player); opponent_drafted_so_far is kept as a
+     * single-value fallback (the first of them) for a 2-player match.
      *
+     * @param int[] $userIds the match's user ids (any count 2-4), in seat order
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      */
-    private function gridDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, ?int $opponentUserId, array $playersByUser): array
+    private function gridDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser): array
     {
         $stateStmt = Connection::get()->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
         $stateStmt->execute(['id' => $draftMatchId]);
@@ -5938,20 +6491,30 @@ final class GameService
             ? array_map(intval(...), json_decode((string) $playersByUser[$userId]['drafted_card_ids'], true))
             : [];
 
+        $currentTurnUserId = (int) $gridState['current_turn_user_id'];
+        $otherUserIds = array_values(array_diff($userIds, [$viewerUserId]));
+        $opponentUserId = $otherUserIds[0] ?? null;
+
         return [
-            'is_your_turn' => (int) $gridState['current_turn_user_id'] === $viewerUserId,
+            'is_your_turn' => $currentTurnUserId === $viewerUserId,
+            'current_turn_username' => $playersByUser[$currentTurnUserId]['username'] ?? null,
             'current_round' => (int) $gridState['current_round'],
-            'total_rounds' => self::GRID_DRAFT_ROUNDS,
+            'total_rounds' => self::gridDraftRounds(count($userIds)),
+            'grid_size' => self::gridDraftGridSize(count($userIds)),
             'first_picker_user_id' => (int) $gridState['first_picker_user_id'],
+            'picks_this_round' => (int) $gridState['picks_this_round'],
+            'total_picks_per_round' => count($userIds),
             'grid_cards' => $gridCards,
-            'first_pick' => $gridState['first_pick_axis'] !== null
-                ? ['axis' => $gridState['first_pick_axis'], 'index' => (int) $gridState['first_pick_index']]
-                : null,
             'remaining_deck_count' => count(json_decode((string) $gridState['remaining_deck_card_ids'], true)),
             'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
             'opponent_drafted_so_far' => $opponentUserId !== null
                 ? $this->serializeCatalogCards($draftedCardIdsFor($opponentUserId))
                 : [],
+            'other_players_drafted_so_far' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($uid)),
+            ], $otherUserIds),
         ];
     }
 
@@ -6582,7 +7145,8 @@ final class GameService
         'game_initial_card_passes' => ['card_ids'],
         'draft_matches' => ['pool_card_ids'],
         'draft_match_players' => ['drafted_card_ids', 'deck_card_ids'],
-        'draft_round_picks' => ['drawn_card_ids', 'kept_from_draw_ids', 'kept_from_received_ids'],
+        'draft_round_picks' => ['drawn_card_ids'],
+        'draft_pile_stage_picks' => ['kept_card_ids'],
         'draft_winston_state' => ['remaining_deck_card_ids', 'pile_1_card_ids', 'pile_2_card_ids', 'pile_3_card_ids'],
         'draft_grid_state' => ['remaining_deck_card_ids', 'grid_card_ids'],
     ];
@@ -6644,6 +7208,7 @@ final class GameService
         $draftMatch = null;
         $draftMatchPlayers = [];
         $draftRoundPicks = [];
+        $draftPileStagePicks = [];
         $draftWinstonState = null;
         $draftGridState = null;
         if ($draftMatchId !== null) {
@@ -6654,6 +7219,7 @@ final class GameService
 
             $draftMatchPlayers = $this->fetchAllForDraftMatch($pdo, 'draft_match_players', $draftMatchId);
             $draftRoundPicks = $this->fetchAllForDraftMatch($pdo, 'draft_round_picks', $draftMatchId);
+            $draftPileStagePicks = $this->fetchAllForDraftMatch($pdo, 'draft_pile_stage_picks', $draftMatchId);
             $draftWinstonState = $this->fetchOneForDraftMatch($pdo, 'draft_winston_state', $draftMatchId);
             $draftGridState = $this->fetchOneForDraftMatch($pdo, 'draft_grid_state', $draftMatchId);
         }
@@ -6674,6 +7240,7 @@ final class GameService
             'draft_match' => $draftMatch,
             'draft_match_players' => $draftMatchPlayers,
             'draft_round_picks' => $draftRoundPicks,
+            'draft_pile_stage_picks' => $draftPileStagePicks,
             'draft_winston_state' => $draftWinstonState,
             'draft_grid_state' => $draftGridState,
         ];
