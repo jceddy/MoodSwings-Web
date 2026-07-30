@@ -3141,6 +3141,20 @@ live participant in every other sense a card effect can reach:
   fewer than 2 players are still active (nowhere to pass to) -- both of
   those effects treat `null` as "nothing to give this player," the same
   as an ordinary empty hand/no-moods skip.
+- **`activeNeighbor()`'s `'left'`/`'right'` match a real table, not raw
+  seat-index direction.** `'left'` is the next seat forward in seat order
+  (index + 1); `'right'` is the previous seat (index - 1). This matches
+  `GameService::rotate()`'s own "ascending seat_order is clockwise"
+  convention: at a physical round table, the next player clockwise from
+  you (i.e. the next player to act) sits at your own left hand -- the
+  same reason the positional in-play board (issue #124,
+  `inPlayZoneAssignments()` in `game.js`) draws that same next-turn-order
+  seat at the viewer's own screen-left. Before a fix, `activeNeighbor()`
+  had these backwards (`'right'` was next-turn-order), so choosing
+  "right" on Avoidance/Confusion/Rationalization sent the pass to
+  whoever the board showed on the viewer's *left*, and vice versa --
+  reported as a board-rendering bug, but the board was already correct;
+  the rules engine's own left/right labels were inverted relative to it.
 - The frontend's own `fieldOptions()` (`case 'player'` in `game.js`)
   additionally filters out any player already flagged `resigned` in
   `getState()`'s response, so a resigned player never even appears as a

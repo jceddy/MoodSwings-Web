@@ -1229,6 +1229,20 @@ too, proportional to the smaller card width.
     built directly from the card being played instead, labeled
     "`<name>` (`color`, `value`) [self]" so it isn't mistaken for some
     other in-play copy of the same card.
+    Avoidance/Confusion/Rationalization's own `direction` field
+    (`type: 'mode'`, options `left`/`right`) gets its own extra touch in
+    games with 3+ players: `directionNeighborUsername()` appends the
+    actual neighbor's name in parentheses to each option's label (e.g.
+    "Left (alice)", "Right (bob)"), computed the same way
+    `BoardState::activeNeighbor()` computes it server-side (`'left'` is
+    the next player forward in seat order among still-active players,
+    `'right'` the previous one — matching a real table's own clockwise
+    turn order, where the next player to act sits at your left hand; see
+    "Resigning" in `php-app/README.md`), so a player never has to
+    puzzle out from the board layout alone which real person a direction
+    choice actually targets. Skipped for exactly 2 players, where both
+    directions are necessarily the same single opponent and naming them
+    would just be redundant, not clarifying.
     A `type: 'grant_choice'` field (`grant_source_card_id`, prepended ahead
     of the card's own fields) appears only when 2+ outstanding play grants
     would each independently cover the card being played — most commonly

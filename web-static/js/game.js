@@ -4815,6 +4815,32 @@
         return word.charAt(0).toUpperCase() + word.slice(1);
     }
 
+    // Avoidance/Confusion/Rationalization's own 'direction' field (left/
+    // right) is only ever chosen by the acting player, who is always the
+    // viewer at that moment -- so currentState.you is the giver here.
+    // Mirrors BoardState::activeNeighbor()'s own (now-fixed) convention
+    // exactly: 'left' is the next player forward in seat order among
+    // still-active (non-resigned) players, 'right' the previous one --
+    // matching a real table, where turn order runs clockwise and the
+    // next player to act sits at your own left hand (see that method's
+    // docblock, and inPlayZoneAssignments() above, which draws that same
+    // seat at the viewer's own screen-left for this exact reason). Only
+    // meaningful with 3+ players -- with exactly 2, "left" and "right"
+    // are necessarily the same single opponent, so showing their name
+    // twice would be redundant rather than clarifying.
+    function directionNeighborUsername(direction) {
+        if (!currentState || currentState.players.length < 3) {
+            return null;
+        }
+        const active = currentState.players.filter((p) => !p.resigned).sort((a, b) => a.seat_order - b.seat_order);
+        const index = active.findIndex((p) => p.game_player_id === currentState.you.game_player_id);
+        if (index === -1 || active.length < 2) {
+            return null;
+        }
+        const offset = direction === 'left' ? 1 : -1;
+        return active[(index + offset + active.length) % active.length].username;
+    }
+
     function buildFieldWidget(field, card, path) {
         path = path || field.key;
 
@@ -4848,7 +4874,16 @@
         select.id = 'choice-field-' + path;
 
         const options = field.type === 'mode'
-            ? field.options.map((value) => ({ value, label: capitalize(value).replace(/_/g, ' ') }))
+            ? field.options.map((value) => {
+                let label = capitalize(value).replace(/_/g, ' ');
+                if (field.key === 'direction') {
+                    const neighborUsername = directionNeighborUsername(value);
+                    if (neighborUsername) {
+                        label += ' (' + neighborUsername + ')';
+                    }
+                }
+                return { value, label };
+            })
             : fieldOptions(field, card);
 
         if (field.multi) {
