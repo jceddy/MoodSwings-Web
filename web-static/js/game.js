@@ -1806,6 +1806,11 @@
         document.getElementById('current-games-section').hidden = true;
         document.getElementById('past-games-section').hidden = false;
         refreshPastGames();
+        // Mirrors pushDisplayHistoryEntry()'s own pattern below -- lets the
+        // browser Back button return to the main lobby from here, handled
+        // by the popstate listener's own pastGamesSection check (see
+        // "Browser back button" further down).
+        history.pushState({ pastGames: true }, '');
     }
 
     function showCurrentGamesSection() {
@@ -1814,7 +1819,15 @@
     }
 
     document.getElementById('past-games-button').addEventListener('click', showPastGamesSection);
-    document.getElementById('back-to-current-games-button').addEventListener('click', showCurrentGamesSection);
+    // Routes through history.back() rather than calling
+    // showCurrentGamesSection() directly, the same way #back-to-lobby-button
+    // does for boards -- the popstate handler is the single place that
+    // actually performs the transition, so the history entry
+    // showPastGamesSection() pushed above is always correctly consumed
+    // instead of left orphaned.
+    document.getElementById('back-to-current-games-button').addEventListener('click', () => {
+        history.back();
+    });
 
     // Routes through the browser's own back-navigation handling (see
     // "Browser back button" below) rather than calling showLobby()/
@@ -5614,6 +5627,19 @@
         }
 
         if (boardView.hidden) {
+            const pastGamesSection = document.getElementById('past-games-section');
+            if (!pastGamesSection.hidden) {
+                // Past games (issue #84) -- consumes the history entry
+                // showPastGamesSection() pushed on the way in; the browser
+                // has already navigated back to the base entry pushed at
+                // load, so no further pushState is needed here (unlike the
+                // "already at the base state" branch below, this Back
+                // press wasn't a no-op -- it genuinely returned to the
+                // main lobby).
+                showCurrentGamesSection();
+                return;
+            }
+
             // Already at the lobby's own base state -- nothing to close
             // or leave, so undo this Back navigation immediately rather
             // than letting it fall through to whatever page was open
