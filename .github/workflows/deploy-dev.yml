@@ -29,6 +29,14 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      # Job-level (not step-level) so it's readable via the `env` context
+      # in a step's own `if:` below -- `secrets` itself isn't a valid
+      # named-value inside a step `if:` condition (GitHub Actions rejects
+      # the workflow file entirely if you try), so this is the standard
+      # workaround: stash the secret in `env` once, then gate on
+      # `env.MIGRATION_DEPLOY_KEY != ''` instead of `secrets.MIGRATION_DEPLOY_KEY != ''`.
+      MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,7 +75,8 @@ jobs:
           DISCORD_CLIENT_SECRET: ${{ secrets.DEV_DISCORD_CLIENT_SECRET }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DEV_DISCORD_PUBLIC_KEY }}
           DISCORD_BOT_TOKEN: ${{ secrets.DEV_DISCORD_BOT_TOKEN }}
-          MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
+          # MIGRATION_DEPLOY_KEY itself comes from the job-level env above
+          # (already in scope here without redeclaring it).
         run: |
           set -euo pipefail
           rm -rf dist
@@ -183,10 +192,9 @@ jobs:
         # -- it's a shared deploy-automation credential rather than
         # something meaningfully different per environment, the same
         # reasoning already applied to SMTP_*/VAPID_* above.
-        if: ${{ vars.DEV_SITE_URL != '' && secrets.MIGRATION_DEPLOY_KEY != '' }}
+        if: ${{ vars.DEV_SITE_URL != '' && env.MIGRATION_DEPLOY_KEY != '' }}
         env:
           SITE_URL: ${{ vars.DEV_SITE_URL }}
-          MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
         run: |
           curl -fsS -X POST -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" "$SITE_URL/app/migrate"
 
