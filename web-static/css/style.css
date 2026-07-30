@@ -482,7 +482,7 @@ body.game-page {
 .winston-draft-pile-cards,
 #winston-draft-drafted-so-far,
 #grid-draft-drafted-so-far,
-#grid-draft-opponent-drafted-so-far,
+#grid-draft-other-players-drafted ul,
 #deck-view-cards,
 #deck-view-sideboard-cards,
 #shared-deck-cards,
@@ -499,7 +499,7 @@ body.game-page {
 #quick-draft-kept-so-far li,
 #winston-draft-drafted-so-far li,
 #grid-draft-drafted-so-far li,
-#grid-draft-opponent-drafted-so-far li,
+#grid-draft-other-players-drafted ul li,
 .in-play-zone__list li,
 .spectator-final-hand ul li {
     list-style: none;

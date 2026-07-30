@@ -806,27 +806,27 @@ too, proportional to the smaller card width.
     Grid Draft reveals `#new-game-grid-draft-fields` instead -- the same
     shape again (`#new-game-grid-draft-pool-source`, its own
     `GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
-    54-card target, and the same Custom-pool file/textarea pair feeding
-    `grid_draft_custom_pool_text`) -- `updateGridDraftPoolSourceVisibility()`
-    mirrors the other two exactly, except its own pool-source `<select>`
-    has only 4 options, not 5: Structure deck is deliberately absent, since
-    its 45 cards fall short of the 54 Grid Draft always requires and there's
-    no top-up mechanism to cover the gap (see "Grid Draft" in
-    `php-app/README.md`) -- offering it in the dropdown would just be a
-    guaranteed `400` waiting to happen. Quick Draft, Winston Draft, and
-    Grid Draft are all three only ever offered under the Draft format
-    (`#new-game-format` has its own
+    per-player-count target (54/72/90 for 2/3/4 players), and the same
+    Custom-pool file/textarea pair feeding `grid_draft_custom_pool_text`) --
+    `updateGridDraftPoolSourceVisibility()` mirrors the other two exactly,
+    except its own pool-source `<select>` has only 4 options, not 5:
+    Structure deck is deliberately absent, since its 45 cards fall short
+    of even the 2-player 54-card minimum and there's no top-up mechanism
+    to cover the gap (see "Grid Draft" in `php-app/README.md`) -- offering
+    it in the dropdown would just be a guaranteed `400` waiting to happen.
+    Quick Draft, Winston Draft, and Grid Draft are all three only ever
+    offered under the Draft format (`#new-game-format` has its own
     Draft option, using the same separate-per-player-deck engine Duel
     uses -- but restricted to deck types that build a deck through some
     kind of live drafting process; Quick Draft was the first, Winston
     Draft joined it next, Grid Draft joined after that -- see "Draft
     format" in `php-app/README.md`). `updateOpponentSelectionLimit()`
     caps opponent selection at 1 (2 players total) for Duel, and for
-    Draft with any deck_type OTHER than Quick Draft -- Quick Draft alone
-    supports 2-4 players (issue #189, `opponentSelectionMax()`), so up to
-    3 opponents may be checked once it's selected; switching away from
-    it (either to a different deck_type or a different format entirely)
-    re-caps the selection at 1 and un-checks any extras, keeping the
+    Draft with any deck_type OTHER than Quick Draft/Grid Draft -- both
+    support 2-4 players (issue #189, `opponentSelectionMax()`), so up to
+    3 opponents may be checked once either is selected; switching away
+    from one (either to a different deck_type or a different format
+    entirely) re-caps the selection at 1 and un-checks any extras, keeping the
     first one checked. Polls `GET /games` every 4 seconds while the lobby is
     open (mirroring the board's own poll below, and mutually exclusive
     with it via the same `pollTimer` variable, since only one of the two
@@ -939,14 +939,15 @@ too, proportional to the smaller card width.
     exists, regardless of whether the game itself is `waiting`/
     `in_progress`/`completed` -- "Best of 3 match, game N, you lead X-Y"
     (or "tied X-X"/"<opponent> leads Y-X", whichever side is actually
-    ahead) for Winston Draft/Grid Draft and a 2-player Quick Draft match.
-    A 3-4 player Quick Draft match (issue #189, always single-game --
-    `games_to_win` is 1) has more than one rival to show a score for, so
-    it branches on `players.length > 2` instead and builds its text from
-    `players` (every seated player's own username/wins/is_you) --
-    "Single-game match -- you 0, Alice 0, Bob 1" rather than the
-    "Best of N"/leader-vs-opponent phrasing. No deck_type-specific label
-    here (Quick Draft/Winston
+    ahead) for Winston Draft and a 2-player Quick Draft/Grid Draft match.
+    A 3-4 player Quick Draft or Grid Draft match (issue #189, always
+    single-game -- `games_to_win` is 1) has more than one rival to show a
+    score for, so it branches on `players.length > 2` instead and builds
+    its text from `players` (every seated player's own username/wins/is_you,
+    populated identically by `quickDraftStateFor()`/`gridDraftStateFor()`
+    for any player count) -- "Single-game match -- you 0, Alice 0, Bob 1"
+    rather than the "Best of N"/leader-vs-opponent phrasing. No
+    deck_type-specific label here (Quick Draft/Winston
     Draft/Grid Draft) -- that's already shown elsewhere on the board (the
     title), so this line stays purely about the match's own progress. The same function also
     owns `#draft-match-next-game-button`, right next to the scoreline:
@@ -1110,11 +1111,11 @@ too, proportional to the smaller card width.
       only one player acts at a time, so there's no card-selection `Set`
       either: the active player picks a whole row or column, never
       individual cells. `#grid-draft-grid` renders all 9 cells of
-      `drafting.grid_cards` (always fully visible to both players -- unlike
-      Winston Draft's face-down piles, a dealt grid is face-up on the
-      table) in the same row-major order `getState()` reports them in, via
-      a CSS grid (`#grid-draft-grid { grid-template-columns: repeat(3, ...) }`);
-      a cell that's already been taken this round (`null` in
+      `drafting.grid_cards` (always fully visible to every seated player --
+      unlike Winston Draft's face-down piles, a dealt grid is face-up on
+      the table) in the same row-major order `getState()` reports them in,
+      via a CSS grid (`#grid-draft-grid { grid-template-columns: repeat(3, ...) }`);
+      a cell already taken and not yet refilled this round (`null` in
       `grid_cards`) renders as a plain dashed placeholder
       (`.grid-draft-cell--empty`) instead of a card thumbnail.
       `#grid-draft-picks` renders 6 buttons (Row 1-3, Column 1-3), each
@@ -1122,23 +1123,28 @@ too, proportional to the smaller card width.
       that line (`gridDraftLineCells()`, a client-side mirror of
       `GameService::submitGridDraftPick()`'s own cell-counting logic) --
       "Row 2 (3 cards)", "Column 1 (2 cards)", etc. A line with 0 cards
-      left (the second pick choosing the exact same line the first pick
-      already fully cleared) renders disabled rather than being sent to
-      the server only to be rejected. Clicking a button calls
-      `submitGridDraftAction(axis, index)` (`submitGridDraftPick()`, `POST
-      /games/draft/grid-pick`). `drafting.remaining_deck_count` and a
-      `#grid-draft-drafted-so-far` read-only list (your own accumulated
-      picks) round out the panel. Unlike Winston Draft's own
-      drafted-so-far list (strictly your own picks, since its piles are
-      genuinely hidden from you until you take them), Grid Draft's grid is
-      face-up and visible to both players the whole time, so there's a
-      second `#grid-draft-opponent-drafted-so-far` read-only list right
-      underneath it showing your opponent's own accumulated picks too
-      (`drafting.opponent_drafted_so_far`) -- nothing there was ever hidden
-      information to begin with. Its heading (`#grid-draft-opponent-drafted-so-far-title`)
-      is set to the opponent's own username (the same `currentOpponentUsername`
-      the deck-building waiting-for-submission message already uses) rather
-      than a generic "Opponent", e.g. "alice's drafted so far".
+      left renders disabled rather than being sent to the server only to
+      be rejected. Clicking a button calls `submitGridDraftAction(axis,
+      index)` (`submitGridDraftPick()`, `POST /games/draft/grid-pick`).
+      The status line (`#grid-draft-drafting-status`) reads whose turn it
+      is by `drafting.current_turn_username` when it isn't yours (issue
+      #189 -- for a 3-4 player match, "not your turn" alone doesn't say
+      whose turn it actually is), and distinguishes a round's first pick
+      ("choose a row or column to take") from a later one ("choose a row
+      or column of what's left") via `drafting.picks_this_round === 0`
+      rather than the now-removed `drafting.first_pick` field.
+      `drafting.remaining_deck_count` and a `#grid-draft-drafted-so-far`
+      read-only list (your own accumulated picks) round out the panel.
+      Unlike Winston Draft's own drafted-so-far list (strictly your own
+      picks, since its piles are genuinely hidden from you until you take
+      them), Grid Draft's grid is face-up and visible to every player the
+      whole time, so `#grid-draft-other-players-drafted` renders one
+      heading + read-only list per *other* seated player (issue #189 --
+      `drafting.other_players_drafted_so_far`, 1 for a 2-player match, up
+      to 3 for 3-4 players), each heading set to that player's own
+      username (e.g. "alice's drafted so far") rather than a generic
+      "Opponent" -- nothing there was ever hidden information to begin
+      with.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

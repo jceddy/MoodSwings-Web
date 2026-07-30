@@ -1278,7 +1278,7 @@
         custom_duel: 'Each player uploads/pastes their own decklist, validated against deck-building rules you choose below.',
         quick_draft: '2-4 players each draft their own deck live from a shared card pool (16 cards for 2 or 4 players, 18 for 3), trim it down to at least 12. A 2-player draft plays a best-of-three match, sideboarding freely between games; a 3-4 player draft plays a single game.',
         winston_draft: 'Both players draft their own deck from a shared 45-card pool by taking or passing on 3 growing face-down piles, then trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
-        grid_draft: 'Both players draft their own deck from a shared 54-card pool over 6 rounds: each round, 9 cards are dealt into a 3x3 grid, and each player in turn takes a whole row or column. Trim to 12+ cards and play a best-of-three match -- sideboarding freely between games.',
+        grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/90 cards for 2/3/4 players) over 6 rounds: each round, 9 cards are dealt into a 3x3 grid, and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1314,17 +1314,20 @@
     };
 
     // Grid Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
-    // kept in sync with GameService::buildGridDraftPool()'s own 54-card
-    // target. No 'structure' option -- the Structure deck's 45 cards fall
-    // short of the 54 Grid Draft always requires, and unlike Quick Draft
-    // there's no mid-draft top-up mechanism to cover the gap, so
-    // buildGridDraftPool() rejects it outright rather than silently
-    // dealing a short final round.
+    // kept in sync with GameService::gridDraftPoolTargetSize()'s own
+    // per-player-count target (54/72/90 for 2/3/4 players, issue #189). No
+    // 'structure' option -- the Structure deck's 45 cards fall short of
+    // even the 2-player 54-card requirement, and unlike Quick Draft there's
+    // no mid-draft top-up mechanism to cover the gap, so buildGridDraftPool()
+    // rejects it outright rather than silently dealing a short final round.
+    // jceddy's 75 Card deck's own 75 cards are doubled to 150 only at
+    // exactly 4 players (the only player count whose 90-card target
+    // exceeds 75) before narrowing back down to the target size.
     const GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
-        random_48: '54 random cards, no duplicates.',
-        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to 54 before the draft begins.",
-        one_of_each: 'The full 133-card pool, randomly narrowed down to 54 before the draft begins.',
-        custom: 'Paste or upload your own pool of 54+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to 54 if you provide more.',
+        random_48: 'Random cards, no duplicates (54/72/90 for 2/3/4 players).',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- doubled first for a 4-player draft, since 75 alone falls short of the 90 needed.",
+        one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
+        custom: 'Paste or upload your own pool of at least 54 cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
     };
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
@@ -1884,21 +1887,22 @@
     const opponentCheckboxes = document.getElementById('opponent-checkboxes');
 
     // 'duel' games, and 'draft' games for every deck_type except
-    // 'quick_draft', require exactly 2 players total (enforced
-    // server-side by GameService::isDuelShapedFormat()'s own check in
-    // createGame()), so at most 1 opponent may be chosen for those --
-    // 'quick_draft' alone supports 3-4 players (issue #189), so up to 3
-    // opponents; every other format allows up to 3 as well. Re-run on
-    // every checkbox change and every format/deck-type-dropdown change,
-    // so switching to a 2-player-only combination with 2+ opponents
-    // already checked un-checks the extras (keeping the first one)
-    // rather than leaving a selection the server would just reject.
+    // 'quick_draft'/'grid_draft', require exactly 2 players total
+    // (enforced server-side by GameService::isDuelShapedFormat()'s own
+    // check in createGame()), so at most 1 opponent may be chosen for
+    // those -- 'quick_draft' and 'grid_draft' both support 3-4 players
+    // (issue #189), so up to 3 opponents; every other format allows up to
+    // 3 as well. Re-run on every checkbox change and every
+    // format/deck-type-dropdown change, so switching to a 2-player-only
+    // combination with 2+ opponents already checked un-checks the extras
+    // (keeping the first one) rather than leaving a selection the server
+    // would just reject.
     function opponentSelectionMax(format, deckType) {
         if (format === 'duel') {
             return 1;
         }
         if (format === 'draft') {
-            return deckType === 'quick_draft' ? 3 : 1;
+            return deckType === 'quick_draft' || deckType === 'grid_draft' ? 3 : 1;
         }
         return 3;
     }
@@ -4053,10 +4057,11 @@
 
     function renderGridDraftDrafting(drafting) {
         document.getElementById('grid-draft-drafting-title').textContent =
-            'Grid Draft — round ' + drafting.current_round + ' of ' + drafting.total_rounds;
+            'Grid Draft — round ' + drafting.current_round + ' of ' + drafting.total_rounds
+            + ' (pick ' + (drafting.picks_this_round + 1) + ' of ' + drafting.total_picks_per_round + ')';
         document.getElementById('grid-draft-drafting-status').textContent = drafting.is_your_turn
-            ? (drafting.first_pick ? 'Your turn -- choose a row or column of what\'s left.' : 'Your turn -- choose a row or column to take.')
-            : "Waiting for your opponent's turn.";
+            ? (drafting.picks_this_round === 0 ? 'Your turn -- choose a row or column to take.' : 'Your turn -- choose a row or column of what\'s left.')
+            : 'Waiting for ' + (drafting.current_turn_username || "your opponent") + "'s turn.";
 
         const gridContainer = document.getElementById('grid-draft-grid');
         gridContainer.innerHTML = '';
@@ -4106,16 +4111,27 @@
         });
 
         // Unlike Quick Draft/Winston Draft, Grid Draft is open information
-        // end to end -- every card either player has ever drafted was
-        // already visible to both of them the moment it was dealt into the
+        // end to end -- every card any player has ever drafted was already
+        // visible to everyone else the moment it was dealt into the
         // face-up grid, so there's nothing to hide here the way Winston
         // Draft's own current_pile_cards hides the opponent's active pile.
-        document.getElementById('grid-draft-opponent-drafted-so-far-title').textContent =
-            currentOpponentUsername + "'s drafted so far";
-        renderList(document.getElementById('grid-draft-opponent-drafted-so-far'), { hidden: true }, drafting.opponent_drafted_so_far, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
-            return li;
+        // other_players_drafted_so_far (issue #189) covers every OTHER
+        // seated player (1 for a 2-player match, up to 3 for 3-4 players),
+        // each getting its own heading + list.
+        const otherPlayersContainer = document.getElementById('grid-draft-other-players-drafted');
+        otherPlayersContainer.innerHTML = '';
+        (drafting.other_players_drafted_so_far || []).forEach((other) => {
+            const heading = document.createElement('h4');
+            heading.textContent = other.username + "'s drafted so far";
+            otherPlayersContainer.appendChild(heading);
+
+            const list = document.createElement('ul');
+            other.drafted_so_far.forEach((card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                list.appendChild(li);
+            });
+            otherPlayersContainer.appendChild(list);
         });
     }
 
