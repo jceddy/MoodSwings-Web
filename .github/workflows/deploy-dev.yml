@@ -191,15 +191,29 @@ jobs:
         # the same MIGRATION_DEPLOY_KEY secret as deploy.yml (production)
         # -- it's a shared deploy-automation credential rather than
         # something meaningfully different per environment, the same
-        # reasoning already applied to SMTP_*/VAPID_* above.
+        # reasoning already applied to SMTP_*/VAPID_* above. -A/-H Accept
+        # below work around Bluehost's own bot-protection layer, which
+        # returns a 406 for a bare curl request (no User-Agent/Accept
+        # headers look like anything a real browser would send) --
+        # confirmed by curling /app/health the same bare way and getting
+        # rejected too, well before either request reaches this app's own
+        # PHP code.
         if: ${{ vars.DEV_SITE_URL != '' && env.MIGRATION_DEPLOY_KEY != '' }}
         env:
           SITE_URL: ${{ vars.DEV_SITE_URL }}
         run: |
-          curl -fsS -X POST -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" "$SITE_URL/app/migrate"
+          curl -fsS -X POST \
+            -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
+            -H "Accept: application/json" \
+            -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" \
+            "$SITE_URL/app/migrate"
 
       - name: Smoke test deployed health endpoint
         if: ${{ vars.DEV_SITE_URL != '' }}
         env:
           SITE_URL: ${{ vars.DEV_SITE_URL }}
-        run: curl -fsS "$SITE_URL/app/health"
+        run: |
+          curl -fsS \
+            -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
+            -H "Accept: application/json" \
+            "$SITE_URL/app/health"
