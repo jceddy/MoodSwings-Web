@@ -1341,6 +1341,76 @@
         custom: 'Paste or upload your own pool of at least 54 cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
     };
 
+    // Mirrors GameService::quickDraftPoolTargetSize()/
+    // winstonDraftPoolTargetSize()/gridDraftPoolTargetSize() -- pure
+    // functions of player count alone, so hardcoded here rather than
+    // fetched from the server, same as the *_DESCRIPTIONS text above.
+    // Used to keep the pool-source <option> labels themselves (not just
+    // the description paragraph below the dropdown) honest about the
+    // actual pool size for however many opponents are currently checked,
+    // rather than a "48 random cards"-style label that's only ever
+    // correct for a 2-player game.
+    const QUICK_DRAFT_POOL_TARGET_SIZES = { 2: 48, 3: 72, 4: 96 };
+    const WINSTON_DRAFT_POOL_TARGET_SIZES = { 2: 45, 3: 70, 4: 90 };
+    const GRID_DRAFT_POOL_TARGET_SIZES = { 2: 54, 3: 72, 4: 96 };
+
+    /** 1 (yourself) plus however many opponents are currently checked, clamped to the 2-4 range every draft deck_type supports. */
+    function currentDraftPlayerCount() {
+        const checkedCount = opponentCheckboxes.querySelectorAll('input:checked').length;
+        return Math.min(Math.max(checkedCount + 1, 2), 4);
+    }
+
+    // jceddy's 75 Card deck pool source's own label -- shared by Quick
+    // Draft/Winston Draft/Grid Draft, all three of which swap in jceddy's
+    // 150 Card deck's own 150-card pool instead at exactly 4 players (see
+    // buildDraftPool()), since 75 alone falls short of every 4-player
+    // target this pool source is offered for.
+    function jceddys75OptionLabel(playerCount) {
+        return playerCount === 4
+            ? "jceddy's 75 Card deck (150 cards -- jceddy's 150 Card deck is used instead at 4 players)"
+            : "jceddy's 75 Card deck (75 cards)";
+    }
+
+    // Winston Draft's own 'structure' pool source label -- unlike Quick
+    // Draft (which tops a short 45-card Structure deck back up via
+    // mid-draft discard-reshuffle instead, so its own label never needs
+    // to change), Winston Draft has no such top-up mechanism and instead
+    // concatenates 2 copies of the Structure deck together for 3-4
+    // players (see buildDraftPool()'s $doubleStructureForMultiplayer) --
+    // a single 45-card copy would leave the draft short of even the
+    // 3-player target (70), let alone the 4-player one (90).
+    function winstonStructureOptionLabel(playerCount) {
+        return playerCount > 2
+            ? 'Structure deck (2 copies combined = 90 cards, trimmed to the ' +
+                WINSTON_DRAFT_POOL_TARGET_SIZES[playerCount] + ' needed)'
+            : 'Structure deck (45 cards)';
+    }
+
+    // Re-derives every draft deck_type's pool-source <option> labels for
+    // however many opponents are currently checked -- called from
+    // updateOpponentSelectionLimit() so it stays current on every
+    // opponent-checkbox/format/deck-type change, the same triggers that
+    // function already re-runs on.
+    function updateDraftPoolSourceOptionLabels() {
+        const playerCount = currentDraftPlayerCount();
+
+        const quickSelect = document.getElementById('new-game-quick-draft-pool-source');
+        quickSelect.querySelector('option[value="random_48"]').textContent =
+            QUICK_DRAFT_POOL_TARGET_SIZES[playerCount] + ' random cards';
+        quickSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
+
+        const winstonSelect = document.getElementById('new-game-winston-draft-pool-source');
+        winstonSelect.querySelector('option[value="random_48"]').textContent =
+            WINSTON_DRAFT_POOL_TARGET_SIZES[playerCount] + ' random cards';
+        winstonSelect.querySelector('option[value="structure"]').textContent = winstonStructureOptionLabel(playerCount);
+        winstonSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
+
+        const gridSelect = document.getElementById('new-game-grid-draft-pool-source');
+        gridSelect.querySelector('option[value="random_48"]').textContent =
+            GRID_DRAFT_POOL_TARGET_SIZES[playerCount] + ' random cards';
+        gridSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
+    }
+
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
 
     // Mirrors GameService::JCEDDYS_75_DECK_COLORS -- used by the deck
@@ -1930,6 +2000,11 @@
         for (const box of boxes) {
             box.disabled = checkedCount >= maxOpponents && !box.checked;
         }
+
+        // The checked count itself may have just changed above, so the
+        // draft deck_types' own pool-source option labels (which depend
+        // on it) need to stay in sync -- see updateDraftPoolSourceOptionLabels().
+        updateDraftPoolSourceOptionLabels();
     }
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);

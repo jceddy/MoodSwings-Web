@@ -820,6 +820,25 @@ too, proportional to the smaller card width.
     of even the 2-player 54-card minimum and there's no top-up mechanism
     to cover the gap (see "Grid Draft" in `php-app/README.md`) -- offering
     it in the dropdown would just be a guaranteed `400` waiting to happen.
+    Every pool-source `<option>`'s own label (not just the description
+    paragraph below the dropdown) is kept honest about however many
+    opponents are *currently* checked, via `updateDraftPoolSourceOptionLabels()`
+    -- re-run from `updateOpponentSelectionLimit()` on every opponent
+    checkbox/format/deck-type change, using `currentDraftPlayerCount()` (1
+    plus the checked-opponent count, clamped to 2-4). Before this, e.g.
+    Quick Draft's `random_48` option always read "48 random cards" even
+    with 2 opponents checked (a 3-player, 72-card pool) -- now it reads
+    "72 random cards" for however many players are actually about to be
+    seated. `jceddys_75`'s label similarly switches to noting jceddy's 150
+    Card deck's own pool is used instead once a 4-player selection is
+    checked. Winston Draft's `structure` option additionally spells out
+    the 2-copies-combined-then-trimmed mechanic once 3+ players are
+    checked (`winstonStructureOptionLabel()`) -- unlike Quick Draft's own
+    `structure` option, which never needs to change wording since it
+    relies on discard-reshuffle top-up instead of doubling (see the
+    `QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS` docblock above), so a single
+    45-card copy genuinely is enough regardless of player count there.
+
     Quick Draft, Winston Draft, and Grid Draft are all three only ever
     offered under the Draft format (`#new-game-format` has its own
     Draft option, using the same separate-per-player-deck engine Duel
