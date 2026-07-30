@@ -4044,7 +4044,22 @@
     }
 
     document.getElementById('winston-draft-take-button').addEventListener('click', () => submitWinstonDraftAction('take'));
-    document.getElementById('winston-draft-pass-button').addEventListener('click', () => submitWinstonDraftAction('pass'));
+    document.getElementById('winston-draft-pass-button').addEventListener('click', () => {
+        // Passing pile 3 replenishes it (if able) BEFORE the mandatory
+        // top-of-deck draw fires (see GameService::submitWinstonDraftPick()'s
+        // own 'pass' branch), so with 0 or 1 cards left in the deck that
+        // draw comes up empty -- the replenish either doesn't happen (0
+        // left) or eats the deck's last card itself (1 left). Either way
+        // the drafter gets nothing this round, which looks like a dropped
+        // click/bug if they didn't mean to pass -- confirm first.
+        const drafting = currentState && currentState.winston_draft && currentState.winston_draft.drafting;
+        if (drafting && drafting.is_your_turn && drafting.current_pile_number === 3 && drafting.remaining_deck_count <= 1) {
+            if (!window.confirm("Passing now won't draw a card -- you'll get nothing this round. Are you sure?")) {
+                return;
+            }
+        }
+        submitWinstonDraftAction('pass');
+    });
 
     // Grid Draft's (issue #188) own drafting UI -- like Winston Draft,
     // only one player acts at a time (see
