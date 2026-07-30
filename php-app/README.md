@@ -1961,7 +1961,10 @@ rounds x 2 players), cheap to scan in full every time.
 time via `quick_draft_pool_source`) -- `random_48` (48 random *distinct*
 catalog cards), `structure` (reuses `buildStructureDeckCardIds()`'s own
 45-card pool as-is), `jceddys_75` (reuses `buildJceddys75DeckCardIds()`'s
-own 75-card pool as-is), `one_of_each` (the full 133-card catalog), or
+own 75-card pool as-is -- except at exactly 4 players, where
+`buildJceddys150DeckCardIds()`'s own 150-card pool is used instead, since
+75 falls short of every 4-player target this source is ever used for; see
+"Multiplayer" below), `one_of_each` (the full 133-card catalog), or
 `custom` (a pool of 45+ cards in the same decklist-line format `custom`
 decks use, parsed via the same `DecklistParser`, minimum 45 rather than
 that deck_type's player-count-scaled minimum, and with no use for
@@ -2174,13 +2177,28 @@ is covered in its own section below rather than repeated here):
   `quickDraftRounds()` is chosen per player count so everyone clears at
   least a 16-card pool: 4 rounds for 2 players (16 total), 3 rounds for
   3 (18 total), 2 rounds for 4 (16 total). A fixed-size pool source
-  short of the target (`structure`'s 45, `jceddys_75`'s 75) isn't padded
-  or duplicated at build time -- the existing discard-reshuffle top-up
-  in `dealQuickDraftRound()` already covers the shortfall generically as
-  the draft proceeds, exactly as it already did for a 2-player
-  `structure` pool. `quickDraftMinCustomPoolSize()` (the floor for a
-  `'custom'` pool) is one structure-deck's worth (45) per 2 seated
-  players, rounding up -- 45 for 2p, 90 for 3-4p.
+  short of the target (`structure`'s 45) isn't padded at build time --
+  the existing discard-reshuffle top-up in `dealQuickDraftRound()`
+  already covers the shortfall generically as the draft proceeds,
+  exactly as it already did for a 2-player `structure` pool.
+  `jceddys_75` is the one exception: at exactly 4 players (96 needed),
+  `buildDraftPool()` itself swaps in `buildJceddys150DeckCardIds()`'s own
+  150-card pool instead of the plain 75-card one (see "jceddy's 150 Card
+  deck" below), so this specific case never needs the reshuffle top-up
+  either. `quickDraftMinCustomPoolSize()` (the floor for a `'custom'`
+  pool) is one structure-deck's worth (45) per 2 seated players, rounding
+  up -- 45 for 2p, 90 for 3-4p.
+- **jceddy's 150 Card deck** (`buildJceddys150DeckCardIds()`,
+  `JCEDDYS_150_DECK_RARITY_SPEC`) -- shared by Quick Draft's and Grid
+  Draft's own 4-player `jceddys_75` pool sourcing (both go through the
+  same `buildDraftPool()`). Not a literal doubling of jceddy's 75 Card
+  deck's own 75-card pool (which would just duplicate the same 75 card
+  ids) -- its own themed 150-card construction, every one of jceddy's 75
+  Card deck's own per-color count/max-copies pairs doubled: 2 Mythics, 4
+  *different* Rares, 8 Uncommons (up to 2 copies of any one), and 16
+  Commons (up to 3 copies of any one) per color, 30 cards per color, 150
+  total across the same 5 colors (10 Mythics/20 Rares/40 Uncommons/80
+  Commons overall) -- matching the spec given for issue #189.
 - **No fixed max deck size.** `submitDraftDeck()`/`quickDraftStateFor()`
   no longer cap Quick Draft's own deck at a flat 16 -- like Winston
   Draft and Grid Draft, the max is simply however many cards that player
@@ -2414,10 +2432,12 @@ and dealt with (there's no top-up mechanism to fall back on) --
 `409`. This specifically excludes the `'structure'` pool source (45 cards,
 short even of the 2-player 54 minimum) from Grid Draft, even though the
 same `pool_source` enum column is shared with Quick Draft/Winston Draft,
-both of which accept it fine. `jceddys_75` is doubled to 150 cards before
-truncating, but only at exactly 4 players (the only player count whose
-90-card target exceeds 75) -- 2-3 players use the plain 75-card pool,
-already large enough.
+both of which accept it fine. `jceddys_75` doesn't need this rejection at
+4 players -- `buildDraftPool()` itself already swaps in jceddy's 150 Card
+deck's own 150-card pool for that case (see "jceddy's 150 Card deck" in
+"Quick Draft"'s own "Multiplayer" section above), the same swap Quick
+Draft's own 4-player `jceddys_75` pool goes through -- 2-3 players use the
+plain 75-card pool, already large enough.
 
 **The draft itself** (`submitGridDraftPick()`, `POST /games/draft/grid-pick
 {game_id, axis: 'row'|'column', index: 0-2}`) -- rejects the request if it

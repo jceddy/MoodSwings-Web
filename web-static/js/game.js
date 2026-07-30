@@ -1291,11 +1291,14 @@
     // a pool source smaller than the target (the 45-card Structure deck,
     // or an undersized custom pool) isn't padded here -- the draft itself
     // tops back up from already-discarded cards as it goes, same as a
-    // physical 45-card box.
+    // physical 45-card box. jceddy's 75 Card deck is the one exception --
+    // at exactly 4 players (96 needed), buildDraftPool() swaps in
+    // jceddy's 150 Card deck's own 150-card pool instead, so this draft
+    // never needs the discard top-up for that specific case either.
     const QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
         random_48: 'Random cards, no duplicates (24 per seated player).',
         structure: 'The 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- for 3+ players, or a 2-player draft needing more than 45 cards, the draft tops back up from already-discarded cards as it goes, same as a physical 45-card box.',
-        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size (or topped back up from discards if more players need more than 75).",
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 96 needed.",
         one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
         custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
     };
@@ -1320,12 +1323,13 @@
     // even the 2-player 54-card requirement, and unlike Quick Draft there's
     // no mid-draft top-up mechanism to cover the gap, so buildGridDraftPool()
     // rejects it outright rather than silently dealing a short final round.
-    // jceddy's 75 Card deck's own 75 cards are doubled to 150 only at
-    // exactly 4 players (the only player count whose 90-card target
-    // exceeds 75) before narrowing back down to the target size.
+    // jceddy's 75 Card deck's own 75 cards are swapped for jceddy's 150
+    // Card deck's own 150-card pool only at exactly 4 players (the only
+    // player count whose 90-card target exceeds 75) before narrowing back
+    // down to the target size.
     const GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
         random_48: 'Random cards, no duplicates (54/72/90 for 2/3/4 players).',
-        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- doubled first for a 4-player draft, since 75 alone falls short of the 90 needed.",
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 90 needed.",
         one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
         custom: 'Paste or upload your own pool of at least 54 cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
     };

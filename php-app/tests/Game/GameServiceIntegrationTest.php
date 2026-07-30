@@ -9001,7 +9001,7 @@ final class GameServiceIntegrationTest extends TestCase
      * @param int $playerCount
      * @return array{gameId:int, userIds:int[]}
      */
-    private function buildMultiplayerQuickDraftFixture(int $playerCount): array
+    private function buildMultiplayerQuickDraftFixture(int $playerCount, string $poolSource = 'random_48'): array
     {
         $userIds = $this->insertUsers('qdmp-' . uniqid() . '-', $playerCount);
         $gameId = $this->games->createGame(
@@ -9010,7 +9010,7 @@ final class GameServiceIntegrationTest extends TestCase
             format: 'draft',
             winsNeeded: 1,
             deckType: 'quick_draft',
-            quickDraftPoolSource: 'random_48',
+            quickDraftPoolSource: $poolSource,
         );
 
         return ['gameId' => $gameId, 'userIds' => $userIds];
@@ -10353,27 +10353,57 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($winnerUserId, (int) $match['winner_user_id']);
     }
 
-    public function testGridDraftFourPlayerJceddys75PoolIsDoubledToNinety(): void
+    public function testGridDraftFourPlayerJceddys75PoolUsesTheThemedJceddys150Pool(): void
     {
         ['gameId' => $gameId] = $this->buildMultiplayerGridDraftFixture(4, 'jceddys_75');
 
         $poolCardIds = json_decode($this->fetchDraftMatch((int) $this->fetchGame($gameId)['draft_match_id'])['pool_card_ids'], true);
 
-        // jceddy's 75 Card deck's own pool is doubled to 150 cards before
-        // truncating down to 4 players' own 90-card target -- without
-        // doubling, 75 would fall short of 90.
+        // jceddy's 75 Card deck's own pool source is swapped for jceddy's
+        // 150 Card deck's own themed 150-card pool (10 Mythics/20 Rares/40
+        // Uncommons/80 Commons, GameService::buildJceddys150DeckCardIds())
+        // before truncating down to 4 players' own 90-card target --
+        // without the swap, 75 would fall short of 90.
         self::assertCount(90, $poolCardIds);
     }
 
-    public function testGridDraftThreePlayerJceddys75PoolIsNotDoubled(): void
+    public function testGridDraftThreePlayerJceddys75PoolStaysOnJceddys75(): void
     {
         ['gameId' => $gameId] = $this->buildMultiplayerGridDraftFixture(3, 'jceddys_75');
 
         $poolCardIds = json_decode($this->fetchDraftMatch((int) $this->fetchGame($gameId)['draft_match_id'])['pool_card_ids'], true);
 
         // 3 players only need 72 -- jceddy's 75 Card deck's own 75 cards
-        // already suffice undoubled, just truncated down by 3 like any
-        // other over-sized pool source.
+        // already suffice without swapping to the 150-card pool, just
+        // truncated down by 3 like any other over-sized pool source.
+        self::assertCount(72, $poolCardIds);
+    }
+
+    public function testQuickDraftFourPlayerJceddys75PoolUsesTheThemedJceddys150Pool(): void
+    {
+        ['gameId' => $gameId] = $this->buildMultiplayerQuickDraftFixture(4, 'jceddys_75');
+
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $this->fetchGame($gameId)['draft_match_id'])['pool_card_ids'], true);
+
+        // Same swap as Grid Draft's own 4-player case above -- jceddy's
+        // 75 Card deck's own 75 cards fall short of 4 players' own
+        // 96-card target, so buildDraftPool() swaps in jceddy's 150 Card
+        // deck's own 150-card pool before truncating down to 96. This
+        // also means the draft never needs dealQuickDraftRound()'s own
+        // discard-reshuffle top-up for this specific case, since the pool
+        // is never actually short to begin with.
+        self::assertCount(96, $poolCardIds);
+    }
+
+    public function testQuickDraftThreePlayerJceddys75PoolStaysOnJceddys75(): void
+    {
+        ['gameId' => $gameId] = $this->buildMultiplayerQuickDraftFixture(3, 'jceddys_75');
+
+        $poolCardIds = json_decode($this->fetchDraftMatch((int) $this->fetchGame($gameId)['draft_match_id'])['pool_card_ids'], true);
+
+        // 3 players only need 72 -- jceddy's 75 Card deck's own 75 cards
+        // already suffice without swapping to the 150-card pool, just
+        // truncated down by 3 like any other over-sized pool source.
         self::assertCount(72, $poolCardIds);
     }
 

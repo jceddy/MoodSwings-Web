@@ -120,6 +120,26 @@ final class GameService
     ];
 
     /**
+     * jceddy's 150 Card deck's own per-color spec -- used only for a
+     * 4-player Quick Draft/Grid Draft 'jceddys_75' pool (the one player
+     * count whose own target pool size, 96/90, exceeds jceddy's 75 Card
+     * deck's 75 cards). Not a literal doubling of the 75-card pool (which
+     * would just duplicate the same 75 card ids) -- its own themed
+     * 150-card construction, every one of JCEDDYS_75_DECK_RARITY_SPEC's
+     * count/max_copies pairs doubled: 2 Mythics, 4 *different* Rares, 8
+     * Uncommons (up to 2 copies of any one), and 16 Commons (up to 3
+     * copies of any one) per color -- 30 cards per color, 150 total across
+     * JCEDDYS_75_DECK_COLORS (10 Mythics/20 Rares/40 Uncommons/80 Commons
+     * overall). See buildJceddys150DeckCardIds().
+     */
+    private const JCEDDYS_150_DECK_RARITY_SPEC = [
+        'mythic' => ['count' => 2, 'max_copies' => 1],
+        'rare' => ['count' => 4, 'max_copies' => 1],
+        'uncommon' => ['count' => 8, 'max_copies' => 2],
+        'common' => ['count' => 16, 'max_copies' => 3],
+    ];
+
+    /**
      * Default for $gameLockTimeoutSeconds below: how long playMood()/
      * pass()/respondToDecision() wait to acquire a game's lock (see
      * withGameLock()) before giving up. Generous relative to how long a
@@ -1478,6 +1498,36 @@ final class GameService
     }
 
     /**
+     * Assembles jceddy's 150 Card deck's own 150-card pool --
+     * JCEDDYS_150_DECK_RARITY_SPEC's own docblock covers why this exists
+     * (a themed 4-player-sized analog of jceddys_75, not a literal
+     * doubling of it); this mirrors buildJceddys75DeckCardIds()'s own
+     * per-color assembly exactly, just against the doubled spec. The
+     * catalog's smallest per-color rarity count (3 Mythics) comfortably
+     * covers every cap here (2 distinct Mythics needed at most), so
+     * randomCardIdsWithCopyLimit() below never has to fall back to fewer
+     * cards than promised.
+     *
+     * @return int[]
+     */
+    private function buildJceddys150DeckCardIds(): array
+    {
+        $pdo = Connection::get();
+
+        $cardIds = [];
+        foreach (self::JCEDDYS_75_DECK_COLORS as $color) {
+            foreach (self::JCEDDYS_150_DECK_RARITY_SPEC as $rarity => $spec) {
+                $cardIds = [
+                    ...$cardIds,
+                    ...$this->randomCardIdsWithCopyLimit($pdo, $color, $rarity, $spec['count'], $spec['max_copies']),
+                ];
+            }
+        }
+
+        return $cardIds;
+    }
+
+    /**
      * $count random card ids matching $color/$rarity, allowing up to
      * $maxCopies repeats of any single id -- built by expanding that
      * color/rarity's own card pool into $maxCopies copies of each id,
@@ -1507,27 +1557,31 @@ final class GameService
      * 'random_48' ($targetSize random *distinct* catalog cards, singleton
      * like buildStructureDeckCardIds()), 'structure' (reuses
      * buildStructureDeckCardIds() as-is -- its own 45-card pool), 'jceddys_75'
-     * (reuses buildJceddys75DeckCardIds() as-is -- its own 75-card pool),
-     * 'one_of_each' (the full TOTAL_CARDS catalog), or 'custom'
-     * (parseDraftCustomPool()). Whatever the source produces, anything
-     * over $targetSize is randomly truncated down to it -- "if more than
-     * 48 cards are in the pool, just ignore the extra cards" (the repo
-     * owner's own words, for Quick Draft's own 48 -- Winston Draft reuses
-     * this exact same logic with its own 45-card target instead) -- so
-     * 'jceddys_75's 75, 'one_of_each's 133, and an oversized 'custom' pool
-     * all end up the same size as 'random_48'/'structure' before drafting
-     * ever starts. Shared by buildQuickDraftPool()/buildWinstonDraftPool()
-     * below, parameterized only by target/minimum pool size -- the pool
-     * assembly logic itself has nothing format-specific about it.
+     * (reuses buildJceddys75DeckCardIds() as-is -- its own 75-card pool --
+     * except at exactly 4 players, where buildJceddys150DeckCardIds()'s own
+     * 150-card pool is used instead, since 75 falls short of every
+     * 4-player target this pool source is ever used for), 'one_of_each'
+     * (the full TOTAL_CARDS catalog), or 'custom' (parseDraftCustomPool()).
+     * Whatever the source produces, anything over $targetSize is randomly
+     * truncated down to it -- "if more than 48 cards are in the pool, just
+     * ignore the extra cards" (the repo owner's own words, for Quick
+     * Draft's own 48 -- Winston Draft/Grid Draft reuse this exact same
+     * logic with their own targets instead) -- so 'jceddys_75'/
+     * 'jceddys_150's 75/150, 'one_of_each's 133, and an oversized 'custom'
+     * pool all end up the same size as 'random_48'/'structure' before
+     * drafting ever starts. Shared by buildQuickDraftPool()/
+     * buildWinstonDraftPool()/buildGridDraftPool() below, parameterized
+     * only by target/minimum pool size and player count -- the pool
+     * assembly logic itself has nothing else format-specific about it.
      *
      * @return int[]
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize, int $playerCount): array
     {
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomDraftCardIds($targetSize),
             'structure' => $this->buildStructureDeckCardIds(),
-            'jceddys_75' => $this->buildJceddys75DeckCardIds(),
+            'jceddys_75' => $playerCount === 4 ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
             default => throw new GameStateException("Unknown pool source \"{$poolSource}\""),
@@ -1582,11 +1636,15 @@ final class GameService
     /**
      * @return int[] Quick Draft's own quickDraftPoolTargetSize($playerCount)-card
      *         pool -- see buildDraftPool(). A fixed-size pool source
-     *         (`'structure'`'s 45 or `'jceddys_75'`'s 75) that's short of
-     *         the target isn't padded/doubled here -- dealQuickDraftRound()'s
-     *         existing discard-reshuffle top-up already covers the
-     *         shortfall generically as the draft proceeds, exactly as it
-     *         already does for a 2-player 'structure' pool.
+     *         (`'structure'`'s 45) that's short of the target isn't
+     *         padded here -- dealQuickDraftRound()'s existing
+     *         discard-reshuffle top-up already covers the shortfall
+     *         generically as the draft proceeds, exactly as it already
+     *         does for a 2-player 'structure' pool. `'jceddys_75'` is the
+     *         one exception: buildDraftPool() itself swaps in
+     *         buildJceddys150DeckCardIds()'s own 150-card pool at exactly
+     *         4 players, so this draft never needs the reshuffle top-up
+     *         for that specific case either.
      */
     private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
     {
@@ -1595,13 +1653,14 @@ final class GameService
             $customPoolText,
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
+            $playerCount,
         );
     }
 
-    /** @return int[] Winston Draft's own WINSTON_POOL_SIZE-card pool -- see buildDraftPool(). */
+    /** @return int[] Winston Draft's own WINSTON_POOL_SIZE-card pool -- see buildDraftPool(). Always exactly 2 players, so the jceddys_150 swap never triggers. */
     private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText): array
     {
-        return $this->buildDraftPool($poolSource, $customPoolText, self::WINSTON_POOL_SIZE, self::WINSTON_MIN_CUSTOM_POOL_SIZE);
+        return $this->buildDraftPool($poolSource, $customPoolText, self::WINSTON_POOL_SIZE, self::WINSTON_MIN_CUSTOM_POOL_SIZE, 2);
     }
 
     /**
@@ -1615,32 +1674,23 @@ final class GameService
      *         exactly gridDraftCardsDrawnPerRound($playerCount) cards per
      *         round for exactly GRID_DRAFT_ROUNDS rounds. The 'structure'
      *         pool source (45 cards) is short of every player count's own
-     *         target (54 at minimum, for 2 players), so it's rejected
-     *         here rather than silently dealing a final round or two
-     *         short of cards -- same for jceddy's 75 Card deck's own
-     *         75-card pool at 4 players (90 needed), EXCEPT that source
-     *         specifically doubles up instead of being rejected (see
-     *         below), since a themed pool is a more natural thing to
-     *         double than to simply reject outright.
+     *         target (54 at minimum, for 2 players), so it's rejected here
+     *         rather than silently dealing a final round or two short of
+     *         cards -- 'jceddys_75' doesn't need this rejection at 4
+     *         players, since buildDraftPool() itself already swaps in the
+     *         150-card 'jceddys_150' pool for that case.
      */
     private function buildGridDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
     {
         $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        $cardIds = $poolSource === 'jceddys_75' && $playerCount === 4
-            ? [...$this->buildJceddys75DeckCardIds(), ...$this->buildJceddys75DeckCardIds()]
-            : $this->buildDraftPool($poolSource, $customPoolText, $targetSize, self::gridDraftMinCustomPoolSize($playerCount));
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
 
         if (count($cardIds) < $targetSize) {
             throw new GameStateException(
                 'The "' . $poolSource . '" pool source has only ' . count($cardIds)
                 . " cards, but Grid Draft with {$playerCount} players requires exactly {$targetSize}"
             );
-        }
-
-        if (count($cardIds) > $targetSize) {
-            shuffle($cardIds);
-            $cardIds = array_slice($cardIds, 0, $targetSize);
         }
 
         return array_values($cardIds);

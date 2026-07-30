@@ -1,0 +1,18 @@
+-- New feature, no schema change: Quick Draft's and Grid Draft's own
+-- 4-player 'jceddys_75' pool sourcing (the one case where jceddy's 75
+-- Card deck's own 75 cards fall short of a 4-player target -- 96/90
+-- respectively) now swaps in a themed 150-card pool
+-- (GameService::buildJceddys150DeckCardIds(), JCEDDYS_150_DECK_RARITY_SPEC:
+-- 10 Mythics/20 Rares/40 Uncommons/80 Commons, every one of jceddy's 75
+-- Card deck's own per-color count/max-copies pairs doubled) instead of
+-- either a literal doubling (Grid Draft's previous behavior) or the
+-- discard-reshuffle top-up (Quick Draft's previous behavior for this
+-- specific case). No new tables/columns -- this migration exists purely
+-- to keep schema_version in sync with the VERSION bump, the same way
+-- 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056/0058/0059/0060/0061/
+-- 0062 already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request
+-- (see migration 0021's own docblock), so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.8.1' WHERE id = 1;
