@@ -11631,4 +11631,164 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($export['game']['draft_match_id'], $export['draft_match']['id']);
         self::assertCount(2, $export['draft_match_players']);
     }
+
+    /**
+     * Rules-committee ruling (Recklessness steals Boredom, then Betrayal
+     * gives Recklessness itself away): "after scoring" effects resolve per
+     * card's CURRENT controller, in turn order. The opponent has
+     * Recklessness when scoring happens (turn order: opponent went first),
+     * so Recklessness's own unconditional "bottom this mood and draw"
+     * resolves first -- returning Boredom to the opponent and bottoming
+     * Recklessness, with the opponent (Recklessness's controller at that
+     * moment) credited with the draw. Only then does Betrayal's "give it
+     * back" attempt to run, but Recklessness is no longer in play, so it
+     * fizzles and the acting player never gets Recklessness back.
+     */
+    public function testRecklessnessGivenAwayViaBetrayalDoesNotReturnOnceBottomedByItsOwnEffect(): void
+    {
+        $u1 = $this->insertUser('reck-betrayal-naive-1');
+        $u2 = $this->insertUser('reck-betrayal-naive-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $boredomId = $this->insertGameCard($gameId, 83, 'hand', $p2); // Boredom
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        // Shared deck (owner MUST be null -- see BoardStateRepository::load()'s
+        // SHARED_DECK_KEY bucketing; 'standard' format has no separate
+        // per-player decks) with distinct deck_position values so draw order
+        // is deterministic.
+        $this->insertGameCard($gameId, 1, 'deck', null, 0);
+        $this->insertGameCard($gameId, 2, 'deck', null, 1);
+        $this->insertGameRound($gameId, 2, $p2, $p2, 1); // p2 "won round 1" -- goes first in round 2
+
+        $this->games->playMood($gameId, $p2, $boredomId, []);
+        // Simulate Hope already banked from round 1 -- both plays_remaining
+        // and pending_play_grants must agree, since BoardStateRepository::load()
+        // derives the actual play-slot count from pending_play_grants when set.
+        $this->pdo->prepare("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null,null]' WHERE game_id = :g")
+            ->execute(['g' => $gameId]);
+
+        $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
+
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $recklessnessId]);
+
+        $cardsStmt = $this->pdo->prepare("SELECT card_id, zone, owner_game_player_id FROM game_cards WHERE game_id = :g AND id = :id");
+        $cardById = function (int $id) use ($cardsStmt, $gameId): array {
+            $cardsStmt->execute(['g' => $gameId, 'id' => $id]);
+            return $cardsStmt->fetch();
+        };
+
+        $boredom = $cardById($boredomId);
+        self::assertSame('in_play', $boredom['zone']);
+        self::assertSame($p2, (int) $boredom['owner_game_player_id']);
+
+        $recklessness = $cardById($recklessnessId);
+        self::assertSame('deck', $recklessness['zone']);
+        self::assertNull($recklessness['owner_game_player_id']);
+
+        $betrayal = $cardById($betrayalId);
+        self::assertSame('in_play', $betrayal['zone']);
+        self::assertSame($p1, (int) $betrayal['owner_game_player_id']);
+
+        // The opponent controlled Recklessness when its own effect
+        // resolved, so they -- not the acting player -- are credited with
+        // its draw, on top of their own loser's draw.
+        $p2HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p2HandCount->execute(['g' => $gameId, 'p' => $p2]);
+        self::assertSame(2, (int) $p2HandCount->fetchColumn());
+
+        $p1HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p1HandCount->execute(['g' => $gameId, 'p' => $p1]);
+        self::assertSame(0, (int) $p1HandCount->fetchColumn());
+
+        // Betrayal's "give it back" must fizzle silently -- no ownership
+        // change for Recklessness should ever be logged, since the ruling
+        // says the return never happens once Recklessness has left play.
+        $eventsStmt = $this->pdo->prepare("SELECT details FROM game_events WHERE game_id = :g AND event_type = 'round_scored' ORDER BY id DESC LIMIT 1");
+        $eventsStmt->execute(['g' => $gameId]);
+        $details = json_decode($eventsStmt->fetchColumn(), true);
+        $ownershipChanges = $details['ownership_changes'] ?? [];
+        foreach ($ownershipChanges as $change) {
+            self::assertNotSame($recklessnessId, $change['card_id']);
+        }
+    }
+
+    /**
+     * The rules judge's "fun line": steal Boredom with Recklessness, then
+     * give Boredom itself (not Recklessness) back via Betrayal. Since
+     * Recklessness never changes hands, both "after scoring" effects
+     * belong to the acting player, who chooses to resolve Recklessness
+     * first -- bottoming it and drawing themselves -- before Betrayal
+     * returns Boredom to them.
+     */
+    public function testRecklessnessKeptWhileBetrayalReturnsTheStolenMoodInstead(): void
+    {
+        $u1 = $this->insertUser('reck-betrayal-fun-1');
+        $u2 = $this->insertUser('reck-betrayal-fun-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $boredomId = $this->insertGameCard($gameId, 83, 'hand', $p2); // Boredom
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $this->insertGameCard($gameId, 1, 'deck', null, 0);
+        $this->insertGameCard($gameId, 2, 'deck', null, 1);
+        $this->insertGameRound($gameId, 2, $p2, $p2, 1);
+
+        $this->games->playMood($gameId, $p2, $boredomId, []);
+        $this->pdo->prepare("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null,null]' WHERE game_id = :g")
+            ->execute(['g' => $gameId]);
+
+        $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
+
+        // This time give BOREDOM back, not Recklessness.
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $boredomId]);
+
+        $cardsStmt = $this->pdo->prepare("SELECT card_id, zone, owner_game_player_id FROM game_cards WHERE game_id = :g AND id = :id");
+        $cardById = function (int $id) use ($cardsStmt, $gameId): array {
+            $cardsStmt->execute(['g' => $gameId, 'id' => $id]);
+            return $cardsStmt->fetch();
+        };
+
+        $boredom = $cardById($boredomId);
+        self::assertSame('in_play', $boredom['zone']);
+        self::assertSame($p1, (int) $boredom['owner_game_player_id']);
+
+        $recklessness = $cardById($recklessnessId);
+        self::assertSame('deck', $recklessness['zone']);
+        self::assertNull($recklessness['owner_game_player_id']);
+
+        $betrayal = $cardById($betrayalId);
+        self::assertSame('in_play', $betrayal['zone']);
+        self::assertSame($p1, (int) $betrayal['owner_game_player_id']);
+
+        // The acting player controlled Recklessness throughout, so THEY
+        // (not the opponent) are credited with its draw.
+        $p1HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p1HandCount->execute(['g' => $gameId, 'p' => $p1]);
+        self::assertSame(1, (int) $p1HandCount->fetchColumn());
+
+        $p2HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p2HandCount->execute(['g' => $gameId, 'p' => $p2]);
+        self::assertSame(1, (int) $p2HandCount->fetchColumn());
+    }
 }

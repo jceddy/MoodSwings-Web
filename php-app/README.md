@@ -4037,6 +4037,29 @@ card's art URL from `catalog_card_id` + a client-side slugification of
 card's catalog id, matching `name`/`rules_text`'s own switch, so the art
 shown always matches whatever mood is actually being displayed.
 
+`GameService::applyAfterScoringHooks()` resolves a mood's own inherent
+`afterScoring` tag (Bashfulness/Gluttony/Insecurity/Recklessness) *before*
+a foreign `returnsToOwnerAfterScoring` tag placed on that same card by a
+different source (Betrayal; Recklessness's own steal), per a rules-committee
+ruling on the case where a single physical card ends up carrying both at
+once -- e.g. Recklessness steals an opponent's mood, then gets given away
+via Betrayal, so Recklessness itself carries both its own unconditional
+"bottom this mood and draw" and Betrayal's "give it back" at the same time.
+The ruling: "after scoring" effects resolve per card's *current* controller,
+in turn order, so Recklessness's own effect -- unconditional, "while in
+play" -- always gets to run first for whoever controls it at that moment;
+only once that's settled does a foreign "give it back ... if it's still in
+play" get a chance, and by then the card may already have left play
+entirely. The previous ordering had this backwards (foreign return resolved
+first), which let a "give it back" tag reclaim a mood a moment before that
+mood's own unconditional effect would have removed it from play for good --
+producing a spurious, ruling-contradicting ownership-change log entry and
+crediting the wrong player with Recklessness's own draw. `isInPlay($cardId)`
+is now checked immediately before `giveInPlayToPlayer()` in the
+`returnsToOwnerAfterScoring` branch, so a foreign return correctly no-ops
+once the card's own effect has already taken it out of play, implementing
+the "if it's still in play" qualifier printed on both cards.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises
