@@ -108,6 +108,13 @@ function listGames() {
     return apiRequest('/games');
 }
 
+// "Past games" (issue #84) -- the complement of listGames() above: every
+// completed game not still tied to an in-progress draft match. See
+// GameService::listPastGamesForUser().
+function listPastGames() {
+    return apiRequest('/games/past');
+}
+
 function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId) {
     return apiRequest('/games', {
         method: 'POST',
@@ -247,9 +254,12 @@ function deleteDecklist(id) {
     });
 }
 
-// Quick Draft (issue #88) -- see "Quick Draft" in web-static/README.md.
-// stage is 'draw' (keep 2 of your own just-dealt 6) or 'received' (keep 2
-// of the 4 cards you received from your opponent).
+// Quick Draft (issue #88; multiplayer support issue #189) -- see "Quick
+// Draft" in web-static/README.md. stage is a 1-based stage number
+// (1..total_stages, where total_stages is the match's own player count) --
+// which pile you're currently holding at that stage is entirely
+// server-derived from the seat-rotation math (see
+// GameService::submitQuickDraftPick()'s own docblock).
 function submitQuickDraftPick(gameId, round, stage, cardIds) {
     return apiRequest('/games/draft/pick', {
         method: 'POST',
@@ -313,6 +323,13 @@ function getGameLog(gameId, code) {
         path += '&code=' + encodeURIComponent(code);
     }
     return apiRequest(path);
+}
+
+// Download complete serialized game data (issue #99) -- unlike
+// getGameLog() above, this has no spectator/code path at all: seated
+// players only, see GameService::exportGameData()'s own docblock.
+function getGameExport(gameId) {
+    return apiRequest('/games/export?game_id=' + encodeURIComponent(gameId));
 }
 
 // Watch game replay (issue #240): the board reconstructed as of one

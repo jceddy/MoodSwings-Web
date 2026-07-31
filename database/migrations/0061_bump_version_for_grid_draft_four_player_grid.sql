@@ -1,0 +1,20 @@
+-- Rules-engine change, no schema change: Grid Draft's 4-player case now
+-- deals a 4x4 grid (16 cells) over 4 rounds instead of the original 3x3
+-- grid (9 cells) over 6 rounds every other player count still uses. With
+-- exactly 4 players and exactly 4 rounds, seat-rotation of who picks
+-- first (already implemented via ($firstPickerSeatIndex + 1) %
+-- $playerCount) now gives each of the 4 players first pick in exactly 1
+-- round, fixing the previous uneven distribution (6 rounds don't divide
+-- evenly among 4 players). The refill pattern itself is unchanged: every
+-- pick refills except the round's last two. This raises the 4-player
+-- pool target from 90 to 96 cards (GameService::gridDraftPoolTargetSize());
+-- 2-3 player Grid Draft matches (3x3 grid, 6 rounds, 54/72-card pools)
+-- are completely unaffected. This migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056/0058/0059 already did
+-- for their own schema-less changes -- MaintenanceGate compares the
+-- deployed VERSION file against this table on every request (see
+-- migration 0021's own docblock), so a VERSION bump with no matching
+-- schema_version update would show maintenance mode after deploy even
+-- though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.10.0' WHERE id = 1;

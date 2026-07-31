@@ -1,0 +1,19 @@
+-- Rules-engine fix, no schema change: buildQuickDraftPool() never passed
+-- $doubleStructureForMultiplayer to buildDraftPool(), so a 3-4 player
+-- Quick Draft's 'structure' pool source stayed at a single 45-card
+-- Structure deck copy instead of 2 combined -- silently falling short of
+-- the 72/96-card targets those player counts need, even with
+-- dealQuickDraftRound()'s own discard-reshuffle top-up (nothing exists
+-- yet to reshuffle before the draft's very first round is dealt). This
+-- also contradicted quickDraftMinCustomPoolSize()'s own long-standing
+-- "2 structure decks for 3-4 players" floor for an equivalent custom
+-- pool. Now doubles it, same as Winston Draft's own 'structure' pool
+-- source already does. This migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056/0058/0059/0061/0062
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every
+-- request (see migration 0021's own docblock), so a VERSION bump with
+-- no matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.10.2' WHERE id = 1;

@@ -183,6 +183,15 @@ dialog#resources-dialog #resources-close-button {
     margin-bottom: 0.5rem;
 }
 
+#past-games-button {
+    margin-left: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+#back-to-current-games-button {
+    margin-bottom: 0.5rem;
+}
+
 .field {
     margin-bottom: 1rem;
 }
@@ -473,7 +482,7 @@ body.game-page {
 .winston-draft-pile-cards,
 #winston-draft-drafted-so-far,
 #grid-draft-drafted-so-far,
-#grid-draft-opponent-drafted-so-far,
+#grid-draft-other-players-drafted ul,
 #deck-view-cards,
 #deck-view-sideboard-cards,
 #shared-deck-cards,
@@ -490,7 +499,7 @@ body.game-page {
 #quick-draft-kept-so-far li,
 #winston-draft-drafted-so-far li,
 #grid-draft-drafted-so-far li,
-#grid-draft-opponent-drafted-so-far li,
+#grid-draft-other-players-drafted ul li,
 .in-play-zone__list li,
 .spectator-final-hand ul li {
     list-style: none;
@@ -505,15 +514,19 @@ body.game-page {
     margin-bottom: 1rem;
 }
 
-/* Grid Draft's own 3x3 grid, laid out in the same row-major order
-   (index = row * 3 + column) getState() reports grid_cards in, so no
-   client-side re-ordering is needed between the two. Columns are sized to
-   their content (not 1fr/minmax(0,1fr)) so the grid hugs its own 3
-   card-widths plus gaps rather than stretching to fill whatever width its
-   container happens to have -- otherwise each column would grow to fill
-   the extra space, spreading the cards apart instead of keeping them
-   snug. An empty cell (its card already taken this round) gets a plain
-   dashed placeholder instead of a card thumbnail. */
+/* Grid Draft's own grid (3x3 for 2-3 players, 4x4 for exactly 4 -- see
+   GameService::gridDraftGridSize()), laid out in the same row-major order
+   (index = row * grid_size + column) getState() reports grid_cards in, so
+   no client-side re-ordering is needed between the two. grid-template-columns
+   below is only the 3-column default; renderGridDraftDrafting() overrides it
+   inline with drafting.grid_size on every render, so a 4-player match's 4x4
+   grid gets 4 columns instead. Columns are sized to their content (not
+   1fr/minmax(0,1fr)) so the grid hugs its own card-widths plus gaps rather
+   than stretching to fill whatever width its container happens to have --
+   otherwise each column would grow to fill the extra space, spreading the
+   cards apart instead of keeping them snug. An empty cell (its card already
+   taken this round) gets a plain dashed placeholder instead of a card
+   thumbnail. */
 #grid-draft-grid {
     display: grid;
     grid-template-columns: repeat(3, min-content);
@@ -523,7 +536,7 @@ body.game-page {
        of how its tracks are sized -- so min-content columns alone don't
        stop the grid ITSELF from stretching wide and leaving each column
        to center within extra leftover space. width: fit-content shrinks
-       the container down to what its 3 min-content columns plus gaps
+       the container down to what its min-content columns plus gaps
        actually need. */
     width: fit-content;
 }
@@ -562,11 +575,14 @@ body.game-page {
 
 /* Fixed width (rather than each button sizing to its own text) so every
    button in both rows lines up into a neat grid instead of jagged edges
-   from "Row 1 (3 cards)" vs. "Col 2 (0 cards)"'s differing lengths. Wide
-   enough for the longest label ("Row/Col N (N cards)") with a little
-   breathing room. */
+   from "Row 1 (3)" vs. "Col 2 (0)"'s differing lengths. Wide enough for
+   the longest label ("Row/Col N (N)", grid_size never exceeds 4) with a
+   little breathing room -- narrowed from the wider fixed width the old
+   "Row/Col N (N cards)" label needed, most noticeable at 4 players where
+   8 buttons (4 rows + 4 columns) share the picks panel a 3x3 grid's 6
+   buttons already do. */
 .grid-draft-pick-button {
-    width: 7.5rem;
+    width: 5rem;
 }
 
 .grid-draft-picks-row {

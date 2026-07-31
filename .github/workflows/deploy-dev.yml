@@ -18,6 +18,10 @@ name: Deploy to Bluehost (dev)
 on:
   push:
     branches: [development]
+  # Lets a maintainer re-run a full deploy on demand (e.g. re-testing the
+  # migrate/health curl calls against the live dev host) without needing
+  # a new commit to trigger the push event above.
+  workflow_dispatch: {}
 
 env:
   # Must be >= the "php": ">=8.2" requirement in php-app/composer.json, and
@@ -29,9 +33,17 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      # Job-level (not step-level) so it's readable via the `env` context
+      # in a step's own `if:` below -- `secrets` itself isn't a valid
+      # named-value inside a step `if:` condition (GitHub Actions rejects
+      # the workflow file entirely if you try), so this is the standard
+      # workaround: stash the secret in `env` once, then gate on
+      # `env.MIGRATION_DEPLOY_KEY != ''` instead of `secrets.MIGRATION_DEPLOY_KEY != ''`.
+      MIGRATION_DEPLOY_KEY: ${{ secrets.MIGRATION_DEPLOY_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up PHP
         uses: shivammathur/setup-php@v2
@@ -67,6 +79,8 @@ jobs:
           DISCORD_CLIENT_SECRET: ${{ secrets.DEV_DISCORD_CLIENT_SECRET }}
           DISCORD_PUBLIC_KEY: ${{ secrets.DEV_DISCORD_PUBLIC_KEY }}
           DISCORD_BOT_TOKEN: ${{ secrets.DEV_DISCORD_BOT_TOKEN }}
+          # MIGRATION_DEPLOY_KEY itself comes from the job-level env above
+          # (already in scope here without redeclaring it).
         run: |
           set -euo pipefail
           rm -rf dist
@@ -101,6 +115,16 @@ jobs:
           cp -R php-app/src dist/src
           cp -R php-app/vendor dist/vendor
 
+          # Migration files, so the "Run database migrations" step below
+          # (a POST /migrate call against the just-deployed app, which has
+          # no shell access of its own) can find them via
+          # MigrationRunner -- see database/README.md's "Applying
+          # migrations". A sibling of dist/src, matching where
+          # MigrationRunner::defaultMigrationsDir() looks for it once
+          # deployed.
+          mkdir -p dist/database
+          cp -R database/migrations dist/database/migrations
+
           # Runtime config generated from repo secrets; never committed. Only
           # write a line when the secret/variable is actually set, so unset
           # optional ones (e.g. SMTP_PORT) fall back to Config::get()'s coded
@@ -133,10 +157,12 @@ jobs:
           write_env_var DISCORD_CLIENT_SECRET "$DISCORD_CLIENT_SECRET"
           write_env_var DISCORD_PUBLIC_KEY "$DISCORD_PUBLIC_KEY"
           write_env_var DISCORD_BOT_TOKEN "$DISCORD_BOT_TOKEN"
+          write_env_var MIGRATION_DEPLOY_KEY "$MIGRATION_DEPLOY_KEY"
 
-          # dist/, vendor/, and src/ all end up under the shared document
-          # root (no Bluehost document-root change required), so block
-          # direct HTTP access to the files that aren't meant to be served.
+          # dist/, vendor/, src/, and database/ all end up under the shared
+          # document root (no Bluehost document-root change required), so
+          # block direct HTTP access to the files that aren't meant to be
+          # served.
           cat > dist/.htaccess <<'HTACCESS'
           <FilesMatch "^\.env$">
               Require all denied
@@ -144,9 +170,10 @@ jobs:
           HTACCESS
           echo 'Require all denied' > dist/vendor/.htaccess
           echo 'Require all denied' > dist/src/.htaccess
+          echo 'Require all denied' > dist/database/.htaccess
 
       - name: Deploy to Bluehost via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
           server: ${{ secrets.DEV_FTP_SERVER }}
           username: ${{ secrets.DEV_FTP_USERNAME }}
@@ -157,8 +184,58 @@ jobs:
             **/.git*
             **/.git*/**
 
+      - name: Run database migrations
+        # Both the deployed app's /migrate route AND this secret need to
+        # be present for this to do anything -- if MIGRATION_DEPLOY_KEY
+        # hasn't been set yet, this step is skipped entirely rather than
+        # curling a request that /migrate would just reject with a 403
+        # anyway, so a deploy set up before this secret existed keeps
+        # working exactly as it did before (falling back to applying
+        # database/migrations/ by hand -- see database/README.md). Shares
+        # the same MIGRATION_DEPLOY_KEY secret as deploy.yml (production)
+        # -- it's a shared deploy-automation credential rather than
+        # something meaningfully different per environment, the same
+        # reasoning already applied to SMTP_*/VAPID_* above. The real cause
+        # of the persistent 406 (found via the diagnostic response-body
+        # capture below, added in a prior deploy): it's Bluehost's own
+        # mod_security layer, not this app or a missing User-Agent/Accept
+        # header -- the response body is literally "This error was
+        # generated by Mod_Security." /app/health's plain GET (next step)
+        # already succeeds with the same UA/Accept headers, so the one
+        # remaining difference was this being a POST with no body and no
+        # Content-Type at all; mod_security appears to flag that shape.
+        # /migrate itself never reads the request body (only the
+        # X-Migration-Key header, see index.php), so a harmless empty JSON
+        # object is a safe, inert payload to satisfy it with.
+        if: ${{ vars.DEV_SITE_URL != '' && env.MIGRATION_DEPLOY_KEY != '' }}
+        env:
+          SITE_URL: ${{ vars.DEV_SITE_URL }}
+        run: |
+          set +e
+          http_status=$(curl -sS -o /tmp/migrate_response.txt -D /tmp/migrate_headers.txt -w "%{http_code}" -X POST \
+            -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
+            -H "Accept: application/json" \
+            -H "Content-Type: application/json" \
+            -H "X-Migration-Key: ${MIGRATION_DEPLOY_KEY}" \
+            -d '{}' \
+            "$SITE_URL/app/migrate")
+          echo "HTTP status: $http_status"
+          echo "--- response headers ---"
+          cat /tmp/migrate_headers.txt
+          echo "--- response body ---"
+          cat /tmp/migrate_response.txt
+          echo "-------------------------"
+          if [ "$http_status" -lt 200 ] || [ "$http_status" -ge 300 ]; then
+            echo "Migration request failed with HTTP $http_status" >&2
+            exit 1
+          fi
+
       - name: Smoke test deployed health endpoint
         if: ${{ vars.DEV_SITE_URL != '' }}
         env:
           SITE_URL: ${{ vars.DEV_SITE_URL }}
-        run: curl -fsS "$SITE_URL/app/health"
+        run: |
+          curl -fsS \
+            -A "Mozilla/5.0 (compatible; MoodSwingsCD/1.0)" \
+            -H "Accept: application/json" \
+            "$SITE_URL/app/health"

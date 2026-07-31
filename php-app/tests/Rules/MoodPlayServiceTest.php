@@ -2778,9 +2778,9 @@ final class MoodPlayServiceTest extends TestCase
             ],
         );
 
-        self::assertSame(2, $state->ownerOf(29)); // player 1's only mood -- Avoidance itself
-        self::assertSame(3, $state->ownerOf(9));
-        self::assertSame(1, $state->ownerOf(106)); // wraps around
+        self::assertSame(3, $state->ownerOf(29)); // player 1's only mood -- Avoidance itself
+        self::assertSame(1, $state->ownerOf(9));
+        self::assertSame(2, $state->ownerOf(106)); // wraps around
     }
 
     public function testAvoidanceGivesEachPlayersOnlyMoodToTheirLeftNeighbor(): void
@@ -2802,9 +2802,9 @@ final class MoodPlayServiceTest extends TestCase
             ],
         );
 
-        self::assertSame(3, $state->ownerOf(29));
-        self::assertSame(1, $state->ownerOf(9));
-        self::assertSame(2, $state->ownerOf(106));
+        self::assertSame(2, $state->ownerOf(29));
+        self::assertSame(3, $state->ownerOf(9));
+        self::assertSame(1, $state->ownerOf(106));
     }
 
     public function testAvoidanceRejectsAGivenMoodNotOwnedByThatPlayer(): void
@@ -2861,10 +2861,11 @@ final class MoodPlayServiceTest extends TestCase
         );
 
         // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
-        // seats is 1->2->4->1, skipping over 3 entirely.
-        self::assertSame(2, $state->ownerOf(29)); // from player 1
-        self::assertSame(4, $state->ownerOf(9)); // from player 2, skipping resigned player 3
-        self::assertSame(1, $state->ownerOf(42)); // from player 4, wraps to player 1
+        // seats is 1->4->2->1 (the previous active seat), skipping over 3
+        // entirely.
+        self::assertSame(4, $state->ownerOf(29)); // from player 1
+        self::assertSame(1, $state->ownerOf(9)); // from player 2
+        self::assertSame(2, $state->ownerOf(42)); // from player 4, skipping resigned player 3
         self::assertSame(3, $state->ownerOf(106)); // resigned player 3's own mood never moves
     }
 
@@ -2912,9 +2913,9 @@ final class MoodPlayServiceTest extends TestCase
             ],
         );
 
-        self::assertTrue($state->isInHand(2, 3));
-        self::assertTrue($state->isInHand(3, 9));
-        self::assertTrue($state->isInHand(1, 106));
+        self::assertTrue($state->isInHand(3, 3));
+        self::assertTrue($state->isInHand(1, 9));
+        self::assertTrue($state->isInHand(2, 106));
     }
 
     public function testConfusionSkipsPlayersWithAnEmptyHand(): void
@@ -2960,10 +2961,11 @@ final class MoodPlayServiceTest extends TestCase
         );
 
         // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
-        // seats is 1->2->4->1, skipping over 3 entirely.
-        self::assertTrue($state->isInHand(2, 3)); // from player 1
-        self::assertTrue($state->isInHand(4, 9)); // from player 2, skipping resigned player 3
-        self::assertTrue($state->isInHand(1, 42)); // from player 4, wraps to player 1
+        // seats is 1->4->2->1 (the previous active seat), skipping over 3
+        // entirely.
+        self::assertTrue($state->isInHand(4, 3)); // from player 1
+        self::assertTrue($state->isInHand(1, 9)); // from player 2
+        self::assertTrue($state->isInHand(2, 42)); // from player 4, skipping resigned player 3
         self::assertTrue($state->isInHand(3, 106)); // resigned player 3's own card never moves
     }
 
@@ -3013,9 +3015,9 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->plays->playMood($state, 1, 49, new PlayerChoices(['mode' => 'rotate', 'direction' => 'right']));
 
-        self::assertTrue($state->isInHand(2, 3));
-        self::assertTrue($state->isInHand(3, 9));
-        self::assertTrue($state->isInHand(1, 106));
+        self::assertTrue($state->isInHand(3, 3));
+        self::assertTrue($state->isInHand(1, 9));
+        self::assertTrue($state->isInHand(2, 106));
     }
 
     public function testRationalizationRotateSkipsAResignedPlayerBothAsGiverAndAsRecipient(): void
@@ -3026,11 +3028,12 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 49, new PlayerChoices(['mode' => 'rotate', 'direction' => 'right']));
 
         // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
-        // seats is 1->2->4->1, skipping over 3 entirely -- 3 keeps their
-        // own hand and never receives anyone else's.
-        self::assertTrue($state->isInHand(2, 3));
-        self::assertTrue($state->isInHand(4, 9));
-        self::assertTrue($state->isInHand(1, 42));
+        // seats is 1->4->2->1 (the previous active seat), skipping over 3
+        // entirely -- 3 keeps their own hand and never receives anyone
+        // else's.
+        self::assertTrue($state->isInHand(4, 3));
+        self::assertTrue($state->isInHand(1, 9));
+        self::assertTrue($state->isInHand(2, 42));
         self::assertTrue($state->isInHand(3, 106));
     }
 

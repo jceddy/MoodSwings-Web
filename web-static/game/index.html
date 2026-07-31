@@ -37,10 +37,25 @@
         <button id="logout-button">Log out</button>
 
         <section id="lobby-view">
-            <h2>Your games</h2>
-            <button id="new-game-button" type="button">New game</button>
-            <ul id="games-list"></ul>
-            <p id="games-empty" hidden>No games yet &mdash; start one!</p>
+            <div id="current-games-section">
+                <h2>Your games</h2>
+                <button id="new-game-button" type="button">New game</button>
+                <button id="past-games-button" type="button">Past games</button>
+                <ul id="games-list"></ul>
+                <p id="games-empty" hidden>No games yet &mdash; start one!</p>
+            </div>
+            <!-- Past games (issue #84) -- completed games move here once
+                 they're no longer part of a still-in-progress draft match
+                 (see GameService::listPastGamesForUser()); the current-games
+                 list above never shows them. Toggled in place rather than a
+                 separate top-level view, since it's just a different filter
+                 over the same "your games" data, not its own display. -->
+            <div id="past-games-section" hidden>
+                <h2>Past games</h2>
+                <button id="back-to-current-games-button" type="button">&larr; Back to your games</button>
+                <ul id="past-games-list"></ul>
+                <p id="past-games-empty" hidden>No past games yet.</p>
+            </div>
         </section>
 
         <section id="board-view" hidden>
@@ -135,7 +150,7 @@
                     <p id="winston-draft-drafting-status"></p>
                     <div id="winston-draft-piles"></div>
                     <p id="winston-draft-remaining-deck-count"></p>
-                    <p id="winston-draft-opponent-info"></p>
+                    <div id="winston-draft-other-players-info"></div>
                     <button id="winston-draft-take-button" type="button" hidden>Take pile</button>
                     <button id="winston-draft-pass-button" type="button" hidden>Pass</button>
                     <h4>Drafted so far</h4>
@@ -152,8 +167,7 @@
                     <p id="grid-draft-remaining-deck-count"></p>
                     <h4>Drafted so far</h4>
                     <ul id="grid-draft-drafted-so-far"></ul>
-                    <h4 id="grid-draft-opponent-drafted-so-far-title"></h4>
-                    <ul id="grid-draft-opponent-drafted-so-far"></ul>
+                    <div id="grid-draft-other-players-drafted"></div>
                 </div>
             </div>
 

@@ -387,12 +387,23 @@ final class BoardState
      * "pass to the player on your left/right" effects (Avoidance,
      * Confusion, Rationalization) should call this instead of indexing
      * playerOrder() directly, so a resigned player is skipped rather than
-     * receiving (or being treated as the source of) a pass. 'right' means
+     * receiving (or being treated as the source of) a pass. 'left' means
      * the next seat forward in playerOrder() (index + 1); anything else
-     * means the previous seat (index - 1) -- matching this codebase's own
-     * existing left/right convention. Returns null if fewer than 2
-     * players are still active (nowhere to pass to) or if $playerId
-     * itself isn't currently active.
+     * means the previous seat (index - 1) -- matching a real round table,
+     * where turn order proceeds clockwise (GameService::rotate() treats
+     * ascending seat_order as clockwise) and the next player in that
+     * rotation is seated at your own physical left hand. This also
+     * matches the positional in-play board (issue #124,
+     * web-static/js/game.js's inPlayZoneAssignments()), which -- for this
+     * same reason -- already draws that same next-turn-order seat at the
+     * viewer's own screen-left. (Before this fix, this method's 'left'/
+     * 'right' were the other way around: the next-turn-order seat was
+     * labeled 'right' despite always being drawn on-screen at the
+     * viewer's left, so choosing "right" on Avoidance/Confusion/
+     * Rationalization sent the pass to the player shown on the viewer's
+     * left, and vice versa.) Returns null if fewer than 2 players are
+     * still active (nowhere to pass to) or if $playerId itself isn't
+     * currently active.
      */
     public function activeNeighbor(int $playerId, string $direction): ?int
     {
@@ -403,7 +414,7 @@ final class BoardState
             return null;
         }
 
-        $offset = $direction === 'right' ? 1 : -1;
+        $offset = $direction === 'left' ? 1 : -1;
 
         return $active[($index + $offset + $count) % $count];
     }
