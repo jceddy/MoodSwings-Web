@@ -575,11 +575,14 @@ body.game-page {
 
 /* Fixed width (rather than each button sizing to its own text) so every
    button in both rows lines up into a neat grid instead of jagged edges
-   from "Row 1 (3 cards)" vs. "Col 2 (0 cards)"'s differing lengths. Wide
-   enough for the longest label ("Row/Col N (N cards)") with a little
-   breathing room. */
+   from "Row 1 (3)" vs. "Col 2 (0)"'s differing lengths. Wide enough for
+   the longest label ("Row/Col N (N)", grid_size never exceeds 4) with a
+   little breathing room -- narrowed from the wider fixed width the old
+   "Row/Col N (N cards)" label needed, most noticeable at 4 players where
+   8 buttons (4 rows + 4 columns) share the picks panel a 3x3 grid's 6
+   buttons already do. */
 .grid-draft-pick-button {
-    width: 7.5rem;
+    width: 5rem;
 }
 
 .grid-draft-picks-row {
