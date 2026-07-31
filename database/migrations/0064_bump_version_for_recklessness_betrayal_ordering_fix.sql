@@ -1,0 +1,17 @@
+-- Rules-engine fix, no schema change: GameService::applyAfterScoringHooks()
+-- resolved a mood's own inherent 'afterScoring' tag (Bashfulness/Gluttony/
+-- Insecurity/Recklessness) AFTER a foreign 'returnsToOwnerAfterScoring' tag
+-- placed on that same card by a different source (Betrayal; Recklessness's
+-- own steal) -- backwards from a rules-committee ruling covering the case
+-- where a single card carries both at once (Recklessness steals a mood,
+-- then is itself given away via Betrayal). Now resolves the card's own
+-- effect first, with an isInPlay() guard before the foreign return so it
+-- correctly no-ops once the card has already left play. This migration
+-- exists purely to keep schema_version in sync with the VERSION bump, the
+-- same way 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056/0058/0059/
+-- 0061/0062/0063 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table on
+-- every request (see migration 0021's own docblock), so a VERSION bump with
+-- no matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.10.3' WHERE id = 1;

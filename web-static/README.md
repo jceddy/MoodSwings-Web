@@ -1859,8 +1859,9 @@ too, proportional to the smaller card width.
     has no `catalog_card_id`/`rules_text` to build a card-detail-dialog-style
     view from. Whoever a delayed choice response is currently pending on
     (Compulsion, Arrogance/Intimidation/Instability/Suspicion/
-    Disillusionment/Malice, a Duplicity repeat offer, or a scoring-time
-    Enthusiasm/Passion decision — see `round.pending_decision` in
+    Disillusionment/Malice, a Duplicity repeat offer, a scoring-time
+    Enthusiasm/Passion decision, or a scoring-time after-scoring-order
+    decision (`'after_scoring_order'` — see `round.pending_decision` in
     `php-app/README.md`'s `/games/state` entry) gets its own small hourglass flag icon
     (`state.round.pending_decision.target_game_player_id`, compared against
     each row's own `game_player_id`) in `--color-pending`, this app's
@@ -1871,6 +1872,33 @@ too, proportional to the smaller card width.
     "a real opponent across the table would see someone visibly puzzling
     over a card, just not what it says" principle other open-information
     fields on this page already follow.
+
+    `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
+    pending-decision field that isn't a `<select>`-backed widget at all —
+    `buildFieldWidget()` renders `field.cards` (already in the server's own
+    default order) as an `.card-order-field` `<ol>`, one `<li>` per pending
+    card. Each `<li>` shows the card's bold name plus (when present) its
+    `description` — a muted one-line summary from the server explaining
+    what that specific pending effect does, e.g. "Returns to Alice after
+    scoring (taken via Betrayal)." — below it, so the player can make an
+    informed choice without needing to already know every card's printed
+    rules text. The ↑/↓ buttons that reorder an `<li>` within the list
+    (via plain `insertBefore()` calls — no drag-and-drop library needed
+    for a handful of items) live together in their own `.card-order-buttons`
+    span rather than as separate flex children of the `<li>` — the CSS's
+    `justify-content: space-between` would otherwise spread them apart
+    from each other (name — up — down) instead of keeping the pair
+    together, leaving the two buttons at inconsistent horizontal positions
+    from row to row; grouping them, with a fixed button width, keeps the
+    pair aligned as a tight column down the list regardless of how long
+    each row's name/description text is. There's no "candidate list" to
+    build via `fieldOptions()` the way every other field type has — every
+    one of `field.cards` is always part of the answer, just reordered —
+    so `buildChoicesFromFields()` reads the final answer straight off the
+    DOM order (`Array.from(...).map(li => Number(li.dataset.cardId))`)
+    rather than collecting `<select>` values. Always a complete, valid
+    answer as soon as it's shown (there's nothing to leave blank), so
+    `fieldHasValue()` treats it the same as a checkbox.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
