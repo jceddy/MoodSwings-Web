@@ -106,6 +106,18 @@ state. Anything reacting to a deploy having landed (e.g. `web-static/js/app.js`'
 version watcher, see `web-static/README.md`) needs to account for this
 rather than assuming the first sign of change is already the final state.
 
+Once the migration and health-check steps above both succeed, each workflow's
+final "Announce deploy on Discord" step posts a message — the deployed
+`VERSION`, the environment's own `SITE_URL`, and the commit subjects (capped
+at 15, `--no-merges`) introduced since the previous deploy on that
+branch — into one shared Discord channel, using the app's own bot token
+(production's `DISCORD_BOT_TOKEN`, dev's own `DEV_DISCORD_BOT_TOKEN`) rather
+than the per-user DM path `DiscordNotificationChannel.php` uses elsewhere.
+It's entirely optional: unless `DISCORD_ANNOUNCE_CHANNEL_ID` (below) is set,
+this step is skipped rather than failing the deploy. A failed migration or
+health check also skips it, so a broken deploy is never announced as if it
+succeeded.
+
 ### One-time setup
 
 1. In cPanel, create (or reuse) an FTP account for deploys and note its
@@ -174,6 +186,22 @@ rather than assuming the first sign of change is already the final state.
      `siteRootUrl()` in `php-app/README.md`'s "Discord" section. If unset,
      the app derives it from `APP_URL` instead, so this is optional but
      recommended.
+   - `DISCORD_ANNOUNCE_CHANNEL_ID` — the id of the Discord channel to post
+     deploy announcements into (right-click the channel in Discord with
+     Developer Mode on → **Copy Channel ID**). Not sensitive (unlike the
+     bot token itself), so this lives with the other variables rather than
+     the secrets above. Shared with `deploy-dev.yml` (dev) — see
+     "Development environment setup" below — so both environments'
+     deploys announce into the same channel. Both the production bot
+     (`DISCORD_BOT_TOKEN`, from step 3 above) and the dev bot
+     (`DEV_DISCORD_BOT_TOKEN`, see below) need to actually be members of
+     the server that channel is in, with permission to view it and send
+     messages there — inviting a bot with only the OAuth2 scopes needed
+     for account linking (per "Discord" in `php-app/README.md`) doesn't
+     add it to any server on its own; use the Developer Portal's OAuth2
+     URL Generator with the `bot` scope and "Send Messages"/"View
+     Channel" permissions to generate an invite link for this. If unset,
+     the "Announce deploy on Discord" step above is skipped entirely.
 5. Create the database itself. A brand-new database still needs its
    initial schema applied by hand — this repo's GitHub Actions runner
    cannot reach Bluehost's MySQL directly, so run each file in
@@ -216,6 +244,11 @@ emails going out from the same already-configured sender isn't a concern.
    (same Developer Portal, same tabs as production's own — see "Discord"
    in `php-app/README.md`), since a Discord Application can only ever
    point its Interactions Endpoint/OAuth2 redirect at one URL.
+   `DEV_DISCORD_BOT_TOKEN` doubles as the token `deploy-dev.yml`'s own
+   "Announce deploy on Discord" step posts with — this second Application's
+   bot needs to be invited to (and have Send Messages/View Channel
+   permission in) the same server/channel as production's own bot, per
+   `DISCORD_ANNOUNCE_CHANNEL_ID` above, or dev deploys just won't announce.
 3. Add the **variables**: `DEV_FTP_SERVER_DIR`, `DEV_APP_URL` (your dev
    domain's `/app` URL), `DEV_SITE_URL` (your dev domain's base URL). No
    separate `DEV_MIGRATION_DEPLOY_KEY` is needed — `deploy-dev.yml` reuses
