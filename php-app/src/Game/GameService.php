@@ -4821,6 +4821,30 @@ final class GameService
      * mood list up front since some actions remove the mood from play,
      * which would otherwise mutate moodsInPlay() mid-iteration.
      *
+     * 'afterScoring' resolves BEFORE 'returnsToOwnerAfterScoring' for a mood
+     * carrying both tags at once (e.g. Recklessness took a mood that
+     * already had its own after-scoring tag, or -- the trickier case --
+     * Recklessness ITSELF got given away via Betrayal, so its own
+     * unconditional "while in play, after scoring, bottom this mood and
+     * draw" tag and Betrayal's foreign "give it back" tag both land on the
+     * exact same card). Printed card text always frames "after scoring"
+     * effects as belonging to whoever currently controls that card when
+     * this resolves -- Recklessness's own bottom-and-draw is unconditional
+     * ("while in play"), so it always fires for its CURRENT controller
+     * first; only once that's settled does a foreign "give it back ... if
+     * it's still in play" get a chance to run, and by then the mood may
+     * already be gone. Doing it in the OTHER order (as this used to) lets
+     * a foreign return-to-owner tag "steal" a mood back to its original
+     * owner a moment before that same mood's own unconditional effect
+     * would have removed it from play entirely -- reversing who ends up
+     * credited with e.g. Recklessness's own draw, and logging a
+     * transient, ruling-contradicting ownership change for a mood that,
+     * per the printed "if it's still in play" qualifier, should never
+     * have moved at all. isInPlay() is checked immediately before
+     * giveInPlayToPlayer() for exactly that qualifier -- 'afterScoring'
+     * may have just removed the mood from play, in which case the return
+     * is skipped entirely rather than acting on a card no longer there.
+     *
      * $winningGamePlayerIds is every player whose "you won this round"
      * condition should read true -- a single-element array for every
      * non-team format (just the round's own winner), or a team-format
@@ -4839,20 +4863,6 @@ final class GameService
             $afterScoring = $state->effectState($cardId, 'afterScoring');
             if ($afterScoring !== null) {
                 $state->clearEffectState($cardId, 'afterScoring');
-            }
-
-            // Resolved before 'afterScoring' below, since a mood can carry
-            // both tags at once (e.g. Recklessness took a mood that already
-            // had its own after-scoring tag) and 'afterScoring' may remove
-            // the mood from play, which would leave nothing for
-            // giveInPlayToPlayer() to act on.
-            $returnsToOwner = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
-            if ($returnsToOwner !== null) {
-                $state->clearEffectState($cardId, 'returnsToOwnerAfterScoring');
-                $state->giveInPlayToPlayer($cardId, $returnsToOwner['ownerId']);
-            }
-
-            if ($afterScoring !== null) {
                 $conditionMet = ($afterScoring['condition'] ?? 'always') === 'always' || in_array($ownerId, $winningGamePlayerIds, true);
                 if ($conditionMet) {
                     match ($afterScoring['action']) {
@@ -4861,6 +4871,14 @@ final class GameService
                         'bottom_and_draw' => $this->bottomOfDeckAndDraw($state, $cardId, $ownerId),
                         default => throw new GameStateException("Unknown afterScoring action '{$afterScoring['action']}'"),
                     };
+                }
+            }
+
+            $returnsToOwner = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
+            if ($returnsToOwner !== null) {
+                $state->clearEffectState($cardId, 'returnsToOwnerAfterScoring');
+                if ($state->isInPlay($cardId)) {
+                    $state->giveInPlayToPlayer($cardId, $returnsToOwner['ownerId']);
                 }
             }
         }
