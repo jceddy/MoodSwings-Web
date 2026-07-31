@@ -1,0 +1,17 @@
+-- CI/CD-only change, no schema change: both deploy workflows
+-- (.github/workflows/deploy.yml, deploy-dev.yml) now post a message to a
+-- shared Discord channel once a deploy's migration + health-check steps
+-- both succeed -- the deployed VERSION, the environment's own SITE_URL,
+-- and the commit subjects introduced since the previous deploy on that
+-- branch -- using the app's own existing Discord bot token, straight to
+-- a fixed channel (DISCORD_ANNOUNCE_CHANNEL_ID) rather than through
+-- DiscordNotificationChannel.php's per-user DM path. Entirely opt-in:
+-- skipped, not failed, unless that channel id is configured. This
+-- migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0064/0065 already did for their
+-- own schema-less changes -- MaintenanceGate compares the deployed
+-- VERSION file against this table on every request (see migration
+-- 0021's own docblock), so a VERSION bump with no matching
+-- schema_version update would show maintenance mode after deploy even
+-- though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.10.5' WHERE id = 1;
