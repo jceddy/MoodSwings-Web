@@ -1859,8 +1859,9 @@ too, proportional to the smaller card width.
     has no `catalog_card_id`/`rules_text` to build a card-detail-dialog-style
     view from. Whoever a delayed choice response is currently pending on
     (Compulsion, Arrogance/Intimidation/Instability/Suspicion/
-    Disillusionment/Malice, a Duplicity repeat offer, or a scoring-time
-    Enthusiasm/Passion decision — see `round.pending_decision` in
+    Disillusionment/Malice, a Duplicity repeat offer, a scoring-time
+    Enthusiasm/Passion decision, or a scoring-time after-scoring-order
+    decision (`'after_scoring_order'` — see `round.pending_decision` in
     `php-app/README.md`'s `/games/state` entry) gets its own small hourglass flag icon
     (`state.round.pending_decision.target_game_player_id`, compared against
     each row's own `game_player_id`) in `--color-pending`, this app's
@@ -1871,6 +1872,20 @@ too, proportional to the smaller card width.
     "a real opponent across the table would see someone visibly puzzling
     over a card, just not what it says" principle other open-information
     fields on this page already follow.
+
+    `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
+    pending-decision field that isn't a `<select>`-backed widget at all —
+    `buildFieldWidget()` renders `field.cards` (already in the server's own
+    default order) as an `.card-order-field` `<ol>`, one `<li>` per pending
+    card with ↑/↓ buttons that reorder it within the list via plain
+    `insertBefore()` calls (no drag-and-drop library needed for a handful
+    of items). There's no "candidate list" to build via `fieldOptions()`
+    the way every other field type has — every one of `field.cards` is
+    always part of the answer, just reordered — so `buildChoicesFromFields()`
+    reads the final answer straight off the DOM order (`Array.from(...).map(li => Number(li.dataset.cardId))`)
+    rather than collecting `<select>` values. Always a complete, valid
+    answer as soon as it's shown (there's nothing to leave blank), so
+    `fieldHasValue()` treats it the same as a checkbox.
 
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits

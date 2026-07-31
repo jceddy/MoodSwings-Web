@@ -167,6 +167,21 @@ final class GameService
     private const SCORING_DECISION_TYPES = [self::ENTHUSIASM_DECISION_TYPE, self::PASSION_DECISION_TYPE];
 
     /**
+     * A player's own choice of which order their "after scoring" effects
+     * resolve in, per the rules-committee ruling on Recklessness/Betrayal
+     * (see applyAfterScoringHooks()'s own docblock): asked once scores are
+     * final and it's known which cards' after-scoring effects will
+     * actually fire, so -- like SCORING_DECISION_TYPES above -- this is a
+     * distinct scoring-time decision, not a mid-play one, even though it's
+     * stored via the exact same game_pending_decision_batches/decisions
+     * machinery. Unlike Enthusiasm/Passion (asked BEFORE scores are
+     * computed, since they feed RoundScorer::score() itself), this is
+     * asked strictly AFTER -- see nextUnresolvedAfterScoringOrderDecision()
+     * and determineRoundWinner().
+     */
+    private const AFTER_SCORING_ORDER_DECISION_TYPE = 'after_scoring_order';
+
+    /**
      * Quick Draft (issue #88, format 'draft' only; multiplayer 2-4 player
      * support added for issue #189): a shared pool of quickDraftPoolTargetSize()
      * cards, drafted over quickDraftRounds() rounds. Each round, every
@@ -3192,6 +3207,23 @@ final class GameService
                 throw new InvalidChoiceException("Missing required choice '{$answerKey}'");
             }
 
+            if ($decisionRow['decision_type'] === self::AFTER_SCORING_ORDER_DECISION_TYPE) {
+                // The only valid answer is a reordering of exactly this
+                // decision's own pending cards -- validated (and rejected
+                // before ever reaching "resolved") the same way the
+                // required-field check above already attributes a bad
+                // submission to whoever actually made it, rather than
+                // letting applyAfterScoringHooks() silently fall back to
+                // the default order for a malformed one later.
+                $expectedCardIds = array_column($field['cards'], 'card_id');
+                sort($expectedCardIds);
+                $submittedCardIds = array_map(intval(...), (array) ($choices[$answerKey] ?? []));
+                sort($submittedCardIds);
+                if ($submittedCardIds !== $expectedCardIds) {
+                    throw new InvalidChoiceException("'{$answerKey}' must be exactly this decision's own pending cards, in some order");
+                }
+            }
+
             $pdo = Connection::get();
             $pdo->beginTransaction();
 
@@ -3219,16 +3251,26 @@ final class GameService
                 $pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
                     ->execute(['id' => $batchRow['id']]);
 
-                if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
-                    // Enthusiasm's/Passion's own scoring-time decision (see
-                    // scoreRoundAndAdvance()) rather than a mid-play one --
-                    // resolved entirely differently: no MoodPlayService chain
-                    // to resume, just either the next scoring decision still
-                    // outstanding this round, or (once none remain) the same
-                    // score/persist/advance tail that would have run
-                    // immediately if no decision had ever been needed. Neither
-                    // decision type moves a card, so this branch's own event
-                    // has no BoardState to fold card history from.
+                if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true) || $decisionRow['decision_type'] === self::AFTER_SCORING_ORDER_DECISION_TYPE) {
+                    // Every scoring-time decision (see scoreRoundAndAdvance()/
+                    // finishScoringAndAdvance()) resolves the same way,
+                    // whether it's Enthusiasm's/Passion's own (asked BEFORE
+                    // scores are computed) or an after-scoring order choice
+                    // (asked AFTER) -- entirely differently from a mid-play
+                    // one: no MoodPlayService chain to resume, just
+                    // re-entering finishScoringAndAdvance() itself, which
+                    // re-checks everything from scratch (both scoring
+                    // decisions, via nextUnresolvedScoringDecision() below,
+                    // and its own internal after-scoring-order check) and
+                    // either pauses again on whatever's next or finishes for
+                    // real. Recomputing $scoringDecisions here even when an
+                    // order decision (never a scoring one) was just answered
+                    // is harmless -- resolvedScoringDecisionBonuses() only
+                    // ever reads what's already resolved, which by this
+                    // point in the round can only be actual scoring
+                    // decisions, if any. None of these decision types moves
+                    // a card, so this branch's own event has no BoardState
+                    // to fold card history from.
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_resolved', $playedCardId, $choices);
 
                     $state = $this->boardStates->load($gameId);
@@ -4286,9 +4328,28 @@ final class GameService
      * scoring decision resolves). The caller is responsible for the
      * transaction; this method never begins or commits one of its own.
      *
+     * Also where an after-scoring ORDER decision (see
+     * AFTER_SCORING_ORDER_DECISION_TYPE) gets a chance to pause the round a
+     * second time, later than SCORING_DECISION_TYPES -- scores must
+     * already be final (RoundScorer::score()/applyScoreSwaps() already
+     * ran, right above) before it's even possible to know which cards'
+     * conditional afterScoring tags will actually fire this round, and
+     * therefore whether any player controls 2+ of them and needs to
+     * choose an order. Crucially, this check runs BEFORE anything below it
+     * writes to the database or calls boardStates->save() -- exactly
+     * mirroring how scoreRoundAndAdvance() itself checks
+     * nextUnresolvedScoringDecision() before ever calling this method at
+     * all, just one phase later. That means every mutation $state has
+     * picked up so far this call (applyScoreSwaps()'s own tag-clearing,
+     * clearEndOfRoundSuppressions() below) is safely discarded, not
+     * persisted, if this pauses -- $state gets reloaded fresh (and
+     * $scores/$state re-derived identically, since both are pure functions
+     * of already-resolved decisions) the next time this round advances,
+     * whether that's another order decision or the real thing.
+     *
      * @param int[] $turnOrder
      * @param array<int, int> $scoringDecisions cardId => resolved bonus, see RoundScorer::score()
-     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
     private function finishScoringAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state, array $scoringDecisions, int $requestingGamePlayerId): array
     {
@@ -4307,18 +4368,32 @@ final class GameService
         // $state.
         $state->clearEndOfRoundSuppressions();
 
+        // A single source of truth for "who won" -- see its own docblock
+        // for why the order-decision check below and whichever tail
+        // actually runs must never derive this two different ways.
+        $outcome = $this->determineRoundWinner($gameId, $round, $scores, $turnOrder);
+
+        $nextOrderDecision = $this->nextUnresolvedAfterScoringOrderDecision($state, $roundId, $turnOrder, $outcome['winningGamePlayerIds']);
+        if ($nextOrderDecision !== null) {
+            $this->writeAfterScoringOrderDecisionBatch($gameId, $roundId, $nextOrderDecision);
+            $this->logEvent($gameId, $roundId, $nextOrderDecision['ownerId'], 'pending_decision_created', $nextOrderDecision['groups'][0]['cardId'], ['after_scoring_order_trigger' => true], $state);
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        }
+
         if (self::isTeamFormat($this->fetchGame($gameId)['format'])) {
-            return $this->finishTeamScoringAndAdvance($gameId, $round, $state, $scores, $requestingGamePlayerId);
+            return $this->finishTeamScoringAndAdvance($gameId, $round, $turnOrder, $state, $scores, $outcome, $requestingGamePlayerId);
         }
 
         // $scores covers every seated player (BoardState has no notion of
         // resignation), but $turnOrder is already active-players-only (see
         // turnOrderForRound()) -- narrowed to match before handing it to
-        // winner()/hurtFeelings(), so a resigned player's own score can
-        // never make them the round's winner or Hurt Feelings holder even
-        // if it happens to be the highest/lowest in $scores.
+        // hurtFeelings(), so a resigned player's own score can never make
+        // them Hurt Feelings holder even if it happens to be the lowest in
+        // $scores. $winnerId itself already reflects the same narrowing --
+        // see determineRoundWinner().
         $activeScores = array_intersect_key($scores, array_flip($turnOrder));
-        $winnerId = $this->scorer->winner($activeScores, $turnOrder);
+        $winnerId = $outcome['winnerGamePlayerId'];
         $winsAwarded = $this->consumeExtraWinMarker($state);
 
         $insertScore = $pdo->prepare(
@@ -4352,7 +4427,9 @@ final class GameService
                 }
             }
         }
-        $this->applyAfterScoringHooks($state, [$winnerId]);
+
+        $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
+        $this->applyAfterScoringHooks($state, [$winnerId], $turnOrder, $resolvedOrders);
 
         // Hurt Feelings only exists in games of 3 or more (active) players.
         $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
@@ -4535,39 +4612,27 @@ final class GameService
      * path above, there's no hurt_feelings_game_player_id to compute or
      * carry into the next round.
      *
+     * $turnOrder/$outcome are precomputed by the caller (finishScoringAndAdvance(),
+     * via determineRoundWinner()) rather than re-derived here -- see that
+     * method's own docblock for why the winner/winning-side computation
+     * must be a single shared source of truth, not something this method
+     * and the after-scoring-order-decision check above it could ever
+     * derive two different ways.
+     *
+     * @param int[] $turnOrder
      * @param array<int,int> $scores game_player_id => score
+     * @param array{winnerGamePlayerId:int, winnerTeamId:?int, winningGamePlayerIds:int[]} $outcome
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
-    private function finishTeamScoringAndAdvance(int $gameId, array $round, BoardState $state, array $scores, int $requestingGamePlayerId): array
+    private function finishTeamScoringAndAdvance(int $gameId, array $round, array $turnOrder, BoardState $state, array $scores, array $outcome, int $requestingGamePlayerId): array
     {
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
 
-        $teamIdByPlayer = $this->teamIdByGamePlayer($gameId);
-        $teamScores = [0 => 0, 1 => 0];
-        foreach ($scores as $playerId => $score) {
-            $teamScores[$teamIdByPlayer[$playerId]] += $score;
-        }
-
-        $firstTeamId = $teamIdByPlayer[(int) $round['first_game_player_id']];
-        $otherTeamId = $firstTeamId === 0 ? 1 : 0;
-        // Ties go to whoever played first this round.
-        $winningTeamId = $teamScores[$firstTeamId] >= $teamScores[$otherTeamId] ? $firstTeamId : $otherTeamId;
+        $winnerRepresentative = $outcome['winnerGamePlayerId'];
+        $winningTeamId = $outcome['winnerTeamId'];
+        $winningTeamMembers = $outcome['winningGamePlayerIds']; // seat_order ASC, see determineRoundWinner()
         $losingTeamId = $winningTeamId === 0 ? 1 : 0;
-
-        $winningTeamMembers = $this->teamMembers($gameId, $winningTeamId); // seat_order ASC
-        // A representative teammate for winner_game_player_id's own FK/
-        // display purposes only -- whoever scored higher individually,
-        // ties by lower seat_order (winningTeamMembers[0] is already the
-        // lower-seat_order member, so a strict > below already keeps it
-        // on a tie). Never used for team win-counting -- see
-        // totalWinsForTeam(), which reads winner_team_id instead.
-        $winnerRepresentative = $winningTeamMembers[0];
-        foreach ($winningTeamMembers as $playerId) {
-            if ($scores[$playerId] > $scores[$winnerRepresentative]) {
-                $winnerRepresentative = $playerId;
-            }
-        }
 
         $winsAwarded = $this->consumeExtraWinMarker($state);
 
@@ -4592,7 +4657,8 @@ final class GameService
         $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
         $gameCompleting = $totalWins >= $winsNeeded;
 
-        $this->applyAfterScoringHooks($state, $winningTeamMembers);
+        $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
+        $this->applyAfterScoringHooks($state, $winningTeamMembers, $turnOrder, $resolvedOrders);
         $this->boardStates->save($gameId, $state);
 
         $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
@@ -4817,33 +4883,50 @@ final class GameService
      * (Bashfulness; Gluttony/Insecurity via MoodPlayService's
      * onUseEffectState; Recklessness's own "while in play" ability) and
      * 'returnsToOwnerAfterScoring' (Betrayal; the mood Recklessness took) --
-     * then clears each tag so it doesn't reapply next round. Snapshots the
-     * mood list up front since some actions remove the mood from play,
-     * which would otherwise mutate moodsInPlay() mid-iteration.
+     * then clears each tag so it doesn't reapply next round.
      *
-     * 'afterScoring' resolves BEFORE 'returnsToOwnerAfterScoring' for a mood
-     * carrying both tags at once (e.g. Recklessness took a mood that
-     * already had its own after-scoring tag, or -- the trickier case --
-     * Recklessness ITSELF got given away via Betrayal, so its own
-     * unconditional "while in play, after scoring, bottom this mood and
-     * draw" tag and Betrayal's foreign "give it back" tag both land on the
-     * exact same card). Printed card text always frames "after scoring"
-     * effects as belonging to whoever currently controls that card when
-     * this resolves -- Recklessness's own bottom-and-draw is unconditional
-     * ("while in play"), so it always fires for its CURRENT controller
-     * first; only once that's settled does a foreign "give it back ... if
-     * it's still in play" get a chance to run, and by then the mood may
-     * already be gone. Doing it in the OTHER order (as this used to) lets
-     * a foreign return-to-owner tag "steal" a mood back to its original
-     * owner a moment before that same mood's own unconditional effect
-     * would have removed it from play entirely -- reversing who ends up
-     * credited with e.g. Recklessness's own draw, and logging a
-     * transient, ruling-contradicting ownership change for a mood that,
-     * per the printed "if it's still in play" qualifier, should never
-     * have moved at all. isInPlay() is checked immediately before
-     * giveInPlayToPlayer() for exactly that qualifier -- 'afterScoring'
-     * may have just removed the mood from play, in which case the return
-     * is skipped entirely rather than acting on a card no longer there.
+     * A rules-committee ruling on the Recklessness/Betrayal interaction
+     * spells out the full general framework this now implements: "after
+     * scoring" effects resolve player by player, in the order they went
+     * this round (see $turnOrder); if a player's OWN cards carry two or
+     * more such effects at once, THEY choose the order those resolve in.
+     * "A player's own cards" means every card whose particular
+     * after-scoring effect currently belongs to them -- see
+     * pendingAfterScoringGroups() for exactly how that's determined (a
+     * self-tag belongs to whoever currently controls the tagged card
+     * itself; a foreign 'returnsToOwnerAfterScoring' tag belongs to
+     * whoever currently controls the *source* card that placed it --
+     * Betrayal, or the Recklessness that stole this mood in the first
+     * place -- since that's whose printed ability it actually is,
+     * regardless of who's currently holding the affected card). $groups
+     * is precomputed once, up front, from $state as of the moment
+     * everyone's finished answering (nothing between "the last order
+     * decision resolves" and this call can move a card, so re-deriving it
+     * fresh per player would only waste work, not change the answer).
+     * $resolvedOrders (see resolvedAfterScoringOrders()) supplies, for
+     * whichever players actually had a real choice to make, the exact
+     * cardId order they chose; every other player's own pending cards are
+     * processed in their only-ever-shown default (ascending cardId) order,
+     * same as before a choice existed at all -- see
+     * nextUnresolvedAfterScoringOrderDecision(), which only pauses for a
+     * decision in the first place once a player has 2+ pending cards.
+     *
+     * Within one physical card that itself carries BOTH tags at once (only
+     * possible when that card's own self-tag and a foreign tag placed ON
+     * it both currently belong to the SAME player -- e.g. Recklessness
+     * took a mood that already had its own after-scoring tag, or --
+     * trickier -- Recklessness ITSELF got given away via Betrayal and then
+     * stolen back again before scoring) the self-tag still always resolves
+     * first, unconditionally, never as part of the player's own order
+     * choice: it's one card's own compound ability, not two separate
+     * cards competing for a turn slot, and printed card text always frames
+     * "after scoring" effects as belonging to whoever currently controls
+     * that card when this resolves -- Recklessness's own bottom-and-draw
+     * is unconditional ("while in play"), so it always fires first; only
+     * once that's settled does a foreign "give it back ... if it's still
+     * in play" get a chance to run, and by then the mood may already be
+     * gone. isInPlay() is checked immediately before giveInPlayToPlayer()
+     * for exactly that qualifier.
      *
      * $winningGamePlayerIds is every player whose "you won this round"
      * condition should read true -- a single-element array for every
@@ -4853,35 +4936,308 @@ final class GameService
      * scores are shared -- see "Open Team Play" in php-app/README.md.
      *
      * @param int[] $winningGamePlayerIds
+     * @param int[] $turnOrder
+     * @param array<int, int[]> $resolvedOrders game_player_id => their chosen cardId order, see resolvedAfterScoringOrders()
      */
-    private function applyAfterScoringHooks(BoardState $state, array $winningGamePlayerIds): void
+    private function applyAfterScoringHooks(BoardState $state, array $winningGamePlayerIds, array $turnOrder, array $resolvedOrders): void
     {
+        $groups = $this->pendingAfterScoringGroups($state, $winningGamePlayerIds);
+
+        foreach ($turnOrder as $playerId) {
+            $playerGroups = $groups[$playerId] ?? [];
+            if ($playerGroups === []) {
+                continue;
+            }
+
+            if (isset($resolvedOrders[$playerId])) {
+                $byCardId = [];
+                foreach ($playerGroups as $group) {
+                    $byCardId[$group['cardId']] = $group;
+                }
+                $ordered = [];
+                foreach ($resolvedOrders[$playerId] as $cardId) {
+                    if (isset($byCardId[$cardId])) {
+                        $ordered[] = $byCardId[$cardId];
+                        unset($byCardId[$cardId]);
+                    }
+                }
+                // Anything left over (never happens for a validly-stored
+                // answer -- see respondToDecision()'s own permutation
+                // check) is appended in the original default order, so a
+                // stale/partial answer still resolves every pending card
+                // rather than silently dropping one.
+                $playerGroups = [...$ordered, ...array_values($byCardId)];
+            }
+
+            foreach ($playerGroups as $group) {
+                $cardId = $group['cardId'];
+
+                if ($group['self']) {
+                    $afterScoring = $state->effectState($cardId, 'afterScoring');
+                    if ($afterScoring !== null) {
+                        $state->clearEffectState($cardId, 'afterScoring');
+                        $ownerId = $state->ownerOf($cardId);
+                        match ($afterScoring['action']) {
+                            'discard' => $state->moveInPlayToDiscard($cardId),
+                            'return_to_hand' => $state->moveInPlayToHand($cardId),
+                            'bottom_and_draw' => $this->bottomOfDeckAndDraw($state, $cardId, $ownerId),
+                            default => throw new GameStateException("Unknown afterScoring action '{$afterScoring['action']}'"),
+                        };
+                    }
+                }
+
+                if ($group['foreign']) {
+                    $returnsToOwner = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
+                    if ($returnsToOwner !== null) {
+                        $state->clearEffectState($cardId, 'returnsToOwnerAfterScoring');
+                        if ($state->isInPlay($cardId)) {
+                            $state->giveInPlayToPlayer($cardId, $returnsToOwner['ownerId']);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Every mood in play whose 'afterScoring' self-tag will actually fire
+     * this round (condition already known, since scores/winner are final
+     * by the time this is ever called) and/or whose
+     * 'returnsToOwnerAfterScoring' foreign tag is present, grouped by
+     * whichever player that specific effect currently belongs to -- see
+     * applyAfterScoringHooks()'s own docblock for exactly what "belongs
+     * to" means for each kind. A single cardId can appear in TWO different
+     * players' own lists at once (e.g. Recklessness given away via
+     * Betrayal: its own self-tag now belongs to whoever holds Recklessness,
+     * but Betrayal's foreign tag on that same card still belongs to
+     * whoever holds Betrayal) -- exactly the case the ruling calls "in
+     * your example different players have each card," even though here
+     * it's the same card. Every controller's own list is sorted by
+     * ascending cardId for a deterministic default order (shown to the
+     * player as the starting point for their own choice, and used as-is
+     * for anyone who never had one to make).
+     *
+     * @param int[] $winningGamePlayerIds
+     * @return array<int, list<array{cardId: int, self: bool, foreign: bool}>> game_player_id => their pending cards
+     */
+    private function pendingAfterScoringGroups(BoardState $state, array $winningGamePlayerIds): array
+    {
+        $byController = [];
+
         foreach ($state->moodsInPlay() as $mood) {
             $cardId = $mood->cardId;
-            $ownerId = $mood->ownerId;
 
             $afterScoring = $state->effectState($cardId, 'afterScoring');
             if ($afterScoring !== null) {
-                $state->clearEffectState($cardId, 'afterScoring');
-                $conditionMet = ($afterScoring['condition'] ?? 'always') === 'always' || in_array($ownerId, $winningGamePlayerIds, true);
+                $conditionMet = ($afterScoring['condition'] ?? 'always') === 'always' || in_array($mood->ownerId, $winningGamePlayerIds, true);
                 if ($conditionMet) {
-                    match ($afterScoring['action']) {
-                        'discard' => $state->moveInPlayToDiscard($cardId),
-                        'return_to_hand' => $state->moveInPlayToHand($cardId),
-                        'bottom_and_draw' => $this->bottomOfDeckAndDraw($state, $cardId, $ownerId),
-                        default => throw new GameStateException("Unknown afterScoring action '{$afterScoring['action']}'"),
-                    };
+                    $byController[$mood->ownerId][$cardId]['cardId'] = $cardId;
+                    $byController[$mood->ownerId][$cardId]['self'] = true;
                 }
             }
 
             $returnsToOwner = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
             if ($returnsToOwner !== null) {
-                $state->clearEffectState($cardId, 'returnsToOwnerAfterScoring');
-                if ($state->isInPlay($cardId)) {
-                    $state->giveInPlayToPlayer($cardId, $returnsToOwner['ownerId']);
-                }
+                $sourceCardId = $returnsToOwner['sourceCardId'];
+                // Betrayal/Recklessness (the only two sources of this tag)
+                // are always still in play in practice -- but if some
+                // future card ever moved one of them out from under an
+                // outstanding tag, falling back to the tag's own
+                // recorded destination keeps this from ever throwing.
+                $controllerId = $state->isInPlay($sourceCardId) ? $state->ownerOf($sourceCardId) : $returnsToOwner['ownerId'];
+                $byController[$controllerId][$cardId]['cardId'] = $cardId;
+                $byController[$controllerId][$cardId]['foreign'] = true;
             }
         }
+
+        $groups = [];
+        foreach ($byController as $controllerId => $byCardId) {
+            ksort($byCardId);
+            $groups[$controllerId] = array_map(
+                static fn (array $g): array => ['cardId' => $g['cardId'], 'self' => $g['self'] ?? false, 'foreign' => $g['foreign'] ?? false],
+                array_values($byCardId)
+            );
+        }
+
+        return $groups;
+    }
+
+    /**
+     * The next player, in turn order, who currently controls 2+ pending
+     * after-scoring cards (see pendingAfterScoringGroups()) and hasn't yet
+     * answered this round's own order decision -- or null once everyone
+     * who needed one has. Mirrors nextUnresolvedScoringDecision()'s own
+     * "recompute fresh each time, don't persist a queue" shape.
+     *
+     * @param int[] $turnOrder
+     * @param int[] $winningGamePlayerIds
+     * @return ?array{ownerId: int, groups: list<array{cardId: int, self: bool, foreign: bool}>}
+     */
+    private function nextUnresolvedAfterScoringOrderDecision(BoardState $state, int $roundId, array $turnOrder, array $winningGamePlayerIds): ?array
+    {
+        $groups = $this->pendingAfterScoringGroups($state, $winningGamePlayerIds);
+        $alreadyAnswered = $this->resolvedAfterScoringOrderPlayerIds($roundId);
+
+        foreach ($turnOrder as $playerId) {
+            $playerGroups = $groups[$playerId] ?? [];
+            if (count($playerGroups) < 2 || in_array($playerId, $alreadyAnswered, true)) {
+                continue;
+            }
+
+            return ['ownerId' => $playerId, 'groups' => $playerGroups];
+        }
+
+        return null;
+    }
+
+    /** @return int[] game_player_ids who've already answered an AFTER_SCORING_ORDER_DECISION_TYPE decision this round */
+    private function resolvedAfterScoringOrderPlayerIds(int $roundId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT DISTINCT d.target_game_player_id FROM game_pending_decision_batches b
+             JOIN game_pending_decisions d ON d.batch_id = b.id
+             WHERE b.game_round_id = :round_id AND b.resolved_at IS NOT NULL AND d.decision_type = :decision_type'
+        );
+        $stmt->execute(['round_id' => $roundId, 'decision_type' => self::AFTER_SCORING_ORDER_DECISION_TYPE]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Every resolved after-scoring order decision for this round,
+     * translated from its raw stored answer -- see
+     * writeAfterScoringOrderDecisionBatch() for the field shape --
+     * straight into the cardId order applyAfterScoringHooks() actually
+     * applies.
+     *
+     * @return array<int, int[]> game_player_id => their chosen cardId order
+     */
+    private function resolvedAfterScoringOrders(int $roundId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT d.target_game_player_id, d.answer FROM game_pending_decision_batches b
+             JOIN game_pending_decisions d ON d.batch_id = b.id
+             WHERE b.game_round_id = :round_id AND b.resolved_at IS NOT NULL AND d.decision_type = :decision_type'
+        );
+        $stmt->execute(['round_id' => $roundId, 'decision_type' => self::AFTER_SCORING_ORDER_DECISION_TYPE]);
+
+        $orders = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $answer = (array) json_decode((string) $row['answer'], true);
+            $orders[(int) $row['target_game_player_id']] = array_map(intval(...), (array) ($answer['ordered_card_ids'] ?? []));
+        }
+
+        return $orders;
+    }
+
+    /**
+     * @param array{ownerId: int, groups: list<array{cardId: int, self: bool, foreign: bool}>} $decision
+     */
+    private function writeAfterScoringOrderDecisionBatch(int $gameId, int $roundId, array $decision): void
+    {
+        $cardNames = $this->cardNamesFor($gameId);
+        $cards = array_map(
+            static fn (array $group): array => ['card_id' => $group['cardId'], 'name' => $cardNames[$group['cardId']] ?? 'Unknown'],
+            $decision['groups']
+        );
+
+        // No CardChoiceSchema::reactionTemplate() entry backs this one --
+        // unlike Enthusiasm's/Passion's own scoring decisions, it's not a
+        // printed reaction on any one card; it's an engine-level question
+        // ("in what order do YOUR OWN several after-scoring effects
+        // resolve") that only exists once 2+ of a single player's own
+        // cards are pending at once. 'cards' carries the exact pending set
+        // the field is describing, in the same default order shown as a
+        // starting point (see pendingAfterScoringGroups()); the answer is
+        // that same set of ids, resubmitted in the player's chosen order.
+        $field = [
+            'key' => 'ordered_card_ids',
+            'type' => 'card_order',
+            'label' => 'Choose the order your after-scoring effects resolve',
+            'required' => true,
+            'cards' => $cards,
+        ];
+
+        $request = new PendingDecisionRequest(
+            key: $field['key'],
+            targetPlayerId: $decision['ownerId'],
+            decisionType: self::AFTER_SCORING_ORDER_DECISION_TYPE,
+            field: $field,
+        );
+
+        // Reuses writePendingBatch()'s exact machinery (see
+        // writeScoringDecisionBatch()'s own comment on the same pattern) --
+        // played_card_id needs *some* real in-play card for its own FK, so
+        // this just names the first (default-order) pending card; nothing
+        // downstream ever reads it back as anything more specific than
+        // "which decision is this."
+        $result = PlayResult::pending([$request], $decision['groups'][0]['cardId'], 0, new PlayerChoices([]));
+
+        $this->writePendingBatch($gameId, $roundId, $decision['ownerId'], new PlayerChoices([]), new PlayerChoices([]), $result);
+    }
+
+    /**
+     * The single source of truth for "who won this round" -- computed
+     * without writing anything to the database, so it can run (and must
+     * give the exact same answer) from two different places: the
+     * after-scoring-order-decision check in finishScoringAndAdvance()
+     * (deciding whether the round needs to pause before it's even
+     * persisted) and, moments later once no more decisions are needed,
+     * the real score/winner persistence that same method (and
+     * finishTeamScoringAndAdvance()) performs. If those two ever computed
+     * "did you win" two different ways, a conditional afterScoring tag
+     * like Bashfulness's could be asked about in the check but resolve
+     * differently once actually applied -- or vice versa.
+     *
+     * @param array<int,int> $scores game_player_id => score, already through applyScoreSwaps()
+     * @param int[] $turnOrder
+     * @return array{winnerGamePlayerId:int, winnerTeamId:?int, winningGamePlayerIds:int[]}
+     */
+    private function determineRoundWinner(int $gameId, array $round, array $scores, array $turnOrder): array
+    {
+        if (self::isTeamFormat($this->fetchGame($gameId)['format'])) {
+            $teamIdByPlayer = $this->teamIdByGamePlayer($gameId);
+            $teamScores = [0 => 0, 1 => 0];
+            foreach ($scores as $playerId => $score) {
+                $teamScores[$teamIdByPlayer[$playerId]] += $score;
+            }
+
+            $firstTeamId = $teamIdByPlayer[(int) $round['first_game_player_id']];
+            $otherTeamId = $firstTeamId === 0 ? 1 : 0;
+            // Ties go to whoever played first this round.
+            $winningTeamId = $teamScores[$firstTeamId] >= $teamScores[$otherTeamId] ? $firstTeamId : $otherTeamId;
+
+            $winningTeamMembers = $this->teamMembers($gameId, $winningTeamId); // seat_order ASC
+            // A representative teammate for winner_game_player_id's own FK/
+            // display purposes only -- whoever scored higher individually,
+            // ties by lower seat_order (winningTeamMembers[0] is already
+            // the lower-seat_order member, so a strict > below already
+            // keeps it on a tie). Never used for team win-counting -- see
+            // totalWinsForTeam(), which reads winner_team_id instead.
+            $winnerRepresentative = $winningTeamMembers[0];
+            foreach ($winningTeamMembers as $playerId) {
+                if ($scores[$playerId] > $scores[$winnerRepresentative]) {
+                    $winnerRepresentative = $playerId;
+                }
+            }
+
+            return [
+                'winnerGamePlayerId' => $winnerRepresentative,
+                'winnerTeamId' => $winningTeamId,
+                'winningGamePlayerIds' => $winningTeamMembers,
+            ];
+        }
+
+        // $scores covers every seated player (BoardState has no notion of
+        // resignation), but $turnOrder is already active-players-only (see
+        // turnOrderForRound()) -- narrowed to match before handing it to
+        // winner(), so a resigned player's own score can never make them
+        // the round's winner even if it happens to be the highest in
+        // $scores.
+        $activeScores = array_intersect_key($scores, array_flip($turnOrder));
+        $winnerId = $this->scorer->winner($activeScores, $turnOrder);
+
+        return ['winnerGamePlayerId' => $winnerId, 'winnerTeamId' => null, 'winningGamePlayerIds' => [$winnerId]];
     }
 
     private function bottomOfDeckAndDraw(BoardState $state, int $cardId, int $ownerId): void

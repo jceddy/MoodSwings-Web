@@ -11680,7 +11680,27 @@ final class GameServiceIntegrationTest extends TestCase
 
         $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
-        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $recklessnessId]);
+        $betrayalResponse = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $recklessnessId]);
+
+        // Once Betrayal gives Recklessness away, the opponent (who now
+        // holds Recklessness) ends up controlling TWO of their own pending
+        // after-scoring effects: Recklessness's own self-tag, and the
+        // foreign "return Boredom to its owner" tag Recklessness's earlier
+        // steal placed on Boredom -- both belong to the opponent because
+        // they currently control Recklessness, the source of both (see
+        // GameService::pendingAfterScoringGroups()'s own docblock). Per
+        // the ruling, that means the opponent -- not the acting player --
+        // gets to choose the order those two resolve in. Order is
+        // immaterial to the final board state here (the two effects touch
+        // different cards), so this just answers with whatever default
+        // order the server offers.
+        self::assertTrue($betrayalResponse['pending_decision'] ?? false);
+        $orderDecision = $this->games->getState($gameId, $u2)['round']['pending_decision'];
+        self::assertSame('after_scoring_order', $orderDecision['decision_type']);
+        $orderedCardIds = array_column($orderDecision['field']['cards'], 'card_id');
+        self::assertEqualsCanonicalizing([$recklessnessId, $boredomId], $orderedCardIds);
+        $finalResult = $this->games->respondToDecision($gameId, $p2, ['ordered_card_ids' => $orderedCardIds]);
+        self::assertTrue($finalResult['round_scored'] ?? false);
 
         $cardsStmt = $this->pdo->prepare("SELECT card_id, zone, owner_game_player_id FROM game_cards WHERE game_id = :g AND id = :id");
         $cardById = function (int $id) use ($cardsStmt, $gameId): array {
@@ -11761,7 +11781,23 @@ final class GameServiceIntegrationTest extends TestCase
         // This time give BOREDOM back, not Recklessness.
         $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
         self::assertTrue($playResult['pending_decision'] ?? false);
-        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $boredomId]);
+        $betrayalResponse = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $boredomId]);
+
+        // The exact scenario the ruling calls out by name: the acting
+        // player still controls both Recklessness (their own self-tag)
+        // AND Betrayal (the source of Boredom's foreign "return to owner"
+        // tag), so THEY get to choose the order -- "you can choose the
+        // order of the after scoring effects because they are both your
+        // cards." Order is immaterial to the final board state (the two
+        // effects touch different cards), so this just answers with
+        // whatever default order the server offers.
+        self::assertTrue($betrayalResponse['pending_decision'] ?? false);
+        $orderDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('after_scoring_order', $orderDecision['decision_type']);
+        $orderedCardIds = array_column($orderDecision['field']['cards'], 'card_id');
+        self::assertEqualsCanonicalizing([$recklessnessId, $boredomId], $orderedCardIds);
+        $finalResult = $this->games->respondToDecision($gameId, $p1, ['ordered_card_ids' => $orderedCardIds]);
+        self::assertTrue($finalResult['round_scored'] ?? false);
 
         $cardsStmt = $this->pdo->prepare("SELECT card_id, zone, owner_game_player_id FROM game_cards WHERE game_id = :g AND id = :id");
         $cardById = function (int $id) use ($cardsStmt, $gameId): array {

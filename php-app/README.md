@@ -4060,6 +4060,51 @@ is now checked immediately before `giveInPlayToPlayer()` in the
 once the card's own effect has already taken it out of play, implementing
 the "if it's still in play" qualifier printed on both cards.
 
+A follow-up ruling from the same rules committee spelled out the FULL
+general framework the paragraph above only covers half of: "after scoring"
+effects resolve player by player, in the order they went this round, and
+if a single player's own cards carry two or more such effects at once, THAT
+PLAYER chooses the order they resolve in. `applyAfterScoringHooks()` now
+implements this in full. `pendingAfterScoringGroups()` determines, for
+every pending `afterScoring`/`returnsToOwnerAfterScoring` tag, which player
+it currently "belongs to" for this purpose -- a self-tag belongs to
+whoever currently controls the tagged card itself; a foreign
+`returnsToOwnerAfterScoring` tag belongs to whoever currently controls its
+own `sourceCardId` (Betrayal, or the Recklessness that stole this mood in
+the first place) -- since that's whose printed ability actually created
+it, regardless of who's currently holding the affected card. This is why
+Recklessness given away via Betrayal still splits across BOTH players even
+though it's one physical card (its own self-tag belongs to whoever now
+holds Recklessness; Betrayal's foreign tag on that same card belongs to
+whoever still holds Betrayal) -- matching "in your example different
+players have each card" from the original ruling even in the case where,
+physically, there's only one card. When a single controller ends up with
+2+ pending cards this way, `scoreRoundAndAdvance()`/`finishScoringAndAdvance()`
+pause the round on a new `AFTER_SCORING_ORDER_DECISION_TYPE`
+(`'after_scoring_order'`) decision -- structurally identical to
+Enthusiasm's/Passion's own scoring-time decisions (same
+`game_pending_decision_batches`/`game_pending_decisions` machinery), but a
+genuinely new *kind* of pause: those two gate BEFORE `RoundScorer::score()`
+ever runs (they feed its own inputs), while this one can only be asked
+AFTER scores/winner are final, since a conditional self-tag's "did you
+win" answer has to be known before anything about ordering makes sense.
+`determineRoundWinner()` is the one place that answer gets computed,
+shared by the order-decision check and the real score/persist tail that
+runs once no more decisions remain, so the two can never disagree about
+who won. Nothing about the resolution order actually changes the FINAL
+board state with any card implemented today (every pending effect acts on
+an independent target, so there's no way for one to influence another) --
+the decision exists for rules fidelity and player agency, not because any
+currently achievable outcome depends on it. The field itself
+(`type: 'card_order'`) is new -- unlike every other pending-decision field,
+it isn't backed by a `CardChoiceSchema::reactionTemplate()` entry, since
+it's not a printed reaction on any one card; it's an engine-level question
+that only exists once 2+ of a single player's own after-scoring cards are
+pending at once. The frontend renders it as an up/down-reorderable list
+(`.card-order-field` in `game.js`/`style.css`) rather than the usual
+`<select>`-based widget, since "pick a permutation of a fixed set" doesn't
+fit any of the existing field types.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises
