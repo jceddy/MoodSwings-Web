@@ -1369,10 +1369,12 @@
     // Draft/Winston Draft/Grid Draft, all three of which swap in jceddy's
     // 150 Card deck's own 150-card pool instead at exactly 4 players (see
     // buildDraftPool()), since 75 alone falls short of every 4-player
-    // target this pool source is offered for.
+    // target this pool source is offered for. The description paragraph
+    // below the dropdown already spells out the swap in full, so the
+    // option label itself just names whichever deck is actually in play.
     function jceddys75OptionLabel(playerCount) {
         return playerCount === 4
-            ? "jceddy's 75 Card deck (150 cards -- jceddy's 150 Card deck is used instead at 4 players)"
+            ? "jceddy's 150 Card deck (150 cards)"
             : "jceddy's 75 Card deck (75 cards)";
     }
 
