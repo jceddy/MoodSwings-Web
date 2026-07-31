@@ -1371,11 +1371,13 @@
     // buildDraftPool()), since 75 alone falls short of every 4-player
     // target this pool source is offered for. The description paragraph
     // below the dropdown already spells out the swap in full, so the
-    // option label itself just names whichever deck is actually in play.
+    // option label itself just names whichever deck is actually in play
+    // ("Card", no "deck" suffix, matching the Traditional format's own
+    // deck_type <select> in index.html).
     function jceddys75OptionLabel(playerCount) {
         return playerCount === 4
-            ? "jceddy's 150 Card deck (150 cards)"
-            : "jceddy's 75 Card deck (75 cards)";
+            ? "jceddy's 150 Card (150 cards)"
+            : "jceddy's 75 Card (75 cards)";
     }
 
     // Shared 'structure' pool source label for Quick Draft/Winston Draft
@@ -1390,12 +1392,11 @@
     // round is even dealt. The doubled 90-card pool is then truncated down
     // to the target if it's over (matching buildDraftPool()'s own
     // "ignore the extra cards" truncation rule -- Winston Draft's own
-    // 70-card 3-player target, or Quick Draft's 72-card one), but for
-    // Quick Draft's 96-card 4-player target specifically, 90 is actually
-    // *short* of it -- that residual 6-card gap is exactly what the
-    // draft's own discard-reshuffle top-up covers as it proceeds (Winston
-    // Draft's own 90-card 4-player target has no such gap, since it
-    // matches the doubled size exactly).
+    // 70-card 3-player target, or Quick Draft's 72-card one); the option
+    // label itself just names the resulting pool size, with the
+    // description paragraph below the dropdown spelling out the doubling
+    // and (for Quick Draft's 96-card 4-player target, where 90 is actually
+    // short of it) the discard-reshuffle top-up that covers the gap.
     function structureOptionLabel(targetSizes, playerCount) {
         if (playerCount <= 2) {
             return 'Structure deck (45 cards)';
@@ -1405,13 +1406,7 @@
         const target = targetSizes[playerCount];
         const poolSize = Math.min(doubled, target);
 
-        if (poolSize < target) {
-            return 'Structure deck (2 copies combined = ' + doubled + ' cards; the remaining '
-                + (target - poolSize) + ' comes from the draft\'s own discard reshuffle as it proceeds)';
-        }
-
-        return 'Structure deck (2 copies combined = ' + poolSize + ' cards'
-            + (poolSize < doubled ? ', trimmed from ' + doubled : '') + ')';
+        return 'Structure deck x2 (' + poolSize + ' cards)';
     }
 
     // Re-derives every draft deck_type's pool-source <option> labels for
