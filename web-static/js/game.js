@@ -4986,8 +4986,21 @@
                 const item = document.createElement('li');
                 item.dataset.cardId = String(orderedCard.card_id);
 
-                const label = document.createElement('span');
-                label.textContent = orderedCard.name;
+                const label = document.createElement('div');
+                label.className = 'card-order-label';
+
+                const nameEl = document.createElement('span');
+                nameEl.className = 'card-order-name';
+                nameEl.textContent = orderedCard.name;
+                label.appendChild(nameEl);
+
+                if (orderedCard.description) {
+                    const descriptionEl = document.createElement('span');
+                    descriptionEl.className = 'card-order-description';
+                    descriptionEl.textContent = orderedCard.description;
+                    label.appendChild(descriptionEl);
+                }
+
                 item.appendChild(label);
 
                 const buttonGroup = document.createElement('span');

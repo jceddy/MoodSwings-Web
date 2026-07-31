@@ -444,6 +444,9 @@ final class GameService
     /** @var array<int, array<int, string>> gameId => (card_id => name), memoized per instance by cardNamesFor() */
     private array $cardNamesByGame = [];
 
+    /** @var array<int, array<int, string>> gameId => (game_player_id => username), memoized per instance by playerUsernamesFor() */
+    private array $playerUsernamesByGame = [];
+
     public function __construct(
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
@@ -4375,7 +4378,7 @@ final class GameService
 
         $nextOrderDecision = $this->nextUnresolvedAfterScoringOrderDecision($state, $roundId, $turnOrder, $outcome['winningGamePlayerIds']);
         if ($nextOrderDecision !== null) {
-            $this->writeAfterScoringOrderDecisionBatch($gameId, $roundId, $nextOrderDecision);
+            $this->writeAfterScoringOrderDecisionBatch($gameId, $roundId, $nextOrderDecision, $state);
             $this->logEvent($gameId, $roundId, $nextOrderDecision['ownerId'], 'pending_decision_created', $nextOrderDecision['groups'][0]['cardId'], ['after_scoring_order_trigger' => true], $state);
 
             return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
@@ -5131,13 +5134,61 @@ final class GameService
     }
 
     /**
+     * One-line summary of what a pending after-scoring effect on $group's
+     * cardId actually does, shown next to its name in the order-decision
+     * field so the player doesn't have to already know every card's rules
+     * text to make an informed choice -- e.g. "Discards after scoring."
+     * for a self afterScoring tag, or "Returns to Alice after scoring
+     * (taken via Betrayal)." for a foreign returnsToOwnerAfterScoring
+     * tag, naming whichever card actually created it (Betrayal, or the
+     * Recklessness that stole this mood in the first place -- see
+     * pendingAfterScoringGroups()). A single cardId can carry both at
+     * once (Recklessness given away via Betrayal), in which case both
+     * sentences are shown together.
+     *
+     * @param array{cardId: int, self: bool, foreign: bool} $group
+     * @param array<int, string> $cardNames
+     * @param array<int, string> $playerNames
+     */
+    private function afterScoringEffectDescription(BoardState $state, array $group, array $cardNames, array $playerNames): string
+    {
+        $sentences = [];
+
+        if ($group['self']) {
+            $afterScoring = $state->effectState($group['cardId'], 'afterScoring');
+            $sentences[] = match ($afterScoring['action'] ?? null) {
+                'discard' => 'Discards after scoring.',
+                'return_to_hand' => 'Returns to your hand after scoring.',
+                'bottom_and_draw' => 'Goes to the bottom of your deck and you draw a new card after scoring.',
+                default => 'Resolves its own after-scoring effect.',
+            };
+        }
+
+        if ($group['foreign']) {
+            $returnsToOwner = $state->effectState($group['cardId'], 'returnsToOwnerAfterScoring');
+            if ($returnsToOwner !== null) {
+                $ownerName = $playerNames[$returnsToOwner['ownerId']] ?? 'its original owner';
+                $sourceName = $cardNames[$returnsToOwner['sourceCardId']] ?? 'another card';
+                $sentences[] = "Returns to {$ownerName} after scoring (taken via {$sourceName}).";
+            }
+        }
+
+        return implode(' ', $sentences);
+    }
+
+    /**
      * @param array{ownerId: int, groups: list<array{cardId: int, self: bool, foreign: bool}>} $decision
      */
-    private function writeAfterScoringOrderDecisionBatch(int $gameId, int $roundId, array $decision): void
+    private function writeAfterScoringOrderDecisionBatch(int $gameId, int $roundId, array $decision, BoardState $state): void
     {
         $cardNames = $this->cardNamesFor($gameId);
+        $playerNames = $this->playerUsernamesFor($gameId);
         $cards = array_map(
-            static fn (array $group): array => ['card_id' => $group['cardId'], 'name' => $cardNames[$group['cardId']] ?? 'Unknown'],
+            fn (array $group): array => [
+                'card_id' => $group['cardId'],
+                'name' => $cardNames[$group['cardId']] ?? 'Unknown',
+                'description' => $this->afterScoringEffectDescription($state, $group, $cardNames, $playerNames),
+            ],
             $decision['groups']
         );
 
@@ -8872,6 +8923,31 @@ final class GameService
         }
 
         return $this->cardNamesByGame[$gameId];
+    }
+
+    /**
+     * Same memoization pattern as cardNamesFor(), for game_player_id =>
+     * username -- used by writeAfterScoringOrderDecisionBatch() to name a
+     * returnsToOwnerAfterScoring tag's ultimate destination player in its
+     * field's per-card description.
+     *
+     * @return array<int, string> game_player_id => username
+     */
+    private function playerUsernamesFor(int $gameId): array
+    {
+        if (!isset($this->playerUsernamesByGame[$gameId])) {
+            $stmt = Connection::get()->prepare(
+                'SELECT gp.id, u.username FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id'
+            );
+            $stmt->execute(['game_id' => $gameId]);
+            $names = [];
+            foreach ($stmt->fetchAll() as $row) {
+                $names[(int) $row['id']] = $row['username'];
+            }
+            $this->playerUsernamesByGame[$gameId] = $names;
+        }
+
+        return $this->playerUsernamesByGame[$gameId];
     }
 
     private function totalWinsFor(int $gameId, int $playerId): int

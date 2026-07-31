@@ -4103,7 +4103,14 @@ that only exists once 2+ of a single player's own after-scoring cards are
 pending at once. The frontend renders it as an up/down-reorderable list
 (`.card-order-field` in `game.js`/`style.css`) rather than the usual
 `<select>`-based widget, since "pick a permutation of a fixed set" doesn't
-fit any of the existing field types.
+fit any of the existing field types. Each entry in the field's `cards`
+array also carries a `description` string (built by
+`afterScoringEffectDescription()`) explaining what that specific pending
+effect actually does and, for a foreign `returnsToOwnerAfterScoring` tag,
+which card caused it and who it returns to (e.g. "Returns to Alice after
+scoring (taken via Betrayal)."), so the player doesn't need to already
+know every card's printed rules text to make an informed choice between
+same-named or unfamiliar cards.
 
 ## Tests
 

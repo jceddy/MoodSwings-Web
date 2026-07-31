@@ -1430,10 +1430,20 @@ dialog#deck-builder-dialog[open] {
     margin-bottom: 0.4rem;
 }
 
-.card-order-field li span:first-child {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+.card-order-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+}
+
+.card-order-name {
+    font-weight: bold;
+}
+
+.card-order-description {
+    font-size: 0.85em;
+    color: var(--color-muted);
 }
 
 .card-order-buttons {

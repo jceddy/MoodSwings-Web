@@ -1877,12 +1877,25 @@ too, proportional to the smaller card width.
     pending-decision field that isn't a `<select>`-backed widget at all —
     `buildFieldWidget()` renders `field.cards` (already in the server's own
     default order) as an `.card-order-field` `<ol>`, one `<li>` per pending
-    card with ↑/↓ buttons that reorder it within the list via plain
-    `insertBefore()` calls (no drag-and-drop library needed for a handful
-    of items). There's no "candidate list" to build via `fieldOptions()`
-    the way every other field type has — every one of `field.cards` is
-    always part of the answer, just reordered — so `buildChoicesFromFields()`
-    reads the final answer straight off the DOM order (`Array.from(...).map(li => Number(li.dataset.cardId))`)
+    card. Each `<li>` shows the card's bold name plus (when present) its
+    `description` — a muted one-line summary from the server explaining
+    what that specific pending effect does, e.g. "Returns to Alice after
+    scoring (taken via Betrayal)." — below it, so the player can make an
+    informed choice without needing to already know every card's printed
+    rules text. The ↑/↓ buttons that reorder an `<li>` within the list
+    (via plain `insertBefore()` calls — no drag-and-drop library needed
+    for a handful of items) live together in their own `.card-order-buttons`
+    span rather than as separate flex children of the `<li>` — the CSS's
+    `justify-content: space-between` would otherwise spread them apart
+    from each other (name — up — down) instead of keeping the pair
+    together, leaving the two buttons at inconsistent horizontal positions
+    from row to row; grouping them, with a fixed button width, keeps the
+    pair aligned as a tight column down the list regardless of how long
+    each row's name/description text is. There's no "candidate list" to
+    build via `fieldOptions()` the way every other field type has — every
+    one of `field.cards` is always part of the answer, just reordered —
+    so `buildChoicesFromFields()` reads the final answer straight off the
+    DOM order (`Array.from(...).map(li => Number(li.dataset.cardId))`)
     rather than collecting `<select>` values. Always a complete, valid
     answer as soon as it's shown (there's nothing to leave blank), so
     `fieldHasValue()` treats it the same as a checkbox.
