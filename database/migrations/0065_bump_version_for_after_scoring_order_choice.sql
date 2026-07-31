@@ -1,0 +1,19 @@
+-- Rules-engine + UI feature, no schema change: a follow-up rules-committee
+-- ruling on Recklessness/Betrayal (see migration 0064) spelled out the
+-- full general framework "after scoring" effects resolve under -- player
+-- by player in this round's turn order, and if a single player's own
+-- cards carry 2+ such effects at once, THAT PLAYER chooses the order.
+-- GameService::applyAfterScoringHooks() now implements this in full,
+-- pausing the round on a new 'after_scoring_order' pending-decision type
+-- (reusing the existing game_pending_decision_batches/game_pending_decisions
+-- tables -- decision_type is a plain VARCHAR, no enum to widen) whenever a
+-- player currently controls 2+ pending after-scoring cards at once. This
+-- migration exists purely to keep schema_version in sync with the VERSION
+-- bump, the same way 0024/0025/0026/0037/0040/0044/0045/0046/0052/0056/
+-- 0058/0059/0061/0062/0063/0064 already did for their own schema-less
+-- changes -- MaintenanceGate compares the deployed VERSION file against
+-- this table on every request (see migration 0021's own docblock), so a
+-- VERSION bump with no matching schema_version update would show
+-- maintenance mode after deploy even though nothing about the schema
+-- actually changed.
+UPDATE schema_version SET version = '1.10.4' WHERE id = 1;

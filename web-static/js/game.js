@@ -4966,6 +4966,56 @@
             return checkbox;
         }
 
+        // AFTER_SCORING_ORDER_DECISION_TYPE's own field -- field.cards is
+        // the pending set (already in the server's default order), and the
+        // "value" is just whatever order the <li> elements end up in after
+        // the player uses the up/down buttons, read back by
+        // buildChoicesFromFields() below. There's no server-recognized
+        // "candidate list" here the way mood/hand_card/player fields have
+        // (fieldOptions() doesn't apply -- every one of field.cards is
+        // always part of the answer, just reordered), so this builds its
+        // own widget directly rather than going through the shared
+        // <select>-based path below.
+        if (field.type === 'card_order') {
+            const container = document.createElement('div');
+            container.id = 'choice-field-' + path;
+            container.className = 'card-order-field';
+
+            const list = document.createElement('ol');
+            for (const orderedCard of field.cards) {
+                const item = document.createElement('li');
+                item.dataset.cardId = String(orderedCard.card_id);
+
+                const label = document.createElement('span');
+                label.textContent = orderedCard.name;
+                item.appendChild(label);
+
+                const upButton = document.createElement('button');
+                upButton.type = 'button';
+                upButton.textContent = '↑';
+                upButton.setAttribute('aria-label', 'Move ' + orderedCard.name + ' earlier');
+                upButton.addEventListener('click', () => {
+                    const previous = item.previousElementSibling;
+                    if (previous) list.insertBefore(item, previous);
+                });
+                item.appendChild(upButton);
+
+                const downButton = document.createElement('button');
+                downButton.type = 'button';
+                downButton.textContent = '↓';
+                downButton.setAttribute('aria-label', 'Move ' + orderedCard.name + ' later');
+                downButton.addEventListener('click', () => {
+                    const next = item.nextElementSibling;
+                    if (next) list.insertBefore(next, item);
+                });
+                item.appendChild(downButton);
+
+                list.appendChild(item);
+            }
+            container.appendChild(list);
+            return container;
+        }
+
         if (field.type === 'value') {
             const select = document.createElement('select');
             select.id = 'choice-field-' + path;
@@ -5116,6 +5166,7 @@
 
     function fieldHasValue(widget, field) {
         if (field.type === 'bool') return true; // a checkbox always has a value (checked or not)
+        if (field.type === 'card_order') return true; // reordering field.cards is always a complete answer, even untouched
         if (field.multi) return widget.selectedOptions.length > 0;
         return widget.value !== '';
     }
@@ -5332,6 +5383,7 @@
             duplicity_repeat_offer: "Repeat " + (pendingDecision.played_card_name || 'this mood') + "'s effect?",
             enthusiasm_extra_score: "Enthusiasm's bonus",
             passion_score_opponent_mood: "Passion's bonus",
+            after_scoring_order: 'Order your after-scoring effects',
         };
         document.getElementById('pending-decision-title').textContent =
             titlesByDecisionType[pendingDecision.decision_type] || 'Respond to ' + (pendingDecision.played_card_name || 'a mood');
@@ -5595,6 +5647,8 @@
             const widget = document.getElementById('choice-field-' + path);
             if (field.type === 'bool') {
                 if (widget.checked) choices[field.key] = true;
+            } else if (field.type === 'card_order') {
+                choices[field.key] = Array.from(widget.querySelectorAll('li')).map((item) => Number(item.dataset.cardId));
             } else if (field.multi) {
                 const values = Array.from(widget.selectedOptions).map((option) => option.value);
                 if (values.length > 0) {
