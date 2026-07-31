@@ -4990,6 +4990,9 @@
                 label.textContent = orderedCard.name;
                 item.appendChild(label);
 
+                const buttonGroup = document.createElement('span');
+                buttonGroup.className = 'card-order-buttons';
+
                 const upButton = document.createElement('button');
                 upButton.type = 'button';
                 upButton.textContent = '↑';
@@ -4998,7 +5001,7 @@
                     const previous = item.previousElementSibling;
                     if (previous) list.insertBefore(item, previous);
                 });
-                item.appendChild(upButton);
+                buttonGroup.appendChild(upButton);
 
                 const downButton = document.createElement('button');
                 downButton.type = 'button';
@@ -5008,7 +5011,9 @@
                     const next = item.nextElementSibling;
                     if (next) list.insertBefore(next, item);
                 });
-                item.appendChild(downButton);
+                buttonGroup.appendChild(downButton);
+
+                item.appendChild(buttonGroup);
 
                 list.appendChild(item);
             }
