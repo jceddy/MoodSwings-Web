@@ -4224,8 +4224,7 @@
                 const button = document.createElement('button');
                 button.type = 'button';
                 button.className = 'grid-draft-pick-button';
-                button.textContent = (axis === 'row' ? 'Row ' : 'Col ') + (index + 1) +
-                    ' (' + cellsRemaining + ' card' + (cellsRemaining === 1 ? '' : 's') + ')';
+                button.textContent = (axis === 'row' ? 'Row ' : 'Col ') + (index + 1) + ' (' + cellsRemaining + ')';
                 button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
                 button.addEventListener('click', () => submitGridDraftAction(axis, index));
                 axisRow.appendChild(button);
