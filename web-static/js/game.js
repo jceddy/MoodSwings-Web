@@ -5632,6 +5632,19 @@
         if (!ok) {
             boardError.textContent = body.message || 'Could not submit your response.';
             boardError.hidden = false;
+            // renderPendingDecision() only ever (re)builds this panel once
+            // per decision (see its own comment), on the assumption that
+            // nothing about the field's own valid options can change while
+            // it's open. A rejected answer means that assumption already
+            // broke -- the widget picked a choice (e.g. a target mood)
+            // that's no longer valid by the time it was submitted -- so
+            // leaving activePendingDecision/the panel as-is would leave the
+            // player stuck re-submitting the same stale, now-invalid
+            // choice forever, with no in-app way to recover short of a
+            // full page reload. Clearing it here before refreshing forces
+            // a fresh rebuild against current state instead.
+            activePendingDecision = null;
+            await refreshBoard();
             return;
         }
 

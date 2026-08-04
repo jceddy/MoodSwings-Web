@@ -1900,6 +1900,21 @@ too, proportional to the smaller card width.
     answer as soon as it's shown (there's nothing to leave blank), so
     `fieldHasValue()` treats it the same as a checkbox.
 
+    `renderPendingDecision()` only ever (re)builds `#pending-decision-panel`
+    once per decision, on the assumption that nothing about the field's
+    own candidate set changes while it's open (a reasonable assumption
+    normally, since a pending decision freezes the whole round). If
+    `#respond-decision-button`'s own click handler gets a rejected answer
+    back from the server anyway (e.g. a target that was valid when the
+    field was first built no longer is by the time it's submitted), it
+    resets `activePendingDecision` to `null` before calling `refreshBoard()`
+    — forcing a full rebuild against current state on the very next render,
+    rather than leaving the same stale widget sitting there with no way to
+    retry short of a full page reload (reported as "the game got stuck"
+    after Passion's own opponent-mood field ended up with zero valid
+    candidates once every one of the responder's opponents' moods had
+    already been taken).
+
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
     just above the Pass button — expanding it lists each outstanding play
