@@ -1631,6 +1631,17 @@ dialog#deck-builder-dialog[open] {
     user-select: none;
 }
 
+/* Sort-direction indicator, driven off aria-sort (set in js/stats.js's
+   updateSortIndicators()) rather than a separate class, so the
+   accessible state and the visual one can never drift apart. */
+#card-stats-table th[aria-sort="ascending"]::after {
+    content: ' \25B2';
+}
+
+#card-stats-table th[aria-sort="descending"]::after {
+    content: ' \25BC';
+}
+
 #stats-pagination {
     display: flex;
     align-items: center;

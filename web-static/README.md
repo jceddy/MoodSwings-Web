@@ -2334,7 +2334,18 @@ using the same-origin `session_token` cookie for auth — see
   click on a different header resets to ascending — same toggle
   convention as any other sortable table would use, tracked as plain
   `sortKey`/`sortAscending` module variables in `js/stats.js` rather than
-  anything persisted. The three draft-format columns hold `{average,
+  anything persisted. `updateSortIndicators()` sets `aria-sort`
+  (`"ascending"`/`"descending"`/`"none"`) on every header to match, and
+  `style.css` draws a ▲/▼ after whichever header currently carries
+  `aria-sort="ascending"`/`"descending"` — without this there was no way
+  to tell, at a glance, which column/direction was active, which made an
+  ordinary "click the already-sorted column again to flip it" interaction
+  read as the sort changing on its own while paging. `sortedFilteredCards()`
+  also always sorts a `.slice()` copy rather than `filteredCards()`'s
+  own return value directly, so a render never mutates the source
+  `cards` array as a side effect (harmless in practice today, since
+  `compareCards` is a valid deterministic order, but worth not relying
+  on). The three draft-format columns hold `{average,
   count}` objects (see `CardStatsService::averagePick()` in
   `../php-app/README.md`) so a never-drafted card's `null` average
   always sorts last regardless of direction, instead of sorting
