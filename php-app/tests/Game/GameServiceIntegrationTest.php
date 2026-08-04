@@ -1395,11 +1395,12 @@ final class GameServiceIntegrationTest extends TestCase
 
     /**
      * The core "past games" split (issue #84): a plain, non-draft
-     * completed game (abandoned games are untouched, only 'completed'
-     * ones move) disappears from listGamesForUser() and appears in
+     * completed game disappears from listGamesForUser() and appears in
      * listPastGamesForUser() instead, with an identical summary shape --
      * both share gameSummaryFor() for hydration, so no fields differ
-     * between the two lists.
+     * between the two lists. See
+     * testAbandonedGameMovesFromListGamesForUserToListPastGamesForUser()
+     * below for 'abandoned' status's own version of this same move.
      */
     public function testCompletedGameMovesFromListGamesForUserToListPastGamesForUser(): void
     {
@@ -1426,12 +1427,18 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * An 'abandoned' game is deliberately left out of scope for the "past
-     * games" split -- only 'completed' status moves. Confirms
-     * listGamesForUser() still includes it and listPastGamesForUser()
-     * does not.
+     * The "past games" split (issue #84, widened by a later follow-up)
+     * treats an 'abandoned' game exactly like a 'completed' one: it
+     * disappears from listGamesForUser() and shows up in
+     * listPastGamesForUser() instead. This is the same isolated SQL-level
+     * check testCompletedGameMovesFromListGamesForUserToListPastGamesForUser()
+     * above does for 'completed' -- a synthetic status flip on a plain,
+     * non-draft game, independent of how 'abandoned' actually gets set in
+     * practice. See
+     * testResignDuringDraftingMovesTheAbandonedGameToListPastGamesForUser()
+     * below for the real end-to-end path (a mid-drafting resignation).
      */
-    public function testAbandonedGameStaysInListGamesForUserNotListPastGamesForUser(): void
+    public function testAbandonedGameMovesFromListGamesForUserToListPastGamesForUser(): void
     {
         $creator = $this->insertUser('abandonsplit-alice');
         $bob = $this->insertUser('abandonsplit-bob');
@@ -1440,8 +1447,34 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->startGame($gameId);
         $this->pdo->prepare("UPDATE games SET status = 'abandoned' WHERE id = :id")->execute(['id' => $gameId]);
 
-        self::assertSame([$gameId], array_column($this->games->listGamesForUser($creator), 'id'));
-        self::assertSame([], array_column($this->games->listPastGamesForUser($creator), 'id'));
+        self::assertSame([], array_column($this->games->listGamesForUser($creator), 'id'), 'abandoned game no longer appears in the main lobby list');
+        $pastSummary = $this->games->listPastGamesForUser($creator)[0];
+        self::assertSame($gameId, $pastSummary['id']);
+        self::assertSame('abandoned', $pastSummary['status']);
+    }
+
+    /**
+     * The real end-to-end path an 'abandoned' game actually gets created
+     * through: a mid-drafting resignation (resignFromDraftMatch()) always
+     * flips draft_matches.status to 'completed' in the same statement
+     * that marks the game 'abandoned' (see abandonDraftMatch()), so the
+     * draft-match-undecided carve-out in listGamesForUser()'s own query
+     * never applies -- the abandoned game moves to Past games immediately,
+     * the very same call, with no separate action needed.
+     */
+    public function testResignDuringDraftingMovesTheAbandonedGameToListPastGamesForUser(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->games->resignGame($gameId, $p1);
+
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+
+        foreach ([$u1, $u2] as $userId) {
+            self::assertSame([], array_column($this->games->listGamesForUser($userId), 'id'), "abandoned draft game no longer in the main lobby for user {$userId}");
+            self::assertContains($gameId, array_column($this->games->listPastGamesForUser($userId), 'id'), "and already in Past games for user {$userId}");
+        }
     }
 
     /**

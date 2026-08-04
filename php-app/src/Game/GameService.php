@@ -5859,28 +5859,37 @@ final class GameService
     {
         $pdo = Connection::get();
 
-        // A 'completed' game moves to listPastGamesForUser() below (issue
-        // #99/#84's own "past games" split) -- EXCEPT one still belonging
-        // to a Quick/Winston/Grid Draft match that isn't itself fully
-        // decided yet (draft_matches.status only ever reaches 'completed'
-        // once a winner is set -- see draftMatchSummaryFor()'s own
-        // docblock), since a finished game 1 of an in-progress
-        // best-of-three match is still very much part of what's
-        // currently being played, not history. 'waiting'/'in_progress'/
-        // 'abandoned' games are never affected by this at all.
+        // A 'completed' OR 'abandoned' game moves to listPastGamesForUser()
+        // below (issue #99/#84's own "past games" split, widened to cover
+        // 'abandoned' too) -- EXCEPT one still belonging to a Quick/
+        // Winston/Grid Draft match that isn't itself fully decided yet
+        // (draft_matches.status only ever reaches 'completed' once a
+        // winner is set -- see draftMatchSummaryFor()'s own docblock),
+        // since a finished game 1 of an in-progress best-of-three match is
+        // still very much part of what's currently being played, not
+        // history. In practice this carve-out never actually applies to an
+        // 'abandoned' game -- resignFromDraftMatch()/abandonDraftMatch()/
+        // finalizeWinstonDraft() always flip draft_matches.status to
+        // 'completed' in the very same statement that marks the game
+        // 'abandoned' (a mid-drafting or zero-survivor resignation always
+        // decides the whole match, one way or another) -- so an abandoned
+        // game moves to Past games immediately, same turn as the
+        // resignation itself, never waiting on a sibling game the way a
+        // naturally-completed one sometimes does. Only 'waiting'/
+        // 'in_progress' games are ever affected by this at all.
         //
-        // Waiting/in-progress games always sort above completed (or
-        // abandoned) ones, regardless of recency -- a finished game is
-        // never more actionable than an active one, no matter how old the
-        // active one is. Within each of those two tiers, most-recently-
-        // active first (last_move_at, falling back to started_at, then
-        // created_at for a game nothing has happened in yet).
+        // Waiting/in-progress games always sort above completed/abandoned
+        // ones, regardless of recency -- a finished game is never more
+        // actionable than an active one, no matter how old the active one
+        // is. Within each of those two tiers, most-recently-active first
+        // (last_move_at, falling back to started_at, then created_at for a
+        // game nothing has happened in yet).
         $gameIdsStmt = $pdo->prepare(
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
-               AND (g.status != 'completed' OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
+               AND (g.status NOT IN ('completed', 'abandoned') OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
              ORDER BY
                  (g.status IN ('waiting', 'in_progress')) DESC,
                  COALESCE(g.last_move_at, g.started_at, g.created_at) DESC,
@@ -5893,13 +5902,17 @@ final class GameService
     }
 
     /**
-     * The complement of listGamesForUser() above: every 'completed' game
-     * NOT still tied to an in-progress draft match -- see that method's
-     * own docblock for exactly where the line falls. Sorted
-     * most-recently-completed first, the natural order for a "past
-     * games" archive (as opposed to listGamesForUser()'s own
+     * The complement of listGamesForUser() above: every 'completed' or
+     * 'abandoned' game NOT still tied to an in-progress draft match -- see
+     * that method's own docblock for exactly where the line falls (and
+     * why an 'abandoned' game never actually hits that carve-out in
+     * practice). Sorted most-recently-completed first, the natural order
+     * for a "past games" archive (as opposed to listGamesForUser()'s own
      * actionability-first ordering, which has no reason to apply once
-     * nothing here is actionable at all).
+     * nothing here is actionable at all). An 'abandoned' game never gets
+     * its own completed_at set (only the draft_matches row it belonged to
+     * does -- see abandonDraftMatch()), so it naturally sorts by
+     * last_move_at instead, same as it would anywhere else in the app.
      *
      * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
      */
@@ -5912,7 +5925,7 @@ final class GameService
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
-               AND g.status = 'completed'
+               AND g.status IN ('completed', 'abandoned')
                AND (g.draft_match_id IS NULL OR dm.status = 'completed')
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
         );
