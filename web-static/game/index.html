@@ -310,7 +310,6 @@
                 </details>
 
                 <button id="pass-button" type="button">Pass</button>
-                <button id="resign-button" type="button" hidden>Resign game</button>
 
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
@@ -319,6 +318,15 @@
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
             </div>
+
+            <!-- Outside #in-progress-area so it stays reachable while a
+                 draft match's own drafting/deck-building phase is still
+                 'waiting' (issue #144) -- resigning from a draft match
+                 doesn't require an in-progress board any more than
+                 resigning from an in-progress game requires one to already
+                 be showing. See renderBoard()'s own resignButton.hidden
+                 computation in game.js for the full visibility rule. -->
+            <button id="resign-button" type="button" hidden>Resign game</button>
         </section>
     </main>
 

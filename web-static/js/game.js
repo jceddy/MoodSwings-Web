@@ -3198,6 +3198,32 @@
         // getSpectatorState()'s own identical 'waiting' exclusion).
         document.getElementById('spectate-share-button').hidden = isReadOnlyView() || state.game.status === 'waiting';
 
+        // Resigning isn't turn-gated the way passing is (see
+        // GameService::resignGame()) -- shown whenever the game is
+        // in_progress and the viewer hasn't already resigned, hidden
+        // entirely once the game's over or they have (a resigned player
+        // has nothing left to resign from). A spectator/replay viewer has
+        // nothing of their own to resign from either -- state.you is just
+        // the synthesized stub (never .resigned), so this needs its own
+        // explicit isReadOnlyView() check rather than relying on that.
+        //
+        // Issue #144: a draft match's own players can also resign while
+        // still 'waiting' (drafting/deck-building, before any game has
+        // actually started) -- see resignGame()'s own draft-phase branch.
+        // Computed here, before the 'waiting' branch's own early return
+        // below, since #resign-button lives outside #in-progress-area
+        // precisely so it stays reachable during that branch too. The
+        // in_progress branch further down still overrides .disabled once
+        // a pending decision is known (nothing can freeze a still-waiting
+        // draft the same way, so there's nothing to gate here yet).
+        const canResignWhileWaiting = state.game.status === 'waiting'
+            && ['quick_draft', 'winston_draft', 'grid_draft'].includes(state.game.deck_type);
+        const resignButton = document.getElementById('resign-button');
+        resignButton.hidden = isReadOnlyView()
+            || !(state.game.status === 'in_progress' || canResignWhileWaiting)
+            || Boolean(you && you.resigned);
+        resignButton.disabled = false;
+
         renderDraftMatchScoreline(state);
 
         const inProgressArea = document.getElementById('in-progress-area');
@@ -3426,7 +3452,12 @@
         document.getElementById('draft-deck-building').hidden = true;
         inProgressArea.hidden = false;
 
-        if (state.game.status === 'completed') {
+        // 'abandoned' (force-expired by the stale-game cron, or a draft
+        // match resigned out of before any round ever started -- see
+        // resignGame()'s own draft-phase branch) never has a round either,
+        // same as 'completed' -- state.round stays null for both, so both
+        // need to skip the "Round N" branch below that assumes a real one.
+        if (state.game.status === 'completed' || state.game.status === 'abandoned') {
             const winnerNames = state.game.winner_usernames && state.game.winner_usernames.length
                 ? state.game.winner_usernames.join(' & ')
                 : 'nobody';
@@ -3530,16 +3561,9 @@
 
         document.getElementById('pass-button').disabled = !canAct;
 
-        // Resigning isn't turn-gated the way passing is (see
-        // GameService::resignGame()) -- shown whenever the game is still
-        // in_progress and the viewer hasn't already resigned, hidden
-        // entirely once the game's over or they have (a resigned player
-        // has nothing left to resign from). A spectator/replay viewer has
-        // nothing of their own to resign from either -- state.you is just
-        // the synthesized stub (never .resigned), so this needs its own
-        // explicit isReadOnlyView() check rather than relying on that.
-        const resignButton = document.getElementById('resign-button');
-        resignButton.hidden = isReadOnlyView() || state.game.status !== 'in_progress' || Boolean(you && you.resigned);
+        // .hidden was already decided above (before the 'waiting' branch's
+        // early return) -- only .disabled needs the in_progress round's
+        // own pending-decision state, which isn't known until here.
         resignButton.disabled = Boolean(pendingDecision);
 
         // "View decklist" (issue #197) -- hidden entirely for a deck_type

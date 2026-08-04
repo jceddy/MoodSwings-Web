@@ -1,0 +1,18 @@
+-- No schema change: adds the ability to resign from a quick_draft/
+-- winston_draft/grid_draft match while it's still 'waiting' through
+-- drafting or deck-building (GameService::resignGame()'s new draft-phase
+-- branch, resignFromDraftMatch()), and fixes the four draft-progressing
+-- methods (submitQuickDraftPick(), submitDraftDeck(),
+-- submitWinstonDraftPick(), submitGridDraftPick()) to call
+-- touchLastMoveAt() the same way playMood()/pass()/respondToDecision()
+-- already did, so an actively-drafted match's games.last_move_at no
+-- longer sits stale and can't be wrongly swept by
+-- expireStaleActiveGames() (issue #144). This migration exists purely to
+-- keep schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0066 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request (see migration 0021's own docblock), so a VERSION
+-- bump with no matching schema_version update would show maintenance
+-- mode after deploy even though nothing about the schema actually
+-- changed.
+UPDATE schema_version SET version = '1.10.6' WHERE id = 1;

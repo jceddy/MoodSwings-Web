@@ -11046,6 +11046,280 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->resignGame($gameId, $p2);
     }
 
+    // -- Resigning from a draft match (issue #144) -----------------------
+
+    public function testResignDuringDraftingAbandonsWholeQuickDraftMatchTwoPlayer(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertFalse($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertNull($match['winner_user_id'], 'a mid-drafting resignation has no winner -- the whole match is simply abandoned');
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('abandoned', $game['status']);
+
+        // u2 never resigned, but there's nothing left to draft against.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not currently drafting');
+        $this->games->submitQuickDraftPick($gameId, $u2, 1, 1, []);
+    }
+
+    public function testResignDuringDraftingAbandonsWholeMatchEvenWithThreeOrFourPlayers(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(3);
+        $gameId = $fixture['gameId'];
+        [$u1, $u2, $u3] = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+
+        // Unlike the deck_building "drop just the resigner" path, an
+        // in-drafting resignation always ends the whole match -- there's
+        // no way to hand a half-finished Winston Draft turn or a
+        // mid-round Quick Draft pile to anyone else, so u2/u3 lose their
+        // still-in-progress draft too, not just u1.
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertNull($match['winner_user_id']);
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+
+        foreach ([$u2, $u3] as $survivorUserId) {
+            $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id');
+            $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $survivorUserId]);
+            self::assertSame(1, (int) $stmt->fetchColumn(), 'abandonDraftMatch() leaves every draft_match_players row in place -- it never removes anyone -- but the match itself is over');
+        }
+    }
+
+    public function testResignDuringDeckBuildingDropsJustTheResignerWithTwoSurvivors(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(3);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        [$resigningUserId, $u2, $u3] = $userIds;
+        $this->driveMultiplayerWinstonDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        if ($this->fetchDraftMatch($draftMatchId)['status'] !== 'deck_building') {
+            self::markTestSkipped('this particular shuffle produced an auto-loss before deck_building was ever reached');
+        }
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $resigningUserId);
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertFalse($result['game_completed'], '2 players still remain -- the match keeps going');
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status']);
+        self::assertNull($match['winner_user_id']);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'the game itself is untouched -- only the resigning seat is removed');
+
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id');
+        $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $resigningUserId]);
+        self::assertSame(0, (int) $stmt->fetchColumn());
+        self::assertNull($this->games->gamePlayerIdFor($gameId, $resigningUserId));
+
+        // u2/u3 can keep submitting their decks as an ordinary 2-player match.
+        $this->submitFullWinstonDraftDeck($gameId, $u2);
+        $this->submitFullWinstonDraftDeck($gameId, $u3);
+        $this->games->startGame($gameId);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testResignDuringDeckBuildingWithOneSurvivorWinsOutright(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertSame($u2, (int) $match['winner_user_id']);
+        self::assertNotNull($match['completed_at']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('abandoned', $game['status'], 'no game was ever actually played -- the sole game row is abandoned, not completed');
+
+        self::assertSame(1, $this->games->lifetimeStatsFor($u2)['match_wins'], 'recordMatchCompletionStats() must still credit u2 with the lifetime match win');
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['match_losses']);
+        self::assertNull($this->games->gamePlayerIdFor($gameId, $u1), 'the resigning player is removed the same as any other dropped draft participant');
+    }
+
+    /**
+     * The 0-survivors branch of resignFromDraftMatch()'s deck_building
+     * case can never actually be reached through resignGame() alone --
+     * only one seat resigns per call, and a match always starts with at
+     * least 2 players, so the very first resignation in deck_building can
+     * only ever leave 1 or more survivors (see resignFromDraftMatch()'s
+     * own docblock). This exercises that defensive branch directly by
+     * simulating the only way it could occur: another process having
+     * already dropped every other draft_match_players row out from under
+     * this call.
+     */
+    public function testResignDuringDeckBuildingWithZeroSurvivorsAbandonsMatch(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $this->pdo->prepare('DELETE FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['match_id' => $draftMatchId, 'user_id' => $u2]);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertNull($match['winner_user_id']);
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * resignFromDraftMatch()'s "already finished" guard can't actually be
+     * reached through resignGame() alone either -- every path that
+     * completes/abandons a draft match also flips its associated
+     * 'waiting' games row away from 'waiting' in the very same call, so
+     * resignGame()'s own outer gate (games.status === 'waiting') would
+     * already have redirected a second attempt to the ordinary "not in
+     * progress" branch instead. This simulates the only way the guard
+     * could actually fire: draft_matches.status changing without the
+     * games row changing alongside it (e.g. a race between two
+     * concurrent requests).
+     */
+    public function testResignFromAnAlreadyFinishedDraftMatchThrows(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare("UPDATE draft_matches SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $draftMatchId]);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('has already finished');
+        $this->games->resignGame($gameId, $p1);
+    }
+
+    public function testResignFromADraftMatchFailsForAPlayerNotSeatedInTheGame(): void
+    {
+        ['gameId' => $gameId] = $this->buildQuickDraftFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not seated');
+        $this->games->resignGame($gameId, 999999);
+    }
+
+    /**
+     * Mirrors removeDraftMatchPlayer()'s own "leave a game_players row
+     * behind if the draft_match_players row is already gone" desync
+     * scenario, just from the opposite direction -- resignFromDraftMatch()
+     * itself asserts the resolved user_id is still a live draftMatchUserIds()
+     * participant before doing anything else.
+     */
+    public function testResignFromADraftMatchFailsIfTheUserIsNoLongerAParticipant(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('DELETE FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['match_id' => $draftMatchId, 'user_id' => $u1]);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('is not part of draft match');
+        $this->games->resignGame($gameId, $p1);
+    }
+
+    public function testDraftResignedEventIsLoggedWithAHumanReadableDescription(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->games->resignGame($gameId, $p1);
+
+        $log = $this->games->fullEventLog($gameId);
+        $lastEntry = end($log);
+        self::assertSame('draft_resigned', $lastEntry['event_type']);
+        self::assertSame("{$this->fetchUsername($u1)} resigned from the draft", $lastEntry['description']);
+    }
+
+    // -- touchLastMoveAt() coverage for draft-progressing actions --------
+    // Companion to issue #144's expiry-cleanup half: bin/expire_and_delete_stale_games.php's
+    // own staleness check reads games.last_move_at, so a draft match that's
+    // genuinely being actively picked/deck-built must keep bumping it just
+    // like playMood()/pass() already do, or an active-but-slow draft could
+    // be force-expired out from under its players.
+
+    public function testSubmitQuickDraftPickStampsLastMoveAt(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        self::assertNull($this->fetchGame($gameId)['last_move_at']);
+
+        $state = $this->games->getState($gameId, $u1);
+        $pack = $state['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
+    public function testSubmitDraftDeckStampsLastMoveAt(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->pdo->prepare('UPDATE games SET last_move_at = NULL WHERE id = :id')->execute(['id' => $gameId]);
+
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
+    public function testSubmitWinstonDraftPickStampsLastMoveAt(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertNull($this->fetchGame($gameId)['last_move_at']);
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
+    public function testSubmitGridDraftPickStampsLastMoveAt(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        self::assertNull($this->fetchGame($gameId)['last_move_at']);
+
+        $state = $this->games->getState($gameId, $u1);
+        $currentUserId = $state['grid_draft']['drafting']['is_your_turn'] ? $u1 : $u2;
+        $this->games->submitGridDraftPick($gameId, $currentUserId, 'row', 0);
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
     /**
      * Private in-game notepad (issue #258) -- one freeform note per seat,
      * keyed on game_player_id (see GameNoteRepository), editable only
