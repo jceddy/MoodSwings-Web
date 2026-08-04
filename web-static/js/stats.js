@@ -208,23 +208,79 @@
         renderTable();
     });
 
+    function triggerDownload(content, mimeType, filename) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(url);
+    }
+
     // Downloads every card matching the current set filter (not just
     // whatever page is currently visible), sorted the same way the table
     // currently is, plus a "filters" block recording what was applied --
     // so the file is self-describing rather than leaving the reader to
     // guess whether it's the full catalog or a narrowed slice.
-    document.getElementById('download-stats-button').addEventListener('click', () => {
+    document.getElementById('download-json-button').addEventListener('click', () => {
         const payload = {
             filters: { set: setFilter === '' ? null : setFilter },
             cards: sortedFilteredCards(),
         };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = 'moodswings-card-stats.json';
-        link.click();
-        URL.revokeObjectURL(url);
+        triggerDownload(JSON.stringify(payload, null, 2), 'application/json', 'moodswings-card-stats.json');
+    });
+
+    // One column per raw field rather than the table's own formatted
+    // display strings (e.g. "4.20 (1 pick)") -- a spreadsheet consumer
+    // wants the average and count as separate numeric columns it can
+    // compute on, not a pre-formatted phrase meant for on-screen reading.
+    const CSV_COLUMNS = [
+        ['catalog_card_id', (card) => card.catalog_card_id],
+        ['name', (card) => card.name],
+        ['set_code', (card) => card.set_code],
+        ['collector_number', (card) => card.collector_number],
+        ['rarity', (card) => card.rarity],
+        ['color', (card) => card.color],
+        ['times_in_deck', (card) => card.times_in_deck],
+        ['deck_win_rate', (card) => card.deck_win_rate],
+        ['times_played', (card) => card.times_played],
+        ['play_win_rate', (card) => card.play_win_rate],
+        ['quick_draft_average', (card) => card.quick_draft.average],
+        ['quick_draft_count', (card) => card.quick_draft.count],
+        ['winston_draft_average', (card) => card.winston_draft.average],
+        ['winston_draft_count', (card) => card.winston_draft.count],
+        ['grid_draft_average', (card) => card.grid_draft.average],
+        ['grid_draft_count', (card) => card.grid_draft.count],
+    ];
+
+    // Per RFC 4180: a field containing a comma, double quote, or newline
+    // is wrapped in double quotes, with any double quote inside it
+    // doubled. A null/undefined value (e.g. a never-drafted card's
+    // average) becomes an empty field rather than the literal text
+    // "null".
+    function csvField(value) {
+        if (value === null || value === undefined) {
+            return '';
+        }
+        const text = String(value);
+        return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+    }
+
+    function toCsv(cardsToExport) {
+        const lines = [CSV_COLUMNS.map(([header]) => csvField(header)).join(',')];
+        for (const card of cardsToExport) {
+            lines.push(CSV_COLUMNS.map(([, value]) => csvField(value(card))).join(','));
+        }
+        return lines.join('\r\n');
+    }
+
+    // Same "every filtered card, current sort order" scope as the JSON
+    // download -- no separate "filters" metadata here, since a CSV has
+    // no natural place for a nested block and the header row already
+    // says what each column is.
+    document.getElementById('download-csv-button').addEventListener('click', () => {
+        triggerDownload(toCsv(sortedFilteredCards()), 'text/csv', 'moodswings-card-stats.csv');
     });
 
     const { ok, body } = await getCardStats();
