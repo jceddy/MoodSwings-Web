@@ -475,8 +475,8 @@ final class GameService
      * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>, even_color_distribution_rarities?: string[]} $duelDeckRules
      *        only meaningful when $deckType is 'custom_duel' -- see resolveDuelDeckRules().
      * @param ?string $quickDraftPoolSource only meaningful (and required) when $deckType
-     *        is 'quick_draft' -- one of 'random_48'/'structure'/'one_of_each'/'custom', see
-     *        buildQuickDraftPool().
+     *        is 'quick_draft' -- one of 'random_48'/'structure'/'one_of_each'/'custom'/
+     *        'saved_deck' (issue #290), see buildQuickDraftPool().
      * @param ?string $quickDraftCustomPoolText only meaningful when $quickDraftPoolSource
      *        is 'custom' -- a decklist-line pool of 45+ cards (same format as the 'custom'
      *        deck_type, see DecklistParser), no About/Sideboard sections expected.
@@ -495,6 +495,16 @@ final class GameService
      * @param ?string $gridDraftCustomPoolText Grid Draft's own analog of
      *        $quickDraftCustomPoolText -- a decklist-line pool of 54+ cards, only
      *        meaningful when $gridDraftPoolSource is 'custom'.
+     * @param ?int $savedDecklistId one of $createdByUserId's own saved decklists
+     *        (issue #92) to source cards from instead of freshly-pasted/uploaded
+     *        text -- meaningful when $deckType is 'custom' (an alternative to
+     *        $decklistText), or when any of $quickDraftPoolSource/
+     *        $winstonDraftPoolSource/$gridDraftPoolSource is 'saved_deck' (issue
+     *        #290, an alternative to that draft type's own *CustomPoolText).
+     *        A single param shared across all four cases -- unlike the pool
+     *        sources' own per-deck_type params, it's the same underlying
+     *        "which saved decklist" concept regardless of which one is
+     *        active, and only one deck_type is ever in effect per call.
      */
     public function createGame(
         int $createdByUserId,
@@ -590,9 +600,9 @@ final class GameService
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
-            'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, count($userIds)),
-            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, count($userIds)),
-            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, count($userIds)),
+            'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
+            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
+            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             default => null,
         };
 
@@ -1676,11 +1686,19 @@ final class GameService
      * buildQuickDraftPool()/buildWinstonDraftPool()/buildGridDraftPool()
      * below, parameterized only by target/minimum pool size, player
      * count, and the structure-doubling flag -- the pool assembly logic
-     * itself has nothing else format-specific about it.
+     * itself has nothing else format-specific about it. Plus 'saved_deck'
+     * (issue #290): reuses one of $requestingUserId's own saved decklists
+     * (issue #92's UserDecklistService -- friends'-visibility decks
+     * included, via the exact same authorization cardIdsForUse() already
+     * enforces for the 'custom' deck_type's own $savedDecklistId use) as
+     * the pool, preserving whatever per-card quantities it was saved
+     * with -- same as 'custom' pool text's own quantities, just sourced
+     * from a first-class saved decklist instead of raw pasted text. See
+     * resolveSavedDeckDraftPool().
      *
      * @return int[]
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false): array
     {
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomDraftCardIds($targetSize),
@@ -1690,6 +1708,7 @@ final class GameService
             'jceddys_75' => $playerCount === 4 ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
+            'saved_deck' => $this->resolveSavedDeckDraftPool($requestingUserId, $savedDecklistId, $minCustomPoolSize),
             default => throw new GameStateException("Unknown pool source \"{$poolSource}\""),
         };
 
@@ -1740,6 +1759,37 @@ final class GameService
     }
 
     /**
+     * The 'saved_deck' pool source (issue #290): the same
+     * $userDecklists->cardIdsForUse() lookup the 'custom' deck_type's own
+     * $savedDecklistId already uses for a whole game's deck, reused here
+     * to source a draft's shared pool instead -- authorization (owner, or
+     * an accepted friend for a 'friends'-visibility deck) and "not
+     * found"/"not authorized" error handling are entirely
+     * UserDecklistService's own, same as that flow. Quantities are
+     * preserved exactly as saved, matching the 'custom' pool source's own
+     * pasted-text quantities.
+     *
+     * @return int[]
+     */
+    private function resolveSavedDeckDraftPool(int $requestingUserId, ?int $savedDecklistId, int $minCustomPoolSize): array
+    {
+        if ($savedDecklistId === null) {
+            throw new GameStateException('A saved decklist is required when the pool source is "saved_deck"');
+        }
+
+        $cardIds = $this->userDecklists->cardIdsForUse($requestingUserId, $savedDecklistId)['cardIds'];
+
+        if (count($cardIds) < $minCustomPoolSize) {
+            throw new GameStateException(
+                'The saved decklist has only ' . count($cardIds) . ' card(s), but at least '
+                . $minCustomPoolSize . ' are required'
+            );
+        }
+
+        return $cardIds;
+    }
+
+    /**
      * @return int[] Quick Draft's own quickDraftPoolTargetSize($playerCount)-card
      *         pool -- see buildDraftPool(). `'structure'`'s 45-card pool is
      *         doubled for 3-4 players (matching quickDraftMinCustomPoolSize()'s
@@ -1758,11 +1808,13 @@ final class GameService
      *         pool at exactly 4 players, comfortably covering that target
      *         outright.
      */
-    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
+    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         return $this->buildDraftPool(
             $poolSource,
             $customPoolText,
+            $savedDecklistId,
+            $requestingUserId,
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
             $playerCount,
@@ -1771,11 +1823,13 @@ final class GameService
     }
 
     /** @return int[] Winston Draft's own winstonDraftPoolTargetSize($playerCount)-card pool -- see buildDraftPool(). */
-    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
+    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         return $this->buildDraftPool(
             $poolSource,
             $customPoolText,
+            $savedDecklistId,
+            $requestingUserId,
             self::winstonDraftPoolTargetSize($playerCount),
             self::winstonDraftMinCustomPoolSize($playerCount),
             $playerCount,
@@ -1800,11 +1854,11 @@ final class GameService
      *         players, since buildDraftPool() itself already swaps in the
      *         150-card 'jceddys_150' pool for that case.
      */
-    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
+    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
 
         if (count($cardIds) < $targetSize) {
             throw new GameStateException(

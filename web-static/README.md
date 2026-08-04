@@ -790,36 +790,58 @@ too, proportional to the smaller card width.
     mean. Selecting Quick Draft reveals `#new-game-quick-draft-fields`
     instead -- a Pool dropdown (`#new-game-quick-draft-pool-source`: 48
     random cards, Structure deck, jceddy's 75 Card deck, One of Each Card,
-    or Custom pool) with its own plain-language description below it
-    (`QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS`, `updateQuickDraftPoolSourceVisibility()`),
-    and, only for Custom pool, the same file-upload/paste pair the
-    Traditional `custom` deck_type and the `custom_duel` waiting room both
-    already use, feeding `quick_draft_custom_pool_text` instead of
-    `decklist_text`/`custom_duel`'s own decklist field. Selecting Winston
-    Draft reveals `#new-game-winston-draft-fields` instead -- the exact
-    same shape one level down (`#new-game-winston-draft-pool-source`, same
-    5 options, its own `WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording
-    reflecting its own per-player-count target (45/70/90 for 2/3/4
-    players, issue #189 -- Structure's own fixed 45-card pool is doubled
-    for 3-4 players rather than reshuffle-topped-up, and `jceddys_75`
-    swaps to jceddy's 150 Card deck's own pool at exactly 4 players, same
-    as Quick Draft's and Grid Draft's own 4-player `jceddys_75` case), and
-    the same Custom-pool file/textarea pair feeding
-    `winston_draft_custom_pool_text`) -- `updateWinstonDraftPoolSourceVisibility()`
-    mirrors `updateQuickDraftPoolSourceVisibility()` exactly. Selecting
-    Grid Draft reveals `#new-game-grid-draft-fields` instead -- the same
-    shape again (`#new-game-grid-draft-pool-source`, its own
+    Custom pool, or My saved deck) with its own plain-language description
+    below it (`QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS`,
+    `updateQuickDraftPoolSourceVisibility()`), and, only for Custom pool,
+    the same file-upload/paste pair the Traditional `custom` deck_type and
+    the `custom_duel` waiting room both already use, feeding
+    `quick_draft_custom_pool_text` instead of `decklist_text`/
+    `custom_duel`'s own decklist field -- or, only for My saved deck
+    (issue #290), a second dropdown (`#new-game-quick-draft-saved-decklist`)
+    listing the player's own saved decks (and any a friend has shared),
+    populated the exact same way -- and with the exact same "My decks"/
+    "&lt;friend&gt;'s decks" `<optgroup>` grouping -- as the `custom`
+    deck_type's own `#new-game-saved-decklist` (`populateSavedDecklistSelect()`,
+    now parameterized with a placeholder string so this second dropdown's
+    "nothing selected" option reads "Choose a saved deck" instead of
+    "Paste/upload a decklist instead", which wouldn't make sense here since
+    there's no paste/upload fallback within this dropdown itself -- picking
+    Custom pool from the Pool dropdown above it is that fallback instead).
+    Selecting Winston Draft reveals `#new-game-winston-draft-fields`
+    instead -- the exact same shape one level down
+    (`#new-game-winston-draft-pool-source`, same 6 options, its own
+    `WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
+    per-player-count target (45/70/90 for 2/3/4 players, issue #189 --
+    Structure's own fixed 45-card pool is doubled for 3-4 players rather
+    than reshuffle-topped-up, and `jceddys_75` swaps to jceddy's 150 Card
+    deck's own pool at exactly 4 players, same as Quick Draft's and Grid
+    Draft's own 4-player `jceddys_75` case), the same Custom-pool
+    file/textarea pair feeding `winston_draft_custom_pool_text`, and its
+    own My-saved-deck picker (`#new-game-winston-draft-saved-decklist`)) --
+    `updateWinstonDraftPoolSourceVisibility()` mirrors
+    `updateQuickDraftPoolSourceVisibility()` exactly. Selecting Grid Draft
+    reveals `#new-game-grid-draft-fields` instead -- the same shape again
+    (`#new-game-grid-draft-pool-source`, its own
     `GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
     per-player-count target (54/72/96 for 2/3/4 players -- the 4-player
     case uses a 4x4 grid over 4 rounds instead of the 3x3-over-6-rounds
-    the other player counts use), and the same
-    Custom-pool file/textarea pair feeding `grid_draft_custom_pool_text`) --
+    the other player counts use), the same Custom-pool file/textarea pair
+    feeding `grid_draft_custom_pool_text`, and its own My-saved-deck
+    picker (`#new-game-grid-draft-saved-decklist`)) --
     `updateGridDraftPoolSourceVisibility()` mirrors the other two exactly,
-    except its own pool-source `<select>` has only 4 options, not 5:
+    except its own pool-source `<select>` has only 5 options, not 6:
     Structure deck is deliberately absent, since its 45 cards fall short
     of even the 2-player 54-card minimum and there's no top-up mechanism
     to cover the gap (see "Grid Draft" in `php-app/README.md`) -- offering
     it in the dropdown would just be a guaranteed `400` waiting to happen.
+    All three My-saved-deck pickers are populated on every dialog open
+    (`populateSavedDecklistSelect(..., 'Choose a saved deck')`, alongside
+    the existing `custom` deck_type picker), and the submit handler reads
+    whichever one is actually relevant into the single shared
+    `saved_decklist_id` field `POST /games` already had for `custom`
+    (`GameService::createGame()` reuses that same param for all four
+    cases -- see its own docblock -- since only one deck_type/pool-source
+    combination is ever active per submission).
     Every pool-source `<option>`'s own label (not just the description
     paragraph below the dropdown) is kept honest about however many
     opponents are *currently* checked, via `updateDraftPoolSourceOptionLabels()`

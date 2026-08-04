@@ -43,13 +43,13 @@
     // same fixed default option (value "", "Paste/upload a decklist
     // instead"), rebuilt fresh here every call so a deck saved/deleted/
     // shared since the select was last populated is always reflected.
-    async function populateSavedDecklistSelect(selectEl) {
+    async function populateSavedDecklistSelect(selectEl, placeholder = 'Paste/upload a decklist instead') {
         const { ok, body } = await listDecklists();
         if (!ok) {
             return;
         }
 
-        selectEl.innerHTML = '<option value="">Paste/upload a decklist instead</option>';
+        selectEl.innerHTML = `<option value="">${placeholder}</option>`;
 
         if (body.own.length > 0) {
             const ownGroup = document.createElement('optgroup');
@@ -1306,6 +1306,7 @@
         jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 96 needed.",
         one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
         custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
+        saved_deck: 'Draft from one of your own saved decks (or a friend\'s, if they\'ve shared one with you) instead of pasting or uploading -- narrowed down to the draft\'s target pool size if it has more, same as a Custom pool.',
     };
 
     // Winston Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
@@ -1324,6 +1325,7 @@
         jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 90 needed.",
         one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
         custom: 'Paste or upload your own pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
+        saved_deck: 'Draft from one of your own saved decks (or a friend\'s, if they\'ve shared one with you) instead of pasting or uploading -- narrowed down to the draft\'s target pool size if it has more, same as a Custom pool.',
     };
 
     // Grid Draft's own analog of QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS --
@@ -1344,6 +1346,7 @@
         jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 96 needed.",
         one_of_each: "The full 133-card pool, randomly narrowed down to the draft's target pool size.",
         custom: 'Paste or upload your own pool of at least 54 cards (same format as a Custom Decklist, but no About/Sideboard sections) -- narrowed down to the draft\'s target pool size if you provide more.',
+        saved_deck: 'Draft from one of your own saved decks (or a friend\'s, if they\'ve shared one with you) instead of pasting or uploading -- narrowed down to the draft\'s target pool size if it has more, same as a Custom pool.',
     };
 
     // Mirrors GameService::quickDraftPoolTargetSize()/
@@ -1493,6 +1496,7 @@
         document.getElementById('new-game-quick-draft-pool-source-description').textContent =
             QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
         document.getElementById('new-game-quick-draft-custom-pool-fields').hidden = poolSource !== 'custom';
+        document.getElementById('new-game-quick-draft-saved-deck-fields').hidden = poolSource !== 'saved_deck';
     }
 
     // Winston Draft's own analog of updateQuickDraftPoolSourceVisibility().
@@ -1501,6 +1505,7 @@
         document.getElementById('new-game-winston-draft-pool-source-description').textContent =
             WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
         document.getElementById('new-game-winston-draft-custom-pool-fields').hidden = poolSource !== 'custom';
+        document.getElementById('new-game-winston-draft-saved-deck-fields').hidden = poolSource !== 'saved_deck';
     }
 
     // Grid Draft's own analog of updateQuickDraftPoolSourceVisibility().
@@ -1509,6 +1514,7 @@
         document.getElementById('new-game-grid-draft-pool-source-description').textContent =
             GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
         document.getElementById('new-game-grid-draft-custom-pool-fields').hidden = poolSource !== 'custom';
+        document.getElementById('new-game-grid-draft-saved-deck-fields').hidden = poolSource !== 'saved_deck';
     }
 
     // Shows the locked-in summary for a built-in preset, or the editable
@@ -2152,6 +2158,15 @@
 
         updateTeamFields();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
+        // Issue #290's own three draft-type pickers, sharing the exact
+        // same decks (own + friends') as the 'custom' deck_type's own
+        // select above -- just a different placeholder, since there's no
+        // "instead" paste/upload fallback within this specific dropdown
+        // (choosing "Custom pool" from the pool-source select above it is
+        // that fallback instead).
+        await populateSavedDecklistSelect(document.getElementById('new-game-quick-draft-saved-decklist'), 'Choose a saved deck');
+        await populateSavedDecklistSelect(document.getElementById('new-game-winston-draft-saved-decklist'), 'Choose a saved deck');
+        await populateSavedDecklistSelect(document.getElementById('new-game-grid-draft-saved-decklist'), 'Choose a saved deck');
         newGameDialog.showModal();
     });
 
@@ -2190,10 +2205,9 @@
 
         const partnerUserId = isTeamFormat ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
-        const savedDecklistId = deckType === 'custom'
-            ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
+        const decklistText = deckType === 'custom' && document.getElementById('new-game-saved-decklist').value === ''
+            ? document.getElementById('new-game-decklist-text').value
             : undefined;
-        const decklistText = deckType === 'custom' && !savedDecklistId ? document.getElementById('new-game-decklist-text').value : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
         const quickDraftPoolSource = deckType === 'quick_draft' ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
         const quickDraftCustomPoolText = deckType === 'quick_draft' && quickDraftPoolSource === 'custom'
@@ -2206,6 +2220,17 @@
         const gridDraftPoolSource = deckType === 'grid_draft' ? document.getElementById('new-game-grid-draft-pool-source').value : undefined;
         const gridDraftCustomPoolText = deckType === 'grid_draft' && gridDraftPoolSource === 'custom'
             ? document.getElementById('new-game-grid-draft-custom-pool-text').value
+            : undefined;
+        // A single param shared by deck_type 'custom' and any of the three
+        // draft pool sources being 'saved_deck' (issue #290) -- only one
+        // of these four is ever active per submission, so whichever
+        // select is currently relevant is the one read here. Mirrors how
+        // GameService::createGame() itself reuses one $savedDecklistId
+        // param across all four -- see its own docblock.
+        const savedDecklistId = deckType === 'custom' ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
+            : deckType === 'quick_draft' && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
+            : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
+            : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
             : undefined;
         const { ok, body } = await createGame(
             opponentUserIds,

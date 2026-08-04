@@ -8069,6 +8069,86 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    // -- 'saved_deck' pool source (issue #290) -----------------------------
+
+    public function testCreateGameQuickDraftSavedDeckPoolUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('quickdraft-saveddeck-alice');
+        $bob = $this->insertUser('quickdraft-saveddeck-bob');
+        // 45 cards, under the 2-player 48-card target, so buildDraftPool()
+        // never truncates/shuffles -- the pool ends up exactly this array.
+        $decklistId = $this->insertSavedDecklist($creator, 'My Cube', range(1, 45));
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('saved_deck', $match['pool_source']);
+        self::assertSame(range(1, 45), array_map(intval(...), json_decode((string) $match['pool_card_ids'], true)));
+    }
+
+    public function testCreateGameQuickDraftSavedDeckPoolRejectsFewerThanFortyFiveCards(): void
+    {
+        $creator = $this->insertUser('quickdraft-saveddeck-few-alice');
+        $bob = $this->insertUser('quickdraft-saveddeck-few-bob');
+        $decklistId = $this->insertSavedDecklist($creator, 'Too Small', range(1, 10));
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 45 are required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+    }
+
+    public function testCreateGameQuickDraftSavedDeckPoolRequiresADecklistId(): void
+    {
+        $creator = $this->insertUser('quickdraft-saveddeck-missing-alice');
+        $bob = $this->insertUser('quickdraft-saveddeck-missing-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('A saved decklist is required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+        );
+    }
+
+    public function testCreateGameQuickDraftSavedDeckPoolRejectsADecklistNotOwnedOrShared(): void
+    {
+        $owner = $this->insertUser('quickdraft-saveddeck-owner');
+        $creator = $this->insertUser('quickdraft-saveddeck-stranger');
+        $bob = $this->insertUser('quickdraft-saveddeck-stranger-bob');
+        $decklistId = $this->insertSavedDecklist($owner, 'Not Yours', range(1, 45));
+
+        $this->expectException(NotAuthorizedToAccessDecklistException::class);
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+    }
+
     public function testFullDraftWithARandom48PoolProducesSixteenKeptCardsPerPlayer(): void
     {
         ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('random_48');
@@ -9232,6 +9312,30 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    public function testCreateGameWinstonDraftSavedDeckPoolUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('winstondraft-saveddeck-alice');
+        $bob = $this->insertUser('winstondraft-saveddeck-bob');
+        // Exactly 45 cards -- Winston Draft's own 2-player target size, so
+        // no truncation/shuffling happens (see winstonDraftMinCustomPoolSize()'s
+        // own docblock on why its minimum equals the target exactly).
+        $decklistId = $this->insertSavedDecklist($creator, 'My Cube', range(1, 45));
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('saved_deck', $match['pool_source']);
+        self::assertSame(range(1, 45), array_map(intval(...), json_decode((string) $match['pool_card_ids'], true)));
+    }
+
     public function testWinstonDraftDealsThreeSingleCardPilesAndRandomlyPicksFirstPlayer(): void
     {
         $fixture = $this->buildWinstonDraftFixture();
@@ -10116,6 +10220,30 @@ final class GameServiceIntegrationTest extends TestCase
             gridDraftPoolSource: 'custom',
             gridDraftCustomPoolText: "20 Charity\n",
         );
+    }
+
+    public function testCreateGameGridDraftSavedDeckPoolUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('griddraft-saveddeck-alice');
+        $bob = $this->insertUser('griddraft-saveddeck-bob');
+        // Exactly 54 cards -- Grid Draft's own 2-player target size, so no
+        // truncation/shuffling happens (see gridDraftMinCustomPoolSize()'s
+        // own docblock on why its minimum equals the target exactly).
+        $decklistId = $this->insertSavedDecklist($creator, 'My Cube', range(1, 54));
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('saved_deck', $match['pool_source']);
+        self::assertSame(range(1, 54), array_map(intval(...), json_decode((string) $match['pool_card_ids'], true)));
     }
 
     public function testCreateGameGridDraftRejectsTheStructurePoolSourceAsUndersized(): void
