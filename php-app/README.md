@@ -1018,6 +1018,22 @@ the suppression doesn't need to watch for anything leaving play to know
 when to lift — it just expires at the round boundary regardless
 (`BoardState::clearEndOfRoundSuppressions()`).
 
+`'while_source_in_play'`'s name is a slight misnomer: the card text on
+all five of Faith/Guilt/Meekness/Pacifism/Shame actually reads "for as
+long as you have this mood" — i.e. while the player who played it still
+*owns* it, not merely while it's in play under anyone's control. A
+steal/give-away effect (Recklessness, Instability, Guile, Betrayal,
+Arrogance, Avoidance, Chaos) reassigning the source card's owner via
+`BoardState::giveInPlayToPlayer()` therefore lifts any
+`'while_source_in_play'` suppression it's the source of at that same
+moment, exactly as if the card had left play outright
+(`clearSuppressionsFrom($cardId, 'while_source_in_play')`) — the original
+caster no longer "has" it once someone else does, even though it's still
+sitting in play. This is scoped to that one expiry only: an
+`'end_of_round'` suppression sourced by the same stolen card (Scorn) is
+left alone, since its own duration has nothing to do with who currently
+owns Scorn.
+
 Every in-play mood also carries `value_locked` -- true once a permanent
 one-time "after playing this mood, ... this mood's value becomes N"
 trigger (Dignity, Delight, Cynicism, and 7 other cards -- every one that

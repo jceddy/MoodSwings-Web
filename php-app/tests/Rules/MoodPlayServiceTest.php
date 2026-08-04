@@ -4186,6 +4186,32 @@ final class MoodPlayServiceTest extends TestCase
         self::assertFalse($state->isSuppressed(9));
     }
 
+    public function testGuiltsSuppressionClearsWhenGuiltChangesOwnerWithoutLeavingPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [14], 2 => [56]]); // Guilt, Betrayal (black)
+        $state->moveHandToInPlay(2, 56);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 14, new PlayerChoices(['mode' => 'single', 'target_mood_id' => 56]));
+        self::assertTrue($state->isSuppressed(56));
+
+        $state->giveInPlayToPlayer(14, 2); // Guilt stolen away from the player who played it, still in play
+
+        self::assertFalse($state->isSuppressed(56));
+    }
+
+    public function testScornsEndOfRoundSuppressionSurvivesScornChangingOwner(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 5]]); // Scorn, Complacency
+        $state->moveHandToInPlay(1, 5);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 24, new PlayerChoices(['target_mood_id' => 5]));
+        self::assertTrue($state->isSuppressed(5));
+
+        $state->giveInPlayToPlayer(24, 2); // Scorn changes hands -- its "until end of round" suppression is unrelated to ownership
+
+        self::assertTrue($state->isSuppressed(5));
+    }
+
     public function testScornSuppressesAnyMoodWhenPlayed(): void
     {
         $state = $this->boardState(hands: [1 => [24, 5]]); // Scorn, Complacency

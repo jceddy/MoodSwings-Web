@@ -15,7 +15,11 @@ use MoodSwings\Rules\PlayerChoices;
  * as long as you have this mood." The suppression is tied to Faith itself
  * as its source (BoardState::suppress()'s $sourceCardId, expiring
  * 'while_source_in_play'), so it lifts automatically once Faith leaves
- * play -- see BoardState::clearSuppressionsFrom().
+ * play -- see BoardState::clearSuppressionsFrom() -- or once Faith
+ * changes owner without leaving play (e.g. stolen by Guile/Chaos/etc.),
+ * since "as long as you have this mood" stops being true the moment the
+ * player who played it no longer owns it -- see
+ * BoardState::giveInPlayToPlayer().
  */
 final class FaithEffect extends AbstractMoodEffect
 {
