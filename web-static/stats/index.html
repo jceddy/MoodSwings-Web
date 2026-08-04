@@ -34,13 +34,30 @@
             not tied to any one player. Click a column header to sort by it.
         </p>
 
-        <button id="download-stats-button" type="button">Download JSON</button>
+        <div id="stats-controls">
+            <label id="stats-set-filter-label">Set
+                <select id="stats-set-filter">
+                    <option value="">All sets</option>
+                </select>
+            </label>
+            <label id="stats-page-size-label">Show
+                <select id="stats-page-size">
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="150">150</option>
+                </select>
+            </label>
+            <button id="download-stats-button" type="button">Download JSON</button>
+        </div>
 
         <div id="card-stats-table-wrap">
             <table id="card-stats-table">
                 <thead>
                     <tr>
                         <th data-sort-key="name" scope="col">Name</th>
+                        <th data-sort-key="set_code" scope="col">Set</th>
+                        <th data-sort-key="collector_number" scope="col">#</th>
                         <th data-sort-key="rarity" scope="col">Rarity</th>
                         <th data-sort-key="color" scope="col">Color</th>
                         <th data-sort-key="times_in_deck" scope="col">Times in deck</th>
@@ -54,6 +71,12 @@
                 </thead>
                 <tbody id="card-stats-body"></tbody>
             </table>
+        </div>
+
+        <div id="stats-pagination">
+            <button id="stats-prev-page-button" type="button">&larr; Prev</button>
+            <span id="stats-page-indicator"></span>
+            <button id="stats-next-page-button" type="button">Next &rarr;</button>
         </div>
     </main>
 

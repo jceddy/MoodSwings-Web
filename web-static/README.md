@@ -2323,33 +2323,59 @@ using the same-origin `session_token` cookie for auth — see
   `#stats-button` (see above, `js/game.js`), with its own "Back to your
   games" button (`#stats-back-to-lobby-button`) navigating to `/game/`.
   Redirects to `/` if there's no active session, same as the other pages.
-  One section: a sortable `#card-stats-table` (`js/stats.js`,
+  One section: a sortable, paginated `#card-stats-table` (`js/stats.js`,
   `getCardStats()` in `app.js` → `GET /stats/cards`) with one row per
-  catalog card and a column each for Name/Rarity/Color/Times in
+  catalog card and a column each for Name/Set/#/Rarity/Color/Times in
   deck/Deck win rate/Times played/Play win rate/Quick Draft avg.
   pick/Winston Draft avg. pile size/Grid Draft avg. round — server-wide
   aggregate data, not tied to any one player. Every `<th data-sort-key>`
-  is clickable: a click sorts ascending by that column, a second click on
-  the same header flips to descending, and a click on a different header
-  resets to ascending — same toggle convention as any other sortable
-  table would use, tracked as plain `sortKey`/`sortAscending` module
-  variables in `js/stats.js` rather than anything persisted. The three
-  draft-format columns hold `{average, count}` objects (see
-  `CardStatsService::averagePick()` in `../php-app/README.md`) so a
-  never-drafted card's `null` average always sorts last regardless of
-  direction, instead of sorting arbitrarily against `0`; every other
-  column sorts null-last the same way. The Rarity column sorts by print
+  is clickable: a click sorts ascending by that column (and resets to
+  page 1), a second click on the same header flips to descending, and a
+  click on a different header resets to ascending — same toggle
+  convention as any other sortable table would use, tracked as plain
+  `sortKey`/`sortAscending` module variables in `js/stats.js` rather than
+  anything persisted. The three draft-format columns hold `{average,
+  count}` objects (see `CardStatsService::averagePick()` in
+  `../php-app/README.md`) so a never-drafted card's `null` average
+  always sorts last regardless of direction, instead of sorting
+  arbitrarily against `0`; every other column (including a card with no
+  `set_code`/`collector_number`, which shouldn't happen but is handled
+  the same way regardless) sorts null-last too. Two columns sort by a
+  fixed lookup table rather than their raw value: Rarity by print
   frequency (`common` -> `uncommon` -> `rare` -> `mythic`, a
-  `RARITY_RANK` lookup in `js/stats.js`) rather than alphabetically,
-  since alphabetical order doesn't mean anything for rarity. No
-  low-sample filtering — a card with only one or two picks/games still
-  shows its raw average and count right alongside it (e.g. `"4.20 (1
-  pick)"`), per the issue's own "show as-is" scope. A `#download-stats-button`
-  ("Download JSON") above the table serializes the full fetched `cards`
-  array (every catalog card, not just whatever's currently sorted into
-  view) into a `moodswings-card-stats.json` file via a `Blob`/temporary
-  `<a download>` link, for offline analysis. Shares the same footer
-  every other page has.
+  `RARITY_RANK` lookup) and Color by the game's own color-wheel order
+  (`white` -> `blue` -> `black` -> `red` -> `green`, a `COLOR_RANK`
+  lookup) — alphabetical order means nothing for either. No low-sample
+  filtering — a card with only one or two picks/games still shows its
+  raw average and count right alongside it (e.g. `"4.20 (1 pick)"`), per
+  the issue's own "show as-is" scope.
+
+  `#stats-controls` sits above the table with three controls:
+  - `#stats-set-filter` — a `<select>` populated once (`populateSetFilterOptions()`)
+    from every distinct `set_code` the fetched cards carry, plus an "All
+    sets" default; narrows both the table and the download to cards from
+    the chosen set only (today there's only ever one, `MSW`, but the
+    control works generically for whenever a second one exists).
+  - `#stats-page-size` — a `<select>` (25/50/100/150, defaulting to
+    the first option) capping how many rows `#card-stats-table` renders
+    at once; `#stats-pagination`'s `#stats-prev-page-button`/
+    `#stats-next-page-button` step `currentPage` by one each (clamped to
+    `[1, totalPages]` inside `renderTable()` itself, so a stale
+    `currentPage` after a filter/page-size change that shrinks the total
+    always lands somewhere valid rather than rendering an empty page),
+    and `#stats-page-indicator` shows `"Page X of Y (N cards)"`. Picking
+    a new set or page size, like a sort-header click, resets to page 1.
+  - `#download-stats-button` ("Download JSON") — serializes every card
+    matching the current set filter (not just the current page, and not
+    limited by `#stats-page-size`), sorted the same way the table
+    currently is, into a `moodswings-card-stats.json` file via a
+    `Blob`/temporary `<a download>` link. The payload is `{"filters":
+    {"set": <code or null>}, "cards": [...]}` rather than a bare array,
+    so the file is self-describing about what was applied instead of
+    leaving the reader to guess whether it's the full catalog or a
+    narrowed slice.
+
+  Shares the same footer every other page has.
 
 ## Layout
 

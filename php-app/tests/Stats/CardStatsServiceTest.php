@@ -316,6 +316,8 @@ final class CardStatsServiceTest extends TestCase
 
         $recorded = $byId[1];
         self::assertSame('Altruism', $recorded['name']);
+        self::assertSame('MSW', $recorded['set_code']);
+        self::assertIsInt($recorded['collector_number']);
         self::assertSame(1, $recorded['times_in_deck']);
         self::assertSame(1.0, $recorded['deck_win_rate']);
         self::assertSame(1, $recorded['times_played']);
