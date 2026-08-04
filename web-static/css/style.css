@@ -1602,6 +1602,10 @@ dialog#deck-builder-dialog[open] {
 /* Card statistics (issue #315) -- ten columns are wider than most phone
    viewports, so the table itself scrolls horizontally inside this
    wrapper rather than the whole page ever needing to. */
+#download-stats-button {
+    margin-bottom: 1rem;
+}
+
 #card-stats-table-wrap {
     overflow-x: auto;
 }

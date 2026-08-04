@@ -20,12 +20,20 @@
     let sortKey = 'name';
     let sortAscending = true;
 
+    // Rarity has an inherent order that alphabetical sorting gets wrong
+    // (common, mythic, rare, uncommon) -- rank it print-frequency order
+    // instead, from least to greatest rare.
+    const RARITY_RANK = { common: 0, uncommon: 1, rare: 2, mythic: 3 };
+
     // The three draft-format columns hold {average, count} rather than a
     // plain number (see CardStatsService::averagePick()) -- sorting by
     // .average keeps a never-drafted card's null last regardless of
     // direction, rather than sorting arbitrarily against 0.
     function sortValue(card, key) {
         const value = card[key];
+        if (key === 'rarity') {
+            return RARITY_RANK[value];
+        }
         if (value !== null && typeof value === 'object') {
             return value.average;
         }
@@ -104,6 +112,19 @@
             renderTable();
         });
     }
+
+    // Downloads the full combined stats payload as-is (every card, not just
+    // whatever's currently sorted into view) so it's usable for offline
+    // analysis, not just what fits on screen.
+    document.getElementById('download-stats-button').addEventListener('click', () => {
+        const blob = new Blob([JSON.stringify(cards, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'moodswings-card-stats.json';
+        link.click();
+        URL.revokeObjectURL(url);
+    });
 
     const { ok, body } = await getCardStats();
     if (ok) {

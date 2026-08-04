@@ -2338,10 +2338,18 @@ using the same-origin `session_token` cookie for auth — see
   `CardStatsService::averagePick()` in `../php-app/README.md`) so a
   never-drafted card's `null` average always sorts last regardless of
   direction, instead of sorting arbitrarily against `0`; every other
-  column sorts null-last the same way. No low-sample filtering — a card
-  with only one or two picks/games still shows its raw average and count
-  right alongside it (e.g. `"4.20 (1 pick)"`), per the issue's own
-  "show as-is" scope. Shares the same footer every other page has.
+  column sorts null-last the same way. The Rarity column sorts by print
+  frequency (`common` -> `uncommon` -> `rare` -> `mythic`, a
+  `RARITY_RANK` lookup in `js/stats.js`) rather than alphabetically,
+  since alphabetical order doesn't mean anything for rarity. No
+  low-sample filtering — a card with only one or two picks/games still
+  shows its raw average and count right alongside it (e.g. `"4.20 (1
+  pick)"`), per the issue's own "show as-is" scope. A `#download-stats-button`
+  ("Download JSON") above the table serializes the full fetched `cards`
+  array (every catalog card, not just whatever's currently sorted into
+  view) into a `moodswings-card-stats.json` file via a `Blob`/temporary
+  `<a download>` link, for offline analysis. Shares the same footer
+  every other page has.
 
 ## Layout
 
