@@ -11046,6 +11046,280 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->resignGame($gameId, $p2);
     }
 
+    // -- Resigning from a draft match (issue #144) -----------------------
+
+    public function testResignDuringDraftingAbandonsWholeQuickDraftMatchTwoPlayer(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertFalse($result['round_scored']);
+        self::assertTrue($result['game_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertNull($match['winner_user_id'], 'a mid-drafting resignation has no winner -- the whole match is simply abandoned');
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('abandoned', $game['status']);
+
+        // u2 never resigned, but there's nothing left to draft against.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not currently drafting');
+        $this->games->submitQuickDraftPick($gameId, $u2, 1, 1, []);
+    }
+
+    public function testResignDuringDraftingAbandonsWholeMatchEvenWithThreeOrFourPlayers(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(3);
+        $gameId = $fixture['gameId'];
+        [$u1, $u2, $u3] = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+
+        // Unlike the deck_building "drop just the resigner" path, an
+        // in-drafting resignation always ends the whole match -- there's
+        // no way to hand a half-finished Winston Draft turn or a
+        // mid-round Quick Draft pile to anyone else, so u2/u3 lose their
+        // still-in-progress draft too, not just u1.
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertNull($match['winner_user_id']);
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+
+        foreach ([$u2, $u3] as $survivorUserId) {
+            $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id');
+            $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $survivorUserId]);
+            self::assertSame(1, (int) $stmt->fetchColumn(), 'abandonDraftMatch() leaves every draft_match_players row in place -- it never removes anyone -- but the match itself is over');
+        }
+    }
+
+    public function testResignDuringDeckBuildingDropsJustTheResignerWithTwoSurvivors(): void
+    {
+        $fixture = $this->buildMultiplayerWinstonDraftFixture(3);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        [$resigningUserId, $u2, $u3] = $userIds;
+        $this->driveMultiplayerWinstonDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        if ($this->fetchDraftMatch($draftMatchId)['status'] !== 'deck_building') {
+            self::markTestSkipped('this particular shuffle produced an auto-loss before deck_building was ever reached');
+        }
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $resigningUserId);
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertFalse($result['game_completed'], '2 players still remain -- the match keeps going');
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('deck_building', $match['status']);
+        self::assertNull($match['winner_user_id']);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status'], 'the game itself is untouched -- only the resigning seat is removed');
+
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id');
+        $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $resigningUserId]);
+        self::assertSame(0, (int) $stmt->fetchColumn());
+        self::assertNull($this->games->gamePlayerIdFor($gameId, $resigningUserId));
+
+        // u2/u3 can keep submitting their decks as an ordinary 2-player match.
+        $this->submitFullWinstonDraftDeck($gameId, $u2);
+        $this->submitFullWinstonDraftDeck($gameId, $u3);
+        $this->games->startGame($gameId);
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    public function testResignDuringDeckBuildingWithOneSurvivorWinsOutright(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture(winsNeeded: 1);
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertSame($u2, (int) $match['winner_user_id']);
+        self::assertNotNull($match['completed_at']);
+
+        $game = $this->fetchGame($gameId);
+        self::assertSame('abandoned', $game['status'], 'no game was ever actually played -- the sole game row is abandoned, not completed');
+
+        self::assertSame(1, $this->games->lifetimeStatsFor($u2)['match_wins'], 'recordMatchCompletionStats() must still credit u2 with the lifetime match win');
+        self::assertSame(1, $this->games->lifetimeStatsFor($u1)['match_losses']);
+        self::assertNull($this->games->gamePlayerIdFor($gameId, $u1), 'the resigning player is removed the same as any other dropped draft participant');
+    }
+
+    /**
+     * The 0-survivors branch of resignFromDraftMatch()'s deck_building
+     * case can never actually be reached through resignGame() alone --
+     * only one seat resigns per call, and a match always starts with at
+     * least 2 players, so the very first resignation in deck_building can
+     * only ever leave 1 or more survivors (see resignFromDraftMatch()'s
+     * own docblock). This exercises that defensive branch directly by
+     * simulating the only way it could occur: another process having
+     * already dropped every other draft_match_players row out from under
+     * this call.
+     */
+    public function testResignDuringDeckBuildingWithZeroSurvivorsAbandonsMatch(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $this->pdo->prepare('DELETE FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['match_id' => $draftMatchId, 'user_id' => $u2]);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status']);
+        self::assertNull($match['winner_user_id']);
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * resignFromDraftMatch()'s "already finished" guard can't actually be
+     * reached through resignGame() alone either -- every path that
+     * completes/abandons a draft match also flips its associated
+     * 'waiting' games row away from 'waiting' in the very same call, so
+     * resignGame()'s own outer gate (games.status === 'waiting') would
+     * already have redirected a second attempt to the ordinary "not in
+     * progress" branch instead. This simulates the only way the guard
+     * could actually fire: draft_matches.status changing without the
+     * games row changing alongside it (e.g. a race between two
+     * concurrent requests).
+     */
+    public function testResignFromAnAlreadyFinishedDraftMatchThrows(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare("UPDATE draft_matches SET status = 'completed', completed_at = NOW() WHERE id = :id")
+            ->execute(['id' => $draftMatchId]);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('has already finished');
+        $this->games->resignGame($gameId, $p1);
+    }
+
+    public function testResignFromADraftMatchFailsForAPlayerNotSeatedInTheGame(): void
+    {
+        ['gameId' => $gameId] = $this->buildQuickDraftFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('not seated');
+        $this->games->resignGame($gameId, 999999);
+    }
+
+    /**
+     * Mirrors removeDraftMatchPlayer()'s own "leave a game_players row
+     * behind if the draft_match_players row is already gone" desync
+     * scenario, just from the opposite direction -- resignFromDraftMatch()
+     * itself asserts the resolved user_id is still a live draftMatchUserIds()
+     * participant before doing anything else.
+     */
+    public function testResignFromADraftMatchFailsIfTheUserIsNoLongerAParticipant(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('DELETE FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['match_id' => $draftMatchId, 'user_id' => $u1]);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('is not part of draft match');
+        $this->games->resignGame($gameId, $p1);
+    }
+
+    public function testDraftResignedEventIsLoggedWithAHumanReadableDescription(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->games->resignGame($gameId, $p1);
+
+        $log = $this->games->fullEventLog($gameId);
+        $lastEntry = end($log);
+        self::assertSame('draft_resigned', $lastEntry['event_type']);
+        self::assertSame("{$this->fetchUsername($u1)} resigned from the draft", $lastEntry['description']);
+    }
+
+    // -- touchLastMoveAt() coverage for draft-progressing actions --------
+    // Companion to issue #144's expiry-cleanup half: bin/expire_and_delete_stale_games.php's
+    // own staleness check reads games.last_move_at, so a draft match that's
+    // genuinely being actively picked/deck-built must keep bumping it just
+    // like playMood()/pass() already do, or an active-but-slow draft could
+    // be force-expired out from under its players.
+
+    public function testSubmitQuickDraftPickStampsLastMoveAt(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1] = $this->buildQuickDraftFixture();
+        self::assertNull($this->fetchGame($gameId)['last_move_at']);
+
+        $state = $this->games->getState($gameId, $u1);
+        $pack = $state['quick_draft']['drafting']['pack'];
+        $this->games->submitQuickDraftPick($gameId, $u1, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
+    public function testSubmitDraftDeckStampsLastMoveAt(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->pdo->prepare('UPDATE games SET last_move_at = NULL WHERE id = :id')->execute(['id' => $gameId]);
+
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
+    public function testSubmitWinstonDraftPickStampsLastMoveAt(): void
+    {
+        $fixture = $this->buildWinstonDraftFixture();
+        $gameId = $fixture['gameId'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertNull($this->fetchGame($gameId)['last_move_at']);
+
+        $currentPlayerUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->games->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
+    public function testSubmitGridDraftPickStampsLastMoveAt(): void
+    {
+        $fixture = $this->buildGridDraftFixture();
+        $gameId = $fixture['gameId'];
+        $u1 = $fixture['u1'];
+        $u2 = $fixture['u2'];
+        self::assertNull($this->fetchGame($gameId)['last_move_at']);
+
+        $state = $this->games->getState($gameId, $u1);
+        $currentUserId = $state['grid_draft']['drafting']['is_your_turn'] ? $u1 : $u2;
+        $this->games->submitGridDraftPick($gameId, $currentUserId, 'row', 0);
+
+        self::assertNotNull($this->fetchGame($gameId)['last_move_at']);
+    }
+
     /**
      * Private in-game notepad (issue #258) -- one freeform note per seat,
      * keyed on game_player_id (see GameNoteRepository), editable only
@@ -11826,5 +12100,144 @@ final class GameServiceIntegrationTest extends TestCase
         $p2HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
         $p2HandCount->execute(['g' => $gameId, 'p' => $p2]);
         self::assertSame(1, (int) $p2HandCount->fetchColumn());
+    }
+
+    /**
+     * The exact scenario from the rules-committee ruling this whole
+     * family of tests is built around, but with the ACTING player (not
+     * the opponent) going first in turn order: Recklessness steals
+     * Boredom, then Betrayal gives Recklessness itself away. Since the
+     * acting player's own Betrayal-sourced "return Recklessness to me"
+     * tag now resolves in THEIR earlier turn-order slot -- before the
+     * opponent's slot, which still owns Recklessness's self-tag and
+     * Boredom's foreign tag at the one-time snapshot -- Recklessness is
+     * back under the acting player's control by the time its own
+     * bottom-and-draw self-tag fires (inside the opponent's slot), so
+     * the acting player (not the opponent) is the one who ends up
+     * cycling it. Per the ruling: "You'll have to return Melancholy and
+     * cycle Recklessness. There's no missing triggers." The final board
+     * state (who ends up with which card) is identical to
+     * testRecklessnessGivenAwayViaBetrayalDoesNotReturnOnceBottomedByItsOwnEffect's
+     * -- only the credited draw shifts from the opponent to the acting
+     * player, proving the turn-order dependency the ruling describes.
+     */
+    public function testRecklessnessGivenAwayViaBetrayalCyclesUnderActingPlayerWhenTheyGoFirst(): void
+    {
+        $u1 = $this->insertUser('reck-betrayal-first-1');
+        $u2 = $this->insertUser('reck-betrayal-first-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Boredom is already in play under p2 -- unlike the mirror-image
+        // test, it's never played *during* this round (matching the
+        // ruling's own scenario: the targeted mood was left over from a
+        // prior round, "my opponent has Melancholy in play"). This also
+        // sidesteps a structural trap: if p2 (out of natural turn order)
+        // played it as an ordinary move first, the engine's forward-only
+        // turn scan -- rotated from first_game_player_id=p1, so
+        // p2 sits LAST -- would find no next player and score the round
+        // immediately, before Recklessness/Betrayal ever got played.
+        $boredomId = $this->insertGameCard($gameId, 83, 'in_play', $p2); // Boredom
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency -- vanilla, no ability
+        $this->insertGameCard($gameId, 1, 'deck', null, 0);
+        $this->insertGameCard($gameId, 2, 'deck', null, 1);
+        // The ACTING player (p1) is this round's first_game_player_id --
+        // "I went first" -- and also starts with 2 plays queued up
+        // (simulating the user's own scenario: "I won last round with
+        // Hope and Laziness in play"), so both Recklessness and Betrayal
+        // are played on p1's own turn before it ever passes to p2.
+        $roundId = $this->insertGameRound($gameId, 2, $p1, $p1, 2);
+        $this->pdo->prepare("UPDATE game_rounds SET pending_play_grants = '[null,null]' WHERE id = :r")
+            ->execute(['r' => $roundId]);
+
+        $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
+
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+        $betrayalResponse = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $recklessnessId]);
+        // p1's own last queued play was Betrayal's decision, not a fresh
+        // card play -- the turn now passes to p2 for their own ordinary
+        // turn, so the round hasn't scored yet.
+        self::assertFalse($betrayalResponse['pending_decision'] ?? false);
+        self::assertFalse($betrayalResponse['round_scored'] ?? false);
+
+        $finalResult = $this->games->playMood($gameId, $p2, $complacencyId, []);
+
+        // p1's own group (Recklessness's foreign "return to me" tag,
+        // sourced from Betrayal which p1 still controls) has only one
+        // pending effect, so it resolves automatically without a
+        // decision, in p1's turn-order slot. That leaves p2 -- who at
+        // the one-time snapshot controlled Recklessness itself, and is
+        // thus the source of BOTH Recklessness's own self-tag and
+        // Boredom's foreign tag -- with two pending effects, so THEY are
+        // asked to order them (order is immaterial to the final board
+        // state; the two effects touch different cards).
+        self::assertTrue($finalResult['pending_decision'] ?? false);
+        $orderDecision = $this->games->getState($gameId, $u2)['round']['pending_decision'];
+        self::assertSame('after_scoring_order', $orderDecision['decision_type']);
+        $orderedCardIds = array_column($orderDecision['field']['cards'], 'card_id');
+        self::assertEqualsCanonicalizing([$recklessnessId, $boredomId], $orderedCardIds);
+        $finalResult = $this->games->respondToDecision($gameId, $p2, ['ordered_card_ids' => $orderedCardIds]);
+        self::assertTrue($finalResult['round_scored'] ?? false);
+
+        $cardsStmt = $this->pdo->prepare("SELECT card_id, zone, owner_game_player_id FROM game_cards WHERE game_id = :g AND id = :id");
+        $cardById = function (int $id) use ($cardsStmt, $gameId): array {
+            $cardsStmt->execute(['g' => $gameId, 'id' => $id]);
+            return $cardsStmt->fetch();
+        };
+
+        // Final board state matches the mirror-image test exactly --
+        // Boredom returns to p2, Recklessness ends up bottomed, Betrayal
+        // stays with p1 -- confirming no trigger was missed either way.
+        $boredom = $cardById($boredomId);
+        self::assertSame('in_play', $boredom['zone']);
+        self::assertSame($p2, (int) $boredom['owner_game_player_id']);
+
+        $recklessness = $cardById($recklessnessId);
+        self::assertSame('deck', $recklessness['zone']);
+        self::assertNull($recklessness['owner_game_player_id']);
+
+        $betrayal = $cardById($betrayalId);
+        self::assertSame('in_play', $betrayal['zone']);
+        self::assertSame($p1, (int) $betrayal['owner_game_player_id']);
+
+        // p1 wins this round (Boredom + Betrayal outvalue Recklessness +
+        // Complacency at the moment scoring happens, before any of this
+        // after-scoring shuffling), so p2 gets the round's own automatic
+        // non-winner's draw. Separately -- and this is the crux of the
+        // scenario -- p1 has already reclaimed Recklessness (via their
+        // own earlier turn-order slot) by the time its self-tag fires
+        // within p2's slot, so p1 (not p2) is credited with ITS draw too.
+        $p1HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p1HandCount->execute(['g' => $gameId, 'p' => $p1]);
+        self::assertSame(1, (int) $p1HandCount->fetchColumn());
+
+        $p2HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p2HandCount->execute(['g' => $gameId, 'p' => $p2]);
+        self::assertSame(1, (int) $p2HandCount->fetchColumn());
+
+        // No trigger was missed: Boredom's return-to-owner is logged as
+        // an ownership change in the round-scored event, confirming the
+        // ruling's "there's no missing triggers."
+        $eventsStmt = $this->pdo->prepare("SELECT details FROM game_events WHERE game_id = :g AND event_type = 'round_scored' ORDER BY id DESC LIMIT 1");
+        $eventsStmt->execute(['g' => $gameId]);
+        $details = json_decode($eventsStmt->fetchColumn(), true);
+        $ownershipChanges = $details['ownership_changes'] ?? [];
+        $boredomChangeFound = false;
+        foreach ($ownershipChanges as $change) {
+            if ($change['card_id'] === $boredomId) {
+                $boredomChangeFound = true;
+            }
+        }
+        self::assertTrue($boredomChangeFound);
     }
 }

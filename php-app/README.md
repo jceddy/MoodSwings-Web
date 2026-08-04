@@ -84,7 +84,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
 | POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
-| POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress`, you've already resigned, or a decision is pending. Gives up instead of playing the game out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
+| POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` (unless it's a `quick_draft`/`winston_draft`/`grid_draft` match still `'waiting'` through drafting/deck-building -- see "Resigning from a draft match" below), you've already resigned, or a decision is pending. Gives up instead of playing the game/draft out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
 | GET    | `/games/notes`  | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. Returns `{"note_text"}` -- your own private note for that seat (issue #258), `""` if you've never saved one. Always readable, regardless of the game's status. See "In-game notepad" below. |
 | POST   | `/games/notes`  | `{"game_id", "note_text"}`                                         | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` -- the note stays visible but read-only once a game ends. `400` if `note_text` is over 20,000 characters. See "In-game notepad" below. |
 | GET    | `/games/spectatable` | —                                                             | Requires auth. Lists any friend's game that's currently `in_progress` and you're not seated in yourself, same shape as `GET /games` rows (minus the viewer-scoped fields, `draft_match` always `null`). See "Spectator mode" below. |
@@ -3169,6 +3169,77 @@ live participant in every other sense a card effect can reach:
   `getState()`'s response, so a resigned player never even appears as a
   selectable option client-side -- purely a UI convenience layered on top
   of the server-side enforcement above, which is what actually matters.
+
+#### Resigning from a draft match (issue #144)
+
+Everything above only ever applied once a game reaches `'in_progress'` --
+`resignGame()` used to throw outright for a `quick_draft`/`winston_draft`/
+`grid_draft` match still sitting `'waiting'` through its own drafting or
+deck-building phase, since there was no way to give up before a real game
+even started. `resignGame()` now checks for this case FIRST, before its
+existing `status !== 'in_progress'` guard: a `'waiting'` game whose
+`deck_type` is one of the three draft types and has a `draft_match_id`
+delegates to a new private `resignFromDraftMatch()` instead, which splits
+on exactly where the match currently is:
+
+- **Still `'drafting'`.** No graceful "drop this player, everyone else
+  keeps going" is possible here -- Quick Draft's own pile-passing math
+  (`submitQuickDraftPick()`'s `$playerCount`-dependent seat-index
+  arithmetic) is fixed for the whole round the instant it's dealt, and
+  Winston/Grid Draft each have exactly one player's turn "in flight" at a
+  time with no defined meaning for handing their half-finished turn to
+  someone else. So a mid-drafting resignation always ends the WHOLE match
+  for every seated player, via a new `abandonDraftMatch()` helper:
+  `draft_matches.status = 'completed'` with `winner_user_id = NULL`, and
+  the match's own currently-`'waiting'` `games` row (passed in as the
+  exact `$gameId` resigning, not hardcoded to `match_game_number = 1` --
+  see below) becomes `'abandoned'`.
+- **`'deck_building'`.** Drafting itself has already fully finished, so
+  there's no shared pile/turn state left to disrupt -- each player's own
+  deck submission is a completely independent operation. This is exactly
+  `finalizeWinstonDraft()`'s own "a short player is dropped, survivors
+  continue" scenario (see below), so it's handled identically: 2+
+  remaining players just continue as their own (N-1)-player match, via a
+  renamed/generalized `removeDraftMatchPlayer()` (was
+  `removeShortWinstonDraftPlayer()`, used by both callers now); exactly 1
+  remaining player wins the match outright
+  (`recordMatchCompletionStats()`, same as `finalizeWinstonDraft()`'s own
+  1-survivor branch, plus the same `abandonDraftMatch()`-style
+  `games`/`draft_matches` updates); 0 remaining (every other player had
+  already resigned first) abandons the match the same way the
+  `'drafting'` branch above does.
+
+Both `abandonDraftMatch()` and `removeDraftMatchPlayer()` are shared with
+`finalizeWinstonDraft()`'s own pre-existing short-player-exclusion logic
+(see "Winston Draft multiplayer" below) rather than duplicated -- a
+mid-drafting resignation and "everyone came up short of
+`WINSTON_MIN_DECK_SIZE`" are the same outcome (whole match abandoned, no
+winner), and a deck_building-phase resignation and "one player came up
+short" are the same outcome (that one player dropped, survivors
+continue). `abandonDraftMatch()` takes `$gameId` explicitly (not
+hardcoded to `match_game_number = 1`) because a resignation between games
+of an already-underway best-of-three draft match -- `advanceDraftMatch()`
+resets `draft_matches.status` back to `'deck_building'` and inserts a
+fresh `'waiting'` games row for each new `match_game_number` -- needs to
+abandon THAT specific game, not game 1's own long-since-completed row.
+
+A new `'draft_resigned'` event type is logged (`card_id` is always
+`null`, same as `'game_expired'`) and gets its own `describeEvent()`
+phrasing ("{player} resigned from the draft") for the same reason
+`'game_expired'` needs its own -- the generic "{actor} played {card}"
+template doesn't fit an event with no card involved.
+
+**Expiry cleanup (the other half of issue #144).** None of the four
+draft-progressing methods (`submitQuickDraftPick()`, `submitDraftDeck()`,
+`submitWinstonDraftPick()`, `submitGridDraftPick()`) used to call
+`touchLastMoveAt()` the way `playMood()`/`pass()`/`respondToDecision()`
+already did -- meaning an actively-drafted-but-slow match could be wrongly
+swept by `expireStaleActiveGames()`/`bin/expire_and_delete_stale_games.php`
+(see "Cleanup cron" above) even with genuine recent activity, since
+`games.last_move_at` would just sit at whatever it was when the game
+row was created (often `NULL`). All four now stamp it on every successful
+pick/deck-submission, the same way the four resignable "real game"
+methods already do.
 
 ### Spectator mode
 
