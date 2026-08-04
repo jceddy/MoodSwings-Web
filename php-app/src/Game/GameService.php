@@ -20,6 +20,7 @@ use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\Stats\CardStatsService;
 use PDO;
 use PDOException;
 use Throwable;
@@ -457,6 +458,7 @@ final class GameService
         private readonly ?NotificationService $notifications = null,
         private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
         private readonly GameNoteRepository $notes = new GameNoteRepository(),
+        private readonly CardStatsService $cardStats = new CardStatsService(),
     ) {
     }
 
@@ -2238,6 +2240,12 @@ final class GameService
                 'kept' => json_encode($cardIds),
             ]);
 
+            // Issue #315's Quick Draft pick-position signal -- written
+            // live, right alongside the pick itself, rather than deferred
+            // to game/match completion (see CardStatsService's own
+            // docblock for why).
+            $this->cardStats->recordQuickDraftPick($cardIds, $roundNumber, $stageNumber, $playerCount);
+
             $stageCountStmt = $pdo->prepare(
                 'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
             );
@@ -2540,6 +2548,18 @@ final class GameService
             }
 
             $this->appendDraftedCardIds($draftMatchId, $userId, $newlyDrafted);
+
+            // Issue #315's Winston Draft pick-position signal: $newlyDrafted
+            // is either the whole pile just taken (pile size = its own
+            // count -- a small pile means it was taken fresh, a large one
+            // means it was passed around and grew first) or the single
+            // forced deck-draw card from declining pile 3 (count 1, always
+            // freshest, since nobody else has seen it) -- count($newlyDrafted)
+            // covers both uniformly. Empty for a plain pass that doesn't
+            // end the turn, hence the guard.
+            if ($newlyDrafted !== []) {
+                $this->cardStats->recordWinstonDraftPick($newlyDrafted, count($newlyDrafted));
+            }
 
             $draftCompleted = $deck === [] && $piles[1] === [] && $piles[2] === [] && $piles[3] === [];
 
@@ -2867,6 +2887,11 @@ final class GameService
             }
 
             $this->appendDraftedCardIds($draftMatchId, $userId, $cardsTaken);
+
+            // Issue #315's Grid Draft pick-position signal -- the round
+            // this pick happened in, read before it's ever incremented
+            // below.
+            $this->cardStats->recordGridDraftPick($cardsTaken, (int) $state['current_round']);
 
             $picksThisRound = (int) $state['picks_this_round'] + 1;
             $remainingDeck = array_map(intval(...), json_decode((string) $state['remaining_deck_card_ids'], true));
@@ -4322,6 +4347,12 @@ final class GameService
      * they're the one still looking at the board right now, watching the
      * game end in front of them, so a push notification about it would
      * just be telling them something they already know.
+     *
+     * Also the single hook point for issue #315's per-card win-rate
+     * stats (CardStatsService::recordGameCompletion()) -- every path
+     * that reaches game completion already funnels through here, so
+     * that's the only place this needs to be called from, rather than
+     * duplicating it at each of this method's own call sites.
      */
     private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId, ?int $excludeGamePlayerId = null): void
     {
@@ -4349,6 +4380,7 @@ final class GameService
 
         $this->bumpLifetimeStats($winningUserIds, 'game_wins');
         $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+        $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
 
         foreach ($winningUserIds as $userId) {
             if ($userId === $excludeUserId) {

@@ -93,6 +93,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/spectate/state` | query params `game_id`, `code`?                        | Requires auth; deliberately does **not** require you to be seated in that game -- see "Spectator mode" below for its own authorization rule. `403` unless you're friends with a seated player or `code` matches the game's own spectate code; `400` if the game is `waiting`/`abandoned`. Same shape as `GET /games/state`, minus `you`, `team_decision`'s propose/confirm affordances, and any draft-match internals -- plus, once the game is `completed`, every player's `hand` is additionally revealed (there's nothing left to hide once the outcome is decided). |
 | GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
+| GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
@@ -3894,6 +3895,97 @@ standings once #91 lands, per-format breakdowns, etc.), and lifetime
 stats are the first section on it, not the only thing it will ever show.
 Each record renders as `wins-losses`, or `wins-losses (NN%)` once the
 percentage is non-null.
+
+### Card statistics (issue #315)
+
+Server-wide, 17lands-style aggregate data -- not tied to any one
+player -- per catalog card (`cards.id`, never a per-game instance id):
+how many completed games' decks it ended up in and how many of those
+were won, how many times it was actually played and how many of those
+games were won, and (for Quick/Winston/Grid Draft) an average
+"how early was this taken" signal per format. Backed by a new
+`card_stats` table (migration `0070`) and a new `MoodSwings\Stats\
+CardStatsService` class -- deliberately its own small service (mirroring
+the `UserDecklistService`/`ReplayStateBuilder` precedent) rather than
+more private methods on the already-large `GameService`, and injected
+into it as an optional constructor dependency (defaulting to
+`new CardStatsService()`, same pattern as `PresenceService`/
+`GameNoteRepository`) so no existing call site needed to change.
+
+Like `user_lifetime_stats`, every stat is written incrementally as it
+happens rather than computed by re-reading historical game data --
+necessary here, not just an optimization: a `completed` game is
+permanently deleted after 7 days (`deleteStaleCompletedGames()`), and
+Winston/Grid Draft's own pick state (`draft_winston_state`/
+`draft_grid_state`) is deleted the instant each draft finishes, so
+there'd be nothing left to read from by the time anyone looked at a
+stats page.
+
+Two independent groups of stats, updated from two different kinds of
+hook point:
+
+- **Deck-membership/played-card win rates**
+  (`CardStatsService::recordGameCompletion()`) are only knowable once a
+  game's outcome is decided, so there's a single hook at the end of
+  `GameService::recordGameCompletionStats()` -- the one method every
+  game-completion code path already funnels through (see "Lifetime
+  stats" above), so no other call site needed touching. For each seated
+  player, `SELECT DISTINCT owner_game_player_id, card_id FROM game_cards`
+  gives "which catalog cards ended up in their deck" -- pre-assigned
+  decks (duel/draft formats) have this set for the whole deck from
+  `startGame()` onward; shared-pool formats only count cards actually
+  drawn (an undrawn deck card, still `owner_game_player_id IS NULL` at
+  game end, was never really part of that player's realized deck).
+  `DISTINCT` because a deck can legally contain duplicate copies of a
+  catalog card (issue #109) -- a duplicate still only counts once toward
+  "how many decks this card ended up in", not once per copy. "Played" is
+  `game_events.event_type = 'mood_played'`, joined through
+  `game_events.card_id -> game_cards.id -> game_cards.card_id` for the
+  catalog id, `DISTINCT`-deduped the same way (a card played twice in one
+  game via Duplicity's repeat mechanic still only counts once).
+- **Draft pick-position signal**
+  (`recordQuickDraftPick()`/`recordWinstonDraftPick()`/
+  `recordGridDraftPick()`) is knowable the instant a pick happens,
+  independent of the eventual game/match outcome (same as 17lands' own
+  ATA, a pure draft signal) -- and for Winston/Grid Draft, deferring
+  wouldn't even be possible, since their own pick state is gone by match
+  completion. Each is called directly from its own pick-submission
+  method instead:
+  - Quick Draft (`submitQuickDraftPick()`): `(round_number - 1) *
+    playerCount + stage_number` -- a genuine ATA-style ordinal, since
+    `draft_pile_stage_picks` already records exactly which (round,
+    stage) a card was kept at.
+  - Winston Draft (`submitWinstonDraftPick()`): the pile's own size at
+    the moment of taking (a small pile means it was taken fresh; a large
+    one means it was passed around and grew first) -- there's no
+    persisted per-pick position for this format otherwise, so this is
+    computed live from `count($newlyDrafted)` right where the pick
+    happens. Also covers the forced pile-3-decline deck-draw, with an
+    implicit pile size of 1 (always freshest, since nobody else has seen
+    it).
+  - Grid Draft (`submitGridDraftPick()`): the round the pick happened in
+    (`draft_grid_state.current_round`, read before it's ever
+    incremented).
+
+  These three numbers are on different scales and never compared across
+  formats (same as 17lands' own ATA, which is always within-format), so
+  each gets its own `*_sum`/`*_count` column pair on `card_stats` rather
+  than one shared value.
+
+`CardStatsService::allCardStats()` (backing `GET /stats/cards`) is the
+read path: every catalog card via `CardCatalog::load()` (the same
+card-catalog source `GameService`/`UserDecklistService` already share),
+each with its recorded stats or all-zero/null defaults for a card
+nothing has happened to yet -- same "no row means zero" shape
+`lifetimeStatsFor()` already uses. Deliberately no minimum-sample-size
+filtering: every card shows its raw counts alongside any rate/average, so
+a low-sample stat is visible as such (a handful of games on a small
+server) rather than hidden or flagged.
+
+The frontend surfaces this on a new dedicated page,
+`web-static/stats/index.html`/`stats.js` (a "Stats" button sits next to
+Spectate on the lobby page) -- see "Card statistics" in
+`web-static/README.md`.
 
 ### Online/presence indicator (issue #110)
 

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <script>
+    // Sets the theme before first paint so an explicit light/dark preference
+    // (see "Dark mode" in web-static/README.md) never flashes the wrong
+    // theme first -- inlined and duplicated per-page rather than an external
+    // script, since an external file would itself add a delay this exists to
+    // avoid. The "system" default needs no JS at all: style.css's own
+    // prefers-color-scheme media query handles it.
+    (function () {
+        try {
+            var theme = localStorage.getItem('themePreference');
+            if (theme === 'light' || theme === 'dark') {
+                document.documentElement.dataset.theme = theme;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls back
+            // to the system default.
+        }
+    })();
+    </script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stats - MoodSwings-Web</title>
+    <link rel="stylesheet" href="../css/style.css">
+</head>
+<body>
+    <main id="stats-main" hidden>
+        <button id="stats-back-to-lobby-button" type="button">&larr; Back to your games</button>
+        <h1>Card statistics</h1>
+        <p>
+            Aggregated across every completed game and draft on this server (issue #315) --
+            not tied to any one player. Click a column header to sort by it.
+        </p>
+
+        <div id="card-stats-table-wrap">
+            <table id="card-stats-table">
+                <thead>
+                    <tr>
+                        <th data-sort-key="name" scope="col">Name</th>
+                        <th data-sort-key="rarity" scope="col">Rarity</th>
+                        <th data-sort-key="color" scope="col">Color</th>
+                        <th data-sort-key="times_in_deck" scope="col">Times in deck</th>
+                        <th data-sort-key="deck_win_rate" scope="col">Deck win rate</th>
+                        <th data-sort-key="times_played" scope="col">Times played</th>
+                        <th data-sort-key="play_win_rate" scope="col">Play win rate</th>
+                        <th data-sort-key="quick_draft" scope="col">Quick Draft avg. pick</th>
+                        <th data-sort-key="winston_draft" scope="col">Winston Draft avg. pile size</th>
+                        <th data-sort-key="grid_draft" scope="col">Grid Draft avg. round</th>
+                    </tr>
+                </thead>
+                <tbody id="card-stats-body"></tbody>
+            </table>
+        </div>
+    </main>
+
+    <dialog id="resources-dialog">
+        <button id="resources-close-button" type="button" aria-label="Close">&times;</button>
+        <h2>Resources</h2>
+        <ul id="resources-list">
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-extended-rules" target="_blank" rel="noopener noreferrer">Rules</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/other-ways-to-play-mood-swings" target="_blank" rel="noopener noreferrer">Formats</a></li>
+            <li><a href="https://magic.wizards.com/en/news/feature/mood-swings-card-notes" target="_blank" rel="noopener noreferrer">Card Specific Rulings</a></li>
+            <li><a href="https://magic.wizards.com/en/news/card-image-gallery/mood-swings" target="_blank" rel="noopener noreferrer">Card Gallery</a></li>
+            <li><a href="https://moodiest.app/" target="_blank" rel="noopener noreferrer">Moodiest (Card Repository)</a></li>
+            <li><a href="https://moodswings.scryfall.com/" target="_blank" rel="noopener noreferrer">Moodfall (another Card Repository)</a></li>
+            <li><a href="https://discord.gg/GgHFEBAd6C" target="_blank" rel="noopener noreferrer">Discord</a></li>
+            <li><a href="https://www.reddit.com/r/moodswingstcg/" target="_blank" rel="noopener noreferrer">Reddit</a></li>
+            <li><a href="https://github.com/jceddy/MoodSwings-Web" target="_blank" rel="noopener noreferrer">GitHub repository</a></li>
+        </ul>
+        <script type="text/javascript" src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js" data-name="bmc-button" data-slug="jceddy" data-color="#FFDD00" data-emoji="" data-font="Cookie" data-text="Buy me a coffee" data-outline-color="#000000" data-font-color="#000000" data-coffee-color="#ffffff"></script>
+    </dialog>
+
+    <footer><span id="app-version"></span><a id="resources-link" href="#">Resources</a><label id="theme-select-label">Theme
+        <select id="theme-select">
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+        </select>
+    </label></footer>
+    <script src="../js/app.js"></script>
+    <script src="../js/stats.js"></script>
+</body>
+</html>
