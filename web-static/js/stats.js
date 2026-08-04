@@ -112,11 +112,30 @@
         return setFilter === '' ? cards : cards.filter((card) => card.set_code === setFilter);
     }
 
+    // .slice() before .sort() so this never mutates the shared `cards`
+    // array as a side effect of rendering -- .sort() sorts in place, and
+    // filteredCards() returns `cards` itself (not a copy) when no set
+    // filter is active, so without this every render (including a plain
+    // page-navigation click that doesn't touch sortKey/sortAscending at
+    // all) would silently resort the underlying source array.
     function sortedFilteredCards() {
-        return filteredCards().sort(compareCards);
+        return filteredCards().slice().sort(compareCards);
+    }
+
+    // Marks the currently-sorted header with aria-sort (the standard
+    // accessible way to convey this) so a CSS ::after rule (see
+    // style.css) can draw an arrow indicating ascending/descending --
+    // without this there was no on-screen way to tell whether a header
+    // click just re-confirmed the current sort or flipped it, which
+    // easily reads as "the sort changed on its own" while paging.
+    function updateSortIndicators() {
+        for (const header of document.querySelectorAll('#card-stats-table th[data-sort-key]')) {
+            header.setAttribute('aria-sort', header.dataset.sortKey === sortKey ? (sortAscending ? 'ascending' : 'descending') : 'none');
+        }
     }
 
     function renderTable() {
+        updateSortIndicators();
         const sorted = sortedFilteredCards();
         const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
         if (currentPage > totalPages) {
