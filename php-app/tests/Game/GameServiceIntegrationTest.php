@@ -12101,4 +12101,143 @@ final class GameServiceIntegrationTest extends TestCase
         $p2HandCount->execute(['g' => $gameId, 'p' => $p2]);
         self::assertSame(1, (int) $p2HandCount->fetchColumn());
     }
+
+    /**
+     * The exact scenario from the rules-committee ruling this whole
+     * family of tests is built around, but with the ACTING player (not
+     * the opponent) going first in turn order: Recklessness steals
+     * Boredom, then Betrayal gives Recklessness itself away. Since the
+     * acting player's own Betrayal-sourced "return Recklessness to me"
+     * tag now resolves in THEIR earlier turn-order slot -- before the
+     * opponent's slot, which still owns Recklessness's self-tag and
+     * Boredom's foreign tag at the one-time snapshot -- Recklessness is
+     * back under the acting player's control by the time its own
+     * bottom-and-draw self-tag fires (inside the opponent's slot), so
+     * the acting player (not the opponent) is the one who ends up
+     * cycling it. Per the ruling: "You'll have to return Melancholy and
+     * cycle Recklessness. There's no missing triggers." The final board
+     * state (who ends up with which card) is identical to
+     * testRecklessnessGivenAwayViaBetrayalDoesNotReturnOnceBottomedByItsOwnEffect's
+     * -- only the credited draw shifts from the opponent to the acting
+     * player, proving the turn-order dependency the ruling describes.
+     */
+    public function testRecklessnessGivenAwayViaBetrayalCyclesUnderActingPlayerWhenTheyGoFirst(): void
+    {
+        $u1 = $this->insertUser('reck-betrayal-first-1');
+        $u2 = $this->insertUser('reck-betrayal-first-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Boredom is already in play under p2 -- unlike the mirror-image
+        // test, it's never played *during* this round (matching the
+        // ruling's own scenario: the targeted mood was left over from a
+        // prior round, "my opponent has Melancholy in play"). This also
+        // sidesteps a structural trap: if p2 (out of natural turn order)
+        // played it as an ordinary move first, the engine's forward-only
+        // turn scan -- rotated from first_game_player_id=p1, so
+        // p2 sits LAST -- would find no next player and score the round
+        // immediately, before Recklessness/Betrayal ever got played.
+        $boredomId = $this->insertGameCard($gameId, 83, 'in_play', $p2); // Boredom
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p2); // Complacency -- vanilla, no ability
+        $this->insertGameCard($gameId, 1, 'deck', null, 0);
+        $this->insertGameCard($gameId, 2, 'deck', null, 1);
+        // The ACTING player (p1) is this round's first_game_player_id --
+        // "I went first" -- and also starts with 2 plays queued up
+        // (simulating the user's own scenario: "I won last round with
+        // Hope and Laziness in play"), so both Recklessness and Betrayal
+        // are played on p1's own turn before it ever passes to p2.
+        $roundId = $this->insertGameRound($gameId, 2, $p1, $p1, 2);
+        $this->pdo->prepare("UPDATE game_rounds SET pending_play_grants = '[null,null]' WHERE id = :r")
+            ->execute(['r' => $roundId]);
+
+        $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
+
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+        $betrayalResponse = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $recklessnessId]);
+        // p1's own last queued play was Betrayal's decision, not a fresh
+        // card play -- the turn now passes to p2 for their own ordinary
+        // turn, so the round hasn't scored yet.
+        self::assertFalse($betrayalResponse['pending_decision'] ?? false);
+        self::assertFalse($betrayalResponse['round_scored'] ?? false);
+
+        $finalResult = $this->games->playMood($gameId, $p2, $complacencyId, []);
+
+        // p1's own group (Recklessness's foreign "return to me" tag,
+        // sourced from Betrayal which p1 still controls) has only one
+        // pending effect, so it resolves automatically without a
+        // decision, in p1's turn-order slot. That leaves p2 -- who at
+        // the one-time snapshot controlled Recklessness itself, and is
+        // thus the source of BOTH Recklessness's own self-tag and
+        // Boredom's foreign tag -- with two pending effects, so THEY are
+        // asked to order them (order is immaterial to the final board
+        // state; the two effects touch different cards).
+        self::assertTrue($finalResult['pending_decision'] ?? false);
+        $orderDecision = $this->games->getState($gameId, $u2)['round']['pending_decision'];
+        self::assertSame('after_scoring_order', $orderDecision['decision_type']);
+        $orderedCardIds = array_column($orderDecision['field']['cards'], 'card_id');
+        self::assertEqualsCanonicalizing([$recklessnessId, $boredomId], $orderedCardIds);
+        $finalResult = $this->games->respondToDecision($gameId, $p2, ['ordered_card_ids' => $orderedCardIds]);
+        self::assertTrue($finalResult['round_scored'] ?? false);
+
+        $cardsStmt = $this->pdo->prepare("SELECT card_id, zone, owner_game_player_id FROM game_cards WHERE game_id = :g AND id = :id");
+        $cardById = function (int $id) use ($cardsStmt, $gameId): array {
+            $cardsStmt->execute(['g' => $gameId, 'id' => $id]);
+            return $cardsStmt->fetch();
+        };
+
+        // Final board state matches the mirror-image test exactly --
+        // Boredom returns to p2, Recklessness ends up bottomed, Betrayal
+        // stays with p1 -- confirming no trigger was missed either way.
+        $boredom = $cardById($boredomId);
+        self::assertSame('in_play', $boredom['zone']);
+        self::assertSame($p2, (int) $boredom['owner_game_player_id']);
+
+        $recklessness = $cardById($recklessnessId);
+        self::assertSame('deck', $recklessness['zone']);
+        self::assertNull($recklessness['owner_game_player_id']);
+
+        $betrayal = $cardById($betrayalId);
+        self::assertSame('in_play', $betrayal['zone']);
+        self::assertSame($p1, (int) $betrayal['owner_game_player_id']);
+
+        // p1 wins this round (Boredom + Betrayal outvalue Recklessness +
+        // Complacency at the moment scoring happens, before any of this
+        // after-scoring shuffling), so p2 gets the round's own automatic
+        // non-winner's draw. Separately -- and this is the crux of the
+        // scenario -- p1 has already reclaimed Recklessness (via their
+        // own earlier turn-order slot) by the time its self-tag fires
+        // within p2's slot, so p1 (not p2) is credited with ITS draw too.
+        $p1HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p1HandCount->execute(['g' => $gameId, 'p' => $p1]);
+        self::assertSame(1, (int) $p1HandCount->fetchColumn());
+
+        $p2HandCount = $this->pdo->prepare("SELECT COUNT(*) FROM game_cards WHERE game_id = :g AND owner_game_player_id = :p AND zone = 'hand'");
+        $p2HandCount->execute(['g' => $gameId, 'p' => $p2]);
+        self::assertSame(1, (int) $p2HandCount->fetchColumn());
+
+        // No trigger was missed: Boredom's return-to-owner is logged as
+        // an ownership change in the round-scored event, confirming the
+        // ruling's "there's no missing triggers."
+        $eventsStmt = $this->pdo->prepare("SELECT details FROM game_events WHERE game_id = :g AND event_type = 'round_scored' ORDER BY id DESC LIMIT 1");
+        $eventsStmt->execute(['g' => $gameId]);
+        $details = json_decode($eventsStmt->fetchColumn(), true);
+        $ownershipChanges = $details['ownership_changes'] ?? [];
+        $boredomChangeFound = false;
+        foreach ($ownershipChanges as $change) {
+            if ($change['card_id'] === $boredomId) {
+                $boredomChangeFound = true;
+            }
+        }
+        self::assertTrue($boredomChangeFound);
+    }
 }
