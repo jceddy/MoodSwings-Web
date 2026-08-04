@@ -115,6 +115,12 @@ function listPastGames() {
     return apiRequest('/games/past');
 }
 
+// Card/draft statistics (issue #315): server-wide aggregate data, not
+// scoped to any one game -- see CardStatsService::allCardStats().
+function getCardStats() {
+    return apiRequest('/stats/cards');
+}
+
 function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId) {
     return apiRequest('/games', {
         method: 'POST',

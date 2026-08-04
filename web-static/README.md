@@ -390,15 +390,18 @@ too, proportional to the smaller card width.
   "Friends" button (see below), a "Decks" button (see below), a "User
   info" button (`#user-info-button`, navigates to `user/index.html`
   below), a "Spectate" button (`#spectate-button`, navigates to
-  `spectate/index.html` below), and the game lobby/board itself. The
-  "Friends"/"Decks"/"User info"/"Spectate"/"Log out" buttons carry their
+  `spectate/index.html` below), a "Stats" button (`#stats-button`,
+  navigates to `stats/index.html` below, issue #315), and the game
+  lobby/board itself. The
+  "Friends"/"Decks"/"User info"/"Spectate"/"Stats"/"Log out" buttons carry their
   own `margin-bottom` so they don't touch whichever of the lobby or board
   view is showing directly beneath them (most noticeably the board
   view's own "Back to your games" button); `#user-info-button`/
-  `#spectate-button` are plain `<button>`s whose click handlers do a real
-  navigation (`window.location.href = '../user/'` /`'../spectate/'`)
-  rather than opening a dialog, since they lead to actual separate
-  pages, not an in-page overlay like Friends/Decks.
+  `#spectate-button`/`#stats-button` are plain `<button>`s whose click
+  handlers do a real navigation (`window.location.href = '../user/'` /
+  `'../spectate/'` / `'../stats/'`) rather than opening a dialog, since
+  they lead to actual separate pages, not an in-page overlay like
+  Friends/Decks.
   - **Spectator mode** (issue #128): if the URL carries a
     `?spectate_game_id=` param (as `spectate/index.html` navigates with,
     see below), `js/game.js` skips the normal lobby entirely and shows
@@ -2316,6 +2319,29 @@ using the same-origin `session_token` cookie for auth — see
   helper, moved to `app.js` — see below) that navigates to
   `../game/?spectate_game_id=<id>` with no code, since friendship alone
   authorizes it. Shares the same footer every other page has.
+- `stats/index.html` (`/stats/`, issue #315) — Reached via the lobby's own
+  `#stats-button` (see above, `js/game.js`), with its own "Back to your
+  games" button (`#stats-back-to-lobby-button`) navigating to `/game/`.
+  Redirects to `/` if there's no active session, same as the other pages.
+  One section: a sortable `#card-stats-table` (`js/stats.js`,
+  `getCardStats()` in `app.js` → `GET /stats/cards`) with one row per
+  catalog card and a column each for Name/Rarity/Color/Times in
+  deck/Deck win rate/Times played/Play win rate/Quick Draft avg.
+  pick/Winston Draft avg. pile size/Grid Draft avg. round — server-wide
+  aggregate data, not tied to any one player. Every `<th data-sort-key>`
+  is clickable: a click sorts ascending by that column, a second click on
+  the same header flips to descending, and a click on a different header
+  resets to ascending — same toggle convention as any other sortable
+  table would use, tracked as plain `sortKey`/`sortAscending` module
+  variables in `js/stats.js` rather than anything persisted. The three
+  draft-format columns hold `{average, count}` objects (see
+  `CardStatsService::averagePick()` in `../php-app/README.md`) so a
+  never-drafted card's `null` average always sorts last regardless of
+  direction, instead of sorting arbitrarily against `0`; every other
+  column sorts null-last the same way. No low-sample filtering — a card
+  with only one or two picks/games still shows its raw average and count
+  right alongside it (e.g. `"4.20 (1 pick)"`), per the issue's own
+  "show as-is" scope. Shares the same footer every other page has.
 
 ## Layout
 

@@ -30,6 +30,12 @@
         window.location.href = '../spectate/';
     });
 
+    // Card/draft statistics (issue #315) -- same real-page-navigation
+    // pattern as #user-info-button/#spectate-button above.
+    document.getElementById('stats-button').addEventListener('click', () => {
+        window.location.href = '../stats/';
+    });
+
     const friendsDialog = document.getElementById('friends-dialog');
     const friendInviteForm = document.getElementById('friend-invite-form');
     const friendInviteInput = document.getElementById('friend-invite-input');

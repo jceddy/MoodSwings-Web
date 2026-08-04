@@ -56,6 +56,7 @@ use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodPlayService;
 use MoodSwings\Rules\RoundScorer;
 use MoodSwings\SiteUrl;
+use MoodSwings\Stats\CardStatsService;
 
 header('Content-Type: application/json');
 
@@ -746,7 +747,8 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications);
+$cardStats = new CardStatsService();
+$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
@@ -916,6 +918,15 @@ if ($path === '/games' && $method === 'GET') {
 if ($path === '/games/past' && $method === 'GET') {
     $currentUser = requireAuth($auth);
     respond(200, ['status' => 'ok', 'games' => $games->listPastGamesForUser((int) $currentUser['id'])]);
+}
+
+// Card/draft statistics (issue #315): server-wide aggregate data, not
+// tied to any one game -- requireAuth() only (every page in this app
+// requires an account), no game/friendship check. See
+// CardStatsService::allCardStats()'s own docblock.
+if ($path === '/stats/cards' && $method === 'GET') {
+    requireAuth($auth);
+    respond(200, ['status' => 'ok', 'cards' => $cardStats->allCardStats()]);
 }
 
 if ($path === '/games/state' && $method === 'GET') {

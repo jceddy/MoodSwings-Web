@@ -76,6 +76,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE games');
         $pdo->exec('TRUNCATE TABLE user_decklists');
         $pdo->exec('TRUNCATE TABLE user_lifetime_stats');
+        $pdo->exec('TRUNCATE TABLE card_stats');
         $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
@@ -12400,5 +12401,118 @@ final class GameServiceIntegrationTest extends TestCase
             }
         }
         self::assertTrue($boredomChangeFound);
+    }
+
+    // -- Card statistics (issue #315) ----------------------------------------
+    //
+    // CardStatsServiceTest.php covers the aggregation math in isolation;
+    // these confirm the real game-completion/pick-submission code paths
+    // actually call into it -- one per hook point (recordGameCompletionStats(),
+    // and each of the three draft formats' own pick-submission methods).
+
+    private function fetchCardStatsRow(int $catalogCardId): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM card_stats WHERE catalog_card_id = :id');
+        $stmt->execute(['id' => $catalogCardId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    public function testGameCompletionByResignationRecordsCardStatsForBothPlayers(): void
+    {
+        $winner = $this->insertUser('cardstats-int-winner');
+        $resigner = $this->insertUser('cardstats-int-resigner');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $winner]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $winnerPlayerId = $this->insertGamePlayer($gameId, $winner, 0);
+        $resignerPlayerId = $this->insertGamePlayer($gameId, $resigner, 1);
+
+        $determinationId = $this->insertGameCard($gameId, 112, 'hand', $winnerPlayerId); // Determination
+        $this->insertGameCard($gameId, 3, 'hand', $resignerPlayerId); // Charity, never played
+        // plays_remaining: 2, not 1, so this single play doesn't itself
+        // trigger round/game scoring -- resignGame() below is the only
+        // thing that completes this game.
+        $this->insertGameRound($gameId, 1, $winnerPlayerId, $winnerPlayerId, 2);
+
+        $this->games->playMood($gameId, $winnerPlayerId, $determinationId, []);
+        $this->games->resignGame($gameId, $resignerPlayerId);
+
+        $determinationStats = $this->fetchCardStatsRow(112);
+        self::assertNotNull($determinationStats, 'the winner\'s played card is recorded');
+        self::assertSame(1, (int) $determinationStats['times_in_deck']);
+        self::assertSame(1, (int) $determinationStats['times_in_won_deck']);
+        self::assertSame(1, (int) $determinationStats['times_played']);
+        self::assertSame(1, (int) $determinationStats['times_played_in_won_game']);
+
+        $charityStats = $this->fetchCardStatsRow(3);
+        self::assertNotNull($charityStats, 'still recorded even though never played');
+        self::assertSame(1, (int) $charityStats['times_in_deck']);
+        self::assertSame(0, (int) $charityStats['times_in_won_deck'], 'belongs to the resigning (losing) player');
+        self::assertSame(0, (int) $charityStats['times_played']);
+    }
+
+    public function testCompletedQuickDraftMatchRecordsDeckStatsAndPickPositions(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $winnerGamePlayerId = $this->games->gamePlayerIdFor($gameId, $winnerUserId);
+
+        // 2 players x 4 rounds x 2 stages x 2 kept cards per stage -- every
+        // submitQuickDraftPick() call recorded via recordQuickDraftPick().
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(quick_draft_pick_position_count) FROM card_stats')->fetchColumn();
+        self::assertSame(2 * 4 * 2 * 2, $totalPicks);
+
+        $winnerCardIdStmt = $this->pdo->prepare(
+            "SELECT DISTINCT card_id FROM game_cards WHERE game_id = :game_id AND owner_game_player_id = :owner LIMIT 1"
+        );
+        $winnerCardIdStmt->execute(['game_id' => $gameId, 'owner' => $winnerGamePlayerId]);
+        $winnerCatalogCardId = (int) $winnerCardIdStmt->fetchColumn();
+
+        $stats = $this->fetchCardStatsRow($winnerCatalogCardId);
+        self::assertNotNull($stats, 'the completed match\'s own game-completion hook recorded deck stats');
+        self::assertGreaterThanOrEqual(1, (int) $stats['times_in_deck']);
+        self::assertGreaterThanOrEqual(1, (int) $stats['times_in_won_deck']);
+    }
+
+    public function testCompletedWinstonDraftMatchRecordsPickPileSizes(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildWinstonDraftFixture();
+        $this->driveWinstonDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $draftedCount = count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true))
+            + count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true));
+
+        // Every card either player ever drafted (via a pile 'take' or the
+        // forced pile-3-decline deck-draw) recorded exactly one
+        // recordWinstonDraftPick() pick -- see submitWinstonDraftPick().
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(winston_draft_pick_pile_size_count) FROM card_stats')->fetchColumn();
+        self::assertSame($draftedCount, $totalPicks);
+    }
+
+    public function testCompletedGridDraftMatchRecordsPickRounds(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildGridDraftFixture();
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $draftedCount = count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true))
+            + count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true));
+
+        // Every card either player took (a row/column pick can clear 1-3
+        // cells at once) recorded exactly one recordGridDraftPick() pick.
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(grid_draft_pick_round_count) FROM card_stats')->fetchColumn();
+        self::assertSame($draftedCount, $totalPicks);
     }
 }

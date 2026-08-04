@@ -1599,6 +1599,30 @@ dialog#deck-builder-dialog[open] {
     color: var(--color-muted);
 }
 
+/* Card statistics (issue #315) -- ten columns are wider than most phone
+   viewports, so the table itself scrolls horizontally inside this
+   wrapper rather than the whole page ever needing to. */
+#card-stats-table-wrap {
+    overflow-x: auto;
+}
+
+#card-stats-table {
+    border-collapse: collapse;
+    white-space: nowrap;
+}
+
+#card-stats-table th,
+#card-stats-table td {
+    padding: 0.3rem 1rem 0.3rem 0;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+#card-stats-table th {
+    cursor: pointer;
+    user-select: none;
+}
+
 /* Watch game replay (issue #240) -- step controls bar. */
 #replay-controls {
     display: flex;
