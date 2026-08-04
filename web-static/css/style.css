@@ -1599,9 +1599,17 @@ dialog#deck-builder-dialog[open] {
     color: var(--color-muted);
 }
 
-/* Card statistics (issue #315) -- ten columns are wider than most phone
-   viewports, so the table itself scrolls horizontally inside this
+/* Card statistics (issue #315) -- twelve columns are wider than most
+   phone viewports, so the table itself scrolls horizontally inside this
    wrapper rather than the whole page ever needing to. */
+#stats-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
 #card-stats-table-wrap {
     overflow-x: auto;
 }
@@ -1621,6 +1629,13 @@ dialog#deck-builder-dialog[open] {
 #card-stats-table th {
     cursor: pointer;
     user-select: none;
+}
+
+#stats-pagination {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
 }
 
 /* Watch game replay (issue #240) -- step controls bar. */

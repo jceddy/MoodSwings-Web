@@ -209,19 +209,24 @@ final class CardStatsService
 
     /**
      * The stats page's own read path -- every catalog card (via
-     * CardCatalog::load(), the same 55-card source GameService/
+     * CardCatalog::load(), the same 133-card source GameService/
      * UserDecklistService already share), each with its recorded stats
      * or all-zero/null defaults for a card nothing has happened to yet
      * (same "no row yet" handling as GameService::lifetimeStatsFor()).
-     * Deliberately no minimum-sample-size filtering -- every card is
-     * shown with its raw counts alongside any rate/average, so a
-     * low-sample stat is visible as such rather than hidden or flagged.
+     * set_code/collector_number come from CardCatalog::loadSetInfo() (a
+     * card's own Set/collector number, same source as
+     * CardCatalog::serialize()) so the frontend can show/filter by set
+     * without a second round trip. Deliberately no minimum-sample-size
+     * filtering -- every card is shown with its raw counts alongside any
+     * rate/average, so a low-sample stat is visible as such rather than
+     * hidden or flagged.
      *
-     * @return array<int, array{catalog_card_id:int, name:string, rarity:string, color:string, times_in_deck:int, deck_win_rate:?float, times_played:int, play_win_rate:?float, quick_draft:array{average:?float, count:int}, winston_draft:array{average:?float, count:int}, grid_draft:array{average:?float, count:int}}>
+     * @return array<int, array{catalog_card_id:int, name:string, set_code:?string, collector_number:?int, rarity:string, color:string, times_in_deck:int, deck_win_rate:?float, times_played:int, play_win_rate:?float, quick_draft:array{average:?float, count:int}, winston_draft:array{average:?float, count:int}, grid_draft:array{average:?float, count:int}}>
      */
     public function allCardStats(): array
     {
         $catalog = CardCatalog::load()['rowsById'];
+        $setInfoByCardId = CardCatalog::loadSetInfo();
 
         $statsByCardId = [];
         foreach (Connection::get()->query('SELECT * FROM card_stats')->fetchAll() as $row) {
@@ -236,9 +241,13 @@ final class CardStatsService
             $timesPlayed = $row !== null ? (int) $row['times_played'] : 0;
             $timesPlayedInWonGame = $row !== null ? (int) $row['times_played_in_won_game'] : 0;
 
+            $setInfo = $setInfoByCardId[$catalogCardId] ?? ['set_code' => null, 'collector_number' => null];
+
             $result[] = [
                 'catalog_card_id' => $catalogCardId,
                 'name' => $card['name'],
+                'set_code' => $setInfo['set_code'],
+                'collector_number' => $setInfo['collector_number'],
                 'rarity' => $card['rarity'],
                 'color' => $card['color'],
                 'times_in_deck' => $timesInDeck,

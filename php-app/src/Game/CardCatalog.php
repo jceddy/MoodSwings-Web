@@ -37,6 +37,36 @@ final class CardCatalog
     }
 
     /**
+     * Set code + collector number for every catalog card, keyed by
+     * catalog_card_id -- the same "lowest set_id row" picking logic as
+     * serialize()'s own subquery below, factored out so CardStatsService's
+     * allCardStats() (issue #315 follow-up) can look this up for the whole
+     * catalog at once without serialize()'s heavier per-card row (rules
+     * text, ability flags, etc. the stats page has no use for).
+     *
+     * @return array<int, array{set_code: ?string, collector_number: ?int}>
+     */
+    public static function loadSetInfo(): array
+    {
+        $stmt = Connection::get()->query(
+            "SELECT cs1.card_id, s.code AS set_code, cs1.collector_number
+             FROM card_sets cs1
+             JOIN sets s ON s.id = cs1.set_id
+             WHERE cs1.set_id = (SELECT MIN(cs2.set_id) FROM card_sets cs2 WHERE cs2.card_id = cs1.card_id)"
+        );
+
+        $result = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $result[(int) $row['card_id']] = [
+                'set_code' => $row['set_code'],
+                'collector_number' => $row['collector_number'] !== null ? (int) $row['collector_number'] : null,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
      * Catalog-only card view (no BoardState/game_cards row involved) shaped
      * to exactly the fields buildCardThumb()/openCardDetail() already read
      * on the frontend -- every in-play-only flag is false/null. Also
