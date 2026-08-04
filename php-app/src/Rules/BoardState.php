@@ -756,6 +756,16 @@ final class BoardState
      * active player is treated as its own grant, the same way
      * computeFreshGrants() already grants one bonus per qualifying mood
      * rather than deduplicating by card.
+     *
+     * Also lifts any 'while_source_in_play' suppression $cardId is the
+     * source of the moment its ownership actually changes -- Guilt/
+     * Pacifism/Meekness/Faith/Shame all read "suppress ... for as long as
+     * you have this mood," meaning while the player who played it still
+     * owns it, not merely while the card is in play under anyone's
+     * control. Scoped to that one expiry via clearSuppressionsFrom()'s
+     * $onlyExpiry so an 'end_of_round' suppression sourced by the same
+     * stolen card (e.g. Scorn) is left alone -- its own duration has
+     * nothing to do with who currently owns Scorn.
      */
     public function giveInPlayToPlayer(int $cardId, int $newOwnerId): void
     {
@@ -763,7 +773,13 @@ final class BoardState
         $this->moodInPlay($cardId)->ownerId = $newOwnerId;
         $this->recordOwnershipChange($cardId, $oldOwnerId, $newOwnerId);
 
-        if ($oldOwnerId === $newOwnerId || $newOwnerId !== $this->currentPlayerId()) {
+        if ($oldOwnerId === $newOwnerId) {
+            return;
+        }
+
+        $this->clearSuppressionsFrom($cardId, 'while_source_in_play');
+
+        if ($newOwnerId !== $this->currentPlayerId()) {
             return;
         }
 
@@ -1018,16 +1034,30 @@ final class BoardState
         return $changes;
     }
 
-    /** Clears every suppression whose source is $sourceCardId (e.g. that mood left play). */
-    public function clearSuppressionsFrom(int $sourceCardId): void
+    /**
+     * Clears every suppression whose source is $sourceCardId (e.g. that
+     * mood left play). $onlyExpiry, when given, additionally restricts
+     * this to suppressions of that specific expiry -- see
+     * giveInPlayToPlayer()'s own call, which only wants to lift
+     * 'while_source_in_play' suppressions (Guilt/Pacifism/Meekness/Faith/
+     * Shame's "for as long as you have this mood") on an ownership
+     * change, not an 'end_of_round' one (Scorn/Repentance's "until the
+     * end of this round" is unconditional on the source card's owner or
+     * even its continued presence in play).
+     */
+    public function clearSuppressionsFrom(int $sourceCardId, ?string $onlyExpiry = null): void
     {
         foreach ($this->moodsInPlay as $mood) {
-            if ($mood->suppressionSourceCardId === $sourceCardId) {
-                $mood->isSuppressed = false;
-                $mood->suppressionExpiry = null;
-                $mood->suppressionSourceCardId = null;
-                $this->recordSuppressionChange($mood->cardId, false, null, null);
+            if ($mood->suppressionSourceCardId !== $sourceCardId) {
+                continue;
             }
+            if ($onlyExpiry !== null && $mood->suppressionExpiry !== $onlyExpiry) {
+                continue;
+            }
+            $mood->isSuppressed = false;
+            $mood->suppressionExpiry = null;
+            $mood->suppressionSourceCardId = null;
+            $this->recordSuppressionChange($mood->cardId, false, null, null);
         }
     }
 
