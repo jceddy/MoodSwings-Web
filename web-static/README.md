@@ -2376,15 +2376,22 @@ using the same-origin `session_token` cookie for auth — see
     always lands somewhere valid rather than rendering an empty page),
     and `#stats-page-indicator` shows `"Page X of Y (N cards)"`. Picking
     a new set or page size, like a sort-header click, resets to page 1.
-  - `#download-stats-button` ("Download JSON") — serializes every card
-    matching the current set filter (not just the current page, and not
-    limited by `#stats-page-size`), sorted the same way the table
-    currently is, into a `moodswings-card-stats.json` file via a
-    `Blob`/temporary `<a download>` link. The payload is `{"filters":
-    {"set": <code or null>}, "cards": [...]}` rather than a bare array,
-    so the file is self-describing about what was applied instead of
-    leaving the reader to guess whether it's the full catalog or a
-    narrowed slice.
+  - `#download-json-button` ("JSON") and `#download-csv-button` ("CSV")
+    — both export every card matching the current set filter (not just
+    the current page, and not limited by `#stats-page-size`), sorted the
+    same way the table currently is, via a shared `triggerDownload()`
+    helper (`Blob`/temporary `<a download>` link). JSON's payload is
+    `{"filters": {"set": <code or null>}, "cards": [...]}` rather than a
+    bare array, so the file is self-describing about what was applied
+    instead of leaving the reader to guess whether it's the full catalog
+    or a narrowed slice. CSV has no natural place for that same nested
+    block, so it's just a header row (`CSV_COLUMNS`'s own field names,
+    e.g. `quick_draft_average`/`quick_draft_count` rather than the
+    table's combined "4.20 (1 pick)" display string, since a spreadsheet
+    wants separate numeric columns to compute on) followed by one row
+    per card, RFC 4180-quoted (`csvField()`) and with `\r\n` line
+    endings; a `null` value (e.g. a never-drafted average) becomes an
+    empty field rather than the literal text `"null"`.
 
   Shares the same footer every other page has.
 
