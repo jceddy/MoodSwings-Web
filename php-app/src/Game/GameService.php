@@ -20,6 +20,7 @@ use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 use MoodSwings\Rules\PlayResult;
 use MoodSwings\Rules\RoundScorer;
+use MoodSwings\Stats\CardStatsService;
 use PDO;
 use PDOException;
 use Throwable;
@@ -457,6 +458,7 @@ final class GameService
         private readonly ?NotificationService $notifications = null,
         private readonly PresenceService $presence = new PresenceService(new SessionRepository()),
         private readonly GameNoteRepository $notes = new GameNoteRepository(),
+        private readonly CardStatsService $cardStats = new CardStatsService(),
     ) {
     }
 
@@ -475,8 +477,8 @@ final class GameService
      * @param ?array{preset?: string, min_cards?: int, rarity_limits?: array<string,int>, duplicate_limits?: array<string,int>, even_color_distribution_rarities?: string[]} $duelDeckRules
      *        only meaningful when $deckType is 'custom_duel' -- see resolveDuelDeckRules().
      * @param ?string $quickDraftPoolSource only meaningful (and required) when $deckType
-     *        is 'quick_draft' -- one of 'random_48'/'structure'/'one_of_each'/'custom', see
-     *        buildQuickDraftPool().
+     *        is 'quick_draft' -- one of 'random_48'/'structure'/'one_of_each'/'custom'/
+     *        'saved_deck' (issue #290), see buildQuickDraftPool().
      * @param ?string $quickDraftCustomPoolText only meaningful when $quickDraftPoolSource
      *        is 'custom' -- a decklist-line pool of 45+ cards (same format as the 'custom'
      *        deck_type, see DecklistParser), no About/Sideboard sections expected.
@@ -495,6 +497,16 @@ final class GameService
      * @param ?string $gridDraftCustomPoolText Grid Draft's own analog of
      *        $quickDraftCustomPoolText -- a decklist-line pool of 54+ cards, only
      *        meaningful when $gridDraftPoolSource is 'custom'.
+     * @param ?int $savedDecklistId one of $createdByUserId's own saved decklists
+     *        (issue #92) to source cards from instead of freshly-pasted/uploaded
+     *        text -- meaningful when $deckType is 'custom' (an alternative to
+     *        $decklistText), or when any of $quickDraftPoolSource/
+     *        $winstonDraftPoolSource/$gridDraftPoolSource is 'saved_deck' (issue
+     *        #290, an alternative to that draft type's own *CustomPoolText).
+     *        A single param shared across all four cases -- unlike the pool
+     *        sources' own per-deck_type params, it's the same underlying
+     *        "which saved decklist" concept regardless of which one is
+     *        active, and only one deck_type is ever in effect per call.
      */
     public function createGame(
         int $createdByUserId,
@@ -590,9 +602,9 @@ final class GameService
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
-            'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, count($userIds)),
-            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, count($userIds)),
-            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, count($userIds)),
+            'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
+            'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
+            'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             default => null,
         };
 
@@ -1676,11 +1688,19 @@ final class GameService
      * buildQuickDraftPool()/buildWinstonDraftPool()/buildGridDraftPool()
      * below, parameterized only by target/minimum pool size, player
      * count, and the structure-doubling flag -- the pool assembly logic
-     * itself has nothing else format-specific about it.
+     * itself has nothing else format-specific about it. Plus 'saved_deck'
+     * (issue #290): reuses one of $requestingUserId's own saved decklists
+     * (issue #92's UserDecklistService -- friends'-visibility decks
+     * included, via the exact same authorization cardIdsForUse() already
+     * enforces for the 'custom' deck_type's own $savedDecklistId use) as
+     * the pool, preserving whatever per-card quantities it was saved
+     * with -- same as 'custom' pool text's own quantities, just sourced
+     * from a first-class saved decklist instead of raw pasted text. See
+     * resolveSavedDeckDraftPool().
      *
      * @return int[]
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false): array
     {
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomDraftCardIds($targetSize),
@@ -1690,6 +1710,7 @@ final class GameService
             'jceddys_75' => $playerCount === 4 ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
+            'saved_deck' => $this->resolveSavedDeckDraftPool($requestingUserId, $savedDecklistId, $minCustomPoolSize),
             default => throw new GameStateException("Unknown pool source \"{$poolSource}\""),
         };
 
@@ -1740,6 +1761,37 @@ final class GameService
     }
 
     /**
+     * The 'saved_deck' pool source (issue #290): the same
+     * $userDecklists->cardIdsForUse() lookup the 'custom' deck_type's own
+     * $savedDecklistId already uses for a whole game's deck, reused here
+     * to source a draft's shared pool instead -- authorization (owner, or
+     * an accepted friend for a 'friends'-visibility deck) and "not
+     * found"/"not authorized" error handling are entirely
+     * UserDecklistService's own, same as that flow. Quantities are
+     * preserved exactly as saved, matching the 'custom' pool source's own
+     * pasted-text quantities.
+     *
+     * @return int[]
+     */
+    private function resolveSavedDeckDraftPool(int $requestingUserId, ?int $savedDecklistId, int $minCustomPoolSize): array
+    {
+        if ($savedDecklistId === null) {
+            throw new GameStateException('A saved decklist is required when the pool source is "saved_deck"');
+        }
+
+        $cardIds = $this->userDecklists->cardIdsForUse($requestingUserId, $savedDecklistId)['cardIds'];
+
+        if (count($cardIds) < $minCustomPoolSize) {
+            throw new GameStateException(
+                'The saved decklist has only ' . count($cardIds) . ' card(s), but at least '
+                . $minCustomPoolSize . ' are required'
+            );
+        }
+
+        return $cardIds;
+    }
+
+    /**
      * @return int[] Quick Draft's own quickDraftPoolTargetSize($playerCount)-card
      *         pool -- see buildDraftPool(). `'structure'`'s 45-card pool is
      *         doubled for 3-4 players (matching quickDraftMinCustomPoolSize()'s
@@ -1758,11 +1810,13 @@ final class GameService
      *         pool at exactly 4 players, comfortably covering that target
      *         outright.
      */
-    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
+    private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         return $this->buildDraftPool(
             $poolSource,
             $customPoolText,
+            $savedDecklistId,
+            $requestingUserId,
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
             $playerCount,
@@ -1771,11 +1825,13 @@ final class GameService
     }
 
     /** @return int[] Winston Draft's own winstonDraftPoolTargetSize($playerCount)-card pool -- see buildDraftPool(). */
-    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
+    private function buildWinstonDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         return $this->buildDraftPool(
             $poolSource,
             $customPoolText,
+            $savedDecklistId,
+            $requestingUserId,
             self::winstonDraftPoolTargetSize($playerCount),
             self::winstonDraftMinCustomPoolSize($playerCount),
             $playerCount,
@@ -1800,11 +1856,11 @@ final class GameService
      *         players, since buildDraftPool() itself already swaps in the
      *         150-card 'jceddys_150' pool for that case.
      */
-    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, int $playerCount): array
+    private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
 
         if (count($cardIds) < $targetSize) {
             throw new GameStateException(
@@ -2184,6 +2240,12 @@ final class GameService
                 'kept' => json_encode($cardIds),
             ]);
 
+            // Issue #315's Quick Draft pick-position signal -- written
+            // live, right alongside the pick itself, rather than deferred
+            // to game/match completion (see CardStatsService's own
+            // docblock for why).
+            $this->cardStats->recordQuickDraftPick($cardIds, $roundNumber, $stageNumber, $playerCount);
+
             $stageCountStmt = $pdo->prepare(
                 'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
             );
@@ -2486,6 +2548,18 @@ final class GameService
             }
 
             $this->appendDraftedCardIds($draftMatchId, $userId, $newlyDrafted);
+
+            // Issue #315's Winston Draft pick-position signal: $newlyDrafted
+            // is either the whole pile just taken (pile size = its own
+            // count -- a small pile means it was taken fresh, a large one
+            // means it was passed around and grew first) or the single
+            // forced deck-draw card from declining pile 3 (count 1, always
+            // freshest, since nobody else has seen it) -- count($newlyDrafted)
+            // covers both uniformly. Empty for a plain pass that doesn't
+            // end the turn, hence the guard.
+            if ($newlyDrafted !== []) {
+                $this->cardStats->recordWinstonDraftPick($newlyDrafted, count($newlyDrafted));
+            }
 
             $draftCompleted = $deck === [] && $piles[1] === [] && $piles[2] === [] && $piles[3] === [];
 
@@ -2813,6 +2887,11 @@ final class GameService
             }
 
             $this->appendDraftedCardIds($draftMatchId, $userId, $cardsTaken);
+
+            // Issue #315's Grid Draft pick-position signal -- the round
+            // this pick happened in, read before it's ever incremented
+            // below.
+            $this->cardStats->recordGridDraftPick($cardsTaken, (int) $state['current_round']);
 
             $picksThisRound = (int) $state['picks_this_round'] + 1;
             $remainingDeck = array_map(intval(...), json_decode((string) $state['remaining_deck_card_ids'], true));
@@ -4268,6 +4347,12 @@ final class GameService
      * they're the one still looking at the board right now, watching the
      * game end in front of them, so a push notification about it would
      * just be telling them something they already know.
+     *
+     * Also the single hook point for issue #315's per-card win-rate
+     * stats (CardStatsService::recordGameCompletion()) -- every path
+     * that reaches game completion already funnels through here, so
+     * that's the only place this needs to be called from, rather than
+     * duplicating it at each of this method's own call sites.
      */
     private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId, ?int $excludeGamePlayerId = null): void
     {
@@ -4295,6 +4380,7 @@ final class GameService
 
         $this->bumpLifetimeStats($winningUserIds, 'game_wins');
         $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+        $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
 
         foreach ($winningUserIds as $userId) {
             if ($userId === $excludeUserId) {
@@ -5805,28 +5891,37 @@ final class GameService
     {
         $pdo = Connection::get();
 
-        // A 'completed' game moves to listPastGamesForUser() below (issue
-        // #99/#84's own "past games" split) -- EXCEPT one still belonging
-        // to a Quick/Winston/Grid Draft match that isn't itself fully
-        // decided yet (draft_matches.status only ever reaches 'completed'
-        // once a winner is set -- see draftMatchSummaryFor()'s own
-        // docblock), since a finished game 1 of an in-progress
-        // best-of-three match is still very much part of what's
-        // currently being played, not history. 'waiting'/'in_progress'/
-        // 'abandoned' games are never affected by this at all.
+        // A 'completed' OR 'abandoned' game moves to listPastGamesForUser()
+        // below (issue #99/#84's own "past games" split, widened to cover
+        // 'abandoned' too) -- EXCEPT one still belonging to a Quick/
+        // Winston/Grid Draft match that isn't itself fully decided yet
+        // (draft_matches.status only ever reaches 'completed' once a
+        // winner is set -- see draftMatchSummaryFor()'s own docblock),
+        // since a finished game 1 of an in-progress best-of-three match is
+        // still very much part of what's currently being played, not
+        // history. In practice this carve-out never actually applies to an
+        // 'abandoned' game -- resignFromDraftMatch()/abandonDraftMatch()/
+        // finalizeWinstonDraft() always flip draft_matches.status to
+        // 'completed' in the very same statement that marks the game
+        // 'abandoned' (a mid-drafting or zero-survivor resignation always
+        // decides the whole match, one way or another) -- so an abandoned
+        // game moves to Past games immediately, same turn as the
+        // resignation itself, never waiting on a sibling game the way a
+        // naturally-completed one sometimes does. Only 'waiting'/
+        // 'in_progress' games are ever affected by this at all.
         //
-        // Waiting/in-progress games always sort above completed (or
-        // abandoned) ones, regardless of recency -- a finished game is
-        // never more actionable than an active one, no matter how old the
-        // active one is. Within each of those two tiers, most-recently-
-        // active first (last_move_at, falling back to started_at, then
-        // created_at for a game nothing has happened in yet).
+        // Waiting/in-progress games always sort above completed/abandoned
+        // ones, regardless of recency -- a finished game is never more
+        // actionable than an active one, no matter how old the active one
+        // is. Within each of those two tiers, most-recently-active first
+        // (last_move_at, falling back to started_at, then created_at for a
+        // game nothing has happened in yet).
         $gameIdsStmt = $pdo->prepare(
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
-               AND (g.status != 'completed' OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
+               AND (g.status NOT IN ('completed', 'abandoned') OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
              ORDER BY
                  (g.status IN ('waiting', 'in_progress')) DESC,
                  COALESCE(g.last_move_at, g.started_at, g.created_at) DESC,
@@ -5839,13 +5934,17 @@ final class GameService
     }
 
     /**
-     * The complement of listGamesForUser() above: every 'completed' game
-     * NOT still tied to an in-progress draft match -- see that method's
-     * own docblock for exactly where the line falls. Sorted
-     * most-recently-completed first, the natural order for a "past
-     * games" archive (as opposed to listGamesForUser()'s own
+     * The complement of listGamesForUser() above: every 'completed' or
+     * 'abandoned' game NOT still tied to an in-progress draft match -- see
+     * that method's own docblock for exactly where the line falls (and
+     * why an 'abandoned' game never actually hits that carve-out in
+     * practice). Sorted most-recently-completed first, the natural order
+     * for a "past games" archive (as opposed to listGamesForUser()'s own
      * actionability-first ordering, which has no reason to apply once
-     * nothing here is actionable at all).
+     * nothing here is actionable at all). An 'abandoned' game never gets
+     * its own completed_at set (only the draft_matches row it belonged to
+     * does -- see abandonDraftMatch()), so it naturally sorts by
+     * last_move_at instead, same as it would anywhere else in the app.
      *
      * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
      */
@@ -5858,7 +5957,7 @@ final class GameService
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
-               AND g.status = 'completed'
+               AND g.status IN ('completed', 'abandoned')
                AND (g.draft_match_id IS NULL OR dm.status = 'completed')
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
         );

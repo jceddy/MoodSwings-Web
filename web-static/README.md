@@ -390,15 +390,18 @@ too, proportional to the smaller card width.
   "Friends" button (see below), a "Decks" button (see below), a "User
   info" button (`#user-info-button`, navigates to `user/index.html`
   below), a "Spectate" button (`#spectate-button`, navigates to
-  `spectate/index.html` below), and the game lobby/board itself. The
-  "Friends"/"Decks"/"User info"/"Spectate"/"Log out" buttons carry their
+  `spectate/index.html` below), a "Stats" button (`#stats-button`,
+  navigates to `stats/index.html` below, issue #315), and the game
+  lobby/board itself. The
+  "Friends"/"Decks"/"User info"/"Spectate"/"Stats"/"Log out" buttons carry their
   own `margin-bottom` so they don't touch whichever of the lobby or board
   view is showing directly beneath them (most noticeably the board
   view's own "Back to your games" button); `#user-info-button`/
-  `#spectate-button` are plain `<button>`s whose click handlers do a real
-  navigation (`window.location.href = '../user/'` /`'../spectate/'`)
-  rather than opening a dialog, since they lead to actual separate
-  pages, not an in-page overlay like Friends/Decks.
+  `#spectate-button`/`#stats-button` are plain `<button>`s whose click
+  handlers do a real navigation (`window.location.href = '../user/'` /
+  `'../spectate/'` / `'../stats/'`) rather than opening a dialog, since
+  they lead to actual separate pages, not an in-page overlay like
+  Friends/Decks.
   - **Spectator mode** (issue #128): if the URL carries a
     `?spectate_game_id=` param (as `spectate/index.html` navigates with,
     see below), `js/game.js` skips the normal lobby entirely and shows
@@ -790,36 +793,58 @@ too, proportional to the smaller card width.
     mean. Selecting Quick Draft reveals `#new-game-quick-draft-fields`
     instead -- a Pool dropdown (`#new-game-quick-draft-pool-source`: 48
     random cards, Structure deck, jceddy's 75 Card deck, One of Each Card,
-    or Custom pool) with its own plain-language description below it
-    (`QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS`, `updateQuickDraftPoolSourceVisibility()`),
-    and, only for Custom pool, the same file-upload/paste pair the
-    Traditional `custom` deck_type and the `custom_duel` waiting room both
-    already use, feeding `quick_draft_custom_pool_text` instead of
-    `decklist_text`/`custom_duel`'s own decklist field. Selecting Winston
-    Draft reveals `#new-game-winston-draft-fields` instead -- the exact
-    same shape one level down (`#new-game-winston-draft-pool-source`, same
-    5 options, its own `WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording
-    reflecting its own per-player-count target (45/70/90 for 2/3/4
-    players, issue #189 -- Structure's own fixed 45-card pool is doubled
-    for 3-4 players rather than reshuffle-topped-up, and `jceddys_75`
-    swaps to jceddy's 150 Card deck's own pool at exactly 4 players, same
-    as Quick Draft's and Grid Draft's own 4-player `jceddys_75` case), and
-    the same Custom-pool file/textarea pair feeding
-    `winston_draft_custom_pool_text`) -- `updateWinstonDraftPoolSourceVisibility()`
-    mirrors `updateQuickDraftPoolSourceVisibility()` exactly. Selecting
-    Grid Draft reveals `#new-game-grid-draft-fields` instead -- the same
-    shape again (`#new-game-grid-draft-pool-source`, its own
+    Custom pool, or My saved deck) with its own plain-language description
+    below it (`QUICK_DRAFT_POOL_SOURCE_DESCRIPTIONS`,
+    `updateQuickDraftPoolSourceVisibility()`), and, only for Custom pool,
+    the same file-upload/paste pair the Traditional `custom` deck_type and
+    the `custom_duel` waiting room both already use, feeding
+    `quick_draft_custom_pool_text` instead of `decklist_text`/
+    `custom_duel`'s own decklist field -- or, only for My saved deck
+    (issue #290), a second dropdown (`#new-game-quick-draft-saved-decklist`)
+    listing the player's own saved decks (and any a friend has shared),
+    populated the exact same way -- and with the exact same "My decks"/
+    "&lt;friend&gt;'s decks" `<optgroup>` grouping -- as the `custom`
+    deck_type's own `#new-game-saved-decklist` (`populateSavedDecklistSelect()`,
+    now parameterized with a placeholder string so this second dropdown's
+    "nothing selected" option reads "Choose a saved deck" instead of
+    "Paste/upload a decklist instead", which wouldn't make sense here since
+    there's no paste/upload fallback within this dropdown itself -- picking
+    Custom pool from the Pool dropdown above it is that fallback instead).
+    Selecting Winston Draft reveals `#new-game-winston-draft-fields`
+    instead -- the exact same shape one level down
+    (`#new-game-winston-draft-pool-source`, same 6 options, its own
+    `WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
+    per-player-count target (45/70/90 for 2/3/4 players, issue #189 --
+    Structure's own fixed 45-card pool is doubled for 3-4 players rather
+    than reshuffle-topped-up, and `jceddys_75` swaps to jceddy's 150 Card
+    deck's own pool at exactly 4 players, same as Quick Draft's and Grid
+    Draft's own 4-player `jceddys_75` case), the same Custom-pool
+    file/textarea pair feeding `winston_draft_custom_pool_text`, and its
+    own My-saved-deck picker (`#new-game-winston-draft-saved-decklist`)) --
+    `updateWinstonDraftPoolSourceVisibility()` mirrors
+    `updateQuickDraftPoolSourceVisibility()` exactly. Selecting Grid Draft
+    reveals `#new-game-grid-draft-fields` instead -- the same shape again
+    (`#new-game-grid-draft-pool-source`, its own
     `GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
     per-player-count target (54/72/96 for 2/3/4 players -- the 4-player
     case uses a 4x4 grid over 4 rounds instead of the 3x3-over-6-rounds
-    the other player counts use), and the same
-    Custom-pool file/textarea pair feeding `grid_draft_custom_pool_text`) --
+    the other player counts use), the same Custom-pool file/textarea pair
+    feeding `grid_draft_custom_pool_text`, and its own My-saved-deck
+    picker (`#new-game-grid-draft-saved-decklist`)) --
     `updateGridDraftPoolSourceVisibility()` mirrors the other two exactly,
-    except its own pool-source `<select>` has only 4 options, not 5:
+    except its own pool-source `<select>` has only 5 options, not 6:
     Structure deck is deliberately absent, since its 45 cards fall short
     of even the 2-player 54-card minimum and there's no top-up mechanism
     to cover the gap (see "Grid Draft" in `php-app/README.md`) -- offering
     it in the dropdown would just be a guaranteed `400` waiting to happen.
+    All three My-saved-deck pickers are populated on every dialog open
+    (`populateSavedDecklistSelect(..., 'Choose a saved deck')`, alongside
+    the existing `custom` deck_type picker), and the submit handler reads
+    whichever one is actually relevant into the single shared
+    `saved_decklist_id` field `POST /games` already had for `custom`
+    (`GameService::createGame()` reuses that same param for all four
+    cases -- see its own docblock -- since only one deck_type/pool-source
+    combination is ever active per submission).
     Every pool-source `<option>`'s own label (not just the description
     paragraph below the dropdown) is kept honest about however many
     opponents are *currently* checked, via `updateDraftPoolSourceOptionLabels()`
@@ -2294,6 +2319,81 @@ using the same-origin `session_token` cookie for auth — see
   helper, moved to `app.js` — see below) that navigates to
   `../game/?spectate_game_id=<id>` with no code, since friendship alone
   authorizes it. Shares the same footer every other page has.
+- `stats/index.html` (`/stats/`, issue #315) — Reached via the lobby's own
+  `#stats-button` (see above, `js/game.js`), with its own "Back to your
+  games" button (`#stats-back-to-lobby-button`) navigating to `/game/`.
+  Redirects to `/` if there's no active session, same as the other pages.
+  One section: a sortable, paginated `#card-stats-table` (`js/stats.js`,
+  `getCardStats()` in `app.js` → `GET /stats/cards`) with one row per
+  catalog card and a column each for Name/Set/#/Rarity/Color/Times in
+  deck/Deck win rate/Times played/Play win rate/Quick Draft avg.
+  pick/Winston Draft avg. pile size/Grid Draft avg. round — server-wide
+  aggregate data, not tied to any one player. Every `<th data-sort-key>`
+  is clickable: a click sorts ascending by that column (and resets to
+  page 1), a second click on the same header flips to descending, and a
+  click on a different header resets to ascending — same toggle
+  convention as any other sortable table would use, tracked as plain
+  `sortKey`/`sortAscending` module variables in `js/stats.js` rather than
+  anything persisted. `updateSortIndicators()` sets `aria-sort`
+  (`"ascending"`/`"descending"`/`"none"`) on every header to match, and
+  `style.css` draws a ▲/▼ after whichever header currently carries
+  `aria-sort="ascending"`/`"descending"` — without this there was no way
+  to tell, at a glance, which column/direction was active, which made an
+  ordinary "click the already-sorted column again to flip it" interaction
+  read as the sort changing on its own while paging. `sortedFilteredCards()`
+  also always sorts a `.slice()` copy rather than `filteredCards()`'s
+  own return value directly, so a render never mutates the source
+  `cards` array as a side effect (harmless in practice today, since
+  `compareCards` is a valid deterministic order, but worth not relying
+  on). The three draft-format columns hold `{average,
+  count}` objects (see `CardStatsService::averagePick()` in
+  `../php-app/README.md`) so a never-drafted card's `null` average
+  always sorts last regardless of direction, instead of sorting
+  arbitrarily against `0`; every other column (including a card with no
+  `set_code`/`collector_number`, which shouldn't happen but is handled
+  the same way regardless) sorts null-last too. Two columns sort by a
+  fixed lookup table rather than their raw value: Rarity by print
+  frequency (`common` -> `uncommon` -> `rare` -> `mythic`, a
+  `RARITY_RANK` lookup) and Color by the game's own color-wheel order
+  (`white` -> `blue` -> `black` -> `red` -> `green`, a `COLOR_RANK`
+  lookup) — alphabetical order means nothing for either. No low-sample
+  filtering — a card with only one or two picks/games still shows its
+  raw average and count right alongside it (e.g. `"4.20 (1 pick)"`), per
+  the issue's own "show as-is" scope.
+
+  `#stats-controls` sits above the table with three controls:
+  - `#stats-set-filter` — a `<select>` populated once (`populateSetFilterOptions()`)
+    from every distinct `set_code` the fetched cards carry, plus an "All
+    sets" default; narrows both the table and the download to cards from
+    the chosen set only (today there's only ever one, `MSW`, but the
+    control works generically for whenever a second one exists).
+  - `#stats-page-size` — a `<select>` (25/50/100/150, defaulting to
+    the first option) capping how many rows `#card-stats-table` renders
+    at once; `#stats-pagination`'s `#stats-prev-page-button`/
+    `#stats-next-page-button` step `currentPage` by one each (clamped to
+    `[1, totalPages]` inside `renderTable()` itself, so a stale
+    `currentPage` after a filter/page-size change that shrinks the total
+    always lands somewhere valid rather than rendering an empty page),
+    and `#stats-page-indicator` shows `"Page X of Y (N cards)"`. Picking
+    a new set or page size, like a sort-header click, resets to page 1.
+  - `#download-json-button` ("JSON") and `#download-csv-button` ("CSV")
+    — both export every card matching the current set filter (not just
+    the current page, and not limited by `#stats-page-size`), sorted the
+    same way the table currently is, via a shared `triggerDownload()`
+    helper (`Blob`/temporary `<a download>` link). JSON's payload is
+    `{"filters": {"set": <code or null>}, "cards": [...]}` rather than a
+    bare array, so the file is self-describing about what was applied
+    instead of leaving the reader to guess whether it's the full catalog
+    or a narrowed slice. CSV has no natural place for that same nested
+    block, so it's just a header row (`CSV_COLUMNS`'s own field names,
+    e.g. `quick_draft_average`/`quick_draft_count` rather than the
+    table's combined "4.20 (1 pick)" display string, since a spreadsheet
+    wants separate numeric columns to compute on) followed by one row
+    per card, RFC 4180-quoted (`csvField()`) and with `\r\n` line
+    endings; a `null` value (e.g. a never-drafted average) becomes an
+    empty field rather than the literal text `"null"`.
+
+  Shares the same footer every other page has.
 
 ## Layout
 

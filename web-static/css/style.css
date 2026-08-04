@@ -412,6 +412,16 @@ body.game-page {
     border-bottom: 1px solid var(--color-border-subtle);
 }
 
+/* #resign-button sits outside #in-progress-area (see its own comment in
+   game/index.html) so it stays reachable even while a draft match is
+   still 'waiting' -- what's directly above it varies (the recent-events
+   list, a drafting/deck-building panel, ...), so margin-top here is more
+   reliable than trying to add margin-bottom to whichever of those happens
+   to be visible. */
+#resign-button {
+    margin-top: 1rem;
+}
+
 #lobby-view li button {
     margin-left: 1rem;
 }
@@ -1587,6 +1597,56 @@ dialog#deck-builder-dialog[open] {
 #user-stats-match-note {
     font-size: 0.85rem;
     color: var(--color-muted);
+}
+
+/* Card statistics (issue #315) -- twelve columns are wider than most
+   phone viewports, so the table itself scrolls horizontally inside this
+   wrapper rather than the whole page ever needing to. */
+#stats-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+#card-stats-table-wrap {
+    overflow-x: auto;
+}
+
+#card-stats-table {
+    border-collapse: collapse;
+    white-space: nowrap;
+}
+
+#card-stats-table th,
+#card-stats-table td {
+    padding: 0.3rem 1rem 0.3rem 0;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border-subtle);
+}
+
+#card-stats-table th {
+    cursor: pointer;
+    user-select: none;
+}
+
+/* Sort-direction indicator, driven off aria-sort (set in js/stats.js's
+   updateSortIndicators()) rather than a separate class, so the
+   accessible state and the visual one can never drift apart. */
+#card-stats-table th[aria-sort="ascending"]::after {
+    content: ' \25B2';
+}
+
+#card-stats-table th[aria-sort="descending"]::after {
+    content: ' \25BC';
+}
+
+#stats-pagination {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.75rem;
 }
 
 /* Watch game replay (issue #240) -- step controls bar. */

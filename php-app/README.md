@@ -59,7 +59,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"?, "saved_decklist_id"?}`           | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, either as pasted/uploaded text or by referencing one of their own or a friend's shared saved decklists (see "Saved decklists" below), validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it. Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | GET    | `/cards/catalog` | —                                                                | Requires auth. Every printed card, hydrated the same way `/decklists/view` hydrates a saved decklist's cards (now including `rarity`, which no other card-view route needed until this one). Not scoped to a game/decklist -- the catalog itself is public knowledge, same reasoning as `/games/log`. Returns `{"cards": [...]}`. Powers the deck builder's (issue #93) own catalog-browsing panel -- see "Deck builder" below. |
 | GET    | `/decklists`    | —                                                                 | Requires auth. Returns `{"own": [...], "friends": [{"friend_id", "friend_username", "decklists": [...]}]}` -- summaries only (`id`/`name`/`card_count`/`sideboard_card_count`/`visibility`/`created_at`/`updated_at`, never card contents). `friends` only lists friends who have 1+ decks shared with you. See "Saved decklists" below. |
@@ -74,8 +74,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Only callable once a best-of-three draft match's game 2/3 has actually started -- the loser of the previous game doesn't have to decide who goes first until they can see their own opening hand, and round 1 stays frozen (nobody can play/pass) until they do. Lets them go first themselves (`play_first: true`) or leave the previous winner going first again (`play_first: false`); either answer permanently unfreezes the round. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, hasn't started yet, is game 1 of its match (nothing to base the choice on), the calling user wasn't the previous game's loser, or the decision was already made. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
-| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress`/`abandoned` game, plus a `completed` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above `abandoned`/still-current-`completed` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username", "players"}`, `winner_username` only set once the match's own status is `completed`, `players` -- issue #189 -- every seated player's own `user_id`/`username`/`wins`/`is_you`, the field a 3-4 player Quick Draft match's own scoreline should actually be read from since `your_wins`/`opponent_wins` only ever reflect the first non-viewer seat) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
-| GET    | `/games/past`   | —                                                                 | Requires auth. The complement of `GET /games` above: every `completed` game NOT still tied to an undecided draft match -- i.e. exactly the games `GET /games` excludes. Same row shape as `GET /games` (`GameService::gameSummaryFor()` hydrates both), sorted most-recently-completed first rather than by actionability, since nothing here is actionable. See "Past games" below. |
+| GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress` game, plus a `completed`/`abandoned` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed`/`abandoned` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above still-current-`completed`/`abandoned` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username", "players"}`, `winner_username` only set once the match's own status is `completed`, `players` -- issue #189 -- every seated player's own `user_id`/`username`/`wins`/`is_you`, the field a 3-4 player Quick Draft match's own scoreline should actually be read from since `your_wins`/`opponent_wins` only ever reflect the first non-viewer seat) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
+| GET    | `/games/past`   | —                                                                 | Requires auth. The complement of `GET /games` above: every `completed`/`abandoned` game NOT still tied to an undecided draft match -- i.e. exactly the games `GET /games` excludes. Same row shape as `GET /games` (`GameService::gameSummaryFor()` hydrates both), sorted most-recently-completed first rather than by actionability, since nothing here is actionable. See "Past games" below. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
@@ -93,6 +93,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/spectate/state` | query params `game_id`, `code`?                        | Requires auth; deliberately does **not** require you to be seated in that game -- see "Spectator mode" below for its own authorization rule. `403` unless you're friends with a seated player or `code` matches the game's own spectate code; `400` if the game is `waiting`/`abandoned`. Same shape as `GET /games/state`, minus `you`, `team_decision`'s propose/confirm affordances, and any draft-match internals -- plus, once the game is `completed`, every player's `hand` is additionally revealed (there's nothing left to hide once the outcome is decided). |
 | GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
+| GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
@@ -1971,14 +1972,18 @@ catalog cards), `structure` (reuses `buildStructureDeckCardIds()`'s own
 own 75-card pool as-is -- except at exactly 4 players, where
 `buildJceddys150DeckCardIds()`'s own 150-card pool is used instead, since
 75 falls short of every 4-player target this source is ever used for; see
-"Multiplayer" below), `one_of_each` (the full 133-card catalog), or
-`custom` (a pool of 45+ cards in the same decklist-line format `custom`
-decks use, parsed via the same `DecklistParser`, minimum 45 rather than
-that deck_type's player-count-scaled minimum, and with no use for
-whatever optional deck name the format's own "About" block might carry --
-a draft pool isn't a named deck). Whatever the source produces, anything
-over 48 cards is randomly truncated down to exactly 48 before drafting
-starts.
+"Multiplayer" below), `one_of_each` (the full 133-card catalog), `custom` (a pool of 45+ cards in
+the same decklist-line format `custom` decks use, parsed via the same
+`DecklistParser`, minimum 45 rather than that deck_type's player-count-scaled
+minimum, and with no use for whatever optional deck name the format's own
+"About" block might carry -- a draft pool isn't a named deck), or
+`saved_deck` (issue #290: one of the creator's own saved decklists --
+`resolveSavedDeckDraftPool()`, reusing `UserDecklistService::cardIdsForUse()`
+the same way the `custom` deck_type's own `saved_decklist_id` already does
+for a whole game's deck; preserves whatever per-card quantities the
+decklist was saved with, subject to the same 45-card minimum as `custom`).
+Whatever the source produces, anything over 48 cards is randomly truncated
+down to exactly 48 before drafting starts.
 
 **Multiset correctness** -- pools/hands can legally contain duplicate
 catalog card ids (a `custom` pool may list "2 Charity"; the other three
@@ -2307,9 +2312,9 @@ parameterized with `winstonDraftPoolTargetSize($playerCount)`/
 the latter equal to the former -- there's no reshuffle-top-up mechanic the
 way Quick Draft's 45-vs-48 gap needed one, so an undersized custom pool is
 rejected outright at creation time) instead of Quick Draft's own flat
-48/45 -- same 5 pool sources
-(`random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`). Two of
-those sources need help reaching the larger 3-4 player targets, both
+48/45 -- same 6 pool sources
+(`random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`).
+Two of those sources need help reaching the larger 3-4 player targets, both
 handled inside the shared `buildDraftPool()` rather than duplicated here:
 `structure`'s own fixed 45-card pool is doubled (2 copies concatenated,
 then narrowed back down to the target) whenever `$playerCount > 2` --
@@ -2835,24 +2840,25 @@ above.
 
 `GET /games` used to return every game you're seated in, `completed`
 ones included -- forever, with no way to clear them out. `listGamesForUser()`
-now excludes `completed` games (`GameService::listGamesForUser()`), and a
-new `listPastGamesForUser()` returns exactly the complement (`GET
-/games/past`), so a finished game always shows up in exactly one of the
-two lists, never both and never neither.
+now excludes `completed` (and, per a later follow-up, `abandoned`) games
+(`GameService::listGamesForUser()`), and a new `listPastGamesForUser()`
+returns exactly the complement (`GET /games/past`), so a finished game
+always shows up in exactly one of the two lists, never both and never
+neither.
 
-The one exception: a `completed` game that's still part of a best-of-three
-`quick_draft`/`winston_draft`/`grid_draft` match whose OTHER game(s)
-haven't decided the match yet stays in `GET /games` rather than moving to
-`GET /games/past` -- a finished game 1 of an in-progress match is still
-very much part of what's currently being played, not history. This is
+The one exception: a `completed`/`abandoned` game that's still part of a
+best-of-three `quick_draft`/`winston_draft`/`grid_draft` match whose OTHER
+game(s) haven't decided the match yet stays in `GET /games` rather than
+moving to `GET /games/past` -- a finished game 1 of an in-progress match is
+still very much part of what's currently being played, not history. This is
 implemented with a single check against `draft_matches.status`: that
 column only ever reaches `'completed'` once a match winner is actually
 determined (see "Quick Draft"/"Winston Draft"/"Grid Draft" below,
 and `draftMatchSummaryFor()`'s own docblock) -- it has no
 `'in_progress'`-equivalent value, staying at `'deck_building'` for the
 entire duration each individual game is being played. So `GET /games`'s
-own query is: every `waiting`/`in_progress`/`abandoned` game, plus a
-`completed` one only if `draft_match_id IS NOT NULL AND
+own query is: every `waiting`/`in_progress` game, plus a `completed`/
+`abandoned` one only if `draft_match_id IS NOT NULL AND
 draft_matches.status != 'completed'`. `GET /games/past` is the exact
 opposite condition. Once the match's last game decides a winner, both
 (or all three) of its games move to `GET /games/past` together in the
@@ -2861,10 +2867,18 @@ UI's own match-grouping (see "Lobby grouping" above) renders identically
 in either list, so nothing about a decided match's own display changes,
 only which list it's found in.
 
-`'abandoned'` games are deliberately left alone by this split -- only
-`'completed'` status moves a game out of the main lobby list. This scopes
-the feature to exactly what was asked for; nothing currently reads
-`GET /games/past` and expects abandoned games there.
+An `'abandoned'` game (a Quick/Winston/Grid Draft match that ended with no
+game ever actually played -- a mid-drafting resignation, or every player
+coming up short of the deck-building minimum) moves to `GET /games/past`
+the same way, and just as immediately: `resignFromDraftMatch()`/
+`abandonDraftMatch()`/`finalizeWinstonDraft()` all flip
+`draft_matches.status` to `'completed'` in the very same statement that
+marks the game `'abandoned'`, so the draft-match-undecided carve-out above
+never actually applies to it in practice -- it's simply gone from the main
+lobby and in Past games from the moment the resignation happens, same as a
+naturally-completed game with no sibling in progress. It has no
+`completed_at` of its own (only the `draft_matches` row does), so it sorts
+by `last_move_at` in `GET /games/past` instead.
 
 ### Cleanup cron (issue #84)
 
@@ -3881,6 +3895,103 @@ standings once #91 lands, per-format breakdowns, etc.), and lifetime
 stats are the first section on it, not the only thing it will ever show.
 Each record renders as `wins-losses`, or `wins-losses (NN%)` once the
 percentage is non-null.
+
+### Card statistics (issue #315)
+
+Server-wide, 17lands-style aggregate data -- not tied to any one
+player -- per catalog card (`cards.id`, never a per-game instance id):
+how many completed games' decks it ended up in and how many of those
+were won, how many times it was actually played and how many of those
+games were won, and (for Quick/Winston/Grid Draft) an average
+"how early was this taken" signal per format. Backed by a new
+`card_stats` table (migration `0070`) and a new `MoodSwings\Stats\
+CardStatsService` class -- deliberately its own small service (mirroring
+the `UserDecklistService`/`ReplayStateBuilder` precedent) rather than
+more private methods on the already-large `GameService`, and injected
+into it as an optional constructor dependency (defaulting to
+`new CardStatsService()`, same pattern as `PresenceService`/
+`GameNoteRepository`) so no existing call site needed to change.
+
+Like `user_lifetime_stats`, every stat is written incrementally as it
+happens rather than computed by re-reading historical game data --
+necessary here, not just an optimization: a `completed` game is
+permanently deleted after 7 days (`deleteStaleCompletedGames()`), and
+Winston/Grid Draft's own pick state (`draft_winston_state`/
+`draft_grid_state`) is deleted the instant each draft finishes, so
+there'd be nothing left to read from by the time anyone looked at a
+stats page.
+
+Two independent groups of stats, updated from two different kinds of
+hook point:
+
+- **Deck-membership/played-card win rates**
+  (`CardStatsService::recordGameCompletion()`) are only knowable once a
+  game's outcome is decided, so there's a single hook at the end of
+  `GameService::recordGameCompletionStats()` -- the one method every
+  game-completion code path already funnels through (see "Lifetime
+  stats" above), so no other call site needed touching. For each seated
+  player, `SELECT DISTINCT owner_game_player_id, card_id FROM game_cards`
+  gives "which catalog cards ended up in their deck" -- pre-assigned
+  decks (duel/draft formats) have this set for the whole deck from
+  `startGame()` onward; shared-pool formats only count cards actually
+  drawn (an undrawn deck card, still `owner_game_player_id IS NULL` at
+  game end, was never really part of that player's realized deck).
+  `DISTINCT` because a deck can legally contain duplicate copies of a
+  catalog card (issue #109) -- a duplicate still only counts once toward
+  "how many decks this card ended up in", not once per copy. "Played" is
+  `game_events.event_type = 'mood_played'`, joined through
+  `game_events.card_id -> game_cards.id -> game_cards.card_id` for the
+  catalog id, `DISTINCT`-deduped the same way (a card played twice in one
+  game via Duplicity's repeat mechanic still only counts once).
+- **Draft pick-position signal**
+  (`recordQuickDraftPick()`/`recordWinstonDraftPick()`/
+  `recordGridDraftPick()`) is knowable the instant a pick happens,
+  independent of the eventual game/match outcome (same as 17lands' own
+  ATA, a pure draft signal) -- and for Winston/Grid Draft, deferring
+  wouldn't even be possible, since their own pick state is gone by match
+  completion. Each is called directly from its own pick-submission
+  method instead:
+  - Quick Draft (`submitQuickDraftPick()`): `(round_number - 1) *
+    playerCount + stage_number` -- a genuine ATA-style ordinal, since
+    `draft_pile_stage_picks` already records exactly which (round,
+    stage) a card was kept at.
+  - Winston Draft (`submitWinstonDraftPick()`): the pile's own size at
+    the moment of taking (a small pile means it was taken fresh; a large
+    one means it was passed around and grew first) -- there's no
+    persisted per-pick position for this format otherwise, so this is
+    computed live from `count($newlyDrafted)` right where the pick
+    happens. Also covers the forced pile-3-decline deck-draw, with an
+    implicit pile size of 1 (always freshest, since nobody else has seen
+    it).
+  - Grid Draft (`submitGridDraftPick()`): the round the pick happened in
+    (`draft_grid_state.current_round`, read before it's ever
+    incremented).
+
+  These three numbers are on different scales and never compared across
+  formats (same as 17lands' own ATA, which is always within-format), so
+  each gets its own `*_sum`/`*_count` column pair on `card_stats` rather
+  than one shared value.
+
+`CardStatsService::allCardStats()` (backing `GET /stats/cards`) is the
+read path: every catalog card via `CardCatalog::load()` (the same
+card-catalog source `GameService`/`UserDecklistService` already share),
+each with its recorded stats or all-zero/null defaults for a card
+nothing has happened to yet -- same "no row means zero" shape
+`lifetimeStatsFor()` already uses. Also includes `set_code`/
+`collector_number` per card via a new `CardCatalog::loadSetInfo()`
+helper (factored out of `CardCatalog::serialize()`'s own per-card
+subquery, same "lowest `sets.id` row" tiebreak, but for the whole
+catalog at once and without `serialize()`'s heavier per-card fields the
+stats page has no use for) -- the frontend's own set filter and Set/#
+columns read straight off this without a second round trip. Deliberately
+no minimum-sample-size filtering: every card shows its raw counts
+alongside any rate/average, so a low-sample stat is visible as such (a
+handful of games on a small server) rather than hidden or flagged.
+
+The frontend surfaces this on a new dedicated page,
+`web-static/stats/index.html`/`stats.js` (a "Stats" button sits next to
+Spectate on the lobby page) -- see "Card statistics" in
+`web-static/README.md`.
 
 ### Online/presence indicator (issue #110)
 

@@ -76,6 +76,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE games');
         $pdo->exec('TRUNCATE TABLE user_decklists');
         $pdo->exec('TRUNCATE TABLE user_lifetime_stats');
+        $pdo->exec('TRUNCATE TABLE card_stats');
         $pdo->exec('TRUNCATE TABLE friendships');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
@@ -1395,11 +1396,12 @@ final class GameServiceIntegrationTest extends TestCase
 
     /**
      * The core "past games" split (issue #84): a plain, non-draft
-     * completed game (abandoned games are untouched, only 'completed'
-     * ones move) disappears from listGamesForUser() and appears in
+     * completed game disappears from listGamesForUser() and appears in
      * listPastGamesForUser() instead, with an identical summary shape --
      * both share gameSummaryFor() for hydration, so no fields differ
-     * between the two lists.
+     * between the two lists. See
+     * testAbandonedGameMovesFromListGamesForUserToListPastGamesForUser()
+     * below for 'abandoned' status's own version of this same move.
      */
     public function testCompletedGameMovesFromListGamesForUserToListPastGamesForUser(): void
     {
@@ -1426,12 +1428,18 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * An 'abandoned' game is deliberately left out of scope for the "past
-     * games" split -- only 'completed' status moves. Confirms
-     * listGamesForUser() still includes it and listPastGamesForUser()
-     * does not.
+     * The "past games" split (issue #84, widened by a later follow-up)
+     * treats an 'abandoned' game exactly like a 'completed' one: it
+     * disappears from listGamesForUser() and shows up in
+     * listPastGamesForUser() instead. This is the same isolated SQL-level
+     * check testCompletedGameMovesFromListGamesForUserToListPastGamesForUser()
+     * above does for 'completed' -- a synthetic status flip on a plain,
+     * non-draft game, independent of how 'abandoned' actually gets set in
+     * practice. See
+     * testResignDuringDraftingMovesTheAbandonedGameToListPastGamesForUser()
+     * below for the real end-to-end path (a mid-drafting resignation).
      */
-    public function testAbandonedGameStaysInListGamesForUserNotListPastGamesForUser(): void
+    public function testAbandonedGameMovesFromListGamesForUserToListPastGamesForUser(): void
     {
         $creator = $this->insertUser('abandonsplit-alice');
         $bob = $this->insertUser('abandonsplit-bob');
@@ -1440,8 +1448,34 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->startGame($gameId);
         $this->pdo->prepare("UPDATE games SET status = 'abandoned' WHERE id = :id")->execute(['id' => $gameId]);
 
-        self::assertSame([$gameId], array_column($this->games->listGamesForUser($creator), 'id'));
-        self::assertSame([], array_column($this->games->listPastGamesForUser($creator), 'id'));
+        self::assertSame([], array_column($this->games->listGamesForUser($creator), 'id'), 'abandoned game no longer appears in the main lobby list');
+        $pastSummary = $this->games->listPastGamesForUser($creator)[0];
+        self::assertSame($gameId, $pastSummary['id']);
+        self::assertSame('abandoned', $pastSummary['status']);
+    }
+
+    /**
+     * The real end-to-end path an 'abandoned' game actually gets created
+     * through: a mid-drafting resignation (resignFromDraftMatch()) always
+     * flips draft_matches.status to 'completed' in the same statement
+     * that marks the game 'abandoned' (see abandonDraftMatch()), so the
+     * draft-match-undecided carve-out in listGamesForUser()'s own query
+     * never applies -- the abandoned game moves to Past games immediately,
+     * the very same call, with no separate action needed.
+     */
+    public function testResignDuringDraftingMovesTheAbandonedGameToListPastGamesForUser(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+
+        $this->games->resignGame($gameId, $p1);
+
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+
+        foreach ([$u1, $u2] as $userId) {
+            self::assertSame([], array_column($this->games->listGamesForUser($userId), 'id'), "abandoned draft game no longer in the main lobby for user {$userId}");
+            self::assertContains($gameId, array_column($this->games->listPastGamesForUser($userId), 'id'), "and already in Past games for user {$userId}");
+        }
     }
 
     /**
@@ -8069,6 +8103,86 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    // -- 'saved_deck' pool source (issue #290) -----------------------------
+
+    public function testCreateGameQuickDraftSavedDeckPoolUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('quickdraft-saveddeck-alice');
+        $bob = $this->insertUser('quickdraft-saveddeck-bob');
+        // 45 cards, under the 2-player 48-card target, so buildDraftPool()
+        // never truncates/shuffles -- the pool ends up exactly this array.
+        $decklistId = $this->insertSavedDecklist($creator, 'My Cube', range(1, 45));
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('saved_deck', $match['pool_source']);
+        self::assertSame(range(1, 45), array_map(intval(...), json_decode((string) $match['pool_card_ids'], true)));
+    }
+
+    public function testCreateGameQuickDraftSavedDeckPoolRejectsFewerThanFortyFiveCards(): void
+    {
+        $creator = $this->insertUser('quickdraft-saveddeck-few-alice');
+        $bob = $this->insertUser('quickdraft-saveddeck-few-bob');
+        $decklistId = $this->insertSavedDecklist($creator, 'Too Small', range(1, 10));
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 45 are required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+    }
+
+    public function testCreateGameQuickDraftSavedDeckPoolRequiresADecklistId(): void
+    {
+        $creator = $this->insertUser('quickdraft-saveddeck-missing-alice');
+        $bob = $this->insertUser('quickdraft-saveddeck-missing-bob');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('A saved decklist is required');
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+        );
+    }
+
+    public function testCreateGameQuickDraftSavedDeckPoolRejectsADecklistNotOwnedOrShared(): void
+    {
+        $owner = $this->insertUser('quickdraft-saveddeck-owner');
+        $creator = $this->insertUser('quickdraft-saveddeck-stranger');
+        $bob = $this->insertUser('quickdraft-saveddeck-stranger-bob');
+        $decklistId = $this->insertSavedDecklist($owner, 'Not Yours', range(1, 45));
+
+        $this->expectException(NotAuthorizedToAccessDecklistException::class);
+
+        $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+    }
+
     public function testFullDraftWithARandom48PoolProducesSixteenKeptCardsPerPlayer(): void
     {
         ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('random_48');
@@ -9232,6 +9346,30 @@ final class GameServiceIntegrationTest extends TestCase
         );
     }
 
+    public function testCreateGameWinstonDraftSavedDeckPoolUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('winstondraft-saveddeck-alice');
+        $bob = $this->insertUser('winstondraft-saveddeck-bob');
+        // Exactly 45 cards -- Winston Draft's own 2-player target size, so
+        // no truncation/shuffling happens (see winstonDraftMinCustomPoolSize()'s
+        // own docblock on why its minimum equals the target exactly).
+        $decklistId = $this->insertSavedDecklist($creator, 'My Cube', range(1, 45));
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('saved_deck', $match['pool_source']);
+        self::assertSame(range(1, 45), array_map(intval(...), json_decode((string) $match['pool_card_ids'], true)));
+    }
+
     public function testWinstonDraftDealsThreeSingleCardPilesAndRandomlyPicksFirstPlayer(): void
     {
         $fixture = $this->buildWinstonDraftFixture();
@@ -10116,6 +10254,30 @@ final class GameServiceIntegrationTest extends TestCase
             gridDraftPoolSource: 'custom',
             gridDraftCustomPoolText: "20 Charity\n",
         );
+    }
+
+    public function testCreateGameGridDraftSavedDeckPoolUsesItsCardIds(): void
+    {
+        $creator = $this->insertUser('griddraft-saveddeck-alice');
+        $bob = $this->insertUser('griddraft-saveddeck-bob');
+        // Exactly 54 cards -- Grid Draft's own 2-player target size, so no
+        // truncation/shuffling happens (see gridDraftMinCustomPoolSize()'s
+        // own docblock on why its minimum equals the target exactly).
+        $decklistId = $this->insertSavedDecklist($creator, 'My Cube', range(1, 54));
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bob],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'saved_deck',
+            savedDecklistId: $decklistId,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('saved_deck', $match['pool_source']);
+        self::assertSame(range(1, 54), array_map(intval(...), json_decode((string) $match['pool_card_ids'], true)));
     }
 
     public function testCreateGameGridDraftRejectsTheStructurePoolSourceAsUndersized(): void
@@ -12239,5 +12401,118 @@ final class GameServiceIntegrationTest extends TestCase
             }
         }
         self::assertTrue($boredomChangeFound);
+    }
+
+    // -- Card statistics (issue #315) ----------------------------------------
+    //
+    // CardStatsServiceTest.php covers the aggregation math in isolation;
+    // these confirm the real game-completion/pick-submission code paths
+    // actually call into it -- one per hook point (recordGameCompletionStats(),
+    // and each of the three draft formats' own pick-submission methods).
+
+    private function fetchCardStatsRow(int $catalogCardId): ?array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM card_stats WHERE catalog_card_id = :id');
+        $stmt->execute(['id' => $catalogCardId]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    public function testGameCompletionByResignationRecordsCardStatsForBothPlayers(): void
+    {
+        $winner = $this->insertUser('cardstats-int-winner');
+        $resigner = $this->insertUser('cardstats-int-resigner');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $winner]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $winnerPlayerId = $this->insertGamePlayer($gameId, $winner, 0);
+        $resignerPlayerId = $this->insertGamePlayer($gameId, $resigner, 1);
+
+        $determinationId = $this->insertGameCard($gameId, 112, 'hand', $winnerPlayerId); // Determination
+        $this->insertGameCard($gameId, 3, 'hand', $resignerPlayerId); // Charity, never played
+        // plays_remaining: 2, not 1, so this single play doesn't itself
+        // trigger round/game scoring -- resignGame() below is the only
+        // thing that completes this game.
+        $this->insertGameRound($gameId, 1, $winnerPlayerId, $winnerPlayerId, 2);
+
+        $this->games->playMood($gameId, $winnerPlayerId, $determinationId, []);
+        $this->games->resignGame($gameId, $resignerPlayerId);
+
+        $determinationStats = $this->fetchCardStatsRow(112);
+        self::assertNotNull($determinationStats, 'the winner\'s played card is recorded');
+        self::assertSame(1, (int) $determinationStats['times_in_deck']);
+        self::assertSame(1, (int) $determinationStats['times_in_won_deck']);
+        self::assertSame(1, (int) $determinationStats['times_played']);
+        self::assertSame(1, (int) $determinationStats['times_played_in_won_game']);
+
+        $charityStats = $this->fetchCardStatsRow(3);
+        self::assertNotNull($charityStats, 'still recorded even though never played');
+        self::assertSame(1, (int) $charityStats['times_in_deck']);
+        self::assertSame(0, (int) $charityStats['times_in_won_deck'], 'belongs to the resigning (losing) player');
+        self::assertSame(0, (int) $charityStats['times_played']);
+    }
+
+    public function testCompletedQuickDraftMatchRecordsDeckStatsAndPickPositions(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $winnerUserId = $this->completeQuickDraftGameByPassing($gameId);
+        $winnerGamePlayerId = $this->games->gamePlayerIdFor($gameId, $winnerUserId);
+
+        // 2 players x 4 rounds x 2 stages x 2 kept cards per stage -- every
+        // submitQuickDraftPick() call recorded via recordQuickDraftPick().
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(quick_draft_pick_position_count) FROM card_stats')->fetchColumn();
+        self::assertSame(2 * 4 * 2 * 2, $totalPicks);
+
+        $winnerCardIdStmt = $this->pdo->prepare(
+            "SELECT DISTINCT card_id FROM game_cards WHERE game_id = :game_id AND owner_game_player_id = :owner LIMIT 1"
+        );
+        $winnerCardIdStmt->execute(['game_id' => $gameId, 'owner' => $winnerGamePlayerId]);
+        $winnerCatalogCardId = (int) $winnerCardIdStmt->fetchColumn();
+
+        $stats = $this->fetchCardStatsRow($winnerCatalogCardId);
+        self::assertNotNull($stats, 'the completed match\'s own game-completion hook recorded deck stats');
+        self::assertGreaterThanOrEqual(1, (int) $stats['times_in_deck']);
+        self::assertGreaterThanOrEqual(1, (int) $stats['times_in_won_deck']);
+    }
+
+    public function testCompletedWinstonDraftMatchRecordsPickPileSizes(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildWinstonDraftFixture();
+        $this->driveWinstonDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $draftedCount = count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true))
+            + count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true));
+
+        // Every card either player ever drafted (via a pile 'take' or the
+        // forced pile-3-decline deck-draw) recorded exactly one
+        // recordWinstonDraftPick() pick -- see submitWinstonDraftPick().
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(winston_draft_pick_pile_size_count) FROM card_stats')->fetchColumn();
+        self::assertSame($draftedCount, $totalPicks);
+    }
+
+    public function testCompletedGridDraftMatchRecordsPickRounds(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildGridDraftFixture();
+        $this->driveGridDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $draftedCount = count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true))
+            + count(json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true));
+
+        // Every card either player took (a row/column pick can clear 1-3
+        // cells at once) recorded exactly one recordGridDraftPick() pick.
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(grid_draft_pick_round_count) FROM card_stats')->fetchColumn();
+        self::assertSame($draftedCount, $totalPicks);
     }
 }
