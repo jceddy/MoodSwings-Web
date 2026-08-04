@@ -1900,6 +1900,21 @@ too, proportional to the smaller card width.
     answer as soon as it's shown (there's nothing to leave blank), so
     `fieldHasValue()` treats it the same as a checkbox.
 
+    `renderPendingDecision()` only ever (re)builds `#pending-decision-panel`
+    once per decision, on the assumption that nothing about the field's
+    own candidate set changes while it's open (a reasonable assumption
+    normally, since a pending decision freezes the whole round). If
+    `#respond-decision-button`'s own click handler gets a rejected answer
+    back from the server anyway (e.g. a target that was valid when the
+    field was first built no longer is by the time it's submitted), it
+    resets `activePendingDecision` to `null` before calling `refreshBoard()`
+    — forcing a full rebuild against current state on the very next render,
+    rather than leaving the same stale widget sitting there with no way to
+    retry short of a full page reload (reported as "the game got stuck"
+    after Passion's own opponent-mood field ended up with zero valid
+    candidates once every one of the responder's opponents' moods had
+    already been taken).
+
     A "Plays left: N" `<details>` element (collapsed by default, so it
     doesn't crowd the board when there's nothing interesting to say) sits
     just above the Pass button — expanding it lists each outstanding play
@@ -1937,6 +1952,28 @@ too, proportional to the smaller card width.
     gets a small `(resigned)` tag next to their name in the players list
     (`.player-resigned-tag`) and the game carries on without them. See
     "Resigning" in `php-app/README.md`.
+
+    Issue #144: a `quick_draft`/`winston_draft`/`grid_draft` match's own
+    seat can also resign while the game is still `'waiting'` (drafting or
+    deck-building, before any actual game has started) -- the button
+    itself lives in `game/index.html` as a sibling right after
+    `#in-progress-area`, not inside it, so it stays reachable even while
+    that whole area is `hidden` for a still-waiting game. `renderBoard()`
+    computes its `.hidden` state once, up front (before the `'waiting'`
+    branch's own early `return`): visible whenever `state.game.status ===
+    'in_progress'`, OR the game is `'waiting'` with a draft `deck_type`
+    (regardless of whether it's currently `'drafting'` or
+    `'deck_building'` -- resignFromDraftMatch() on the backend accepts
+    both). `.disabled` is still only ever set from the `in_progress`
+    branch further down (there's no pending-decision concept for a
+    still-drafting game to gate on). A resignation here always leaves
+    `state.round` `null` (no round was ever dealt) even once
+    `games.status` flips to `'abandoned'` -- `board-round-status`'s own
+    "Round N" rendering now treats `'abandoned'` the same as `'completed'`
+    (a plain "Game over — nobody won." message, `winner_usernames` is
+    always empty for an abandoned draft match) instead of assuming a real
+    round exists, which a mid-drafting resignation would otherwise crash
+    on (`Cannot read properties of null (reading 'round_number')`).
   - A "Friends" button opens a `<dialog>` for managing friends: send a
     request by username/email, accept/decline/block incoming requests,
     view sent (outgoing) requests, and remove existing friends. All of it

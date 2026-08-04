@@ -2099,7 +2099,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $roundNumber, $stageNumber, $cardIds): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $roundNumber, $stageNumber, $cardIds): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -2220,6 +2220,10 @@ final class GameService
 
             return ['stage_completed' => $stageNumber, 'round_advanced' => true, 'draft_completed' => false];
         });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
     }
 
     /**
@@ -2294,6 +2298,8 @@ final class GameService
                 'user_id' => $userId,
             ]);
         });
+
+        $this->touchLastMoveAt($gameId);
     }
 
     /**
@@ -2409,7 +2415,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $action): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $action): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -2516,6 +2522,10 @@ final class GameService
 
             return ['action_completed' => $action, 'turn_advanced' => $turnEnds, 'draft_completed' => false];
         });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
     }
 
     /**
@@ -2571,12 +2581,7 @@ final class GameService
 
         if ($survivingUserIds === []) {
             // Everyone came up short -- no one left to play at all.
-            $pdo->prepare(
-                "UPDATE draft_matches SET status = 'completed', winner_user_id = NULL, completed_at = NOW() WHERE id = :id"
-            )->execute(['id' => $draftMatchId]);
-            $pdo->prepare(
-                "UPDATE games SET status = 'abandoned' WHERE draft_match_id = :match_id AND match_game_number = 1"
-            )->execute(['match_id' => $draftMatchId]);
+            $this->abandonDraftMatch($gameId, $draftMatchId);
 
             return;
         }
@@ -2600,7 +2605,7 @@ final class GameService
             $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
 
             foreach ($shortUserIds as $shortUserId) {
-                $this->removeShortWinstonDraftPlayer($gameId, $draftMatchId, $shortUserId);
+                $this->removeDraftMatchPlayer($gameId, $draftMatchId, $shortUserId);
             }
 
             return;
@@ -2614,7 +2619,7 @@ final class GameService
         // advanceDraftMatch()'s own existing recordMatchCompletionStats()
         // call once that match actually completes.
         foreach ($shortUserIds as $shortUserId) {
-            $this->removeShortWinstonDraftPlayer($gameId, $draftMatchId, $shortUserId);
+            $this->removeDraftMatchPlayer($gameId, $draftMatchId, $shortUserId);
         }
 
         $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
@@ -2622,21 +2627,49 @@ final class GameService
     }
 
     /**
-     * Drops a Winston Draft player short of WINSTON_MIN_DECK_SIZE from
-     * the match entirely -- called once per short player from
-     * finalizeWinstonDraft() above, before the match ever reaches
-     * deck_building. Deletes their draft_match_players row (so
-     * draftMatchUserIds()/every player-count-derived helper simply never
-     * sees them again) and their game_players row for the match's own
-     * game 1 (the only game to exist yet -- nothing has been dealt for
-     * it, since startGame() hasn't run, so there's no game_cards/
-     * game_rounds row anywhere referencing that seat to clean up first,
-     * unlike resignGame()'s own mid-match removal of an already-playing
-     * seat). Leaving a gap in the remaining seats' own seat_order values
-     * is harmless -- every seat_order-ordered query already just orders
-     * by it rather than indexing arithmetically off of it.
+     * Ends a draft match with no winner at all -- every seated
+     * participant just walks away with nothing decided. Used both by
+     * finalizeWinstonDraft() above (every player came up short of
+     * WINSTON_MIN_DECK_SIZE) and by resignGame()'s own draft-phase branch
+     * below (a mid-drafting resignation, which -- unlike a deck_building-
+     * phase resignation -- can't gracefully continue without the
+     * resigning player; see that method's own docblock for why). $gameId
+     * is whichever of the match's own games rows is still 'waiting' right
+     * now (match_game_number 1 for a fresh match, or a later game number
+     * if this fires between games of an already-underway best-of-N draft
+     * match) -- marking it 'abandoned' rather than deleting it preserves
+     * it as a plain historical record, the same way expireStaleActiveGames()
+     * leaves a force-ended game's row in place instead of removing it.
      */
-    private function removeShortWinstonDraftPlayer(int $gameId, int $draftMatchId, int $userId): void
+    private function abandonDraftMatch(int $gameId, int $draftMatchId): void
+    {
+        Connection::get()->prepare(
+            "UPDATE draft_matches SET status = 'completed', winner_user_id = NULL, completed_at = NOW() WHERE id = :id"
+        )->execute(['id' => $draftMatchId]);
+        Connection::get()->prepare(
+            "UPDATE games SET status = 'abandoned' WHERE id = :game_id"
+        )->execute(['game_id' => $gameId]);
+    }
+
+    /**
+     * Drops a draft match player from the match entirely -- as if they'd
+     * never been part of it. Called once per short player from
+     * finalizeWinstonDraft() above (a player left short of
+     * WINSTON_MIN_DECK_SIZE once Winston Draft ends) and from
+     * resignGame()'s own draft-phase branch below (a deck_building-phase
+     * resignation, with 2+ players surviving -- see that method's own
+     * docblock). Both callers only ever reach this before the match's
+     * current game has actually started (nothing has been dealt yet, so
+     * there's no game_cards/game_rounds row anywhere referencing that
+     * seat to clean up first, unlike resignGame()'s own mid-game removal
+     * of an already-playing seat). Deletes their draft_match_players row
+     * (so draftMatchUserIds()/every player-count-derived helper simply
+     * never sees them again) and their game_players row for $gameId.
+     * Leaving a gap in the remaining seats' own seat_order values is
+     * harmless -- every seat_order-ordered query already just orders by
+     * it rather than indexing arithmetically off of it.
+     */
+    private function removeDraftMatchPlayer(int $gameId, int $draftMatchId, int $userId): void
     {
         $pdo = Connection::get();
         $pdo->prepare('DELETE FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id')
@@ -2735,7 +2768,7 @@ final class GameService
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
-        return $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $axis, $index): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $axis, $index): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -2867,6 +2900,10 @@ final class GameService
                 'draft_completed' => false,
             ];
         });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
     }
 
     /**
@@ -3004,12 +3041,31 @@ final class GameService
      * from under an outstanding Compulsion-style decision -- resolve the
      * decision first, then resign.
      *
+     * A Quick/Winston/Grid Draft match's own game row never reaches
+     * status='in_progress' until drafting AND deck-building are both
+     * fully done (see startGame()'s requireDraftDecksSubmitted() gate),
+     * so this method's own status='in_progress' requirement below can
+     * never be satisfied while a draft match is still drafting or
+     * building decks -- the very case this issue asks for. Rather than a
+     * separate endpoint, this checks for that case FIRST and delegates
+     * to resignFromDraftMatch() below, so the exact same "Resign" action
+     * a player already knows works everywhere else in the app.
+     *
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
      */
     public function resignGame(int $gameId, int $gamePlayerId): array
     {
         $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
             $game = $this->fetchGame($gameId);
+
+            if (
+                $game['status'] === 'waiting'
+                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true)
+                && $game['draft_match_id'] !== null
+            ) {
+                return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id']);
+            }
+
             if ($game['status'] !== 'in_progress') {
                 throw new GameStateException("Game {$gameId} is not in progress");
             }
@@ -3049,6 +3105,106 @@ final class GameService
         $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
 
         return $result;
+    }
+
+    /**
+     * resignGame()'s own draft-phase branch (issue #144's "resign from a
+     * draft match, even during the draft portion") -- called from inside
+     * that method's own withGameLock() closure, so this never takes its
+     * own separate lock. What "resigning" means here splits on exactly
+     * where the match currently is:
+     *
+     * - Still `'drafting'`: no graceful "drop this player, everyone else
+     *   keeps going" is possible. Quick Draft's own pile-passing math
+     *   (submitQuickDraftPick()'s $playerCount-dependent seat-index
+     *   arithmetic) is fixed for the whole round the instant it's dealt,
+     *   Winston/Grid Draft each have exactly one player's turn "in
+     *   flight" at a time with no defined meaning for "hand their
+     *   half-finished turn to someone else" -- so a mid-drafting
+     *   resignation always ends the WHOLE match for every seated player,
+     *   the same abandonDraftMatch() outcome finalizeWinstonDraft() uses
+     *   when literally everyone came up short.
+     * - `'deck_building'`: drafting itself already fully finished, so
+     *   there's no shared pile/turn state left to disrupt -- each
+     *   player's own deck submission is a completely independent
+     *   operation. This is exactly finalizeWinstonDraft()'s own "a short
+     *   player is dropped, survivors continue" scenario, so it's handled
+     *   identically here: 2+ remaining players just continue as their
+     *   own (N-1)-player match (removeDraftMatchPlayer()); exactly 1
+     *   remaining player wins outright (recordMatchCompletionStats(),
+     *   same as finalizeWinstonDraft()'s own 1-survivor branch); 0
+     *   remaining (every other player had already resigned first)
+     *   abandons the match the same way the 'drafting' branch above does.
+     *
+     * $gameId is deliberately used as-is (not hardcoded to
+     * match_game_number=1 the way finalizeWinstonDraft()'s own two
+     * inline callers of this pattern are) -- a resignation between games
+     * of an already-underway best-of-N draft match (advanceDraftMatch()
+     * resets status back to 'deck_building' and inserts a fresh 'waiting'
+     * games row for the next match_game_number) needs to abandon THAT
+     * specific game, not game 1's own long-since-completed row.
+     *
+     * @return array{round_scored: bool, game_completed: bool}
+     */
+    private function resignFromDraftMatch(int $gameId, int $gamePlayerId, int $draftMatchId): array
+    {
+        $match = $this->fetchDraftMatch($draftMatchId);
+        if (!in_array($match['status'], ['drafting', 'deck_building'], true)) {
+            throw new GameStateException("Game {$gameId}'s draft match has already finished");
+        }
+
+        $stmt = Connection::get()->prepare('SELECT * FROM game_players WHERE id = :id AND game_id = :game_id');
+        $stmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
+        $player = $stmt->fetch();
+        if ($player === false) {
+            throw new GameStateException("Player {$gamePlayerId} is not seated in game {$gameId}");
+        }
+        if ($player['resigned_at'] !== null) {
+            throw new GameStateException("Player {$gamePlayerId} has already resigned");
+        }
+        $userId = (int) $player['user_id'];
+
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        if (!in_array($userId, $userIds, true)) {
+            throw new GameStateException("User {$userId} is not part of draft match {$draftMatchId}");
+        }
+
+        Connection::get()->prepare('UPDATE game_players SET resigned_at = NOW() WHERE id = :id')
+            ->execute(['id' => $gamePlayerId]);
+        $this->logEvent($gameId, null, $gamePlayerId, 'draft_resigned', null, []);
+
+        if ($match['status'] === 'drafting') {
+            $this->abandonDraftMatch($gameId, $draftMatchId);
+
+            return ['round_scored' => false, 'game_completed' => true];
+        }
+
+        $survivingUserIds = array_values(array_diff($userIds, [$userId]));
+
+        if ($survivingUserIds === []) {
+            $this->abandonDraftMatch($gameId, $draftMatchId);
+
+            return ['round_scored' => false, 'game_completed' => true];
+        }
+
+        if (count($survivingUserIds) === 1) {
+            $winnerUserId = $survivingUserIds[0];
+
+            Connection::get()->prepare(
+                "UPDATE draft_matches SET status = 'completed', winner_user_id = :winner, completed_at = NOW() WHERE id = :id"
+            )->execute(['winner' => $winnerUserId, 'id' => $draftMatchId]);
+            Connection::get()->prepare(
+                "UPDATE games SET status = 'abandoned' WHERE id = :game_id"
+            )->execute(['game_id' => $gameId]);
+            $this->recordMatchCompletionStats($draftMatchId, $winnerUserId);
+            $this->removeDraftMatchPlayer($gameId, $draftMatchId, $userId);
+
+            return ['round_scored' => false, 'game_completed' => true];
+        }
+
+        $this->removeDraftMatchPlayer($gameId, $draftMatchId, $userId);
+
+        return ['round_scored' => false, 'game_completed' => false];
     }
 
     /**
@@ -8101,6 +8257,10 @@ final class GameService
             // would otherwise misleadingly render as "A player played a
             // card".
             $row['event_type'] === 'game_expired' => 'This game was automatically ended due to inactivity',
+            // resignFromDraftMatch()'s own event -- card_id is always
+            // null (there's no card involved), so this needs its own
+            // phrasing for the same reason 'game_expired' above does.
+            $row['event_type'] === 'draft_resigned' => "{$actor} resigned from the draft",
             default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 
