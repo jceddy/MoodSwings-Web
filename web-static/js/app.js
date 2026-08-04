@@ -140,10 +140,13 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // Draft" in web-static/README.md.
             grid_draft_pool_source: gridDraftPoolSource,
             grid_draft_custom_pool_text: gridDraftCustomPoolText,
-            // Only meaningful for deck_type 'custom' -- an alternative to
-            // decklistText, loading a previously-saved decklist (issue
-            // #92) instead of parsing freshly-pasted/uploaded text. See
-            // "Saved decklists" in web-static/README.md.
+            // Meaningful for deck_type 'custom' (an alternative to
+            // decklistText) or when any of the three *_pool_source values
+            // above is 'saved_deck' (issue #290, an alternative to that
+            // draft type's own *_custom_pool_text) -- loading a
+            // previously-saved decklist (issue #92) instead of parsing
+            // freshly-pasted/uploaded text. See "Saved decklists" in
+            // web-static/README.md.
             saved_decklist_id: savedDecklistId,
         }),
     });

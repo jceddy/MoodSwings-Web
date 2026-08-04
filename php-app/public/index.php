@@ -844,9 +844,11 @@ if ($path === '/games' && $method === 'POST') {
     // Only meaningful for deck_type 'grid_draft' -- see createGame()'s own docblock.
     $gridDraftPoolSource = isset($body['grid_draft_pool_source']) ? (string) $body['grid_draft_pool_source'] : null;
     $gridDraftCustomPoolText = isset($body['grid_draft_custom_pool_text']) ? (string) $body['grid_draft_custom_pool_text'] : null;
-    // Only meaningful for deck_type 'custom' -- an alternative to
-    // decklist_text, loading a previously-saved decklist (issue #92)
-    // instead of parsing freshly-pasted/uploaded text.
+    // Meaningful for deck_type 'custom' (an alternative to decklist_text)
+    // or when any of the three *_pool_source values above is 'saved_deck'
+    // (issue #290, an alternative to that draft type's own
+    // *_custom_pool_text) -- loading a previously-saved decklist (issue
+    // #92) instead of parsing freshly-pasted/uploaded text.
     $savedDecklistId = isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null;
 
     try {
