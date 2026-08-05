@@ -2971,6 +2971,24 @@
         document.getElementById('shared-deck-dialog').close();
     });
 
+    // Same WUBRG-style color wheel and print-frequency rarity order
+    // web-static/js/stats.js's own RARITY_RANK/COLOR_RANK already sort by
+    // -- duplicated here rather than shared, since this is a plain
+    // <script> tag per page (no module system), not a real function
+    // reuse opportunity.
+    const DRAFT_POOL_COLOR_RANK = { white: 0, blue: 1, black: 2, red: 3, green: 4 };
+    const DRAFT_POOL_RARITY_RANK = { common: 0, uncommon: 1, rare: 2, mythic: 3 };
+
+    // Color, then rarity, then name -- the order requested for issue
+    // #314's own "View draft pool" sections, so e.g. every white common
+    // groups together before white uncommons, and the whole white group
+    // sits ahead of blue.
+    function compareDraftPoolCards(a, b) {
+        return DRAFT_POOL_COLOR_RANK[a.color] - DRAFT_POOL_COLOR_RANK[b.color]
+            || DRAFT_POOL_RARITY_RANK[a.rarity] - DRAFT_POOL_RARITY_RANK[b.rarity]
+            || a.name.localeCompare(b.name);
+    }
+
     // A completed draft match's full shared pool (issue #314), sectioned
     // by drafter -- see GameService::draftMatchPoolView(). Reuses the same
     // buildCardThumb()/openCardDetail() card-grid pattern as
@@ -3000,7 +3018,7 @@
             sectionEl.appendChild(headingEl);
             const cardsEl = document.createElement('div');
             cardsEl.className = 'draft-pool-cards';
-            for (const card of cards) {
+            for (const card of cards.slice().sort(compareDraftPoolCards)) {
                 cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
             }
             sectionEl.appendChild(cardsEl);
