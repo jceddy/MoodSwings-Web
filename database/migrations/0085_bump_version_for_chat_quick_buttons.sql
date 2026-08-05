@@ -1,0 +1,13 @@
+-- No schema change: adds a row of "quick chat" canned-message buttons
+-- (GL;HF, GG, and a handful of emoji) to the in-game chat dialog,
+-- between the free-text send form and the Close button -- one click
+-- sends that text on whichever channel is currently selected, via the
+-- same sendChatText() helper (POST /games/chat) the free-text form's own
+-- submit handler already uses. This migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0084 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request, so a VERSION bump with no matching schema_version
+-- update would show maintenance mode after deploy even though nothing
+-- about the schema actually changed.
+UPDATE schema_version SET version = '1.11.15' WHERE id = 1;
