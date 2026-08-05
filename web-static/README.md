@@ -685,10 +685,15 @@ too, proportional to the smaller card width.
     same player.
   - **View draft pool** (issue #314): once `match.status === 'completed'`
     (the same field the `.lobby-winner` result line above gates on), the
-    group header also gets a `.lobby-actions`-wrapped "View draft pool"
-    button (`openDraftPoolView(firstGame.id)`), separate from any
-    individual game's own action row since the pool is shared across the
-    whole match, not scoped to one of its up-to-3 games. Opens
+    group header's own text (`headerEl`) and the "View draft pool" button
+    (`openDraftPoolView(firstGame.id)`) sit as flex siblings in a
+    `.lobby-row`, pinning the button to the right edge the same way every
+    other lobby action button already is -- a `.lobby-match-actions`
+    wrapper rather than `.lobby-actions`, since there's always exactly one
+    button here (no fixed width needed to line up a stacked column of
+    several, unlike a game row's own Play/View + View log). Separate from
+    any individual game's own action row since the pool is shared across
+    the whole match, not scoped to one of its up-to-3 games. Opens
     `#draft-pool-dialog`, fetching `GET /games/draft-pool` (see
     `GameService::draftMatchPoolView()` in `../php-app/README.md`) and
     rendering one `.draft-pool-section` per player (heading "username (N)"
@@ -700,10 +705,22 @@ too, proportional to the smaller card width.
     Quick Draft and Grid Draft always have something here by design (their
     own per-round discard mechanics), Winston Draft normally doesn't
     (its draft only ends once the whole pool is claimed), so the section is
-    simply omitted rather than shown empty for that format. `code` is
-    passed through from `activeShareCode()` exactly like
-    `openSharedDeckView()` does, so a spectator viewing via share code can
-    open this too. A "New game" dialog
+    simply omitted rather than shown empty for that format. Each section's
+    own cards sort by color (white/blue/black/red/green, the same WUBRG
+    wheel `web-static/js/stats.js`'s own `COLOR_RANK` already sorts by),
+    then rarity (common/uncommon/rare/mythic, `RARITY_RANK`), then name --
+    duplicated as `DRAFT_POOL_COLOR_RANK`/`DRAFT_POOL_RARITY_RANK` locally
+    in `game.js` rather than shared with `stats.js`, since each page is a
+    plain `<script>` tag with no module system between them.
+    `#draft-pool-sections .card-thumb`/`.card-thumb__art` also get their
+    own narrower mobile width (3.75rem, vs. the 4rem several other
+    card grids already shrink to at the same `max-width: 600px`
+    breakpoint) -- specifically calibrated so four cards actually fit per
+    row on a ~360px-wide phone against `dialog#draft-pool-dialog`'s own
+    measured content width there, not just "somewhat smaller than
+    before." `code` is passed through from `activeShareCode()` exactly
+    like `openSharedDeckView()` does, so a spectator viewing via share
+    code can open this too. A "New game" dialog
     (`.new-game-field` puts the Format and Deck `<label>`s each on their
     own line -- plain inline `<label>` elements otherwise sit side by side
     until their own `<select>` runs out of room, rather than breaking

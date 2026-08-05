@@ -787,6 +787,22 @@ body.game-page {
     .deck-builder-card-grid .card-thumb__art {
         width: 4rem;
     }
+
+    /* The draft pool view (issue #314 follow-up) specifically wants four
+       cards per row even on a narrow ~360px-wide phone, not just "smaller
+       than before" -- measured against dialog#draft-pool-dialog's own
+       actual rendered content width there (its 90% dialog width, minus
+       1.5rem padding on each side, leaves ~274px for the card grid),
+       .card-thumb's plain 4rem (64px) above only clears 3 per row once
+       the three 0.5rem gaps between them are counted (4*64 + 3*8 = 280px
+       > 274px available) -- a bare 10% shrink off the normal 5.5rem falls
+       even further short. 3.75rem (60px) comfortably clears four across
+       with room to spare (4*60 + 3*8 = 264px < 274px) at 360px, and with
+       even more room on every wider phone this same media query covers. */
+    #draft-pool-sections .card-thumb,
+    #draft-pool-sections .card-thumb__art {
+        width: 3.75rem;
+    }
 }
 
 /* -- Card art thumbnails (hand/in-play/discard) --------------------- */
