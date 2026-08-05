@@ -8049,6 +8049,107 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(48, array_unique($poolCardIds), 'random_48 is drawn without replacement -- always singleton');
     }
 
+    /**
+     * Issue #314: once a draft match completes, draftMatchPoolView()
+     * separates the shared pool into each player's own drafted set plus
+     * whatever nobody kept. Quick Draft is the clearest case for a
+     * non-empty "undrafted" bucket -- its own 2-discards-per-pile-per-round
+     * mechanic (see driveQuickDraftToDeckBuilding()'s own docblock)
+     * permanently discards 16 of this 48-card pool's cards across the
+     * match's 4 rounds, by design, well before deck-building or actual
+     * gameplay ever runs -- so the match is force-completed here via a
+     * direct row update rather than playing out a full best-of-three,
+     * since draftMatchPoolView() itself only cares about
+     * draft_matches.status and each player's already-final
+     * drafted_card_ids, not how the match got there.
+     */
+    public function testDraftMatchPoolViewSeparatesCardsByDrafterAndFlagsUndraftedOnes(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('random_48');
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare("UPDATE draft_matches SET status = 'completed' WHERE id = :id")->execute(['id' => $draftMatchId]);
+
+        $view = $this->games->draftMatchPoolView($gameId);
+
+        self::assertSame($draftMatchId, $view['draft_match_id']);
+        self::assertCount(2, $view['players']);
+
+        $poolCardIds = json_decode($this->fetchDraftMatch($draftMatchId)['pool_card_ids'], true);
+        $draftedByU1 = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $u1)['drafted_card_ids'], true);
+        $draftedByU2 = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $u2)['drafted_card_ids'], true);
+        self::assertCount(16, $draftedByU1);
+        self::assertCount(16, $draftedByU2);
+
+        $cardIdsByUser = [];
+        foreach ($view['players'] as $playerView) {
+            $cardIdsByUser[$playerView['user_id']] = array_column($playerView['cards'], 'card_id');
+        }
+        self::assertEqualsCanonicalizing($draftedByU1, $cardIdsByUser[$u1]);
+        self::assertEqualsCanonicalizing($draftedByU2, $cardIdsByUser[$u2]);
+
+        // 48 pool cards, 16 kept by each of 2 players -- the other 16 were
+        // dealt out over the course of the draft but discarded by both
+        // players' own pile mechanics, never kept by anyone.
+        $undraftedCardIds = array_column($view['undrafted_cards'], 'card_id');
+        self::assertCount(16, $undraftedCardIds);
+        $expectedUndrafted = $poolCardIds;
+        foreach ([...$draftedByU1, ...$draftedByU2] as $draftedCardId) {
+            $key = array_search($draftedCardId, $expectedUndrafted, true);
+            unset($expectedUndrafted[$key]);
+        }
+        self::assertEqualsCanonicalizing(array_values($expectedUndrafted), $undraftedCardIds);
+    }
+
+    /**
+     * Winston Draft's own end condition ("the deck and all 3 piles
+     * simultaneously empty") means every pool card ends up in SOME
+     * player's drafted_card_ids under normal play -- unlike Quick Draft's
+     * by-design discards, an empty undrafted_cards section here is the
+     * expected outcome, not a gap in the view.
+     */
+    public function testDraftMatchPoolViewHasNoUndraftedCardsForANormallyCompletedWinstonDraft(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildWinstonDraftFixture('random_48');
+        $this->driveWinstonDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare("UPDATE draft_matches SET status = 'completed' WHERE id = :id")->execute(['id' => $draftMatchId]);
+
+        $view = $this->games->draftMatchPoolView($gameId);
+
+        self::assertSame([], $view['undrafted_cards']);
+
+        $poolCardIds = json_decode($this->fetchDraftMatch($draftMatchId)['pool_card_ids'], true);
+        $allViewedCardIds = [];
+        foreach ($view['players'] as $playerView) {
+            $allViewedCardIds = [...$allViewedCardIds, ...array_column($playerView['cards'], 'card_id')];
+        }
+        self::assertEqualsCanonicalizing($poolCardIds, $allViewedCardIds, 'every pool card belongs to exactly one player once Winston Draft has genuinely finished');
+    }
+
+    public function testDraftMatchPoolViewRejectsAMatchThatHasNotCompletedYet(): void
+    {
+        ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture('random_48');
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("isn't completed yet");
+        $this->games->draftMatchPoolView($gameId);
+    }
+
+    public function testDraftMatchPoolViewRejectsANonDraftGame(): void
+    {
+        $u1 = $this->insertUser('draft-pool-nondraft-1');
+        $u2 = $this->insertUser('draft-pool-nondraft-2');
+        $gameId = $this->games->createGame($u1, [$u1, $u2], deckType: 'structure');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("isn't part of a draft match");
+        $this->games->draftMatchPoolView($gameId);
+    }
+
     public function testCreateGameQuickDraftStructurePoolHasFortyFiveCards(): void
     {
         ['gameId' => $gameId] = $this->buildQuickDraftFixture('structure');

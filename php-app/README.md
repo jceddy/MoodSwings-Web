@@ -92,6 +92,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/spectate/resolve` | `{"code"}`                                              | Requires auth. `404` if no game has that code, or it's `waiting`/`abandoned`. Returns `{"game_id"}` for the frontend to navigate with. See "Spectator mode" below. |
 | GET    | `/games/spectate/state` | query params `game_id`, `code`?                        | Requires auth; deliberately does **not** require you to be seated in that game -- see "Spectator mode" below for its own authorization rule. `403` unless you're friends with a seated player or `code` matches the game's own spectate code; `400` if the game is `waiting`/`abandoned`. Same shape as `GET /games/state`, minus `you`, `team_decision`'s propose/confirm affordances, and any draft-match internals -- plus, once the game is `completed`, every player's `hand` is additionally revealed (there's nothing left to hide once the outcome is decided). |
 | GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
+| GET    | `/games/draft-pool` | query params `game_id`, `code`?                             | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/log`/`GET /games/replay/state` use). `409` if `game_id` isn't part of a draft match, or its match hasn't `completed` yet. Returns `{"draft_match_id", "players": [{"user_id", "username", "cards": [...]}], "undrafted_cards": [...]}` -- the whole Quick/Winston/Grid Draft match's shared `pool_card_ids`, sectioned by which player's `drafted_card_ids` each card ended up in, plus whatever nobody drafted (issue #314). See "View draft pool" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
 | GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
@@ -3479,6 +3480,43 @@ only the final confirmed choice is logged).
 
 The frontend reuses the board renderer entirely -- see "Watch replay" in
 `web-static/README.md` for the step-control UI.
+
+### View draft pool (issue #314)
+
+Once a Quick/Winston/Grid Draft match is `completed`, `GET /games/draft-pool`
+(`GameService::draftMatchPoolView()`) answers "what was the shared pool, and
+who drafted what from it" -- useful for reviewing/comparing draft decisions
+after the fact, similar in spirit to "Watch replay" above. Both source
+columns it reads already outlive any single one of the match's up-to-3
+`games` rows: `draft_matches.pool_card_ids` (the whole shared pool, fixed at
+match creation) and each `draft_match_players.drafted_card_ids` (the fixed
+result of the draft itself). Deliberately reads `drafted_card_ids`, not
+`deck_card_ids` -- the latter is a player-chosen, game-to-game-changeable
+*subset* of the former (see `submitDraftDeck()`'s own docblock), and "what
+did you draft" is a different question than "what's in your current deck."
+Authorization mirrors `GET /games/log`/`GET /games/replay/state` (seated
+player or `canSpectateGame()`); the actual "only once the match is
+completed" gate is a `409` from `draftMatchPoolView()` itself, since the
+requester genuinely is authorized to view the game, the pool data just isn't
+final yet.
+
+A pool card belonging to nobody is a real, expected outcome for at least two
+of the three formats, not an edge case: Quick Draft discards exactly 2 cards
+per pile per round by design, and Grid Draft discards whatever's left in the
+grid at the end of every round; Winston Draft normally drafts its entire
+pool (the draft only ends once the deck and all 3 piles are simultaneously
+empty), though even it can leave cards unclaimed if a short player was ever
+dropped via `removeDraftMatchPlayer()`. `undrafted_cards` is computed via
+the same `multisetSubtract()` every other pool/pick accounting in
+`GameService` already uses (`pool_card_ids` minus the concatenation of every
+player's own `drafted_card_ids`), so a duplicate catalog id (a custom pool
+listing 2 of the same card) is still subtracted one-for-one correctly.
+
+The frontend's "View draft pool" button lives on a completed match's own
+group header in the games list (see `buildMatchGroupRow()` in
+`web-static/README.md`) rather than on any individual game row, since the
+pool is shared across the whole match, not scoped to one of its games. See
+"View draft pool" in `web-static/README.md` for the dialog itself.
 
 ### Browser push notifications (issue #108)
 

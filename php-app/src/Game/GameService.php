@@ -6693,6 +6693,84 @@ final class GameService
     }
 
     /**
+     * Issue #314 "view shared draft pool after a draft match completes":
+     * $gameId's own draft_match_id (fixed at match creation, shared across
+     * however many of its up-to-3 games rows exist -- see draft_matches'
+     * own migration 0027 docblock) resolved back to the match's full
+     * pool_card_ids, each seated player's own drafted_card_ids (deliberately
+     * NOT deck_card_ids -- see this method's own reasoning below), and
+     * whatever's left over. Authorization (seated player or
+     * canSpectateGame()) is the caller's own job, same as
+     * replayStateAsOf()/fullEventLog() -- see the GET /games/draft-pool
+     * route.
+     *
+     * "Drafted" here means drafted_card_ids specifically, not the
+     * player's final deck_card_ids -- the two are genuinely different
+     * columns (see submitDraftDeck()'s own docblock: deck_card_ids is a
+     * player-chosen SUBSET of drafted_card_ids, changeable game-to-game
+     * within the same match's sideboarding, while drafted_card_ids is the
+     * fixed result of the draft itself). This view answers "what did you
+     * draft," not "what's in your current deck."
+     *
+     * A pool card belonging to nobody is a real, expected outcome, not an
+     * edge case -- Quick Draft discards exactly 2 cards per pile per
+     * round by design, Grid Draft discards whatever's left in the grid at
+     * the end of every round, and even Winston Draft (which normally
+     * drafts the entire pool) can leave cards unclaimed if a short player
+     * was ever dropped via removeDraftMatchPlayer(). $undraftedCardIds is
+     * computed via the same multisetSubtract() every other pool/pick
+     * accounting in this class already uses, so a duplicate catalog id
+     * (a custom pool listing 2 of the same card) is still subtracted
+     * correctly one-for-one rather than an id-based array_diff wrongly
+     * removing every copy at once.
+     *
+     * @return array<string, mixed>
+     */
+    public function draftMatchPoolView(int $gameId): array
+    {
+        $game = $this->fetchGame($gameId);
+        $draftMatchId = $game['draft_match_id'] !== null ? (int) $game['draft_match_id'] : null;
+        if ($draftMatchId === null) {
+            throw new GameStateException("Game {$gameId} isn't part of a draft match");
+        }
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        if ($match['status'] !== 'completed') {
+            throw new GameStateException("Draft match {$draftMatchId} isn't completed yet -- its draft pool is only available once the match is over");
+        }
+
+        $rowsStmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, dmp.drafted_card_ids, u.username FROM draft_match_players dmp
+             JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id ORDER BY dmp.id ASC'
+        );
+        $rowsStmt->execute(['id' => $draftMatchId]);
+
+        $players = [];
+        $everyDraftedCardId = [];
+        foreach ($rowsStmt->fetchAll() as $row) {
+            $draftedCardIds = $row['drafted_card_ids'] !== null
+                ? array_map(intval(...), json_decode((string) $row['drafted_card_ids'], true))
+                : [];
+            $everyDraftedCardId = [...$everyDraftedCardId, ...$draftedCardIds];
+
+            $players[] = [
+                'user_id' => (int) $row['user_id'],
+                'username' => $row['username'],
+                'cards' => $this->serializeCatalogCards($draftedCardIds),
+            ];
+        }
+
+        $poolCardIds = array_map(intval(...), json_decode((string) $match['pool_card_ids'], true));
+        $undraftedCardIds = $this->multisetSubtract($poolCardIds, $everyDraftedCardId);
+
+        return [
+            'draft_match_id' => $draftMatchId,
+            'players' => $players,
+            'undrafted_cards' => $this->serializeCatalogCards($undraftedCardIds),
+        ];
+    }
+
+    /**
      * getState()'s own 'quick_draft' field -- the match-level scoreline
      * (always present once a draft_match_id exists) plus whichever one of
      * 'drafting'/'deck_building' is currently live (null if the match has

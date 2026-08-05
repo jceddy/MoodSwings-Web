@@ -1860,6 +1860,20 @@
             headerEl.appendChild(resultEl);
         }
 
+        // View draft pool (issue #314) -- match-level, not per-game (the
+        // pool is shared across the whole match, see
+        // GameService::draftMatchPoolView()), so this lives in the group's
+        // own header rather than on any one sub-row. Same "status is
+        // 'completed'" gate as winner_username above -- the pool view
+        // itself also enforces this server-side, but gating the button too
+        // avoids offering it for a still-undecided match's own dead end.
+        if (match.status === 'completed') {
+            const poolActionsEl = document.createElement('div');
+            poolActionsEl.className = 'lobby-actions';
+            poolActionsEl.appendChild(actionButton('View draft pool', () => openDraftPoolView(firstGame.id)));
+            headerEl.appendChild(poolActionsEl);
+        }
+
         // Reuses buildGameRow()'s own icon logic (see
         // appendPlayersWithFlags()) against firstGame -- the match's most
         // recent (and only ever actionable) game -- since a draft-based
@@ -2947,6 +2961,59 @@
 
     document.getElementById('shared-deck-close-button').addEventListener('click', () => {
         document.getElementById('shared-deck-dialog').close();
+    });
+
+    // A completed draft match's full shared pool (issue #314), sectioned
+    // by drafter -- see GameService::draftMatchPoolView(). Reuses the same
+    // buildCardThumb()/openCardDetail() card-grid pattern as
+    // openSharedDeckView() above, just one section per player (plus an
+    // "undrafted" one when non-empty) instead of a single flat list, since
+    // the whole point here is showing WHO drafted each card.
+    async function openDraftPoolView(gameId) {
+        const metaEl = document.getElementById('draft-pool-meta');
+        const sectionsEl = document.getElementById('draft-pool-sections');
+        metaEl.textContent = '';
+        sectionsEl.innerHTML = '';
+        document.getElementById('draft-pool-dialog').showModal();
+
+        const { ok, body } = await getDraftPool(gameId, activeShareCode());
+        if (!ok) {
+            return;
+        }
+
+        const totalCards = body.players.reduce((sum, player) => sum + player.cards.length, 0) + body.undrafted_cards.length;
+        metaEl.textContent = totalCards + ' card(s) in the shared pool';
+
+        function appendSection(title, cards) {
+            const sectionEl = document.createElement('section');
+            sectionEl.className = 'draft-pool-section';
+            const headingEl = document.createElement('h3');
+            headingEl.textContent = title + ' (' + cards.length + ')';
+            sectionEl.appendChild(headingEl);
+            const cardsEl = document.createElement('div');
+            cardsEl.className = 'draft-pool-cards';
+            for (const card of cards) {
+                cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            }
+            sectionEl.appendChild(cardsEl);
+            sectionsEl.appendChild(sectionEl);
+        }
+
+        for (const player of body.players) {
+            appendSection(player.username, player.cards);
+        }
+        // Only shown when non-empty -- Winston Draft normally drafts its
+        // entire pool under standard play (see draftMatchPoolView()'s own
+        // docblock), so an empty section here would just be dead space for
+        // that format, while Quick Draft/Grid Draft always have something
+        // to show.
+        if (body.undrafted_cards.length > 0) {
+            appendSection('Not drafted', body.undrafted_cards);
+        }
+    }
+
+    document.getElementById('draft-pool-close-button').addEventListener('click', () => {
+        document.getElementById('draft-pool-dialog').close();
     });
 
     // Private in-game notepad (issue #258) -- one freeform note per seat,
