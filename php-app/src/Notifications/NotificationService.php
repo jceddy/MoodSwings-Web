@@ -110,6 +110,27 @@ final class NotificationService
         ]);
     }
 
+    /**
+     * In-game chat (issue #109) -- shares NotificationScope::forGame()
+     * with notifyYourTurn()/notifyGameFinished() above rather than its
+     * own scope, the same way those two already share one cooldown/queue
+     * bucket per game instead of one each: a player active in a game
+     * gets at most one round of notifications about it every 5 minutes
+     * regardless of whether it's their turn, the game just ended, or a
+     * new message arrived, not a separate 5-minute allowance per kind of
+     * event. $tag still distinguishes it in the OS notification list the
+     * same way notifyYourTurn()'s own per-case tags do.
+     */
+    public function notifyNewChatMessage(int $userId, int $gameId, string $senderUsername, string $messagePreview): void
+    {
+        $this->notify($userId, NotificationScope::forGame($gameId), 'notify_chat_message', [
+            'title' => "{$senderUsername} says...",
+            'body' => $messagePreview,
+            'url' => "/game/?id={$gameId}",
+            'tag' => "game-{$gameId}-chat",
+        ]);
+    }
+
     /** GameService::clearQueuedNotificationForGamePlayer()'s own passthrough -- see that method's docblock. */
     public function clearQueuedForGame(int $userId, int $gameId): void
     {

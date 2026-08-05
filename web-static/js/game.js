@@ -137,6 +137,7 @@
         const yourTurnCheckbox = document.getElementById('notify-your-turn-checkbox');
         const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
         const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
+        const chatMessageCheckbox = document.getElementById('notify-chat-message-checkbox');
         const disableCooldownCheckbox = document.getElementById('disable-cooldown-checkbox');
 
         const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -163,6 +164,7 @@
                     yourTurnCheckbox.checked = body.preferences.notify_your_turn;
                     friendRequestCheckbox.checked = body.preferences.notify_friend_request;
                     gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
+                    chatMessageCheckbox.checked = body.preferences.notify_chat_message;
                     disableCooldownCheckbox.checked = body.preferences.disable_cooldown;
                 }
             }
@@ -273,12 +275,14 @@
                 notify_your_turn: yourTurnCheckbox.checked,
                 notify_friend_request: friendRequestCheckbox.checked,
                 notify_game_finished: gameFinishedCheckbox.checked,
+                notify_chat_message: chatMessageCheckbox.checked,
                 disable_cooldown: disableCooldownCheckbox.checked,
             });
         }
         yourTurnCheckbox.addEventListener('change', savePreferences);
         friendRequestCheckbox.addEventListener('change', savePreferences);
         gameFinishedCheckbox.addEventListener('change', savePreferences);
+        chatMessageCheckbox.addEventListener('change', savePreferences);
         disableCooldownCheckbox.addEventListener('change', savePreferences);
     }
 
@@ -3103,6 +3107,107 @@
         }, 1000);
     });
 
+    // In-game chat (issue #109) -- unlike the notepad above, there's no
+    // separate fetch to open this dialog: chat_messages rides along on
+    // every refreshBoard() poll already (see renderChat(), called from
+    // renderBoard() itself), so this dialog just re-renders from
+    // currentState whenever it's open rather than loading its own data.
+    // Table-wide by default; the channel selector only appears for
+    // Open/Closed Team Play, where postChatMessage() also accepts 'team'.
+    const gameChatDialog = document.getElementById('game-chat-dialog');
+    const chatMessagesList = document.getElementById('game-chat-messages');
+    const chatEmptyEl = document.getElementById('game-chat-empty');
+    const chatForm = document.getElementById('game-chat-form');
+    const chatInput = document.getElementById('game-chat-input');
+    const chatChannelSelect = document.getElementById('chat-channel-select');
+    const chatErrorEl = document.getElementById('game-chat-error');
+    const chatButton = document.getElementById('view-chat-button');
+    // How many of the current game's chat_messages have already been seen
+    // (dialog open, or last closed while caught up) -- renderChat() below
+    // diffs against this to decide whether the unread badge should show.
+    // Reset to 0 whenever the viewed game itself changes, since a fresh
+    // game's history was never "unseen" in the first place.
+    let chatSeenGameId = null;
+    let chatSeenCount = 0;
+
+    function isChatReadOnly() {
+        return !currentState || currentState.game.status !== 'in_progress';
+    }
+
+    function chatMessageListItem(message) {
+        const li = document.createElement('li');
+        if (message.channel === 'team') {
+            li.classList.add('chat-team-message');
+        }
+        const sender = document.createElement('strong');
+        sender.textContent = (message.sender_username || 'Someone') + (message.channel === 'team' ? ' (team)' : '') + ': ';
+        li.appendChild(sender);
+        // A plain text-node append -- never innerHTML -- is what actually
+        // keeps a message's free-text content from being interpreted as
+        // markup (issue #109's own XSS surface note), matching how every
+        // other user-supplied string on this page is already rendered.
+        li.append(message.message_text);
+        return li;
+    }
+
+    function renderChat(state) {
+        const gameId = state.game.id;
+        const messages = state.chat_messages || [];
+
+        if (chatSeenGameId !== gameId) {
+            chatSeenGameId = gameId;
+            chatSeenCount = 0;
+        }
+
+        const isTeamFormat = state.game.format === 'team' || state.game.format === 'closed_team';
+        chatChannelSelect.hidden = !isTeamFormat;
+
+        if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
+            renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);
+            chatMessagesList.scrollTop = chatMessagesList.scrollHeight;
+            chatSeenCount = messages.length;
+            chatButton.classList.remove('has-unread-chat');
+        } else {
+            chatButton.classList.toggle('has-unread-chat', messages.length > chatSeenCount);
+        }
+    }
+
+    document.getElementById('view-chat-button').addEventListener('click', () => {
+        gameChatDialog.dataset.gameId = currentGameId;
+        chatErrorEl.hidden = true;
+        chatInput.value = '';
+        const readOnly = isChatReadOnly();
+        document.getElementById('game-chat-readonly-message').hidden = !readOnly;
+        chatInput.disabled = readOnly;
+        chatForm.querySelector('button').disabled = readOnly;
+        gameChatDialog.showModal();
+        if (currentState) {
+            renderChat(currentState);
+        }
+    });
+
+    document.getElementById('game-chat-close-button').addEventListener('click', () => {
+        gameChatDialog.close();
+    });
+
+    chatForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const messageText = chatInput.value.trim();
+        if (messageText === '') {
+            return;
+        }
+        chatErrorEl.hidden = true;
+        const channel = chatChannelSelect.hidden ? 'table' : chatChannelSelect.value;
+        const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
+        if (!ok) {
+            chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
+            chatErrorEl.hidden = false;
+            return;
+        }
+        chatInput.value = '';
+        await refreshBoard();
+    });
+
     // Small inline pictograms (issue #143) replacing the players list's own
     // plain-text stat clauses ("4 point(s)", "went first this round", ...)
     // -- self-contained straight-line shapes rather than curves, so each is
@@ -3704,6 +3809,14 @@
         // spectator/replay viewer (state.you is just a synthesized stub
         // with no game_player_id there -- see isReadOnlyView()'s docblock).
         document.getElementById('view-notes-button').hidden = isReadOnlyView();
+
+        // In-game chat (issue #109) -- same seated-players-only gating as
+        // Notes above (no spectator/replay access -- see
+        // GameService::buildGameState()'s own docblock for why this
+        // diverges from the more permissive game_events/recent-events
+        // gating just below).
+        document.getElementById('view-chat-button').hidden = isReadOnlyView();
+        renderChat(state);
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's

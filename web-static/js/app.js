@@ -454,6 +454,20 @@ function saveGameNote(gameId, noteText) {
     });
 }
 
+// In-game chat (issue #109) -- unlike the notepad above, there's no
+// getGameChat(): chat messages arrive piggybacked on the existing
+// getGameState() poll's own 'chat_messages' field rather than a
+// dedicated fetch, so sending is the only new request needed. channel
+// defaults to 'table'; 'team' is only accepted for Open/Closed Team Play
+// games (a 409 otherwise) -- see renderChat() in game.js for how the
+// channel selector is shown/hidden.
+function sendChatMessage(gameId, messageText, channel) {
+    return apiRequest('/games/chat', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, message_text: messageText, channel: channel || 'table' }),
+    });
+}
+
 function respondToDecision(gameId, choices) {
     return apiRequest('/games/respond', {
         method: 'POST',

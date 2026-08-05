@@ -505,16 +505,18 @@ too, proportional to the smaller card width.
     below runs. Otherwise, opening the dialog calls `pushManager
     .getSubscription()` to decide which of `#notifications-enable-button`/
     `#notifications-disable-button` to show, and -- only once subscribed
-    -- fetches `GET /notifications/preferences` to populate the four
+    -- fetches `GET /notifications/preferences` to populate the five
     `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
     `notify-friend-request-checkbox`/`notify-game-finished-checkbox`/
-    `disable-cooldown-checkbox`, disabled via the `<fieldset>` until a
-    subscription exists). The fourth ("Send every notification
-    immediately (disable the 5-minute cooldown)") maps to the server's
-    own `disable_cooldown` preference -- off by default, so the cooldown
-    stays on until a player explicitly opts out of it (see "Browser push
-    notifications" in `../php-app/README.md` for what it actually does).
-    "Enable"
+    `notify-chat-message-checkbox`/`disable-cooldown-checkbox`, disabled
+    via the `<fieldset>` until a subscription exists). The last ("Send
+    every notification immediately (disable the 5-minute cooldown)") maps
+    to the server's own `disable_cooldown` preference -- off by default,
+    so the cooldown stays on until a player explicitly opts out of it (see
+    "Browser push notifications" in `../php-app/README.md` for what it
+    actually does); `notify-chat-message-checkbox` ("I receive an in-game
+    chat message", issue #109) is otherwise wired up identically to the
+    first three. "Enable"
     calls `Notification.requestPermission()`, then `GET
     /notifications/vapid-public-key` for the server's public key (converted
     from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs
@@ -1834,6 +1836,37 @@ too, proportional to the smaller card width.
     line -- the previously-saved text is still loaded and shown, just not
     editable (see `GameService::saveNote()`'s own gate in
     `php-app/README.md`).
+
+    **In-game chat (issue #109).** A "Chat" button (`#view-chat-button`,
+    next to "Notes") opens `#game-chat-dialog`, hidden the same way "Notes"
+    is while spectating/replaying (`isReadOnlyView()`). Unlike Notes,
+    opening it fetches nothing of its own -- `chat_messages` rides along on
+    every `refreshBoard()` poll already (piggybacked on `GET /games/state`
+    rather than a dedicated endpoint, see "In-game chat" in
+    `php-app/README.md`), so `renderChat(state)` is called from
+    `renderBoard()` itself and just re-renders `#game-chat-messages` from
+    `currentState.chat_messages` whenever the dialog happens to be open --
+    an open chat window updates live without needing to be closed and
+    reopened. Each message is built with `Element.append(string)`/
+    `textContent`, never `innerHTML`, since a chat message is free-text
+    user input rendered back to other users (this issue's own flagged XSS
+    surface) -- the same text-node-only convention already used everywhere
+    else user-supplied text appears on the board. While the dialog is
+    closed, a small notification dot on `#view-chat-button` itself
+    (`.has-unread-chat`, the same visual treatment as `#friends-button`'s
+    own `.has-friend-request` dot) lights up once the currently-viewed
+    game's `chat_messages.length` grows past what was last seen, and
+    clears the moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
+    `chatSeenCount`) so switching to a different game doesn't carry over a
+    stale unread count. `#chat-channel-select` (a `<select>` for `Table`/
+    `Team`) is only shown for `team`/`closed_team` games -- every other
+    format only ever has the `'table'` channel, so sending always uses
+    `'table'` when the selector itself is hidden. Sending
+    (`sendChatMessage()` -> `POST /games/chat`) clears the input and calls
+    `refreshBoard()` immediately on success, the same "an action triggers
+    its own refreshBoard()" convention Play/Pass/etc. already follow,
+    rather than waiting for the next 4-second poll tick to show the
+    player's own just-sent message.
 
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
