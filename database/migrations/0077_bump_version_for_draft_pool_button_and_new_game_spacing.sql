@@ -1,0 +1,12 @@
+-- No schema change: right-aligns the "View draft pool" button (issue
+-- #314) within its match group header, and adds spacing between the New
+-- Game dialog's "Saved deck" selection and the "Create game" submit
+-- button when a Quick/Winston/Grid Draft's pool source is 'saved_deck'
+-- (web-static/js/game.js, web-static/css/style.css). This migration
+-- exists purely to keep schema_version in sync with the VERSION bump,
+-- the same way 0024/.../0076 already did for their own schema-less
+-- changes -- MaintenanceGate compares the deployed VERSION file against
+-- this table on every request, so a VERSION bump with no matching
+-- schema_version update would show maintenance mode after deploy even
+-- though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.11.7' WHERE id = 1;
