@@ -3280,6 +3280,11 @@
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
         // A delayed decision response awaiting this player: an hourglass.
         pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
+        // Team affiliation (Open/Closed Team Play only, player.team_id !==
+        // null): a plain heraldic shield -- color (not shape) is what
+        // actually distinguishes "your own team" from "the opposing team",
+        // see .player-flag--teamMate/--teamOpponent in style.css.
+        team: '<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z"/>',
         // Shared with friends (issue #92 follow-up): two overlapping people,
         // replacing what used to be a plain "shared with friends" text
         // clause next to a saved deck's name.
@@ -3500,6 +3505,12 @@
 
         const inProgressArea = document.getElementById('in-progress-area');
 
+        // Team affiliation icon (below) colors every row relative to THIS
+        // -- the viewer's own team_id, null outside Open/Closed Team Play
+        // (`you` is undefined for a spectator/replay viewer, who has no
+        // team of their own to compare against either).
+        const viewerTeamId = you ? you.team_id : null;
+
         renderList(
             document.getElementById('players-list'),
             { hidden: true }, // players are never empty
@@ -3605,6 +3616,28 @@
                 // Online/presence indicator (issue #110) -- first, so it's
                 // the first thing seen next to the name.
                 iconsEl.appendChild(buildPresenceFlag(player.username, player.presence));
+                // Team affiliation (Open/Closed Team Play only) -- color,
+                // not the team NUMBER, is what actually matters to the
+                // viewer at a glance: green for their own team (including
+                // their own row), red for the opposing team. The existing
+                // text-based teamLabel above already spells out which
+                // numbered team and calls out the specific teammate by
+                // name, so this icon is a quick-glance summary of that,
+                // not a replacement for it. Skipped entirely for a
+                // spectator/replay viewer (viewerTeamId === null there,
+                // since they have no team of their own) -- coloring every
+                // row red for someone with no "own team" to contrast
+                // against would just be misleading, not informative.
+                if (player.team_id !== null && viewerTeamId !== null) {
+                    const isSameTeamAsViewer = player.team_id === viewerTeamId;
+                    const teamIconLabel = 'Team ' + (player.team_id + 1) +
+                        (isSameTeamAsViewer ? ' (your team)' : ' (opposing team)');
+                    iconsEl.appendChild(buildPlayerFlag(
+                        'team',
+                        teamIconLabel,
+                        isSameTeamAsViewer ? 'player-flag--teamMate' : 'player-flag--teamOpponent'
+                    ));
+                }
                 iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
