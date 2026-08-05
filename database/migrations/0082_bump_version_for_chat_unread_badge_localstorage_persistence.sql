@@ -1,0 +1,16 @@
+-- No schema change: the in-game chat unread badge (#view-chat-button
+-- .has-unread-chat) previously forgot what the player had already read
+-- on every browser refresh -- chatLastSeenMessageId (web-static/js/
+-- game.js's renderChat()) lived only in memory, so reloading the page
+-- reset it and could re-flag an already-read message from another
+-- player as unread. Now persisted to localStorage, keyed per game_id
+-- (chatLastSeenMessageId:{game_id}), the same try/catch-guarded-for-
+-- private-browsing pattern initThemeSelect()'s own THEME_STORAGE_KEY
+-- already uses in app.js. This migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0081 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request, so a VERSION bump with no matching schema_version
+-- update would show maintenance mode after deploy even though nothing
+-- about the schema actually changed.
+UPDATE schema_version SET version = '1.11.12' WHERE id = 1;

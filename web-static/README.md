@@ -1855,14 +1855,21 @@ too, proportional to the smaller card width.
     closed, a small notification dot on `#view-chat-button` itself
     (`.has-unread-chat`, the same visual treatment as `#friends-button`'s
     own `.has-friend-request` dot) lights up once the currently-viewed
-    game has a message, past what was last seen (`chatSeenCount`), whose
+    game has a message, past what was last seen (`chatLastSeenMessageId`,
+    the highest `chat_messages[].id` seen so far), whose
     `sender_game_player_id` ISN'T the viewer's own -- a plain message-count
     comparison would also light this up for the viewer's own just-sent
     message or on a fresh page load where they're the only one who's said
     anything so far, neither of which is actually "unread." Clears the
     moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
-    `chatSeenCount`) so switching to a different game doesn't carry over a
-    stale unread count. `#chat-channel-select` (a `<select>` for `Table`/
+    `chatLastSeenMessageId`), and `chatLastSeenMessageId` is additionally
+    persisted to `localStorage` (`chatLastSeenMessageId:{game_id}`,
+    read/written through the same try/catch-guarded-for-private-browsing
+    pattern `initThemeSelect()`'s own `THEME_STORAGE_KEY` uses in `app.js`)
+    so a browser refresh after reading a message doesn't forget that and
+    re-flag it unread; switching to a different game re-reads that game's
+    own stored value rather than carrying over whatever the previous
+    game's was. `#chat-channel-select` (a `<select>` for `Table`/
     `Team`) is only shown for `format: 'team'` games -- deliberately NOT
     `closed_team` too (see "In-game chat" in `../php-app/README.md` for
     why: Closed Team Play's whole premise is that information stays
