@@ -1202,6 +1202,7 @@ dialog#card-detail-dialog {
 #deck-view-close-button,
 #shared-deck-close-button,
 #draft-pool-close-button,
+#game-chat-close-button,
 #deck-builder-save-button {
     margin-top: 0.5rem;
 }
@@ -1339,7 +1340,7 @@ dialog#game-chat-dialog[open] {
 #game-chat-messages {
     overflow-y: auto;
     flex: 1 1 auto;
-    min-height: 8rem;
+    min-height: 12rem;
     margin: 0 0 0.75rem;
     padding: 0;
     list-style: none;
