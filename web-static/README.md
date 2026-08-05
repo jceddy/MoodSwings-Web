@@ -974,7 +974,14 @@ too, proportional to the smaller card width.
     regardless of whether their hand is visible. A
     `#team-scores` section (`renderTeamScores()`, hidden until
     `state.teams` is populated -- only once the game has actually started)
-    lists each team's combined score-so-far and round wins. A
+    lists each team's combined score-so-far and round wins, one line per
+    team led by that same team-affiliation shield icon (green/red relative
+    to `viewerTeamId`, the same value the Players-list rows use, passed
+    into `renderTeamScores(state.teams, viewerTeamId)`) rather than a
+    spelled-out "Team N (name & name)" identifier string -- the icon's own
+    `title`/`aria-label` carries that exact text instead, so the line
+    itself just reads "— N point(s) this round, N round win(s)" after the
+    icon. A
     `#teammate-hand-section` (`renderTeammateHand()`, hidden whenever
     `state.you.teammate_hand` is `null`) shows your teammate's hand the
     same read-only way in-play/discard-pile cards are shown to everyone --
