@@ -1133,6 +1133,21 @@ body.game-page {
     color: var(--color-success);
 }
 
+/* Team affiliation (Open/Closed Team Play only, player.team_id !== null --
+   see buildPlayerFlag('team', ...) in game.js): green for the viewer's
+   own team (including their own row), red for the opposing team -- the
+   same --color-success/--color-error pairing already used for "good"/
+   "went first" elsewhere on this page, just repurposed here as "mine" vs
+   "theirs" rather than "good" vs "bad" (the opposing team isn't a bad
+   thing, just the other side). */
+.player-flag--teamMate {
+    color: var(--color-success);
+}
+
+.player-flag--teamOpponent {
+    color: var(--color-error);
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {
