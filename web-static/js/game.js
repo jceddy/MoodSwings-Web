@@ -3122,13 +3122,38 @@
     const chatChannelSelect = document.getElementById('chat-channel-select');
     const chatErrorEl = document.getElementById('game-chat-error');
     const chatButton = document.getElementById('view-chat-button');
-    // How many of the current game's chat_messages have already been seen
-    // (dialog open, or last closed while caught up) -- renderChat() below
-    // diffs against this to decide whether the unread badge should show.
-    // Reset to 0 whenever the viewed game itself changes, since a fresh
-    // game's history was never "unseen" in the first place.
+    // The highest chat_messages[].id the player has already seen for the
+    // current game (dialog open, or last closed while caught up) --
+    // renderChat() below diffs against this to decide whether the unread
+    // badge should show. Persisted to localStorage (keyed per game_id,
+    // CHAT_LAST_SEEN_STORAGE_PREFIX below) rather than kept only in
+    // memory, so refreshing the browser doesn't forget what's already
+    // been read and re-flag it as unread -- a plain in-memory counter
+    // would reset to 0 on every page load. Reset (well, re-loaded from
+    // storage) whenever the viewed game itself changes.
     let chatSeenGameId = null;
-    let chatSeenCount = 0;
+    let chatLastSeenMessageId = 0;
+
+    const CHAT_LAST_SEEN_STORAGE_PREFIX = 'chatLastSeenMessageId:';
+
+    function getStoredChatLastSeenMessageId(gameId) {
+        try {
+            return Number(localStorage.getItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId)) || 0;
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls
+            // back to treating this game as never-seen, same as before
+            // this persistence existed.
+            return 0;
+        }
+    }
+
+    function setStoredChatLastSeenMessageId(gameId, messageId) {
+        try {
+            localStorage.setItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId, String(messageId));
+        } catch (e) {
+            // ignore -- the read position just won't persist across reloads
+        }
+    }
 
     function isChatReadOnly() {
         return !currentState || currentState.game.status !== 'in_progress';
@@ -3156,7 +3181,7 @@
 
         if (chatSeenGameId !== gameId) {
             chatSeenGameId = gameId;
-            chatSeenCount = 0;
+            chatLastSeenMessageId = getStoredChatLastSeenMessageId(gameId);
         }
 
         // Open Team Play only -- NOT 'closed_team' too, unlike every other
@@ -3170,19 +3195,22 @@
         if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
             renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);
             chatMessagesList.scrollTop = chatMessagesList.scrollHeight;
-            chatSeenCount = messages.length;
+            if (messages.length > 0) {
+                chatLastSeenMessageId = messages[messages.length - 1].id;
+                setStoredChatLastSeenMessageId(gameId, chatLastSeenMessageId);
+            }
             chatButton.classList.remove('has-unread-chat');
         } else {
             // Only a message from someone ELSE counts as unread -- sending
             // your own message (dialog open at the time, so it's already
-            // counted into chatSeenCount above) or reloading the page after
-            // being the only one who's said anything so far must never
-            // light this up, since there's nothing of anyone else's the
-            // player hasn't seen.
+            // past chatLastSeenMessageId above) or reloading the page
+            // after being the only one who's said anything so far must
+            // never light this up, since there's nothing of anyone else's
+            // the player hasn't seen.
             const viewerGamePlayerId = state.you && state.you.game_player_id;
-            const hasUnreadFromSomeoneElse = messages
-                .slice(chatSeenCount)
-                .some((message) => message.sender_game_player_id !== viewerGamePlayerId);
+            const hasUnreadFromSomeoneElse = messages.some(
+                (message) => message.id > chatLastSeenMessageId && message.sender_game_player_id !== viewerGamePlayerId
+            );
             chatButton.classList.toggle('has-unread-chat', hasUnreadFromSomeoneElse);
         }
     }
