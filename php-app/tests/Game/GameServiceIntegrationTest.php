@@ -12180,6 +12180,83 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * On the round that actually finishes the game (wins_needed reached),
+     * the after-scoring order decision must never pause play -- there's no
+     * next round for a chosen order to matter to, so asking would just be
+     * a stall on a choice with no visible consequence. Same fixture as
+     * testRecklessnessGivenAwayViaBetrayalDoesNotReturnOnceBottomedByItsOwnEffect()
+     * (opponent ends up controlling two pending after-scoring cards once
+     * Betrayal gives Recklessness away), except wins_needed is 1, so this
+     * round -- p1's first round win -- completes the game outright:
+     * Betrayal's own response must go straight to game_completed rather
+     * than surfacing a pending_decision, and the after-scoring effects
+     * still resolve (via the same no-decision-made default order) exactly
+     * as the paused version does.
+     */
+    public function testAfterScoringOrderDecisionIsSkippedOnTheGamesFinalRound(): void
+    {
+        $u1 = $this->insertUser('reck-betrayal-final-1');
+        $u2 = $this->insertUser('reck-betrayal-final-2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 1)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $boredomId = $this->insertGameCard($gameId, 83, 'hand', $p2); // Boredom
+        $recklessnessId = $this->insertGameCard($gameId, 100, 'hand', $p1); // Recklessness
+        $betrayalId = $this->insertGameCard($gameId, 56, 'hand', $p1); // Betrayal
+        $this->insertGameCard($gameId, 1, 'deck', null, 0);
+        $this->insertGameCard($gameId, 2, 'deck', null, 1);
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->games->playMood($gameId, $p2, $boredomId, []);
+        $this->pdo->prepare("UPDATE game_rounds SET plays_remaining = 2, pending_play_grants = '[null,null]' WHERE game_id = :g")
+            ->execute(['g' => $gameId]);
+
+        $this->games->playMood($gameId, $p1, $recklessnessId, ['target_mood_id' => $boredomId]);
+        $playResult = $this->games->playMood($gameId, $p1, $betrayalId, ['recipient_player_id' => $p2]);
+        self::assertTrue($playResult['pending_decision'] ?? false);
+
+        $betrayalResponse = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $recklessnessId]);
+
+        // No after_scoring_order pause -- straight through to game_completed,
+        // even though the opponent controls two pending after-scoring cards
+        // (Recklessness's self-tag plus the foreign "return Boredom" tag),
+        // exactly the situation that pauses play in the non-final-round test.
+        self::assertFalse($betrayalResponse['pending_decision'] ?? false);
+        self::assertTrue($betrayalResponse['round_scored'] ?? false);
+        self::assertTrue($betrayalResponse['game_completed'] ?? false);
+        self::assertSame($p1, $betrayalResponse['winner_game_player_id']);
+
+        $game = $this->pdo->prepare("SELECT status FROM games WHERE id = :g");
+        $game->execute(['g' => $gameId]);
+        self::assertSame('completed', $game->fetchColumn());
+
+        // The after-scoring effects still resolved (in the default
+        // ascending-cardId order, since no one was ever asked) -- same
+        // final placement as the paused version: Boredom back with the
+        // opponent, Recklessness bottomed and out of anyone's hand.
+        $cardsStmt = $this->pdo->prepare("SELECT card_id, zone, owner_game_player_id FROM game_cards WHERE game_id = :g AND id = :id");
+        $cardById = function (int $id) use ($cardsStmt, $gameId): array {
+            $cardsStmt->execute(['g' => $gameId, 'id' => $id]);
+            return $cardsStmt->fetch();
+        };
+
+        $boredom = $cardById($boredomId);
+        self::assertSame('in_play', $boredom['zone']);
+        self::assertSame($p2, (int) $boredom['owner_game_player_id']);
+
+        $recklessness = $cardById($recklessnessId);
+        self::assertSame('deck', $recklessness['zone']);
+        self::assertNull($recklessness['owner_game_player_id']);
+    }
+
+    /**
      * The rules judge's "fun line": steal Boredom with Recklessness, then
      * give Boredom itself (not Recklessness) back via Betrayal. Since
      * Recklessness never changes hands, both "after scoring" effects

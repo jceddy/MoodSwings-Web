@@ -4618,7 +4618,14 @@ final class GameService
         // actually runs must never derive this two different ways.
         $outcome = $this->determineRoundWinner($gameId, $round, $scores, $turnOrder);
 
-        $nextOrderDecision = $this->nextUnresolvedAfterScoringOrderDecision($state, $roundId, $turnOrder, $outcome['winningGamePlayerIds']);
+        // Skip the pause entirely once this round is about to finish the
+        // game -- see roundWouldCompleteGame()'s own docblock. Every
+        // player's pending after-scoring cards still resolve, in
+        // applyAfterScoringHooks() below, just always via its
+        // no-decision-made default (ascending cardId) order.
+        $nextOrderDecision = $this->roundWouldCompleteGame($gameId, $state, $outcome)
+            ? null
+            : $this->nextUnresolvedAfterScoringOrderDecision($state, $roundId, $turnOrder, $outcome['winningGamePlayerIds']);
         if ($nextOrderDecision !== null) {
             $this->writeAfterScoringOrderDecisionBatch($gameId, $roundId, $nextOrderDecision, $state);
             $this->logEvent($gameId, $roundId, $nextOrderDecision['ownerId'], 'pending_decision_created', $nextOrderDecision['groups'][0]['cardId'], ['after_scoring_order_trigger' => true], $state);
@@ -5104,6 +5111,27 @@ final class GameService
     }
 
     /**
+     * Non-mutating peek at whether Corruption's "the winner of the
+     * current round wins two rounds instead of one" marker is currently
+     * set -- see consumeExtraWinMarker(), which clears it once actually
+     * applied. Used by roundWouldCompleteGame() to predict this round's
+     * win count without touching board state, since that prediction runs
+     * before it's known whether this round will actually go on to be
+     * scored via this same $state instance or a freshly-reloaded one on
+     * a later request (see roundWouldCompleteGame()'s own docblock).
+     */
+    private function hasExtraWinMarker(BoardState $state): bool
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * Corruption: "...or the winner of the current round wins two rounds
      * instead of one (each losing player still draws only one card)."
      * Doesn't matter who played Corruption or who ends up winning -- it's
@@ -5112,15 +5140,46 @@ final class GameService
      */
     private function consumeExtraWinMarker(BoardState $state): int
     {
-        $winsAwarded = 1;
+        if (!$this->hasExtraWinMarker($state)) {
+            return 1;
+        }
+
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
                 $state->clearEffectState($mood->cardId, 'awardsExtraWin');
-                $winsAwarded = 2;
             }
         }
 
-        return $winsAwarded;
+        return 2;
+    }
+
+    /**
+     * Predicts, before any of this round's own rows are written, whether
+     * scoring it is about to complete the game -- used only to decide
+     * whether the after-scoring order decision (AFTER_SCORING_ORDER_DECISION_TYPE,
+     * see its own docblock) is worth pausing to ask at all. With no next
+     * round for a chosen order to ever matter to, forcing every player
+     * through that choice on the game's final round would just be a
+     * stall on a decision whose only visible effect is which of several
+     * equally-legal default resolutions (see applyAfterScoringHooks()'s
+     * own ascending-cardId fallback) a completed game's final board state
+     * ends up showing. Reuses the exact same totalWinsFor()/
+     * totalWinsForTeam() + wins_needed comparison finishScoringAndAdvance()/
+     * finishTeamScoringAndAdvance() make for real further down -- safe to
+     * duplicate here since nothing between this call and that one writes
+     * to game_rounds or touches the Corruption marker, so the two are
+     * guaranteed to agree.
+     */
+    private function roundWouldCompleteGame(int $gameId, BoardState $state, array $outcome): bool
+    {
+        $winsNeeded = (int) $this->fetchGame($gameId)['wins_needed'];
+        $predictedWinsAwarded = $this->hasExtraWinMarker($state) ? 2 : 1;
+
+        $totalWins = $outcome['winnerTeamId'] !== null
+            ? $this->totalWinsForTeam($gameId, $outcome['winnerTeamId'])
+            : $this->totalWinsFor($gameId, $outcome['winnerGamePlayerId']);
+
+        return $totalWins + $predictedWinsAwarded >= $winsNeeded;
     }
 
     /**
