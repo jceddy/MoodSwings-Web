@@ -137,6 +137,7 @@
         const yourTurnCheckbox = document.getElementById('notify-your-turn-checkbox');
         const friendRequestCheckbox = document.getElementById('notify-friend-request-checkbox');
         const gameFinishedCheckbox = document.getElementById('notify-game-finished-checkbox');
+        const chatMessageCheckbox = document.getElementById('notify-chat-message-checkbox');
         const disableCooldownCheckbox = document.getElementById('disable-cooldown-checkbox');
 
         const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -163,6 +164,7 @@
                     yourTurnCheckbox.checked = body.preferences.notify_your_turn;
                     friendRequestCheckbox.checked = body.preferences.notify_friend_request;
                     gameFinishedCheckbox.checked = body.preferences.notify_game_finished;
+                    chatMessageCheckbox.checked = body.preferences.notify_chat_message;
                     disableCooldownCheckbox.checked = body.preferences.disable_cooldown;
                 }
             }
@@ -273,12 +275,14 @@
                 notify_your_turn: yourTurnCheckbox.checked,
                 notify_friend_request: friendRequestCheckbox.checked,
                 notify_game_finished: gameFinishedCheckbox.checked,
+                notify_chat_message: chatMessageCheckbox.checked,
                 disable_cooldown: disableCooldownCheckbox.checked,
             });
         }
         yourTurnCheckbox.addEventListener('change', savePreferences);
         friendRequestCheckbox.addEventListener('change', savePreferences);
         gameFinishedCheckbox.addEventListener('change', savePreferences);
+        chatMessageCheckbox.addEventListener('change', savePreferences);
         disableCooldownCheckbox.addEventListener('change', savePreferences);
     }
 
@@ -1868,7 +1872,29 @@
         // otherwise never show these icons at all for a draft game.
         appendPlayersWithFlags(headerEl, firstGame);
 
-        li.appendChild(headerEl);
+        // headerEl's own text stack sits in a .lobby-row alongside View
+        // draft pool (issue #314) -- the same flex "text on the left,
+        // action button pinned to the right edge" layout buildGameRow()'s
+        // own .lobby-row/.lobby-info/.lobby-actions trio already uses,
+        // rather than stacking the button as just another line within
+        // headerEl itself. Match-level, not per-game (the pool is shared
+        // across the whole match, see GameService::draftMatchPoolView()),
+        // so this lives in the group's own header rather than on any one
+        // sub-row. Same "status is 'completed'" gate as winner_username
+        // above -- the pool view itself also enforces this server-side,
+        // but gating the button too avoids offering it for a
+        // still-undecided match's own dead end.
+        const headerRowEl = document.createElement('div');
+        headerRowEl.className = 'lobby-row';
+        headerRowEl.appendChild(headerEl);
+        if (match.status === 'completed') {
+            const poolActionsEl = document.createElement('div');
+            poolActionsEl.className = 'lobby-match-actions';
+            poolActionsEl.appendChild(actionButton('View draft pool', () => openDraftPoolView(firstGame.id)));
+            headerRowEl.appendChild(poolActionsEl);
+        }
+
+        li.appendChild(headerRowEl);
 
         const gamesListEl = document.createElement('ul');
         gamesListEl.className = 'lobby-match-games';
@@ -2949,6 +2975,77 @@
         document.getElementById('shared-deck-dialog').close();
     });
 
+    // Same WUBRG-style color wheel and print-frequency rarity order
+    // web-static/js/stats.js's own RARITY_RANK/COLOR_RANK already sort by
+    // -- duplicated here rather than shared, since this is a plain
+    // <script> tag per page (no module system), not a real function
+    // reuse opportunity.
+    const DRAFT_POOL_COLOR_RANK = { white: 0, blue: 1, black: 2, red: 3, green: 4 };
+    const DRAFT_POOL_RARITY_RANK = { common: 0, uncommon: 1, rare: 2, mythic: 3 };
+
+    // Color, then rarity, then name -- the order requested for issue
+    // #314's own "View draft pool" sections, so e.g. every white common
+    // groups together before white uncommons, and the whole white group
+    // sits ahead of blue.
+    function compareDraftPoolCards(a, b) {
+        return DRAFT_POOL_COLOR_RANK[a.color] - DRAFT_POOL_COLOR_RANK[b.color]
+            || DRAFT_POOL_RARITY_RANK[a.rarity] - DRAFT_POOL_RARITY_RANK[b.rarity]
+            || a.name.localeCompare(b.name);
+    }
+
+    // A completed draft match's full shared pool (issue #314), sectioned
+    // by drafter -- see GameService::draftMatchPoolView(). Reuses the same
+    // buildCardThumb()/openCardDetail() card-grid pattern as
+    // openSharedDeckView() above, just one section per player (plus an
+    // "undrafted" one when non-empty) instead of a single flat list, since
+    // the whole point here is showing WHO drafted each card.
+    async function openDraftPoolView(gameId) {
+        const metaEl = document.getElementById('draft-pool-meta');
+        const sectionsEl = document.getElementById('draft-pool-sections');
+        metaEl.textContent = '';
+        sectionsEl.innerHTML = '';
+        document.getElementById('draft-pool-dialog').showModal();
+
+        const { ok, body } = await getDraftPool(gameId, activeShareCode());
+        if (!ok) {
+            return;
+        }
+
+        const totalCards = body.players.reduce((sum, player) => sum + player.cards.length, 0) + body.undrafted_cards.length;
+        metaEl.textContent = totalCards + ' card(s) in the shared pool';
+
+        function appendSection(title, cards) {
+            const sectionEl = document.createElement('section');
+            sectionEl.className = 'draft-pool-section';
+            const headingEl = document.createElement('h3');
+            headingEl.textContent = title + ' (' + cards.length + ')';
+            sectionEl.appendChild(headingEl);
+            const cardsEl = document.createElement('div');
+            cardsEl.className = 'draft-pool-cards';
+            for (const card of cards.slice().sort(compareDraftPoolCards)) {
+                cardsEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            }
+            sectionEl.appendChild(cardsEl);
+            sectionsEl.appendChild(sectionEl);
+        }
+
+        for (const player of body.players) {
+            appendSection(player.username, player.cards);
+        }
+        // Only shown when non-empty -- Winston Draft normally drafts its
+        // entire pool under standard play (see draftMatchPoolView()'s own
+        // docblock), so an empty section here would just be dead space for
+        // that format, while Quick Draft/Grid Draft always have something
+        // to show.
+        if (body.undrafted_cards.length > 0) {
+            appendSection('Not drafted', body.undrafted_cards);
+        }
+    }
+
+    document.getElementById('draft-pool-close-button').addEventListener('click', () => {
+        document.getElementById('draft-pool-dialog').close();
+    });
+
     // Private in-game notepad (issue #258) -- one freeform note per seat,
     // autosaved as you type (debounced 1s) rather than an explicit Save
     // button. Read-only once the game is no longer 'in_progress' (see
@@ -3010,6 +3107,173 @@
         }, 1000);
     });
 
+    // In-game chat (issue #109) -- unlike the notepad above, there's no
+    // separate fetch to open this dialog: chat_messages rides along on
+    // every refreshBoard() poll already (see renderChat(), called from
+    // renderBoard() itself), so this dialog just re-renders from
+    // currentState whenever it's open rather than loading its own data.
+    // Table-wide by default; the channel selector only appears for
+    // Open/Closed Team Play, where postChatMessage() also accepts 'team'.
+    const gameChatDialog = document.getElementById('game-chat-dialog');
+    const chatMessagesList = document.getElementById('game-chat-messages');
+    const chatEmptyEl = document.getElementById('game-chat-empty');
+    const chatForm = document.getElementById('game-chat-form');
+    const chatInput = document.getElementById('game-chat-input');
+    const chatChannelSelect = document.getElementById('chat-channel-select');
+    const chatErrorEl = document.getElementById('game-chat-error');
+    const chatButton = document.getElementById('view-chat-button');
+    // The highest chat_messages[].id the player has already seen for the
+    // current game (dialog open, or last closed while caught up) --
+    // renderChat() below diffs against this to decide whether the unread
+    // badge should show. Persisted to localStorage (keyed per game_id,
+    // CHAT_LAST_SEEN_STORAGE_PREFIX below) rather than kept only in
+    // memory, so refreshing the browser doesn't forget what's already
+    // been read and re-flag it as unread -- a plain in-memory counter
+    // would reset to 0 on every page load. Reset (well, re-loaded from
+    // storage) whenever the viewed game itself changes.
+    let chatSeenGameId = null;
+    let chatLastSeenMessageId = 0;
+
+    const CHAT_LAST_SEEN_STORAGE_PREFIX = 'chatLastSeenMessageId:';
+
+    function getStoredChatLastSeenMessageId(gameId) {
+        try {
+            return Number(localStorage.getItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId)) || 0;
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls
+            // back to treating this game as never-seen, same as before
+            // this persistence existed.
+            return 0;
+        }
+    }
+
+    function setStoredChatLastSeenMessageId(gameId, messageId) {
+        try {
+            localStorage.setItem(CHAT_LAST_SEEN_STORAGE_PREFIX + gameId, String(messageId));
+        } catch (e) {
+            // ignore -- the read position just won't persist across reloads
+        }
+    }
+
+    function isChatReadOnly() {
+        return !currentState || currentState.game.status !== 'in_progress';
+    }
+
+    function chatMessageListItem(message) {
+        const li = document.createElement('li');
+        if (message.channel === 'team') {
+            li.classList.add('chat-team-message');
+        }
+        const sender = document.createElement('strong');
+        sender.textContent = (message.sender_username || 'Someone') + (message.channel === 'team' ? ' (team)' : '') + ': ';
+        li.appendChild(sender);
+        // A plain text-node append -- never innerHTML -- is what actually
+        // keeps a message's free-text content from being interpreted as
+        // markup (issue #109's own XSS surface note), matching how every
+        // other user-supplied string on this page is already rendered.
+        li.append(message.message_text);
+        return li;
+    }
+
+    function renderChat(state) {
+        const gameId = state.game.id;
+        const messages = state.chat_messages || [];
+
+        if (chatSeenGameId !== gameId) {
+            chatSeenGameId = gameId;
+            chatLastSeenMessageId = getStoredChatLastSeenMessageId(gameId);
+        }
+
+        // Open Team Play only -- NOT 'closed_team' too, unlike every other
+        // isTeamFormat()-style check elsewhere in this file. Closed Team
+        // Play's whole premise is that information stays closed between
+        // teammates (see postChatMessage()'s own docblock in
+        // GameService.php), so it gets no private channel to undercut
+        // that with.
+        chatChannelSelect.hidden = state.game.format !== 'team';
+
+        if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
+            renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);
+            chatMessagesList.scrollTop = chatMessagesList.scrollHeight;
+            if (messages.length > 0) {
+                chatLastSeenMessageId = messages[messages.length - 1].id;
+                setStoredChatLastSeenMessageId(gameId, chatLastSeenMessageId);
+            }
+            chatButton.classList.remove('has-unread-chat');
+        } else {
+            // Only a message from someone ELSE counts as unread -- sending
+            // your own message (dialog open at the time, so it's already
+            // past chatLastSeenMessageId above) or reloading the page
+            // after being the only one who's said anything so far must
+            // never light this up, since there's nothing of anyone else's
+            // the player hasn't seen.
+            const viewerGamePlayerId = state.you && state.you.game_player_id;
+            const hasUnreadFromSomeoneElse = messages.some(
+                (message) => message.id > chatLastSeenMessageId && message.sender_game_player_id !== viewerGamePlayerId
+            );
+            chatButton.classList.toggle('has-unread-chat', hasUnreadFromSomeoneElse);
+        }
+    }
+
+    const chatQuickButtonsEl = document.getElementById('game-chat-quick-buttons');
+    const chatQuickButtons = Array.from(chatQuickButtonsEl.querySelectorAll('button'));
+
+    document.getElementById('view-chat-button').addEventListener('click', () => {
+        gameChatDialog.dataset.gameId = currentGameId;
+        chatErrorEl.hidden = true;
+        chatInput.value = '';
+        const readOnly = isChatReadOnly();
+        document.getElementById('game-chat-readonly-message').hidden = !readOnly;
+        chatInput.disabled = readOnly;
+        chatForm.querySelector('button').disabled = readOnly;
+        chatQuickButtons.forEach((button) => { button.disabled = readOnly; });
+        gameChatDialog.showModal();
+        if (currentState) {
+            renderChat(currentState);
+        }
+    });
+
+    document.getElementById('game-chat-close-button').addEventListener('click', () => {
+        gameChatDialog.close();
+    });
+
+    // Shared by the free-text form below and the quick-chat buttons
+    // (GL;HF/GG/emoji canned messages) further down -- both just send
+    // some text on whichever channel is currently selected, differing
+    // only in where that text comes from.
+    async function sendChatText(messageText) {
+        chatErrorEl.hidden = true;
+        const channel = chatChannelSelect.hidden ? 'table' : chatChannelSelect.value;
+        const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
+        if (!ok) {
+            chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
+            chatErrorEl.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
+    chatForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const messageText = chatInput.value.trim();
+        if (messageText === '') {
+            return;
+        }
+        await sendChatText(messageText);
+        chatInput.value = '';
+    });
+
+    // Quick chat (canned GL;HF/GG/emoji messages, one click to send on
+    // whichever channel -- table or team -- is currently selected) --
+    // above the dialog's own Close button, per this feature's own
+    // placement. data-quick-chat-text (rather than each button's own
+    // textContent) is what actually gets sent, so a future button could
+    // show different label text than the message it sends without this
+    // needing to change; today they're identical for every button here.
+    chatQuickButtons.forEach((button) => {
+        button.addEventListener('click', () => sendChatText(button.dataset.quickChatText));
+    });
+
     // Small inline pictograms (issue #143) replacing the players list's own
     // plain-text stat clauses ("4 point(s)", "went first this round", ...)
     // -- self-contained straight-line shapes rather than curves, so each is
@@ -3039,6 +3303,11 @@
         onTurn: '<polygon points="7,4 20,12 7,20"/>',
         // A delayed decision response awaiting this player: an hourglass.
         pendingDecision: '<polygon points="6,3 18,3 12,11"/><polygon points="6,21 18,21 12,13"/>',
+        // Team affiliation (Open/Closed Team Play only, player.team_id !==
+        // null): a plain heraldic shield -- color (not shape) is what
+        // actually distinguishes "your own team" from "the opposing team",
+        // see .player-flag--teamMate/--teamOpponent in style.css.
+        team: '<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z"/>',
         // Shared with friends (issue #92 follow-up): two overlapping people,
         // replacing what used to be a plain "shared with friends" text
         // clause next to a saved deck's name.
@@ -3259,6 +3528,12 @@
 
         const inProgressArea = document.getElementById('in-progress-area');
 
+        // Team affiliation icon (below) colors every row relative to THIS
+        // -- the viewer's own team_id, null outside Open/Closed Team Play
+        // (`you` is undefined for a spectator/replay viewer, who has no
+        // team of their own to compare against either).
+        const viewerTeamId = you ? you.team_id : null;
+
         renderList(
             document.getElementById('players-list'),
             { hidden: true }, // players are never empty
@@ -3289,14 +3564,15 @@
                     ? (player.custom_deck_name || 'Uploaded Deck')
                     : null;
                 // Open Team Play's own team_id (null in every other format)
-                // -- tags each row with which team it's on, and calls out
-                // the viewer's own teammate specifically since that's the
-                // one other player whose hand they can actually see (see
-                // the teammate-hand section below).
+                // -- calls out the viewer's own teammate specifically
+                // since that's the one other player whose hand they can
+                // actually see (see the teammate-hand section below).
+                // Previously also drove a plain "— Team N (your
+                // teammate)" text tag on this row; now conveyed instead
+                // by the team-affiliation icon's own title/aria-label
+                // below (see teamIconLabel), so isTeammate is only needed
+                // here for that icon's wording.
                 const isTeammate = state.you.teammate_game_player_id === player.game_player_id;
-                const teamLabel = player.team_id !== null
-                    ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
-                    : '';
 
                 const isYou = state.you.game_player_id === player.game_player_id;
 
@@ -3323,8 +3599,6 @@
                     resignedTag.textContent = ' (resigned)';
                     nameEl.appendChild(resignedTag);
                 }
-                nameEl.appendChild(document.createTextNode(teamLabel));
-
                 // Wraps the username line plus (for custom_duel) a second
                 // line naming that player's own deck -- .player-name (moved
                 // here from nameEl itself) is what the width-alignment pass
@@ -3364,6 +3638,32 @@
                 // Online/presence indicator (issue #110) -- first, so it's
                 // the first thing seen next to the name.
                 iconsEl.appendChild(buildPresenceFlag(player.username, player.presence));
+                // Team affiliation (Open/Closed Team Play only) -- color,
+                // not the team NUMBER, is what actually matters to the
+                // viewer at a glance: green for their own team (including
+                // their own row), red for the opposing team. This icon is
+                // the ONLY place that information appears now (there used
+                // to also be a plain "— Team N (your teammate)" text tag
+                // on the row itself) -- its title/aria-label (see
+                // buildPlayerFlag()) carries the exact same wording that
+                // text tag used to, so a screen reader (or a sighted user
+                // hovering for a reminder) still gets the full "Team N"/
+                // "your teammate" information, just via the icon instead
+                // of separate on-row text. Skipped entirely for a
+                // spectator/replay viewer (viewerTeamId === null there,
+                // since they have no team of their own) -- coloring every
+                // row red for someone with no "own team" to contrast
+                // against would just be misleading, not informative.
+                if (player.team_id !== null && viewerTeamId !== null) {
+                    const isSameTeamAsViewer = player.team_id === viewerTeamId;
+                    const teamIconLabel = 'Team ' + (player.team_id + 1) +
+                        (isTeammate ? ' (your teammate)' : '');
+                    iconsEl.appendChild(buildPlayerFlag(
+                        'team',
+                        teamIconLabel,
+                        isSameTeamAsViewer ? 'player-flag--teamMate' : 'player-flag--teamOpponent'
+                    ));
+                }
                 iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
@@ -3417,7 +3717,7 @@
         const maxNameWidth = Math.max(0, ...Array.from(playerNameEls, (el) => el.offsetWidth));
         playerNameEls.forEach((el) => { el.style.minWidth = maxNameWidth + 'px'; });
 
-        renderTeamScores(state.teams);
+        renderTeamScores(state.teams, viewerTeamId);
 
         if (state.game.status === 'waiting') {
             inProgressArea.hidden = true;
@@ -3612,6 +3912,14 @@
         // with no game_player_id there -- see isReadOnlyView()'s docblock).
         document.getElementById('view-notes-button').hidden = isReadOnlyView();
 
+        // In-game chat (issue #109) -- same seated-players-only gating as
+        // Notes above (no spectator/replay access -- see
+        // GameService::buildGameState()'s own docblock for why this
+        // diverges from the more permissive game_events/recent-events
+        // gating just below).
+        document.getElementById('view-chat-button').hidden = isReadOnlyView();
+        renderChat(state);
+
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
         // turn would read as "you have a play left" when you don't, so the
@@ -3648,7 +3956,16 @@
     // GameService::getState()'s early return for 'waiting'), so the
     // partner pairing itself is only visible via each player row's own
     // team_id tag (see the players-list renderer above) until then.
-    function renderTeamScores(teams) {
+    // $viewerTeamId (null outside Open/Closed Team Play, or for a
+    // spectator/replay viewer with no team of their own -- same value
+    // renderBoard() already computes for the Players list' own
+    // team-affiliation icons) drives the same green/red coloring here:
+    // the "Team N (name & name)" identifier is now the icon's own
+    // title/aria-label rather than spelled out inline, matching how that
+    // information moved off the Players-list rows and onto their own
+    // icons too, so the score line itself just reads "— N point(s) this
+    // round, N round win(s)" after it.
+    function renderTeamScores(teams, viewerTeamId) {
         const container = document.getElementById('team-scores');
         if (!teams) {
             container.hidden = true;
@@ -3659,8 +3976,17 @@
         renderList(document.getElementById('team-scores-list'), { hidden: true }, teams, (team) => {
             const li = document.createElement('li');
             const memberNames = team.game_player_ids.map(playerLabelFor).join(' & ');
-            li.textContent = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ') — ' +
-                team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)';
+            const teamLabel = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ')';
+            // No color-coding at all (left at .player-flag's own default
+            // muted gray) when there's no viewer team to compare
+            // against -- coloring both teams red for a spectator would
+            // be misleading, not informative, same reasoning the
+            // Players-list icon already follows.
+            const extraClass = viewerTeamId === null
+                ? null
+                : (team.team_id === viewerTeamId ? 'player-flag--teamMate' : 'player-flag--teamOpponent');
+            li.appendChild(buildPlayerFlag('team', teamLabel, extraClass));
+            li.append(' — ' + team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)');
             return li;
         });
     }

@@ -505,16 +505,18 @@ too, proportional to the smaller card width.
     below runs. Otherwise, opening the dialog calls `pushManager
     .getSubscription()` to decide which of `#notifications-enable-button`/
     `#notifications-disable-button` to show, and -- only once subscribed
-    -- fetches `GET /notifications/preferences` to populate the four
+    -- fetches `GET /notifications/preferences` to populate the five
     `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
     `notify-friend-request-checkbox`/`notify-game-finished-checkbox`/
-    `disable-cooldown-checkbox`, disabled via the `<fieldset>` until a
-    subscription exists). The fourth ("Send every notification
-    immediately (disable the 5-minute cooldown)") maps to the server's
-    own `disable_cooldown` preference -- off by default, so the cooldown
-    stays on until a player explicitly opts out of it (see "Browser push
-    notifications" in `../php-app/README.md` for what it actually does).
-    "Enable"
+    `notify-chat-message-checkbox`/`disable-cooldown-checkbox`, disabled
+    via the `<fieldset>` until a subscription exists). The last ("Send
+    every notification immediately (disable the 5-minute cooldown)") maps
+    to the server's own `disable_cooldown` preference -- off by default,
+    so the cooldown stays on until a player explicitly opts out of it (see
+    "Browser push notifications" in `../php-app/README.md` for what it
+    actually does); `notify-chat-message-checkbox` ("I receive an in-game
+    chat message", issue #109) is otherwise wired up identically to the
+    first three. "Enable"
     calls `Notification.requestPermission()`, then `GET
     /notifications/vapid-public-key` for the server's public key (converted
     from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs
@@ -682,7 +684,45 @@ too, proportional to the smaller card width.
     Play/View button and its own `winner_usernames` line once that
     particular game is `completed` -- not redundant with the group header's
     own result, since a match's games aren't necessarily all won by the
-    same player. A "New game" dialog
+    same player.
+  - **View draft pool** (issue #314): once `match.status === 'completed'`
+    (the same field the `.lobby-winner` result line above gates on), the
+    group header's own text (`headerEl`) and the "View draft pool" button
+    (`openDraftPoolView(firstGame.id)`) sit as flex siblings in a
+    `.lobby-row`, pinning the button to the right edge the same way every
+    other lobby action button already is -- a `.lobby-match-actions`
+    wrapper rather than `.lobby-actions`, since there's always exactly one
+    button here (no fixed width needed to line up a stacked column of
+    several, unlike a game row's own Play/View + View log). Separate from
+    any individual game's own action row since the pool is shared across
+    the whole match, not scoped to one of its up-to-3 games. Opens
+    `#draft-pool-dialog`, fetching `GET /games/draft-pool` (see
+    `GameService::draftMatchPoolView()` in `../php-app/README.md`) and
+    rendering one `.draft-pool-section` per player (heading "username (N)"
+    over a `buildCardThumb()`/`openCardDetail()` grid of exactly that
+    player's own drafted cards, the same click-for-detail card-grid pattern
+    every other card list in this app already uses) plus, only when
+    non-empty, a final "Not drafted (N)" section for whatever the pool's
+    `pool_card_ids` doesn't account for in anyone's `drafted_card_ids` --
+    Quick Draft and Grid Draft always have something here by design (their
+    own per-round discard mechanics), Winston Draft normally doesn't
+    (its draft only ends once the whole pool is claimed), so the section is
+    simply omitted rather than shown empty for that format. Each section's
+    own cards sort by color (white/blue/black/red/green, the same WUBRG
+    wheel `web-static/js/stats.js`'s own `COLOR_RANK` already sorts by),
+    then rarity (common/uncommon/rare/mythic, `RARITY_RANK`), then name --
+    duplicated as `DRAFT_POOL_COLOR_RANK`/`DRAFT_POOL_RARITY_RANK` locally
+    in `game.js` rather than shared with `stats.js`, since each page is a
+    plain `<script>` tag with no module system between them.
+    `#draft-pool-sections .card-thumb`/`.card-thumb__art` also get their
+    own narrower mobile width (3.75rem, vs. the 4rem several other
+    card grids already shrink to at the same `max-width: 600px`
+    breakpoint) -- specifically calibrated so four cards actually fit per
+    row on a ~360px-wide phone against `dialog#draft-pool-dialog`'s own
+    measured content width there, not just "somewhat smaller than
+    before." `code` is passed through from `activeShareCode()` exactly
+    like `openSharedDeckView()` does, so a spectator viewing via share
+    code can open this too. A "New game" dialog
     (`.new-game-field` puts the Format and Deck `<label>`s each on their
     own line -- plain inline `<label>` elements otherwise sit side by side
     until their own `<select>` runs out of room, rather than breaking
@@ -926,14 +966,22 @@ too, proportional to the smaller card width.
 
     For a `team`/`closed_team`-format game (see "Open Team Play"/"Closed
     Team Play" in `php-app/README.md`),
-    each Players-list row also gets a "— Team N" tag (from that player's
-    own `team_id`, `null` in every other format) plus "(your teammate)" on
-    the one row that's actually `state.you.teammate_game_player_id` --
-    populated for BOTH team formats, regardless of whether their hand is
-    visible. A
+    each Players-list row also gets a team-affiliation shield icon (from
+    that player's own `team_id`, `null` in every other format) -- see
+    "Team affiliation icon" further below for what it looks like and how
+    its title/aria-label calls out the one row that's actually
+    `state.you.teammate_game_player_id`, populated for BOTH team formats
+    regardless of whether their hand is visible. A
     `#team-scores` section (`renderTeamScores()`, hidden until
     `state.teams` is populated -- only once the game has actually started)
-    lists each team's combined score-so-far and round wins. A
+    lists each team's combined score-so-far and round wins, one line per
+    team led by that same team-affiliation shield icon (green/red relative
+    to `viewerTeamId`, the same value the Players-list rows use, passed
+    into `renderTeamScores(state.teams, viewerTeamId)`) rather than a
+    spelled-out "Team N (name & name)" identifier string -- the icon's own
+    `title`/`aria-label` carries that exact text instead, so the line
+    itself just reads "— N point(s) this round, N round win(s)" after the
+    icon. A
     `#teammate-hand-section` (`renderTeammateHand()`, hidden whenever
     `state.you.teammate_hand` is `null`) shows your teammate's hand the
     same read-only way in-play/discard-pile cards are shown to everyone --
@@ -1797,6 +1845,65 @@ too, proportional to the smaller card width.
     editable (see `GameService::saveNote()`'s own gate in
     `php-app/README.md`).
 
+    **In-game chat (issue #109).** A "Chat" button (`#view-chat-button`,
+    next to "Notes") opens `#game-chat-dialog`, hidden the same way "Notes"
+    is while spectating/replaying (`isReadOnlyView()`). Unlike Notes,
+    opening it fetches nothing of its own -- `chat_messages` rides along on
+    every `refreshBoard()` poll already (piggybacked on `GET /games/state`
+    rather than a dedicated endpoint, see "In-game chat" in
+    `php-app/README.md`), so `renderChat(state)` is called from
+    `renderBoard()` itself and just re-renders `#game-chat-messages` from
+    `currentState.chat_messages` whenever the dialog happens to be open --
+    an open chat window updates live without needing to be closed and
+    reopened. Each message is built with `Element.append(string)`/
+    `textContent`, never `innerHTML`, since a chat message is free-text
+    user input rendered back to other users (this issue's own flagged XSS
+    surface) -- the same text-node-only convention already used everywhere
+    else user-supplied text appears on the board. While the dialog is
+    closed, a small notification dot on `#view-chat-button` itself
+    (`.has-unread-chat`, the same visual treatment as `#friends-button`'s
+    own `.has-friend-request` dot) lights up once the currently-viewed
+    game has a message, past what was last seen (`chatLastSeenMessageId`,
+    the highest `chat_messages[].id` seen so far), whose
+    `sender_game_player_id` ISN'T the viewer's own -- a plain message-count
+    comparison would also light this up for the viewer's own just-sent
+    message or on a fresh page load where they're the only one who's said
+    anything so far, neither of which is actually "unread." Clears the
+    moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
+    `chatLastSeenMessageId`), and `chatLastSeenMessageId` is additionally
+    persisted to `localStorage` (`chatLastSeenMessageId:{game_id}`,
+    read/written through the same try/catch-guarded-for-private-browsing
+    pattern `initThemeSelect()`'s own `THEME_STORAGE_KEY` uses in `app.js`)
+    so a browser refresh after reading a message doesn't forget that and
+    re-flag it unread; switching to a different game re-reads that game's
+    own stored value rather than carrying over whatever the previous
+    game's was. `#chat-channel-select` (a `<select>` for `Table`/
+    `Team`) is only shown for `format: 'team'` games -- deliberately NOT
+    `closed_team` too (see "In-game chat" in `../php-app/README.md` for
+    why: Closed Team Play's whole premise is that information stays
+    closed between teammates, so it gets no private channel); every
+    other format only ever has the `'table'` channel, so sending always
+    uses `'table'` when the selector itself is hidden. Sending
+    (`sendChatMessage()` -> `POST /games/chat`) clears the input and calls
+    `refreshBoard()` immediately on success, the same "an action triggers
+    its own refreshBoard()" convention Play/Pass/etc. already follow,
+    rather than waiting for the next 4-second poll tick to show the
+    player's own just-sent message. Both the free-text form and a row of
+    "quick chat" buttons below it (`#game-chat-quick-buttons`, between the
+    form and the Close button -- GL;HF, GG, and a handful of emoji, one
+    click each) funnel through the same `sendChatText(messageText)`
+    helper, which does everything the old inline submit handler used to
+    (hide any previous error, resolve the channel, `sendChatMessage()`,
+    `refreshBoard()` on success) -- a quick-chat button's own
+    `data-quick-chat-text` supplies the message instead of
+    `#game-chat-input`'s value, and (unlike the form's own submit
+    handler) never touches the text input afterward, since there's
+    nothing in it to clear. Each quick-chat button is disabled/enabled in
+    lockstep with the free-text input and Send button whenever the
+    dialog opens (`isChatReadOnly()`), so a completed/abandoned game's
+    read-only chat can't be worked around by clicking GG instead of
+    typing it.
+
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
     `#in-progress-area` (a pending decision/scoring preview belongs to
@@ -1897,6 +2004,36 @@ too, proportional to the smaller card width.
     "a real opponent across the table would see someone visibly puzzling
     over a card, just not what it says" principle other open-information
     fields on this page already follow.
+
+    **Team affiliation icon.** For Open/Closed Team Play (`player.team_id
+    !== null`), each row gets a plain heraldic shield icon
+    (`buildPlayerFlag('team', ..., 'player-flag--teamMate'/'--teamOpponent')`)
+    right after its presence dot -- the ONLY place team affiliation
+    appears on the row now; there used to also be a plain "— Team N (your
+    teammate)" text tag appended after the username, removed once the
+    icon existed to cover the same information, so it isn't shown twice.
+    Color, not the shield's shape, is what actually carries the "which
+    side" information: green (`--color-success`) for every row sharing
+    the *viewer's own* `team_id` — including the viewer's own row — and
+    red (`--color-error`) for the opposing team's two rows, so which side
+    is "us" vs. "them" reads at a glance without needing to read each
+    row's team number. The removed text tag's own wording didn't just
+    vanish, though -- the icon's `title`/`aria-label` (`teamIconLabel`,
+    same `buildPlayerFlag()` tooltip/accessible-label convention every
+    other icon on this row already uses) carries the exact same "Team N"/
+    "(your teammate)" text a screen reader or a sighted user hovering for
+    a reminder would have gotten from the old text tag, just moved onto
+    the icon instead of sitting separately on the row. Computed once,
+    right before the `players-list` `renderList()` call, as
+    `viewerTeamId` (`you ? you.team_id : null`, `you` being the same
+    viewer's-own-row lookup the board title/hand section already use) —
+    `null` for every non-team format (the icon is skipped outright, same
+    as the old text tag already was) and also for a spectator/replay
+    viewer, who has no `team_id` of their own to color the icon relative
+    to (coloring every row red for someone with no "own team" to contrast
+    against would be misleading, not informative, so the icon just
+    doesn't render for them at all rather than defaulting to one color or
+    the other).
 
     `'after_scoring_order'`'s own field (`type: 'card_order'`) is the one
     pending-decision field that isn't a `<select>`-backed widget at all —

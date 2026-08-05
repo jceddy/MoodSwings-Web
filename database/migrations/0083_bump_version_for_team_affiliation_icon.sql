@@ -1,0 +1,14 @@
+-- No schema change: adds a team-affiliation shield icon to the board's
+-- own Players list (Open/Closed Team Play only, player.team_id !== null)
+-- alongside the existing text-based "— Team N (your teammate)" label --
+-- green (--color-success) for the viewer's own team (including their
+-- own row), red (--color-error) for the opposing team, so which side is
+-- "us" vs. "them" reads at a glance. Skipped entirely for a spectator/
+-- replay viewer, who has no team_id of their own to color it relative
+-- to. This migration exists purely to keep schema_version in sync with
+-- the VERSION bump, the same way 0024/.../0082 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.11.13' WHERE id = 1;

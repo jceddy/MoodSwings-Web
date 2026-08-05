@@ -497,7 +497,8 @@ body.game-page {
 #deck-view-sideboard-cards,
 #shared-deck-cards,
 .deck-builder-card-grid,
-.spectator-final-hand ul {
+.spectator-final-hand ul,
+.draft-pool-cards {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -785,6 +786,22 @@ body.game-page {
     .deck-builder-card-grid .card-thumb,
     .deck-builder-card-grid .card-thumb__art {
         width: 4rem;
+    }
+
+    /* The draft pool view (issue #314 follow-up) specifically wants four
+       cards per row even on a narrow ~360px-wide phone, not just "smaller
+       than before" -- measured against dialog#draft-pool-dialog's own
+       actual rendered content width there (its 90% dialog width, minus
+       1.5rem padding on each side, leaves ~274px for the card grid),
+       .card-thumb's plain 4rem (64px) above only clears 3 per row once
+       the three 0.5rem gaps between them are counted (4*64 + 3*8 = 280px
+       > 274px available) -- a bare 10% shrink off the normal 5.5rem falls
+       even further short. 3.75rem (60px) comfortably clears four across
+       with room to spare (4*60 + 3*8 = 264px < 274px) at 360px, and with
+       even more room on every wider phone this same media query covers. */
+    #draft-pool-sections .card-thumb,
+    #draft-pool-sections .card-thumb__art {
+        width: 3.75rem;
     }
 }
 
@@ -1116,6 +1133,21 @@ body.game-page {
     color: var(--color-success);
 }
 
+/* Team affiliation (Open/Closed Team Play only, player.team_id !== null --
+   see buildPlayerFlag('team', ...) in game.js): green for the viewer's
+   own team (including their own row), red for the opposing team -- the
+   same --color-success/--color-error pairing already used for "good"/
+   "went first" elsewhere on this page, just repurposed here as "mine" vs
+   "theirs" rather than "good" vs "bad" (the opposing team isn't a bad
+   thing, just the other side). */
+.player-flag--teamMate {
+    color: var(--color-success);
+}
+
+.player-flag--teamOpponent {
+    color: var(--color-error);
+}
+
 /* -- Hurt Feelings art thumbnail (players list) ---------------------- */
 
 .hurt-feelings-thumb {
@@ -1155,6 +1187,19 @@ dialog#card-detail-dialog {
     margin-bottom: 0.5rem;
 }
 
+/* Quick/Winston/Grid Draft's own "My saved deck" pool-source fields --
+   each is the LAST field shown before #new-game-submit-button whenever
+   that pool source is chosen, and (like every other plain <div>-wrapped
+   field group in this dialog) has no bottom margin of its own by
+   default, so the Saved deck <select> and the Create game button sat
+   flush against each other. Same 0.5rem spacing .new-game-field already
+   uses elsewhere in this same dialog. */
+#new-game-quick-draft-saved-deck-fields,
+#new-game-winston-draft-saved-deck-fields,
+#new-game-grid-draft-saved-deck-fields {
+    margin-bottom: 0.5rem;
+}
+
 /* The submit button (inside <form>) and the Close button (a sibling
    after </form>) sit in different block boxes, so they stack instead of
    flowing side by side -- margin-top gives them a little breathing room
@@ -1171,8 +1216,21 @@ dialog#card-detail-dialog {
    heading, whichever ends up last) directly above it. */
 #deck-view-close-button,
 #shared-deck-close-button,
+#draft-pool-close-button,
+#game-chat-close-button,
 #deck-builder-save-button {
     margin-top: 0.5rem;
+}
+
+/* One heading + card grid per draft-pool-dialog section (issue #314) --
+   spacing between sections since there's always at least 2 (one per
+   player), often 3+ once "Not drafted" is shown. */
+.draft-pool-section {
+    margin-bottom: 1rem;
+}
+
+.draft-pool-section h3 {
+    margin: 0 0 0.5rem;
 }
 
 dialog#art-preview-dialog {
@@ -1231,6 +1289,23 @@ dialog#shared-deck-dialog[open] {
     overflow-y: auto;
 }
 
+/* A completed draft match's shared pool (issue #314) -- same sizing
+   reasoning as dialog#shared-deck-dialog[open] immediately above, just
+   tall enough to comfortably scroll several card-grid sections (one per
+   player, plus "Not drafted") rather than just one flat list. */
+dialog#draft-pool-dialog[open] {
+    box-sizing: border-box;
+    max-width: 48rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    overflow-y: auto;
+}
+
 /* The private in-game notepad (issue #258) -- same dialog-sizing reasoning
    as dialog#game-log-dialog[open] above, just narrower since it only ever
    holds one textarea rather than a list or card grid. */
@@ -1256,6 +1331,93 @@ dialog#game-notes-dialog[open] {
 #game-notes-textarea:disabled {
     background-color: var(--color-bg);
     color: var(--color-muted);
+}
+
+/* In-game chat (issue #109) -- same max-height + internal-scroll reasoning
+   as dialog#game-log-dialog[open] above (a long game can accumulate a lot
+   of messages), plus a fixed-at-the-bottom send row (channel select +
+   text input + button) that never scrolls out of view along with the
+   message list above it. */
+dialog#game-chat-dialog[open] {
+    box-sizing: border-box;
+    max-width: 30rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+#game-chat-messages {
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 12rem;
+    margin: 0 0 0.75rem;
+    padding: 0;
+    list-style: none;
+}
+
+#game-chat-messages li {
+    padding: 0.25rem 0;
+    overflow-wrap: break-word;
+}
+
+/* A team-channel message (Open Team Play only -- see renderChat()'s own
+   format check) is visually set apart from the whole-table channel it's
+   mixed in with in the same list, echoing the " (team)" suffix already
+   appended to its sender label. */
+.chat-team-message {
+    background-color: var(--color-bg);
+    border-radius: 0.25rem;
+    padding-left: 0.5rem !important;
+}
+
+#game-chat-form {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#game-chat-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Quick chat (canned GL;HF/GG/emoji messages, one click to send on
+   whichever channel is currently selected) -- sits between the send form
+   and the Close button, its own flex-wrap row rather than crammed into
+   #game-chat-form's own row alongside the channel select/text input/Send
+   button. */
+#game-chat-quick-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
+/* A small notification dot on #view-chat-button while the currently
+   viewed game has chat messages that haven't been seen yet (dialog never
+   opened, or closed before catching up) -- see renderChat() in game.js,
+   which toggles this class each poll. Same visual treatment as
+   #friends-button.has-friend-request above. */
+#view-chat-button {
+    position: relative;
+}
+
+#view-chat-button.has-unread-chat::after {
+    content: '';
+    position: absolute;
+    top: -0.3rem;
+    right: -0.3rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background-color: var(--color-error);
+    border: 1px solid var(--color-bg);
 }
 
 /* The deck builder (issue #93) shows the full card catalog next to the
@@ -1571,6 +1733,18 @@ dialog#deck-builder-dialog[open] {
 .lobby-match-score {
     font-size: 0.85rem;
     color: var(--color-muted);
+}
+
+/* View draft pool (issue #314): keeps the button pinned to the right
+   edge of the match group's own header row (headerRowEl's .lobby-row),
+   vertically centered against however many lines headerEl's own text
+   wraps to -- same reasoning as .lobby-actions, but its own class since
+   there's always exactly one button here, not a stacked column, so it
+   doesn't need .lobby-actions' fixed width (sized to line up several
+   *different* rows' buttons in a column, not relevant to this one-off
+   button) or flex-direction: column. */
+.lobby-match-actions {
+    flex-shrink: 0;
 }
 
 /* Indented slightly so a match's own games read as nested under its

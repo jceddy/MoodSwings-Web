@@ -315,6 +315,7 @@
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
                 <button id="view-notes-button" type="button" hidden>Notes</button>
+                <button id="view-chat-button" type="button" hidden>Chat</button>
                 <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
@@ -594,6 +595,20 @@
         <button id="shared-deck-close-button" type="button">Close</button>
     </dialog>
 
+    <!-- A completed Quick/Winston/Grid Draft match's full shared pool
+         (issue #314), sectioned by which player drafted each card plus
+         whatever nobody kept -- see openDraftPoolView() in game.js and
+         GameService::draftMatchPoolView(). Sections are built dynamically
+         (one per player, plus "Not drafted" when non-empty) since a
+         match's player count varies 2-4 and whether anything went
+         undrafted varies by format. -->
+    <dialog id="draft-pool-dialog">
+        <h2>Draft pool</h2>
+        <p id="draft-pool-meta"></p>
+        <div id="draft-pool-sections"></div>
+        <button id="draft-pool-close-button" type="button">Close</button>
+    </dialog>
+
     <!-- Private in-game notepad (issue #258) -- one freeform note per seat,
          never shared with the other players at the table. Autosaves as you
          type (debounced) -- see openNotesDialog() in game.js and
@@ -606,6 +621,43 @@
         <textarea id="game-notes-textarea" rows="12"></textarea>
         <p id="game-notes-save-status"></p>
         <button id="game-notes-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- In-game chat (issue #109) -- seated players only, no spectator
+         access. GameService::chatMessagesFor() piggybacks the message list
+         on the existing GET /games/state poll rather than its own polling
+         endpoint, so this dialog re-renders from currentState.chat_messages
+         every refreshBoard() tick while it's open -- see renderChat() in
+         game.js. #chat-channel-select only appears for Open Team Play
+         games (format 'team' -- deliberately NOT 'closed_team' too,
+         since that format's whole premise is that information stays
+         closed between teammates; enforced server-side in
+         GameService::postChatMessage()); every other format only ever
+         has the 'table' channel. -->
+    <dialog id="game-chat-dialog">
+        <h2>Chat</h2>
+        <p id="game-chat-readonly-message" hidden>This game has ended, so chat is read-only.</p>
+        <ul id="game-chat-messages"></ul>
+        <p id="game-chat-empty" hidden>No messages yet.</p>
+        <form id="game-chat-form">
+            <select id="chat-channel-select" hidden>
+                <option value="table">Table</option>
+                <option value="team">Team</option>
+            </select>
+            <input type="text" id="game-chat-input" maxlength="500" placeholder="Say something…" autocomplete="off">
+            <button id="game-chat-send-button" type="submit">Send</button>
+        </form>
+        <p id="game-chat-error" class="error" hidden></p>
+        <div id="game-chat-quick-buttons">
+            <button type="button" data-quick-chat-text="GL;HF">GL;HF</button>
+            <button type="button" data-quick-chat-text="GG">GG</button>
+            <button type="button" data-quick-chat-text="💀">💀</button>
+            <button type="button" data-quick-chat-text="🗿">🗿</button>
+            <button type="button" data-quick-chat-text="🤡">🤡</button>
+            <button type="button" data-quick-chat-text="😭">😭</button>
+            <button type="button" data-quick-chat-text="👑">👑</button>
+        </div>
+        <button id="game-chat-close-button" type="button">Close</button>
     </dialog>
 
     <!-- Browser push notifications (issue #108) -- see initNotifications()
@@ -627,6 +679,7 @@
                 <label><input type="checkbox" id="notify-your-turn-checkbox"> It's my turn</label>
                 <label><input type="checkbox" id="notify-friend-request-checkbox"> I receive a friend request</label>
                 <label><input type="checkbox" id="notify-game-finished-checkbox"> One of my games finishes</label>
+                <label><input type="checkbox" id="notify-chat-message-checkbox"> I receive an in-game chat message</label>
                 <label><input type="checkbox" id="disable-cooldown-checkbox"> Send every notification immediately (disable the 5-minute cooldown)</label>
             </fieldset>
         </div>

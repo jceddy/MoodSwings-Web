@@ -366,6 +366,19 @@ function getSharedDeck(gameId, code) {
     return apiRequest(path);
 }
 
+// A completed Quick/Winston/Grid Draft match's full shared pool, sectioned
+// by who drafted each card plus whatever nobody kept (issue #314) -- see
+// GameService::draftMatchPoolView(). code is only ever passed while
+// spectating via a share code rather than friendship, same as
+// getSharedDeck() above -- see openDraftPoolView() in game.js.
+function getDraftPool(gameId, code) {
+    let path = '/games/draft-pool?game_id=' + encodeURIComponent(gameId);
+    if (code) {
+        path += '&code=' + encodeURIComponent(code);
+    }
+    return apiRequest(path);
+}
+
 // Spectator mode (issue #128) -- see GameService::listFriendsInProgressGames()/
 // getOrCreateSpectateCode()/resolveSpectateCode()/getSpectatorState(). Shared
 // here (rather than only in game.js) since both game/index.html (sharing a
@@ -438,6 +451,20 @@ function saveGameNote(gameId, noteText) {
     return apiRequest('/games/notes', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, note_text: noteText }),
+    });
+}
+
+// In-game chat (issue #109) -- unlike the notepad above, there's no
+// getGameChat(): chat messages arrive piggybacked on the existing
+// getGameState() poll's own 'chat_messages' field rather than a
+// dedicated fetch, so sending is the only new request needed. channel
+// defaults to 'table'; 'team' is only accepted for Open/Closed Team Play
+// games (a 409 otherwise) -- see renderChat() in game.js for how the
+// channel selector is shown/hidden.
+function sendChatMessage(gameId, messageText, channel) {
+    return apiRequest('/games/chat', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, message_text: messageText, channel: channel || 'table' }),
     });
 }
 

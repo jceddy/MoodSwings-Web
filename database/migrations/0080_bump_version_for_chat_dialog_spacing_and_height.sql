@@ -1,0 +1,12 @@
+-- No schema change: adds spacing between #game-chat-dialog's send row and
+-- its Close button (matching the existing #deck-view-close-button/
+-- #shared-deck-close-button/#draft-pool-close-button margin-top
+-- convention) and raises #game-chat-messages' own min-height so the
+-- dialog opens taller by default. This migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way 0024/.../0079
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every
+-- request, so a VERSION bump with no matching schema_version update
+-- would show maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.11.10' WHERE id = 1;

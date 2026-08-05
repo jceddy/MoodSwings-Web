@@ -1,0 +1,14 @@
+-- No schema change: fixes the in-game chat unread badge (#view-chat-button
+-- .has-unread-chat) lighting up for the viewer's own messages -- a plain
+-- chat_messages.length comparison in renderChat() (web-static/js/game.js)
+-- also flagged the viewer's own just-sent message, or being the only one
+-- who's said anything so far on a fresh page load, as "unread." Now
+-- checked against each message's sender_game_player_id instead, so only
+-- a message from someone ELSE counts. This migration exists purely to
+-- keep schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0080 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request, so a VERSION bump with no matching schema_version
+-- update would show maintenance mode after deploy even though nothing
+-- about the schema actually changed.
+UPDATE schema_version SET version = '1.11.11' WHERE id = 1;
