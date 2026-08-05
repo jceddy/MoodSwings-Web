@@ -1317,6 +1317,81 @@ dialog#game-notes-dialog[open] {
     color: var(--color-muted);
 }
 
+/* In-game chat (issue #109) -- same max-height + internal-scroll reasoning
+   as dialog#game-log-dialog[open] above (a long game can accumulate a lot
+   of messages), plus a fixed-at-the-bottom send row (channel select +
+   text input + button) that never scrolls out of view along with the
+   message list above it. */
+dialog#game-chat-dialog[open] {
+    box-sizing: border-box;
+    max-width: 30rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    display: flex;
+    flex-direction: column;
+}
+
+#game-chat-messages {
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 8rem;
+    margin: 0 0 0.75rem;
+    padding: 0;
+    list-style: none;
+}
+
+#game-chat-messages li {
+    padding: 0.25rem 0;
+    overflow-wrap: break-word;
+}
+
+/* A team-channel message (Open Team Play only -- see renderChat()'s own
+   format check) is visually set apart from the whole-table channel it's
+   mixed in with in the same list, echoing the " (team)" suffix already
+   appended to its sender label. */
+.chat-team-message {
+    background-color: var(--color-bg);
+    border-radius: 0.25rem;
+    padding-left: 0.5rem !important;
+}
+
+#game-chat-form {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#game-chat-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* A small notification dot on #view-chat-button while the currently
+   viewed game has chat messages that haven't been seen yet (dialog never
+   opened, or closed before catching up) -- see renderChat() in game.js,
+   which toggles this class each poll. Same visual treatment as
+   #friends-button.has-friend-request above. */
+#view-chat-button {
+    position: relative;
+}
+
+#view-chat-button.has-unread-chat::after {
+    content: '';
+    position: absolute;
+    top: -0.3rem;
+    right: -0.3rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    background-color: var(--color-error);
+    border: 1px solid var(--color-bg);
+}
+
 /* The deck builder (issue #93) shows the full card catalog next to the
    deck under construction side by side -- wider still than
    dialog#shared-deck-dialog[open] above, since it needs room for two of

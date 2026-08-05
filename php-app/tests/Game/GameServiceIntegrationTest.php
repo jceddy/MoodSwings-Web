@@ -65,6 +65,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
         $pdo->exec('TRUNCATE TABLE game_notes');
+        $pdo->exec('TRUNCATE TABLE game_chat_messages');
         $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
         $pdo->exec('TRUNCATE TABLE game_team_decisions');
         $pdo->exec('TRUNCATE TABLE game_pending_decisions');
@@ -11671,6 +11672,172 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * In-game chat (issue #109) -- unlike the notepad above (one row per
+     * seat, upsert-only, always fully visible), chat is genuinely
+     * many-rows-per-seat and gated to seated players only (no spectator
+     * fallback, matching the notepad's own gating rather than
+     * game_events'/GET /games/log's more permissive one).
+     */
+    public function testPostChatMessageThenGetStateRoundTripsOnTheTableChannel(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1, 'u2' => $u2] = $this->buildThreePlayerFixture();
+
+        $this->games->postChatMessage($gameId, $p1, 'table', 'Nice hand!');
+
+        $state = $this->games->getState($gameId, $u2);
+        self::assertCount(1, $state['chat_messages']);
+        self::assertSame('Nice hand!', $state['chat_messages'][0]['message_text']);
+        self::assertSame('table', $state['chat_messages'][0]['channel']);
+        self::assertSame($p1, $state['chat_messages'][0]['sender_game_player_id']);
+        self::assertSame('p1', $state['chat_messages'][0]['sender_username']);
+
+        // Visible to the sender's own state too, not just other seats.
+        self::assertCount(1, $this->games->getState($gameId, $u1)['chat_messages']);
+    }
+
+    public function testTableChannelMessagesAreVisibleToEverySeatedPlayer(): void
+    {
+        ['gameId' => $gameId, 'p2' => $p2, 'u1' => $u1, 'u2' => $u2, 'u3' => $u3] = $this->buildThreePlayerFixture();
+
+        $this->games->postChatMessage($gameId, $p2, 'table', 'Anyone want to trade?');
+
+        foreach ([$u1, $u2, $u3] as $viewerUserId) {
+            self::assertCount(1, $this->games->getState($gameId, $viewerUserId)['chat_messages']);
+        }
+    }
+
+    public function testPostChatMessagesAreReturnedOldestFirst(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1] = $this->buildThreePlayerFixture();
+
+        $this->games->postChatMessage($gameId, $p1, 'table', 'First message');
+        $this->games->postChatMessage($gameId, $p1, 'table', 'Second message');
+
+        $messages = $this->games->getState($gameId, $u1)['chat_messages'];
+        self::assertSame('First message', $messages[0]['message_text']);
+        self::assertSame('Second message', $messages[1]['message_text']);
+    }
+
+    public function testPostChatMessageRejectsEmptyMessage(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->games->postChatMessage($gameId, $p1, 'table', "   \n  ");
+    }
+
+    public function testPostChatMessageRejectsMessageOverTheLengthLimit(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->games->postChatMessage($gameId, $p1, 'table', str_repeat('a', 501));
+    }
+
+    public function testPostChatMessageAllowsMessageExactlyAtTheLengthLimit(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u1' => $u1] = $this->buildThreePlayerFixture();
+
+        $text = str_repeat('a', 500);
+        $this->games->postChatMessage($gameId, $p1, 'table', $text);
+
+        self::assertSame($text, $this->games->getState($gameId, $u1)['chat_messages'][0]['message_text']);
+    }
+
+    public function testPostChatMessageFailsOnceTheGameHasCompleted(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->pdo->prepare("UPDATE games SET status = 'completed' WHERE id = :id")->execute(['id' => $gameId]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p1, 'table', 'Trying to chat after the game ended.');
+    }
+
+    public function testPostChatMessageFailsOnceTheGameHasBeenAbandoned(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->pdo->prepare("UPDATE games SET status = 'abandoned' WHERE id = :id")->execute(['id' => $gameId]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p1, 'table', 'Trying to chat on an abandoned game.');
+    }
+
+    public function testPostChatMessageRejectsTeamChannelForANonTeamFormat(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('no team channel');
+        $this->games->postChatMessage($gameId, $p1, 'team', 'Only I can see this... right?');
+    }
+
+    // Closed Team Play (format 'closed_team') deliberately gets NO 'team'
+    // chat channel, unlike every other isTeamFormat()-gated mechanic in
+    // this file -- that format's whole premise is that information stays
+    // closed between teammates (see testSubmitInitialCardPassRequiresExactlyTwoCards()
+    // and friends above), so a private out-of-band channel would
+    // undercut the one thing it's actually testing. Open Team Play
+    // (format 'team') has no such restriction -- see
+    // testTeamChannelMessagesAreOnlyVisibleToTheSendersOwnTeam() below.
+    public function testPostChatMessageRejectsTeamChannelForClosedTeamFormat(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildClosedTeamFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('no team channel');
+        $this->games->postChatMessage($gameId, $p1, 'team', 'Only my closed_team partner can see this... right?');
+    }
+
+    // Open Team Play's own private teammate-only channel alongside the
+    // whole-table one -- 'team'-channel messages are only ever visible to
+    // seats sharing the sender's own team_id, never the opposing team,
+    // and 'table'-channel messages stay visible to everyone regardless
+    // of team.
+    public function testTeamChannelMessagesAreOnlyVisibleToTheSendersOwnTeam(): void
+    {
+        $fixture = $this->buildTeamFixture();
+        $gameId = $fixture['gameId'];
+        $p1 = $fixture['p1']; // team 0
+        $p3 = $fixture['p3']; // team 1
+
+        $this->games->postChatMessage($gameId, $p1, 'team', 'Team 0 secret plan');
+        $this->games->postChatMessage($gameId, $p1, 'table', 'Good luck everyone');
+
+        $p2UserId = (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$fixture['p2']}")->fetchColumn();
+        $p3UserId = (int) $this->pdo->query("SELECT user_id FROM game_players WHERE id = {$p3}")->fetchColumn();
+
+        $team0ViewerState = $this->games->getState($gameId, $p2UserId);
+        self::assertCount(2, $team0ViewerState['chat_messages']);
+
+        $team1ViewerState = $this->games->getState($gameId, $p3UserId);
+        self::assertCount(1, $team1ViewerState['chat_messages']);
+        self::assertSame('table', $team1ViewerState['chat_messages'][0]['channel']);
+    }
+
+    public function testGetSpectatorStateNeverIncludesChatMessages(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildThreePlayerFixture();
+
+        $this->games->postChatMessage($gameId, $p1, 'table', 'Spectators should never see this.');
+
+        self::assertSame([], $this->games->getSpectatorState($gameId)['chat_messages']);
+    }
+
+    public function testPostChatMessageStillWorksWhenPushNotificationsAreWired(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1, 'u2' => $u2] = $this->buildThreePlayerFixture();
+
+        $games = $this->gamesWithNotificationsWired();
+        $games->postChatMessage($gameId, $p1, 'table', 'Notifications should not blow this up.');
+
+        self::assertCount(1, $games->getState($gameId, $u2)['chat_messages']);
+    }
+
+    /**
      * Lifetime game/match stats (issue #106) -- recordGameCompletionStats()/
      * recordMatchCompletionStats() are called from every code path that
      * completes a game/match, so these exercise each of those paths
@@ -12152,6 +12319,28 @@ final class GameServiceIntegrationTest extends TestCase
 
         self::assertCount(1, $export['game_notes']);
         self::assertSame('p1 private note', $export['game_notes'][0]['note_text']);
+    }
+
+    // In-game chat (issue #109) mirrors the note-scoping test above:
+    // 'table'-channel messages are visible to everyone, but a 'team'-
+    // channel export must never leak the OTHER team's private messages
+    // to the requesting player.
+    public function testExportGameDataExcludesTheOtherTeamsChatMessages(): void
+    {
+        $fixture = $this->buildTeamFixture();
+        $gameId = $fixture['gameId'];
+        $p1 = $fixture['p1']; // team 0
+        $p3 = $fixture['p3']; // team 1
+
+        $this->games->postChatMessage($gameId, $p1, 'table', 'Hello table');
+        $this->games->postChatMessage($gameId, $p1, 'team', 'Team 0 secret');
+        $this->games->postChatMessage($gameId, $p3, 'team', 'Team 1 secret');
+
+        $export = $this->games->exportGameData($gameId, $p1);
+
+        self::assertCount(2, $export['game_chat_messages']);
+        self::assertSame('Hello table', $export['game_chat_messages'][0]['message_text']);
+        self::assertSame('Team 0 secret', $export['game_chat_messages'][1]['message_text']);
     }
 
     public function testExportGameDataIncludesDraftMatchDataForADraftGame(): void

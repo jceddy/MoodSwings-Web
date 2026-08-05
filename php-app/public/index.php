@@ -592,7 +592,8 @@ if ($path === '/notifications/preferences' && $method === 'POST') {
         (bool) ($body['notify_your_turn'] ?? true),
         (bool) ($body['notify_friend_request'] ?? true),
         (bool) ($body['notify_game_finished'] ?? true),
-        (bool) ($body['disable_cooldown'] ?? false)
+        (bool) ($body['disable_cooldown'] ?? false),
+        (bool) ($body['notify_chat_message'] ?? true)
     );
     respond(200, ['status' => 'ok', 'preferences' => $notificationPreferences->forUser((int) $currentUser['id'])]);
 }
@@ -1207,6 +1208,35 @@ if ($path === '/games/notes' && $method === 'POST') {
 
     try {
         $games->saveNote($gameId, $gamePlayerId, $noteText);
+        respond(200, ['status' => 'ok']);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    } catch (\InvalidArgumentException $e) {
+        respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+// In-game chat (issue #109): no GET route -- unlike /games/notes above,
+// chat is delivered entirely via GET /games/state's own new
+// 'chat_messages' field (piggybacked on the existing 4s poll rather than
+// its own polling endpoint, see GameService::chatMessagesFor()'s own
+// docblock), so sending is the only new endpoint needed. 'channel'
+// defaults to 'table' -- the only option every format actually has;
+// 'team' is only valid for format 'team' (Open Team Play only -- NOT
+// 'closed_team', whose whole premise is that information stays closed
+// between teammates, see postChatMessage()'s own docblock; enforced
+// inside postChatMessage() itself, a 409 otherwise).
+if ($path === '/games/chat' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $channel = (string) ($body['channel'] ?? 'table');
+    $messageText = (string) ($body['message_text'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $games->postChatMessage($gameId, $gamePlayerId, $channel, $messageText);
         respond(200, ['status' => 'ok']);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

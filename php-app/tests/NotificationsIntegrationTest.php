@@ -113,14 +113,14 @@ final class NotificationsIntegrationTest extends TestCase
         $userId = $this->insertUser('prefs-default');
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'disable_cooldown' => false],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
 
         $this->preferences->save($userId, false, true, false);
 
         self::assertSame(
-            ['notify_your_turn' => false, 'notify_friend_request' => true, 'notify_game_finished' => false, 'disable_cooldown' => false],
+            ['notify_your_turn' => false, 'notify_friend_request' => true, 'notify_game_finished' => false, 'notify_chat_message' => true, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
     }
@@ -133,7 +133,26 @@ final class NotificationsIntegrationTest extends TestCase
         $this->preferences->save($userId, true, true, true);
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'disable_cooldown' => false],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'disable_cooldown' => false],
+            $this->preferences->forUser($userId)
+        );
+    }
+
+    // notify_chat_message (issue #109) defaults on like the three
+    // notify_* toggles above, independently settable/upsertable from all
+    // of them and from disable_cooldown -- mirrors
+    // testDisableCooldownPreferenceDefaultsOffAndIsIndependentlySettable
+    // below for the newer toggle.
+    public function testNotifyChatMessagePreferenceDefaultsOnAndIsIndependentlySettable(): void
+    {
+        $userId = $this->insertUser('prefs-chat-message');
+
+        self::assertTrue($this->preferences->forUser($userId)['notify_chat_message']);
+
+        $this->preferences->save($userId, true, true, true, false, false);
+
+        self::assertSame(
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => false, 'disable_cooldown' => false],
             $this->preferences->forUser($userId)
         );
     }
@@ -152,7 +171,7 @@ final class NotificationsIntegrationTest extends TestCase
         $this->preferences->save($userId, true, true, true, true);
 
         self::assertSame(
-            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'disable_cooldown' => true],
+            ['notify_your_turn' => true, 'notify_friend_request' => true, 'notify_game_finished' => true, 'notify_chat_message' => true, 'disable_cooldown' => true],
             $this->preferences->forUser($userId)
         );
 
@@ -256,6 +275,40 @@ final class NotificationsIntegrationTest extends TestCase
         $this->service()->notifyGameFinished($userId, 1, 'Game #1 is over -- you won!');
 
         self::addToAssertionCount(1);
+    }
+
+    public function testNotifyNewChatMessageIsANoOpWhenTheUserHasNoSubscriptions(): void
+    {
+        $userId = $this->insertUser('chat-no-subscriptions');
+        putenv('VAPID_PUBLIC_KEY=some-public-key');
+        putenv('VAPID_PRIVATE_KEY=some-private-key');
+
+        $this->service()->notifyNewChatMessage($userId, 1, 'alice', 'hey, your move');
+
+        self::addToAssertionCount(1);
+    }
+
+    // In-game chat (issue #109) shares NotificationScope::forGame() with
+    // notifyYourTurn()/notifyGameFinished() rather than its own scope --
+    // see NotificationService::notifyNewChatMessage()'s own docblock --
+    // so a chat message arriving right after this game's scope was
+    // already marked notified must queue rather than send immediately,
+    // exactly like notifyYourTurn() already does in
+    // testNotifyServiceSkipsSendingWhenAlreadyNotifiedRecentlyAboutTheSameGame()
+    // below.
+    public function testNotifyNewChatMessageSharesCooldownScopeWithOtherGameNotifications(): void
+    {
+        $userId = $this->insertUser('chat-shares-cooldown');
+        $this->subscriptions->save($userId, 'https://push.example.com/chat-cooldown', 'p', 'a');
+        $this->cooldowns->markNotified($userId, NotificationScope::forGame(1));
+        putenv('VAPID_PUBLIC_KEY=some-public-key');
+        putenv('VAPID_PRIVATE_KEY=some-private-key');
+
+        $this->service()->notifyNewChatMessage($userId, 1, 'alice', 'hey, your move');
+
+        $queued = array_filter($this->queuedNotifications->all(), static fn (array $row) => $row['user_id'] === $userId);
+        self::assertCount(1, $queued);
+        self::assertSame('notify_chat_message', array_values($queued)[0]['preference_key']);
     }
 
     // -- Five-minute cooldown, scoped per (user, game) -----------------------
