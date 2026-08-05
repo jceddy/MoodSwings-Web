@@ -4310,6 +4310,25 @@ scoring (taken via Betrayal)."), so the player doesn't need to already
 know every card's printed rules text to make an informed choice between
 same-named or unfamiliar cards.
 
+The pause is skipped outright, however, on whichever round actually
+finishes the game (`wins_needed` reached) -- there's no next round for a
+chosen order to ever matter to, so asking would just stall the game's
+last action on a decision whose only visible effect, per the paragraph
+above, is which of several equally-legal orderings a completed game's
+final board state happens to show. `roundWouldCompleteGame()` predicts
+this *before* `finishScoringAndAdvance()`/`finishTeamScoringAndAdvance()`
+write any of this round's own rows, reusing the exact same
+`totalWinsFor()`/`totalWinsForTeam()` + `wins_needed` comparison (and a
+non-mutating peek at Corruption's extra-win marker via
+`hasExtraWinMarker()`) those methods make for real further down, so the
+two are guaranteed to agree. When the prediction says the game is about
+to end, `finishScoringAndAdvance()` never calls
+`nextUnresolvedAfterScoringOrderDecision()` at all -- every pending
+after-scoring card still resolves in `applyAfterScoringHooks()` exactly
+as it always does, just always via that method's own no-decision-made
+default (ascending `cardId`) order, the same fallback already used for
+any player who was never asked in the first place.
+
 ## Tests
 
 Unit tests run without a database. The `AuthIntegrationTest` suite exercises
