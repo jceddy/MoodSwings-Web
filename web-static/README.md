@@ -1855,8 +1855,12 @@ too, proportional to the smaller card width.
     closed, a small notification dot on `#view-chat-button` itself
     (`.has-unread-chat`, the same visual treatment as `#friends-button`'s
     own `.has-friend-request` dot) lights up once the currently-viewed
-    game's `chat_messages.length` grows past what was last seen, and
-    clears the moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
+    game has a message, past what was last seen (`chatSeenCount`), whose
+    `sender_game_player_id` ISN'T the viewer's own -- a plain message-count
+    comparison would also light this up for the viewer's own just-sent
+    message or on a fresh page load where they're the only one who's said
+    anything so far, neither of which is actually "unread." Clears the
+    moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
     `chatSeenCount`) so switching to a different game doesn't carry over a
     stale unread count. `#chat-channel-select` (a `<select>` for `Table`/
     `Team`) is only shown for `format: 'team'` games -- deliberately NOT
