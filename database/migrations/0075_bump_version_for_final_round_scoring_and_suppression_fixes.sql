@@ -1,0 +1,16 @@
+-- No schema change: covers three fixes since 1.11.4 --
+-- (1) excluding "Bump VERSION to X.Y.Z" commits from the Discord deploy
+-- announcement's changelog bullets (.github/workflows/deploy.yml,
+-- deploy-dev.yml); (2) Guilt/Pacifism/Meekness/Faith/Shame's
+-- 'while_source_in_play' suppression now lifting the instant its source
+-- card's ownership changes, not just when the card leaves play
+-- (php-app/src/Rules/BoardState.php); (3) skipping the after-scoring
+-- order decision pause on the round that actually finishes the game
+-- (php-app/src/Game/GameService.php). This migration exists purely to
+-- keep schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0074 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request, so a VERSION bump with no matching schema_version
+-- update would show maintenance mode after deploy even though nothing
+-- about the schema actually changed.
+UPDATE schema_version SET version = '1.11.5' WHERE id = 1;
