@@ -3173,7 +3173,17 @@
             chatSeenCount = messages.length;
             chatButton.classList.remove('has-unread-chat');
         } else {
-            chatButton.classList.toggle('has-unread-chat', messages.length > chatSeenCount);
+            // Only a message from someone ELSE counts as unread -- sending
+            // your own message (dialog open at the time, so it's already
+            // counted into chatSeenCount above) or reloading the page after
+            // being the only one who's said anything so far must never
+            // light this up, since there's nothing of anyone else's the
+            // player hasn't seen.
+            const viewerGamePlayerId = state.you && state.you.game_player_id;
+            const hasUnreadFromSomeoneElse = messages
+                .slice(chatSeenCount)
+                .some((message) => message.sender_game_player_id !== viewerGamePlayerId);
+            chatButton.classList.toggle('has-unread-chat', hasUnreadFromSomeoneElse);
         }
     }
 

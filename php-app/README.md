@@ -4264,9 +4264,13 @@ open, `renderChat()` re-renders the dialog's message list from
 open, so an open chat dialog updates live without the player needing to
 close and reopen it. A small notification dot on the "Chat" button itself
 (`.has-unread-chat`, mirroring `#friends-button`'s own `.has-friend-request`
-dot) lights up when the currently-viewed game has messages the player
-hasn't seen yet (dialog never opened, or closed before catching up), and
-clears the moment the dialog is opened. The channel `<select>` only
+dot) lights up when the currently-viewed game has a message from someone
+OTHER than the viewer that they haven't seen yet (dialog never opened, or
+closed before catching up) -- checked against `sender_game_player_id`
+rather than a plain message count, so being the only one who's said
+anything so far (including right after sending your own message, or on a
+fresh page load) never lights it up -- and clears the moment the dialog
+is opened. The channel `<select>` only
 appears for `format: 'team'` games -- NOT `closed_team` too, unlike every
 other team-format UI check in this frontend; every other format only
 ever has `'table'`. Every message is rendered via `Element.append(string)`/
