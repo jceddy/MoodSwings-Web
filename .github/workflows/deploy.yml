@@ -264,17 +264,34 @@ jobs:
           # this push (unset/all-zero for a workflow_dispatch run or a
           # brand-new branch) -- diffing from it to the SHA just deployed
           # lists exactly the commits this deploy introduced. --no-merges
-          # drops the "Merge pull request #NNN ..." commits themselves,
-          # and --invert-grep --grep='^Bump VERSION to ' drops the no-op
-          # version-bump commits that accompany every schema_version
-          # migration (see database/migrations' own "bump the fix part of
-          # the version number" commits) -- neither is a substantive
-          # change worth a bullet of its own.
+          # drops the "Merge pull request #NNN ..." commits themselves.
+          #
+          # The subject-only "Bump VERSION to X.Y.Z" filter below used to
+          # be `git log --invert-grep --grep=...`, but --grep matches
+          # anywhere in the FULL commit message (subject + body), not just
+          # the subject line -- so a commit whose subject was a real,
+          # substantive change (e.g. "Right-align the Foo button") but
+          # whose BODY happened to mention bumping the version (a bundled
+          # version-bump-plus-fix commit, not a dedicated bump-only one)
+          # got silently dropped in its entirety, once even producing an
+          # empty changelog that read "no new commits" despite a real
+          # change having shipped. Fixed by extracting just each commit's
+          # subject line via `%s` first, THEN filtering with an ordinary
+          # line-anchored `grep -v` -- %s never includes the body, so this
+          # can only ever match a commit whose subject itself starts with
+          # "Bump VERSION to ", regardless of what its body says.
+          #
+          # `|| true` on each pipeline: under `set -o pipefail`, `grep -v`
+          # finding zero non-matching lines (every commit in range was a
+          # bare version bump) exits 1, which -- being the rightmost
+          # non-zero exit status in the pipeline -- would otherwise trip
+          # `set -e` and abort this whole step instead of falling through
+          # to the "no new commits" fallback below.
           BEFORE_SHA="${{ github.event.before }}"
           if [ -z "$BEFORE_SHA" ] || [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ]; then
-            CHANGES_FULL="$(git log --no-merges --invert-grep --grep='^Bump VERSION to ' -1 --pretty=format:'- %s')"
+            CHANGES_FULL="$(git log --no-merges -1 --pretty=format:'%s' | grep -v '^Bump VERSION to ' | sed 's/^/- /' || true)"
           else
-            CHANGES_FULL="$(git log --no-merges --invert-grep --grep='^Bump VERSION to ' --pretty=format:'- %s' "${BEFORE_SHA}..${GITHUB_SHA}")"
+            CHANGES_FULL="$(git log --no-merges --pretty=format:'%s' "${BEFORE_SHA}..${GITHUB_SHA}" | grep -v '^Bump VERSION to ' | sed 's/^/- /' || true)"
           fi
           if [ -z "$CHANGES_FULL" ]; then
             CHANGES_FULL="- (no new commits since the last deploy)"
