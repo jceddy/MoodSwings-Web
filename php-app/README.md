@@ -4282,7 +4282,14 @@ ever has `'table'`. Every message is rendered via `Element.append(string)`/
 `textContent`, never `innerHTML` -- free-text chat rendered back to other
 users is this issue's own flagged XSS surface, and this is the same
 text-node-only convention the rest of the frontend already follows for
-every other piece of user-supplied text on the board.
+every other piece of user-supplied text on the board. A row of "quick
+chat" buttons (`#game-chat-quick-buttons`, between the send form and the
+Close button) sends a canned message -- GL;HF, GG, and a handful of
+emoji -- on whichever channel is currently selected with one click, no
+typing required; each just calls the same `sendChatText()` helper the
+free-text form's own submit handler uses, differing only in where the
+message text comes from (a button's own `data-quick-chat-text` rather
+than `#game-chat-input`'s value).
 
 ### Duel: separate per-player decks
 

@@ -3215,6 +3215,9 @@
         }
     }
 
+    const chatQuickButtonsEl = document.getElementById('game-chat-quick-buttons');
+    const chatQuickButtons = Array.from(chatQuickButtonsEl.querySelectorAll('button'));
+
     document.getElementById('view-chat-button').addEventListener('click', () => {
         gameChatDialog.dataset.gameId = currentGameId;
         chatErrorEl.hidden = true;
@@ -3223,6 +3226,7 @@
         document.getElementById('game-chat-readonly-message').hidden = !readOnly;
         chatInput.disabled = readOnly;
         chatForm.querySelector('button').disabled = readOnly;
+        chatQuickButtons.forEach((button) => { button.disabled = readOnly; });
         gameChatDialog.showModal();
         if (currentState) {
             renderChat(currentState);
@@ -3233,12 +3237,11 @@
         gameChatDialog.close();
     });
 
-    chatForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const messageText = chatInput.value.trim();
-        if (messageText === '') {
-            return;
-        }
+    // Shared by the free-text form below and the quick-chat buttons
+    // (GL;HF/GG/emoji canned messages) further down -- both just send
+    // some text on whichever channel is currently selected, differing
+    // only in where that text comes from.
+    async function sendChatText(messageText) {
         chatErrorEl.hidden = true;
         const channel = chatChannelSelect.hidden ? 'table' : chatChannelSelect.value;
         const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
@@ -3247,8 +3250,28 @@
             chatErrorEl.hidden = false;
             return;
         }
-        chatInput.value = '';
         await refreshBoard();
+    }
+
+    chatForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const messageText = chatInput.value.trim();
+        if (messageText === '') {
+            return;
+        }
+        await sendChatText(messageText);
+        chatInput.value = '';
+    });
+
+    // Quick chat (canned GL;HF/GG/emoji messages, one click to send on
+    // whichever channel -- table or team -- is currently selected) --
+    // above the dialog's own Close button, per this feature's own
+    // placement. data-quick-chat-text (rather than each button's own
+    // textContent) is what actually gets sent, so a future button could
+    // show different label text than the message it sends without this
+    // needing to change; today they're identical for every button here.
+    chatQuickButtons.forEach((button) => {
+        button.addEventListener('click', () => sendChatText(button.dataset.quickChatText));
     });
 
     // Small inline pictograms (issue #143) replacing the players list's own

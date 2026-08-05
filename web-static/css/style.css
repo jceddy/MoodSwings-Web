@@ -1387,6 +1387,18 @@ dialog#game-chat-dialog[open] {
     min-width: 0;
 }
 
+/* Quick chat (canned GL;HF/GG/emoji messages, one click to send on
+   whichever channel is currently selected) -- sits between the send form
+   and the Close button, its own flex-wrap row rather than crammed into
+   #game-chat-form's own row alongside the channel select/text input/Send
+   button. */
+#game-chat-quick-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+}
+
 /* A small notification dot on #view-chat-button while the currently
    viewed game has chat messages that haven't been seen yet (dialog never
    opened, or closed before catching up) -- see renderChat() in game.js,

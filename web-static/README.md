@@ -1888,7 +1888,21 @@ too, proportional to the smaller card width.
     `refreshBoard()` immediately on success, the same "an action triggers
     its own refreshBoard()" convention Play/Pass/etc. already follow,
     rather than waiting for the next 4-second poll tick to show the
-    player's own just-sent message.
+    player's own just-sent message. Both the free-text form and a row of
+    "quick chat" buttons below it (`#game-chat-quick-buttons`, between the
+    form and the Close button -- GL;HF, GG, and a handful of emoji, one
+    click each) funnel through the same `sendChatText(messageText)`
+    helper, which does everything the old inline submit handler used to
+    (hide any previous error, resolve the channel, `sendChatMessage()`,
+    `refreshBoard()` on success) -- a quick-chat button's own
+    `data-quick-chat-text` supplies the message instead of
+    `#game-chat-input`'s value, and (unlike the form's own submit
+    handler) never touches the text input afterward, since there's
+    nothing in it to clear. Each quick-chat button is disabled/enabled in
+    lockstep with the free-text input and Send button whenever the
+    dialog opens (`isChatReadOnly()`), so a completed/abandoned game's
+    read-only chat can't be worked around by clicking GG instead of
+    typing it.
 
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
