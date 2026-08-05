@@ -1860,20 +1860,6 @@
             headerEl.appendChild(resultEl);
         }
 
-        // View draft pool (issue #314) -- match-level, not per-game (the
-        // pool is shared across the whole match, see
-        // GameService::draftMatchPoolView()), so this lives in the group's
-        // own header rather than on any one sub-row. Same "status is
-        // 'completed'" gate as winner_username above -- the pool view
-        // itself also enforces this server-side, but gating the button too
-        // avoids offering it for a still-undecided match's own dead end.
-        if (match.status === 'completed') {
-            const poolActionsEl = document.createElement('div');
-            poolActionsEl.className = 'lobby-actions';
-            poolActionsEl.appendChild(actionButton('View draft pool', () => openDraftPoolView(firstGame.id)));
-            headerEl.appendChild(poolActionsEl);
-        }
-
         // Reuses buildGameRow()'s own icon logic (see
         // appendPlayersWithFlags()) against firstGame -- the match's most
         // recent (and only ever actionable) game -- since a draft-based
@@ -1882,7 +1868,29 @@
         // otherwise never show these icons at all for a draft game.
         appendPlayersWithFlags(headerEl, firstGame);
 
-        li.appendChild(headerEl);
+        // headerEl's own text stack sits in a .lobby-row alongside View
+        // draft pool (issue #314) -- the same flex "text on the left,
+        // action button pinned to the right edge" layout buildGameRow()'s
+        // own .lobby-row/.lobby-info/.lobby-actions trio already uses,
+        // rather than stacking the button as just another line within
+        // headerEl itself. Match-level, not per-game (the pool is shared
+        // across the whole match, see GameService::draftMatchPoolView()),
+        // so this lives in the group's own header rather than on any one
+        // sub-row. Same "status is 'completed'" gate as winner_username
+        // above -- the pool view itself also enforces this server-side,
+        // but gating the button too avoids offering it for a
+        // still-undecided match's own dead end.
+        const headerRowEl = document.createElement('div');
+        headerRowEl.className = 'lobby-row';
+        headerRowEl.appendChild(headerEl);
+        if (match.status === 'completed') {
+            const poolActionsEl = document.createElement('div');
+            poolActionsEl.className = 'lobby-match-actions';
+            poolActionsEl.appendChild(actionButton('View draft pool', () => openDraftPoolView(firstGame.id)));
+            headerRowEl.appendChild(poolActionsEl);
+        }
+
+        li.appendChild(headerRowEl);
 
         const gamesListEl = document.createElement('ul');
         gamesListEl.className = 'lobby-match-games';

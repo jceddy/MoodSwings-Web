@@ -1156,6 +1156,19 @@ dialog#card-detail-dialog {
     margin-bottom: 0.5rem;
 }
 
+/* Quick/Winston/Grid Draft's own "My saved deck" pool-source fields --
+   each is the LAST field shown before #new-game-submit-button whenever
+   that pool source is chosen, and (like every other plain <div>-wrapped
+   field group in this dialog) has no bottom margin of its own by
+   default, so the Saved deck <select> and the Create game button sat
+   flush against each other. Same 0.5rem spacing .new-game-field already
+   uses elsewhere in this same dialog. */
+#new-game-quick-draft-saved-deck-fields,
+#new-game-winston-draft-saved-deck-fields,
+#new-game-grid-draft-saved-deck-fields {
+    margin-bottom: 0.5rem;
+}
+
 /* The submit button (inside <form>) and the Close button (a sibling
    after </form>) sit in different block boxes, so they stack instead of
    flowing side by side -- margin-top gives them a little breathing room
@@ -1601,6 +1614,18 @@ dialog#deck-builder-dialog[open] {
 .lobby-match-score {
     font-size: 0.85rem;
     color: var(--color-muted);
+}
+
+/* View draft pool (issue #314): keeps the button pinned to the right
+   edge of the match group's own header row (headerRowEl's .lobby-row),
+   vertically centered against however many lines headerEl's own text
+   wraps to -- same reasoning as .lobby-actions, but its own class since
+   there's always exactly one button here, not a stacked column, so it
+   doesn't need .lobby-actions' fixed width (sized to line up several
+   *different* rows' buttons in a column, not relevant to this one-off
+   button) or flex-direction: column. */
+.lobby-match-actions {
+    flex-shrink: 0;
 }
 
 /* Indented slightly so a match's own games read as nested under its
