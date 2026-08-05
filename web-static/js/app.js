@@ -366,6 +366,19 @@ function getSharedDeck(gameId, code) {
     return apiRequest(path);
 }
 
+// A completed Quick/Winston/Grid Draft match's full shared pool, sectioned
+// by who drafted each card plus whatever nobody kept (issue #314) -- see
+// GameService::draftMatchPoolView(). code is only ever passed while
+// spectating via a share code rather than friendship, same as
+// getSharedDeck() above -- see openDraftPoolView() in game.js.
+function getDraftPool(gameId, code) {
+    let path = '/games/draft-pool?game_id=' + encodeURIComponent(gameId);
+    if (code) {
+        path += '&code=' + encodeURIComponent(code);
+    }
+    return apiRequest(path);
+}
+
 // Spectator mode (issue #128) -- see GameService::listFriendsInProgressGames()/
 // getOrCreateSpectateCode()/resolveSpectateCode()/getSpectatorState(). Shared
 // here (rather than only in game.js) since both game/index.html (sharing a

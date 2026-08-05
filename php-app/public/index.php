@@ -1093,6 +1093,31 @@ if ($path === '/games/deck' && $method === 'GET') {
     }
 }
 
+// Issue #314 "view shared draft pool after a draft match completes": the
+// full pool a Quick/Winston/Grid Draft match was drafted from, plus each
+// seated player's own drafted cards and whatever nobody ended up with.
+// Same "reviewing after the fact" spirit -- and the same seated-or-
+// canSpectateGame() authorization -- as GET /games/replay/state above,
+// since draftMatchPoolView() itself enforces the actual "only once the
+// match is completed" gate (a 409, not a 403 -- the requester IS
+// authorized to view this game, the data just isn't ready yet).
+if ($path === '/games/draft-pool' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+    $code = isset($_GET['code']) ? (string) $_GET['code'] : null;
+
+    $isSeated = $games->gamePlayerIdFor($gameId, (int) $currentUser['id']) !== null;
+    if (!$isSeated && !canSpectateGame($games, $friendships, $gameId, (int) $currentUser['id'], $code)) {
+        respond(403, ['status' => 'error', 'message' => 'You are not authorized to view this game.']);
+    }
+
+    try {
+        respond(200, ['status' => 'ok', ...$games->draftMatchPoolView($gameId)]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/games/start' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();

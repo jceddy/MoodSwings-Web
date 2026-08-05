@@ -497,7 +497,8 @@ body.game-page {
 #deck-view-sideboard-cards,
 #shared-deck-cards,
 .deck-builder-card-grid,
-.spectator-final-hand ul {
+.spectator-final-hand ul,
+.draft-pool-cards {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -1171,8 +1172,20 @@ dialog#card-detail-dialog {
    heading, whichever ends up last) directly above it. */
 #deck-view-close-button,
 #shared-deck-close-button,
+#draft-pool-close-button,
 #deck-builder-save-button {
     margin-top: 0.5rem;
+}
+
+/* One heading + card grid per draft-pool-dialog section (issue #314) --
+   spacing between sections since there's always at least 2 (one per
+   player), often 3+ once "Not drafted" is shown. */
+.draft-pool-section {
+    margin-bottom: 1rem;
+}
+
+.draft-pool-section h3 {
+    margin: 0 0 0.5rem;
 }
 
 dialog#art-preview-dialog {
@@ -1219,6 +1232,23 @@ dialog#game-log-dialog[open] {
    viewport), just wider still since a card thumbnail takes up
    considerably more horizontal room than a line of log text. */
 dialog#shared-deck-dialog[open] {
+    box-sizing: border-box;
+    max-width: 48rem;
+    width: 90%;
+    max-height: 80vh;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+    overflow-y: auto;
+}
+
+/* A completed draft match's shared pool (issue #314) -- same sizing
+   reasoning as dialog#shared-deck-dialog[open] immediately above, just
+   tall enough to comfortably scroll several card-grid sections (one per
+   player, plus "Not drafted") rather than just one flat list. */
+dialog#draft-pool-dialog[open] {
     box-sizing: border-box;
     max-width: 48rem;
     width: 90%;

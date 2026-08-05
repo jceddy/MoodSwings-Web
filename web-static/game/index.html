@@ -594,6 +594,20 @@
         <button id="shared-deck-close-button" type="button">Close</button>
     </dialog>
 
+    <!-- A completed Quick/Winston/Grid Draft match's full shared pool
+         (issue #314), sectioned by which player drafted each card plus
+         whatever nobody kept -- see openDraftPoolView() in game.js and
+         GameService::draftMatchPoolView(). Sections are built dynamically
+         (one per player, plus "Not drafted" when non-empty) since a
+         match's player count varies 2-4 and whether anything went
+         undrafted varies by format. -->
+    <dialog id="draft-pool-dialog">
+        <h2>Draft pool</h2>
+        <p id="draft-pool-meta"></p>
+        <div id="draft-pool-sections"></div>
+        <button id="draft-pool-close-button" type="button">Close</button>
+    </dialog>
+
     <!-- Private in-game notepad (issue #258) -- one freeform note per seat,
          never shared with the other players at the table. Autosaves as you
          type (debounced) -- see openNotesDialog() in game.js and

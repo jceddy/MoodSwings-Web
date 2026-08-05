@@ -682,7 +682,28 @@ too, proportional to the smaller card width.
     Play/View button and its own `winner_usernames` line once that
     particular game is `completed` -- not redundant with the group header's
     own result, since a match's games aren't necessarily all won by the
-    same player. A "New game" dialog
+    same player.
+  - **View draft pool** (issue #314): once `match.status === 'completed'`
+    (the same field the `.lobby-winner` result line above gates on), the
+    group header also gets a `.lobby-actions`-wrapped "View draft pool"
+    button (`openDraftPoolView(firstGame.id)`), separate from any
+    individual game's own action row since the pool is shared across the
+    whole match, not scoped to one of its up-to-3 games. Opens
+    `#draft-pool-dialog`, fetching `GET /games/draft-pool` (see
+    `GameService::draftMatchPoolView()` in `../php-app/README.md`) and
+    rendering one `.draft-pool-section` per player (heading "username (N)"
+    over a `buildCardThumb()`/`openCardDetail()` grid of exactly that
+    player's own drafted cards, the same click-for-detail card-grid pattern
+    every other card list in this app already uses) plus, only when
+    non-empty, a final "Not drafted (N)" section for whatever the pool's
+    `pool_card_ids` doesn't account for in anyone's `drafted_card_ids` --
+    Quick Draft and Grid Draft always have something here by design (their
+    own per-round discard mechanics), Winston Draft normally doesn't
+    (its draft only ends once the whole pool is claimed), so the section is
+    simply omitted rather than shown empty for that format. `code` is
+    passed through from `activeShareCode()` exactly like
+    `openSharedDeckView()` does, so a spectator viewing via share code can
+    open this too. A "New game" dialog
     (`.new-game-field` puts the Format and Deck `<label>`s each on their
     own line -- plain inline `<label>` elements otherwise sit side by side
     until their own `<select>` runs out of room, rather than breaking
