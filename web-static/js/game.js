@@ -3541,14 +3541,15 @@
                     ? (player.custom_deck_name || 'Uploaded Deck')
                     : null;
                 // Open Team Play's own team_id (null in every other format)
-                // -- tags each row with which team it's on, and calls out
-                // the viewer's own teammate specifically since that's the
-                // one other player whose hand they can actually see (see
-                // the teammate-hand section below).
+                // -- calls out the viewer's own teammate specifically
+                // since that's the one other player whose hand they can
+                // actually see (see the teammate-hand section below).
+                // Previously also drove a plain "— Team N (your
+                // teammate)" text tag on this row; now conveyed instead
+                // by the team-affiliation icon's own title/aria-label
+                // below (see teamIconLabel), so isTeammate is only needed
+                // here for that icon's wording.
                 const isTeammate = state.you.teammate_game_player_id === player.game_player_id;
-                const teamLabel = player.team_id !== null
-                    ? ' — Team ' + (player.team_id + 1) + (isTeammate ? ' (your teammate)' : '')
-                    : '';
 
                 const isYou = state.you.game_player_id === player.game_player_id;
 
@@ -3575,8 +3576,6 @@
                     resignedTag.textContent = ' (resigned)';
                     nameEl.appendChild(resignedTag);
                 }
-                nameEl.appendChild(document.createTextNode(teamLabel));
-
                 // Wraps the username line plus (for custom_duel) a second
                 // line naming that player's own deck -- .player-name (moved
                 // here from nameEl itself) is what the width-alignment pass
@@ -3619,11 +3618,15 @@
                 // Team affiliation (Open/Closed Team Play only) -- color,
                 // not the team NUMBER, is what actually matters to the
                 // viewer at a glance: green for their own team (including
-                // their own row), red for the opposing team. The existing
-                // text-based teamLabel above already spells out which
-                // numbered team and calls out the specific teammate by
-                // name, so this icon is a quick-glance summary of that,
-                // not a replacement for it. Skipped entirely for a
+                // their own row), red for the opposing team. This icon is
+                // the ONLY place that information appears now (there used
+                // to also be a plain "— Team N (your teammate)" text tag
+                // on the row itself) -- its title/aria-label (see
+                // buildPlayerFlag()) carries the exact same wording that
+                // text tag used to, so a screen reader (or a sighted user
+                // hovering for a reminder) still gets the full "Team N"/
+                // "your teammate" information, just via the icon instead
+                // of separate on-row text. Skipped entirely for a
                 // spectator/replay viewer (viewerTeamId === null there,
                 // since they have no team of their own) -- coloring every
                 // row red for someone with no "own team" to contrast
@@ -3631,7 +3634,7 @@
                 if (player.team_id !== null && viewerTeamId !== null) {
                     const isSameTeamAsViewer = player.team_id === viewerTeamId;
                     const teamIconLabel = 'Team ' + (player.team_id + 1) +
-                        (isSameTeamAsViewer ? ' (your team)' : ' (opposing team)');
+                        (isTeammate ? ' (your teammate)' : '');
                     iconsEl.appendChild(buildPlayerFlag(
                         'team',
                         teamIconLabel,
