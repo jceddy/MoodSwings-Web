@@ -1,0 +1,13 @@
+-- No schema change: the #team-scores section's own "Team N (name & name)"
+-- identifier string is now the same team-affiliation shield icon the
+-- Players list rows already use (green/red relative to viewerTeamId)
+-- instead of spelled-out text, so each line just reads "— N point(s)
+-- this round, N round win(s)" after the icon -- the removed text lives
+-- on as the icon's own title/aria-label. This migration exists purely
+-- to keep schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0083 already did for their own schema-less changes --
+-- MaintenanceGate compares the deployed VERSION file against this table
+-- on every request, so a VERSION bump with no matching schema_version
+-- update would show maintenance mode after deploy even though nothing
+-- about the schema actually changed.
+UPDATE schema_version SET version = '1.11.14' WHERE id = 1;

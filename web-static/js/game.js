@@ -3694,7 +3694,7 @@
         const maxNameWidth = Math.max(0, ...Array.from(playerNameEls, (el) => el.offsetWidth));
         playerNameEls.forEach((el) => { el.style.minWidth = maxNameWidth + 'px'; });
 
-        renderTeamScores(state.teams);
+        renderTeamScores(state.teams, viewerTeamId);
 
         if (state.game.status === 'waiting') {
             inProgressArea.hidden = true;
@@ -3933,7 +3933,16 @@
     // GameService::getState()'s early return for 'waiting'), so the
     // partner pairing itself is only visible via each player row's own
     // team_id tag (see the players-list renderer above) until then.
-    function renderTeamScores(teams) {
+    // $viewerTeamId (null outside Open/Closed Team Play, or for a
+    // spectator/replay viewer with no team of their own -- same value
+    // renderBoard() already computes for the Players list' own
+    // team-affiliation icons) drives the same green/red coloring here:
+    // the "Team N (name & name)" identifier is now the icon's own
+    // title/aria-label rather than spelled out inline, matching how that
+    // information moved off the Players-list rows and onto their own
+    // icons too, so the score line itself just reads "— N point(s) this
+    // round, N round win(s)" after it.
+    function renderTeamScores(teams, viewerTeamId) {
         const container = document.getElementById('team-scores');
         if (!teams) {
             container.hidden = true;
@@ -3944,8 +3953,17 @@
         renderList(document.getElementById('team-scores-list'), { hidden: true }, teams, (team) => {
             const li = document.createElement('li');
             const memberNames = team.game_player_ids.map(playerLabelFor).join(' & ');
-            li.textContent = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ') — ' +
-                team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)';
+            const teamLabel = 'Team ' + (team.team_id + 1) + ' (' + memberNames + ')';
+            // No color-coding at all (left at .player-flag's own default
+            // muted gray) when there's no viewer team to compare
+            // against -- coloring both teams red for a spectator would
+            // be misleading, not informative, same reasoning the
+            // Players-list icon already follows.
+            const extraClass = viewerTeamId === null
+                ? null
+                : (team.team_id === viewerTeamId ? 'player-flag--teamMate' : 'player-flag--teamOpponent');
+            li.appendChild(buildPlayerFlag('team', teamLabel, extraClass));
+            li.append(' — ' + team.total_score + ' point(s) this round, ' + team.total_wins + ' round win(s)');
             return li;
         });
     }
