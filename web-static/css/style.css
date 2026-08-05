@@ -1350,10 +1350,10 @@ dialog#game-chat-dialog[open] {
     overflow-wrap: break-word;
 }
 
-/* A team-channel message (Open/Closed Team Play only -- see
-   isTeamFormat() in renderChat()) is visually set apart from the
-   whole-table channel it's mixed in with in the same list, echoing the
-   " (team)" suffix already appended to its sender label. */
+/* A team-channel message (Open Team Play only -- see renderChat()'s own
+   format check) is visually set apart from the whole-table channel it's
+   mixed in with in the same list, echoing the " (team)" suffix already
+   appended to its sender label. */
 .chat-team-message {
     background-color: var(--color-bg);
     border-radius: 0.25rem;

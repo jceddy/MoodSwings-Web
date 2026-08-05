@@ -11775,11 +11775,28 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->postChatMessage($gameId, $p1, 'team', 'Only I can see this... right?');
     }
 
-    // Open/Closed Team Play's own private teammate-only channel
-    // alongside the whole-table one -- 'team'-channel messages are only
-    // ever visible to seats sharing the sender's own team_id, never the
-    // opposing team, and 'table'-channel messages stay visible to
-    // everyone regardless of team.
+    // Closed Team Play (format 'closed_team') deliberately gets NO 'team'
+    // chat channel, unlike every other isTeamFormat()-gated mechanic in
+    // this file -- that format's whole premise is that information stays
+    // closed between teammates (see testSubmitInitialCardPassRequiresExactlyTwoCards()
+    // and friends above), so a private out-of-band channel would
+    // undercut the one thing it's actually testing. Open Team Play
+    // (format 'team') has no such restriction -- see
+    // testTeamChannelMessagesAreOnlyVisibleToTheSendersOwnTeam() below.
+    public function testPostChatMessageRejectsTeamChannelForClosedTeamFormat(): void
+    {
+        ['gameId' => $gameId, 'p1' => $p1] = $this->buildClosedTeamFixture();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('no team channel');
+        $this->games->postChatMessage($gameId, $p1, 'team', 'Only my closed_team partner can see this... right?');
+    }
+
+    // Open Team Play's own private teammate-only channel alongside the
+    // whole-table one -- 'team'-channel messages are only ever visible to
+    // seats sharing the sender's own team_id, never the opposing team,
+    // and 'table'-channel messages stay visible to everyone regardless
+    // of team.
     public function testTeamChannelMessagesAreOnlyVisibleToTheSendersOwnTeam(): void
     {
         $fixture = $this->buildTeamFixture();

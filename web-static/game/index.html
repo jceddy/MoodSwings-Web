@@ -628,9 +628,12 @@
          on the existing GET /games/state poll rather than its own polling
          endpoint, so this dialog re-renders from currentState.chat_messages
          every refreshBoard() tick while it's open -- see renderChat() in
-         game.js. #chat-channel-select only appears for Open/Closed Team
-         Play games (isTeamFormat() server-side); every other format only
-         ever has the 'table' channel. -->
+         game.js. #chat-channel-select only appears for Open Team Play
+         games (format 'team' -- deliberately NOT 'closed_team' too,
+         since that format's whole premise is that information stays
+         closed between teammates; enforced server-side in
+         GameService::postChatMessage()); every other format only ever
+         has the 'table' channel. -->
     <dialog id="game-chat-dialog">
         <h2>Chat</h2>
         <p id="game-chat-readonly-message" hidden>This game has ended, so chat is read-only.</p>

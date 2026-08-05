@@ -1859,9 +1859,12 @@ too, proportional to the smaller card width.
     clears the moment the dialog is opened -- tracked per-game (`chatSeenGameId`/
     `chatSeenCount`) so switching to a different game doesn't carry over a
     stale unread count. `#chat-channel-select` (a `<select>` for `Table`/
-    `Team`) is only shown for `team`/`closed_team` games -- every other
-    format only ever has the `'table'` channel, so sending always uses
-    `'table'` when the selector itself is hidden. Sending
+    `Team`) is only shown for `format: 'team'` games -- deliberately NOT
+    `closed_team` too (see "In-game chat" in `../php-app/README.md` for
+    why: Closed Team Play's whole premise is that information stays
+    closed between teammates, so it gets no private channel); every
+    other format only ever has the `'table'` channel, so sending always
+    uses `'table'` when the selector itself is hidden. Sending
     (`sendChatMessage()` -> `POST /games/chat`) clears the input and calls
     `refreshBoard()` immediately on success, the same "an action triggers
     its own refreshBoard()" convention Play/Pass/etc. already follow,

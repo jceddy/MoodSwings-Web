@@ -9,12 +9,13 @@
 -- a real sender -- chat is seated-players-only, spectators can neither
 -- read nor write it (see GameService::chatMessagesFor()'s own docblock).
 --
--- 'channel' + 'team_id' together support Open/Closed Team Play's own
--- private teammate-only channel alongside the whole-table one: 'table'
--- messages are always visible to everyone seated; 'team' messages are
--- only ever inserted for a format where game_players.team_id is actually
--- set (see GameService::postChatMessage()), and only visible to seats
--- sharing that same team_id. team_id is redundant with a join back to
+-- 'channel' + 'team_id' together support Open Team Play's own private
+-- teammate-only channel alongside the whole-table one: 'table' messages
+-- are always visible to everyone seated; 'team' messages are only ever
+-- inserted for format 'team' (see GameService::postChatMessage() --
+-- deliberately NOT Closed Team Play too, whose entire premise is that
+-- information stays closed between teammates), and only visible to
+-- seats sharing that same team_id. team_id is redundant with a join back to
 -- game_players through sender_game_player_id, but storing it directly
 -- keeps the read-side filter (WHERE channel = 'table' OR (channel =
 -- 'team' AND team_id = :viewer_team_id)) a single indexed lookup rather

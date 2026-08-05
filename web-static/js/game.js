@@ -3159,8 +3159,13 @@
             chatSeenCount = 0;
         }
 
-        const isTeamFormat = state.game.format === 'team' || state.game.format === 'closed_team';
-        chatChannelSelect.hidden = !isTeamFormat;
+        // Open Team Play only -- NOT 'closed_team' too, unlike every other
+        // isTeamFormat()-style check elsewhere in this file. Closed Team
+        // Play's whole premise is that information stays closed between
+        // teammates (see postChatMessage()'s own docblock in
+        // GameService.php), so it gets no private channel to undercut
+        // that with.
+        chatChannelSelect.hidden = state.game.format !== 'team';
 
         if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
             renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);

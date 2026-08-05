@@ -4194,15 +4194,26 @@ always returns `chat_messages` once the game is `in_progress`/`completed`
 `[]` regardless, since `buildGameState()`'s single shared builder only
 ever populates it when there's a real seated viewer.
 
-Open/Closed Team Play (`format` `team`/`closed_team`, `GameService::
-isTeamFormat()`) additionally gets a private teammate-only channel
+Open Team Play (`format: 'team'` only -- deliberately NOT Closed Team
+Play, see below) additionally gets a private teammate-only channel
 alongside the whole-table one -- the first team-scoped read/write path
 anywhere in this schema. `channel` (`ENUM('table', 'team')`) plus `team_id`
 together drive it: `'table'` messages are always visible to every seated
-player; `'team'` messages are only ever inserted for a team-format game
+player; `'team'` messages are only ever inserted for format `'team'`
 where the sender actually has a `game_players.team_id` (`GameStateException`
 otherwise, "This game has no team channel." / "You are not on a team in
 this game."), and only visible to seats sharing that same `team_id`.
+`closed_team` games get no `'team'` channel at all --
+`GameService::postChatMessage()` deliberately checks `$game['format'] ===
+'team'` rather than the shared `isTeamFormat()` predicate ($format ===
+'team' || $format === 'closed_team') every OTHER team-format branch in
+this file uses, since Closed Team Play's entire premise is that
+information stays closed between teammates (see "Closed Team Play"
+above, point 4) -- a private out-of-band channel there would undercut the
+one thing that format is actually testing. Open Team Play has no such
+restriction (partners already see each other's hands via
+`you.teammate_hand`), so a private channel there is just a convenience,
+not a rules violation.
 `team_id` is stored directly on the message row rather than only
 resolvable via a join back through `sender_game_player_id`, keeping the
 read-side filter (`WHERE channel = 'table' OR (channel = 'team' AND
@@ -4256,8 +4267,9 @@ close and reopen it. A small notification dot on the "Chat" button itself
 dot) lights up when the currently-viewed game has messages the player
 hasn't seen yet (dialog never opened, or closed before catching up), and
 clears the moment the dialog is opened. The channel `<select>` only
-appears for `team`/`closed_team` games; every other format only ever has
-`'table'`. Every message is rendered via `Element.append(string)`/
+appears for `format: 'team'` games -- NOT `closed_team` too, unlike every
+other team-format UI check in this frontend; every other format only
+ever has `'table'`. Every message is rendered via `Element.append(string)`/
 `textContent`, never `innerHTML` -- free-text chat rendered back to other
 users is this issue's own flagged XSS surface, and this is the same
 text-node-only convention the rest of the frontend already follows for

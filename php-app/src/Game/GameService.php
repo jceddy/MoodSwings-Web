@@ -4514,18 +4514,30 @@ final class GameService
 
     /**
      * In-game chat (issue #109): appends one message to $gameId's chat,
-     * visible either to the whole seated table ('table') or, for a team
-     * format only (isTeamFormat()), to $senderGamePlayerId's own
-     * teammate too ('team') -- see chatMessagesFor()'s own read-side
-     * filter for the other half of this. Only while the game is
-     * 'in_progress', the same "editable only in_progress, stays visible
-     * read-only after" rule saveNote() enforces for notes -- "while
-     * playing" is this issue's own framing, and a completed/abandoned
-     * game has no one left mid-conversation to send to. Fires a
-     * best-effort notification (never blocking, see NotificationService's
-     * own docblock) to every OTHER seat this message is actually visible
-     * to -- never the sender, and never the other team once $channel is
-     * 'team'.
+     * visible either to the whole seated table ('table') or, for Open
+     * Team Play only ('team' -- NOT isTeamFormat(), see below), to
+     * $senderGamePlayerId's own teammate too ('team' channel) -- see
+     * chatMessagesFor()'s own read-side filter for the other half of
+     * this. Only while the game is 'in_progress', the same "editable
+     * only in_progress, stays visible read-only after" rule saveNote()
+     * enforces for notes -- "while playing" is this issue's own framing,
+     * and a completed/abandoned game has no one left mid-conversation to
+     * send to. Fires a best-effort notification (never blocking, see
+     * NotificationService's own docblock) to every OTHER seat this
+     * message is actually visible to -- never the sender, and never the
+     * other team once $channel is 'team'.
+     *
+     * Deliberately checks `$game['format'] === 'team'` rather than the
+     * shared isTeamFormat() predicate every OTHER team-format branch in
+     * this file uses -- Closed Team Play's entire premise is that
+     * information stays closed between teammates (see "Closed Team Play"
+     * in php-app/README.md, point 4: getState() never even reveals a
+     * closed_team partner's hand), so a private out-of-band channel for
+     * them to coordinate would undercut the one thing that format is
+     * actually testing. Open Team Play has no such restriction (partners
+     * already see each other's hands via you.teammate_hand), so a
+     * private channel there is just a convenience, not a rules
+     * violation.
      */
     public function postChatMessage(int $gameId, int $senderGamePlayerId, string $channel, string $messageText): void
     {
@@ -4544,7 +4556,7 @@ final class GameService
 
         $senderTeamId = null;
         if ($channel === 'team') {
-            if (!self::isTeamFormat($game['format'])) {
+            if ($game['format'] !== 'team') {
                 throw new GameStateException('This game has no team channel.');
             }
             $teamStmt = Connection::get()->prepare('SELECT team_id FROM game_players WHERE id = :id');

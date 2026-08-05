@@ -1222,8 +1222,10 @@ if ($path === '/games/notes' && $method === 'POST') {
 // its own polling endpoint, see GameService::chatMessagesFor()'s own
 // docblock), so sending is the only new endpoint needed. 'channel'
 // defaults to 'table' -- the only option every format actually has;
-// 'team' is only valid for format 'team'/'closed_team' (enforced inside
-// postChatMessage() itself, a 409 otherwise).
+// 'team' is only valid for format 'team' (Open Team Play only -- NOT
+// 'closed_team', whose whole premise is that information stays closed
+// between teammates, see postChatMessage()'s own docblock; enforced
+// inside postChatMessage() itself, a 409 otherwise).
 if ($path === '/games/chat' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
