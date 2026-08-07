@@ -1,0 +1,17 @@
+-- No schema change: the Discord deploy-announcement changelog (deploy.yml/
+-- deploy-dev.yml's own "Announce deploy on Discord" step) listed commits
+-- newest-first (git log's own default), which read backwards as a bullet
+-- list -- an earlier bullet could reference something not explained
+-- until a later bullet, because "later" in the list actually meant
+-- "committed earlier". Now built with `git log --reverse`, so commits
+-- list oldest-first (implementation order); when truncated to fit
+-- Discord's message-length cap, the omitted-count note also moved from
+-- trailing the list to leading it, since it now stands for commits that
+-- chronologically precede everything actually shown, not follow it.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0085 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.11.16' WHERE id = 1;
