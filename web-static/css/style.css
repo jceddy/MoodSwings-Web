@@ -460,6 +460,14 @@ body.game-page {
     font-style: italic;
 }
 
+/* Practice bot (issue #140) -- muted rather than a strong color like
+   (you)/(resigned) above, since it's an ambient fact about the seat
+   rather than something the viewer needs to react to. */
+.player-bot-tag {
+    color: var(--color-muted);
+    font-style: italic;
+}
+
 .player-deck-name {
     font-size: 0.85rem;
     color: var(--color-muted);

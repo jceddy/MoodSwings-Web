@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace MoodSwings\Game;
 
+use MoodSwings\Bot\BotChoiceResolver;
+use MoodSwings\Bot\BotPlayerService;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
@@ -470,6 +472,7 @@ final class GameService
         private readonly GameNoteRepository $notes = new GameNoteRepository(),
         private readonly CardStatsService $cardStats = new CardStatsService(),
         private readonly GameChatRepository $chat = new GameChatRepository(),
+        private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
     ) {
     }
 
@@ -571,6 +574,16 @@ final class GameService
             if ($deckType === 'power') {
                 throw new GameStateException('The "power" deck type is too small for Team Play\'s ' . self::MIN_TEAM_DECK_SIZE . '-card minimum -- choose a different deck type');
             }
+        }
+
+        // Practice bots (issue #140) only support the simplest case for
+        // now: Traditional/Duel with a deck_type that needs no per-player
+        // setup of its own (no custom decklist to write on the bot's
+        // behalf, no draft picks for it to make). Checked up front, ahead
+        // of the deck-type-specific validation/building below, so a
+        // doomed request never gets as far as e.g. parsing a decklist.
+        if ($this->containsBotUser($userIds) && !$this->botsSupportedFor($format, $deckType)) {
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel games using a Structure, Power, jceddy\'s 75 Card, or One of Each Card deck');
         }
 
         $customDeckName = null;
@@ -735,6 +748,61 @@ final class GameService
         }
 
         return $gameId;
+    }
+
+    /**
+     * Every deck_type a practice bot (issue #140) can currently be seated
+     * in a game with -- none of the four need any per-player setup a bot
+     * would have to do itself (a custom decklist to submit, a draft to
+     * pick through), unlike 'custom'/'custom_duel'/'quick_draft'/
+     * 'winston_draft'/'grid_draft'. See botsSupportedFor().
+     */
+    private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each'];
+
+    /**
+     * Whether a practice bot (issue #140) can be seated in a game with
+     * this $format/$deckType combination -- Traditional/Duel only for
+     * now, both because Team Play needs a bot to also answer turn-order
+     * propose/confirm decisions (and, for Closed Team Play, a blind
+     * pregame card pass) and because the 'draft' format needs a bot to
+     * make its own draft picks -- neither of which BotPlayerService
+     * implements yet. See BOT_SUPPORTED_DECK_TYPES for the deck_type half
+     * of this restriction.
+     */
+    private function botsSupportedFor(string $format, string $deckType): bool
+    {
+        return in_array($format, ['standard', 'duel'], true) && in_array($deckType, self::BOT_SUPPORTED_DECK_TYPES, true);
+    }
+
+    /**
+     * The full practice-bot (issue #140) roster -- every users.is_bot
+     * row, ordered by id (i.e. migration 0090's own seeding order,
+     * BotAlice/BotBen/BotCleo), for the New Game dialog's own bot picker.
+     *
+     * @return array<int, array{user_id: int, username: string}>
+     */
+    public function listPracticeBots(): array
+    {
+        $stmt = Connection::get()->query('SELECT id, username FROM users WHERE is_bot = 1 ORDER BY id ASC');
+
+        return array_map(
+            static fn (array $row) => ['user_id' => (int) $row['id'], 'username' => $row['username']],
+            $stmt->fetchAll(),
+        );
+    }
+
+    /** Whether any of $userIds is a practice bot (users.is_bot) -- see botsSupportedFor(). */
+    private function containsBotUser(array $userIds): bool
+    {
+        if ($userIds === []) {
+            return false;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT COUNT(*) FROM users WHERE id IN ({$placeholders}) AND is_bot = 1");
+        $stmt->execute(array_values($userIds));
+
+        return ((int) $stmt->fetchColumn()) > 0;
     }
 
     /**
@@ -3117,6 +3185,102 @@ final class GameService
     }
 
     /**
+     * Generous but bounded -- covers even a long chain of grant-fueled
+     * bot turns/decisions in a row (advanceBotTurns()) without risking a
+     * genuine engine bug (e.g. a mutually-triggering pair of effects)
+     * looping forever.
+     */
+    private const MAX_BOT_ACTIONS_PER_REQUEST = 200;
+
+    /**
+     * Drives every practice bot's (issue #140) own turn/decision-answer
+     * in a row, immediately after a human's own playMood()/pass()/
+     * respondToDecision() call has already fully returned -- called from
+     * the three matching routes in public/index.php, right after each
+     * one, so a solo human never has to manually advance a bot's turn
+     * themselves. See php-app/README.md's "Practice bots" section for
+     * the full design (why a wrapper around these three rather than
+     * something threaded into their own internals).
+     *
+     * Each iteration takes a FRESH BoardState/DB read (not carried over
+     * from a previous iteration) and drives at most one bot action
+     * through the exact same public playMood()/pass()/
+     * respondToDecision() entry points a real player's own request would
+     * use -- each still gets its own withGameLock() cycle, taken fresh
+     * after the previous one (including the human's own triggering call)
+     * has already released it, sidestepping any question of MySQL's
+     * GET_LOCK()'s reentrancy within one connection.
+     *
+     * @return array<string, mixed>|null the LAST bot action's own result
+     *     (the same shape playMood()/pass()/respondToDecision() return),
+     *     which the caller should use IN PLACE of the human's own result
+     *     once any bot has acted, since it's now the more current picture
+     *     of the game (e.g. a bot's own play might be what actually
+     *     completed the game). Null if no bot ever got to act (no bots
+     *     seated in this game, or it was never actually their turn),
+     *     in which case the caller keeps the human's own original result.
+     */
+    public function advanceBotTurns(int $gameId): ?array
+    {
+        $botGamePlayerIds = $this->botGamePlayerIds($gameId);
+        if ($botGamePlayerIds === []) {
+            return null;
+        }
+
+        $lastResult = null;
+        for ($i = 0; $i < self::MAX_BOT_ACTIONS_PER_REQUEST; $i++) {
+            try {
+                $round = $this->currentRound($gameId);
+            } catch (GameStateException) {
+                break; // game completed/abandoned -- nothing left to drive
+            }
+            $roundId = (int) $round['id'];
+
+            $batch = $this->activePendingBatch($roundId);
+            if ($batch !== null) {
+                $decision = $this->activePendingDecision((int) $batch['id']);
+                $targetGamePlayerId = $decision !== null ? (int) $decision['target_game_player_id'] : null;
+                if ($targetGamePlayerId === null || !in_array($targetGamePlayerId, $botGamePlayerIds, true)) {
+                    break; // waiting on a real player (or a batch with nothing left unresolved -- shouldn't happen)
+                }
+
+                $field = json_decode((string) $decision['field'], true);
+                $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId);
+                $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
+                continue;
+            }
+
+            $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
+            if ($currentTurnGamePlayerId === null || !in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
+                break; // waiting on a real player, or a frozen round (team formats never seat a bot -- see botsSupportedFor())
+            }
+
+            $state = $this->boardStates->load($gameId);
+            $playableCardIds = array_values(array_filter(
+                $state->hand($currentTurnGamePlayerId),
+                fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
+            ));
+            $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
+            $lastResult = $action !== null
+                ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
+                : $this->pass($gameId, $currentTurnGamePlayerId);
+        }
+
+        return $lastResult;
+    }
+
+    /** @return int[] every game_players.id in $gameId whose seat is a practice bot (users.is_bot) */
+    private function botGamePlayerIds(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id AND u.is_bot = 1'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
      * Lets a seated player give up instead of playing a game out.
      *
      * Team-format games (always exactly two opposing SIDES -- a 2v2 team
@@ -4375,19 +4539,39 @@ final class GameService
      * that reaches game completion already funnels through here, so
      * that's the only place this needs to be called from, rather than
      * duplicating it at each of this method's own call sites.
+     *
+     * Neither of those two stats updates happens at all when any seated
+     * player is a practice bot (issue #140) -- see botsSupportedFor()'s
+     * own docblock for why a bot is only ever seated in the first place
+     * for exactly this kind of low-stakes practice game. Beating (or
+     * losing to) a bot repeatedly shouldn't be able to inflate a real
+     * player's own win rate, and a bot's own "deck" (whichever
+     * non-custom deck_type the human picked for the whole game) has
+     * nothing to do with real card-performance data either. The game
+     * still completes normally in every other way -- still shows up in
+     * that player's own GET /games/past (clearly marked via
+     * game_players[].is_bot), still sends the ordinary "game finished"
+     * notification below -- only the two aggregate stats updates are
+     * skipped.
      */
     private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId, ?int $excludeGamePlayerId = null): void
     {
-        $stmt = Connection::get()->prepare('SELECT id, user_id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id, gp.user_id, gp.team_id, u.is_bot FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id'
+        );
         $stmt->execute(['game_id' => $gameId]);
         $players = $stmt->fetchAll();
 
         $excludeUserId = null;
         $winningUserIds = [];
         $losingUserIds = [];
+        $containsBot = false;
         foreach ($players as $player) {
             if ($excludeGamePlayerId !== null && (int) $player['id'] === $excludeGamePlayerId) {
                 $excludeUserId = (int) $player['user_id'];
+            }
+            if ((bool) $player['is_bot']) {
+                $containsBot = true;
             }
 
             $isWinner = $winnerTeamId !== null
@@ -4400,9 +4584,11 @@ final class GameService
             }
         }
 
-        $this->bumpLifetimeStats($winningUserIds, 'game_wins');
-        $this->bumpLifetimeStats($losingUserIds, 'game_losses');
-        $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
+        if (!$containsBot) {
+            $this->bumpLifetimeStats($winningUserIds, 'game_wins');
+            $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+            $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
+        }
 
         foreach ($winningUserIds as $userId) {
             if ($userId === $excludeUserId) {
@@ -6353,7 +6539,7 @@ final class GameService
         $game = $this->fetchGame($gameId);
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -6370,6 +6556,11 @@ final class GameService
                 'user_id' => (int) $row['user_id'],
                 'username' => $row['username'],
                 'seat_order' => (int) $row['seat_order'],
+                // Practice bot (issue #140) -- see "Practice bots" in
+                // php-app/README.md. Surfaced here (GET /games, GET
+                // /games/past) so the lobby can badge a bot player the
+                // same way GET /games/state's own 'players' does.
+                'is_bot' => (bool) $row['is_bot'],
             ];
         }
 
@@ -7549,7 +7740,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.share_presence FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.share_presence, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -7595,6 +7786,9 @@ final class GameService
                 // format, since game_players.team_id is never written
                 // otherwise.
                 'team_id' => $row['team_id'] !== null ? (int) $row['team_id'] : null,
+                // Practice bot (issue #140) -- see "Practice bots" in
+                // php-app/README.md.
+                'is_bot' => (bool) $row['is_bot'],
                 'hand_count' => $handCounts[(int) $row['id']] ?? 0,
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
                 // Overwritten below with the live sum of this player's
@@ -8367,7 +8561,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -8385,6 +8579,9 @@ final class GameService
                 'username' => $row['username'],
                 'seat_order' => (int) $row['seat_order'],
                 'team_id' => $row['team_id'] !== null ? (int) $row['team_id'] : null,
+                // Practice bot (issue #140) -- see "Practice bots" in
+                // php-app/README.md.
+                'is_bot' => (bool) $row['is_bot'],
                 'hand_count' => count($state->hand((int) $row['id'])),
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
                 'total_score' => $this->boardPointTotalFor($state, (int) $row['id']),

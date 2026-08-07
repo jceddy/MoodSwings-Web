@@ -79,6 +79,10 @@ function listFriends() {
     return apiRequest('/friends');
 }
 
+function listPracticeBots() {
+    return apiRequest('/games/bots');
+}
+
 function listFriendInvites() {
     return apiRequest('/friends/invites');
 }
