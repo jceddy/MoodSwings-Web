@@ -1754,6 +1754,51 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 50, new PlayerChoices(['hand_mood_ids' => [3], 'target_mood_id' => 1]));
     }
 
+    /**
+     * Regression test for a real bug: MoodPlayService used to consume a
+     * card's play grant AFTER paying its "to play" cost, but a
+     * conditional grant (e.g. Eagerness's own "shares a color with one
+     * of your moods") is re-checked live against the CURRENT board every
+     * time it's evaluated. Regret's own cost -- "return two of your own
+     * moods to hand" -- can remove the exact moods that made such a
+     * grant valid in the first place: here, Regret (blue) only qualifies
+     * for Eagerness's grant via Insecurity (also blue) being in play, but
+     * Insecurity is also one of the two moods Regret's own cost returns
+     * to hand. The initial "is this play even allowed" check
+     * (hasUsablePlayGrant()) correctly found the grant usable against the
+     * board as it stood BEFORE the cost was paid -- the bug was
+     * consuming it AFTER, against the post-cost board, where it no
+     * longer qualified, so it silently went unconsumed and sat there as
+     * a spurious extra play.
+     */
+    public function testRegretPayingItsCostDoesNotLeaveAConditionalGrantUnconsumed(): void
+    {
+        $state = $this->boardState(hands: [1 => [45, 114, 50], 2 => [9]]); // Insecurity, Eagerness, Regret; opponent mood
+        $state->moveHandToInPlay(2, 9);
+        $state->startTurn(1);
+
+        // Insecurity (blue): consumes the turn's base play, banks its own
+        // unconditional extra play.
+        $this->plays->playMood($state, 1, 45, new PlayerChoices([]));
+        // Eagerness (green), using Insecurity's grant: banks a
+        // conditional extra play, usable only for a card sharing a color
+        // with one of player 1's own moods -- currently Insecurity
+        // (blue) and Eagerness (green) are in play.
+        $this->plays->playMood($state, 1, 114, new PlayerChoices([]));
+        self::assertSame(1, $state->playsRemaining()); // Eagerness's own grant, still outstanding
+
+        // Regret (blue) qualifies for Eagerness's grant via Insecurity's
+        // color -- but Regret's own cost returns BOTH Insecurity and
+        // Eagerness to hand, leaving player 1 with no moods in play at
+        // all by the time the grant would be consumed.
+        $this->plays->playMood($state, 1, 50, new PlayerChoices(['hand_mood_ids' => [45, 114], 'target_mood_id' => 9]));
+
+        self::assertSame(0, $state->playsRemaining());
+        self::assertTrue($state->isInHand(1, 45));
+        self::assertTrue($state->isInHand(1, 114));
+        self::assertTrue($state->isInHand(1, 9)); // stolen from player 2
+    }
+
     public function testCrueltyDiscardsARandomMoodFromEachQualifyingOpponent(): void
     {
         $state = $this->boardState(hands: [1 => [61], 2 => [9, 3], 3 => [7]]);
@@ -4047,7 +4092,8 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->plays->playMood($state, 1, 120, new PlayerChoices(['target_player_id' => 2]));
 
-        self::assertSame(2, $state->effectState(120, 'banksExtraPlayForPlayerId'));
+        self::assertSame([['sourceCardId' => 120]], $state->consumeBankedExtraPlaysFor(2));
+        self::assertSame([], $state->consumeBankedExtraPlaysFor(1));
     }
 
     public function testGenerosityRejectsTargetingYourself(): void
@@ -4075,7 +4121,40 @@ final class MoodPlayServiceTest extends TestCase
 
         $this->plays->playMood($state, 1, 125, new PlayerChoices([]));
 
-        self::assertSame(1, $state->effectState(125, 'banksExtraPlayForPlayerId'));
+        self::assertSame([['sourceCardId' => 125]], $state->consumeBankedExtraPlaysFor(1));
+    }
+
+    /**
+     * Regression test for a real bug: Joy's banked play used to live as a
+     * tag on the physical card's own effectState, so if that SAME card
+     * later got stolen out of play and replayed by a different player
+     * (e.g. via Regret's "steal an opponent's mood" effect) before the
+     * original beneficiary's next turn ever started, the replay silently
+     * overwrote the tag -- erasing the original player's already-banked
+     * play and reassigning it to whoever replayed the card. Banked plays
+     * are now tracked per player (BoardState::bankExtraPlay()), entirely
+     * independent of the source card's zone, so both bankings must
+     * survive as their own independent entries.
+     */
+    public function testJoysBankedPlaySurvivesBeingStolenAndReplayedByAnotherPlayer(): void
+    {
+        $state = $this->boardState(hands: [1 => [125]]);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 125, new PlayerChoices([]));
+
+        // Simulate Regret-style theft: the same physical Joy card leaves
+        // play and lands in player 2's hand, well before player 1's own
+        // next turn.
+        $state->moveInPlayToPlayersHand(125, 2);
+
+        $state->startTurn(2);
+        $this->plays->playMood($state, 2, 125, new PlayerChoices([]));
+
+        // Player 1's original banked play must still be there, untouched
+        // by player 2 replaying the same card -- and player 2's own new
+        // banking must be there too, independently.
+        self::assertSame([['sourceCardId' => 125]], $state->consumeBankedExtraPlaysFor(1));
+        self::assertSame([['sourceCardId' => 125]], $state->consumeBankedExtraPlaysFor(2));
     }
 
     public function testArrogancePausesForTheOpponentsOwnChoiceThenTagsItToReturn(): void

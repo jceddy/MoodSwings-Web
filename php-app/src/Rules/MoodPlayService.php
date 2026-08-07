@@ -25,7 +25,13 @@ use MoodSwings\Rules\Exceptions\InvalidChoiceException;
  * grant consumption itself) have to happen before the card is moved into
  * play, since the restriction is evaluated against the board as it stood
  * *before* this play (a card always "shares a color with itself", so
- * checking after the move would make color-based restrictions meaningless).
+ * checking after the move would make color-based restrictions meaningless)
+ * -- and, for the same reason, before the "to play" cost (if any) is
+ * paid too: a card whose own cost removes the player's own moods (e.g.
+ * Regret) could otherwise silently invalidate a color-conditional grant
+ * that was legitimately usable right up until that cost was paid -- see
+ * playMood()'s own comment just above where the grant is consumed for
+ * the full explanation.
  */
 final class MoodPlayService
 {
@@ -108,14 +114,6 @@ final class MoodPlayService
         $effectiveRow = $copiedCardId !== null ? $state->catalogRow($copiedCardId) : $row;
         $effectiveEffectKey = $effectiveRow['effectKey'];
 
-        if ($effectiveRow['hasToPlay']) {
-            $effect = $this->registry->for($effectiveEffectKey);
-            if (!$effect->canPayToPlayCost($state, $cardId, $playerId, $choices)) {
-                throw new IllegalPlayException("Cannot pay the to-play cost for card {$cardId}");
-            }
-            $effect->payToPlayCost($state, $cardId, $playerId, $choices);
-        }
-
         // 'grant_source_card_id' (see GameService::grantChoiceOptions()) is
         // only ever offered/submitted when 2+ distinct grants would
         // actually work for this play, and is optional even then -- left
@@ -126,6 +124,23 @@ final class MoodPlayService
         // consumed or lost -- see BoardState::grantIsActive()) is rejected
         // outright rather than silently falling through to consuming some
         // *other* grant the player never chose.
+        //
+        // This has to happen BEFORE the cost is paid below, not after: a
+        // conditional grant (e.g. Eagerness's/Grace's own "shares a color
+        // with one of your moods") is re-checked live against the CURRENT
+        // board every time hasUsablePlayGrant()/usableGrants()/
+        // useGrantFor() run. A card whose own cost returns/discards the
+        // player's own moods -- Regret's "return two of your own moods to
+        // hand" is the clearest example -- can, by paying that cost,
+        // remove the very moods that made such a grant usable in the
+        // first place. hasUsablePlayGrant()'s own gate above already ran
+        // against the board as it stood *before* any cost was paid, so
+        // consuming the grant against that same pre-cost snapshot (by
+        // doing it here, first) keeps both checks consistent; consuming
+        // it after paying the cost let a play sail through the initial
+        // gate on a grant that then silently failed to actually get
+        // consumed, leaving it sitting unconsumed and available for an
+        // extra, unearned play afterward.
         $preferredGrantSourceCardId = $choices->int('grant_source_card_id');
         if ($preferredGrantSourceCardId !== null) {
             $usableSourceCardIds = array_map(
@@ -138,8 +153,16 @@ final class MoodPlayService
                 throw new InvalidChoiceException("Grant sourced from {$grantLabel} is not currently usable for playing {$cardLabel}");
             }
         }
-
         $consumedGrant = $state->useGrantFor($cardId, $playerId, $preferredGrantSourceCardId);
+
+        if ($effectiveRow['hasToPlay']) {
+            $effect = $this->registry->for($effectiveEffectKey);
+            if (!$effect->canPayToPlayCost($state, $cardId, $playerId, $choices)) {
+                throw new IllegalPlayException("Cannot pay the to-play cost for card {$cardId}");
+            }
+            $effect->payToPlayCost($state, $cardId, $playerId, $choices);
+        }
+
         if ($fromDiscard) {
             $state->moveDiscardToInPlay($playerId, $cardId, $copiedCardId);
         } else {

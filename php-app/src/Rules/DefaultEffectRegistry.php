@@ -189,7 +189,8 @@ use MoodSwings\Rules\Effects\ZealEffect;
  * MoodPlayService, since Hope/Grace have no after-playing ability to
  * hook), a one-shot "banked" extra play for a specific player's next
  * turn however many turns from now that is (Generosity/Joy -- the same
- * computeFreshGrants() consulting a 'banksExtraPlayForPlayerId' tag), and
+ * computeFreshGrants() consuming a per-player banked play via
+ * BoardState::consumeBankedExtraPlaysFor()), and
  * an opponent's own choice among their qualifying moods -- resolved the
  * same random way as Instability's -- tied to a "give it back if you
  * still have it" cascade that fires when the taking card itself leaves

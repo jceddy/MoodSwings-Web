@@ -372,7 +372,17 @@ same bonus the instant it happens, if it lands on whoever's turn is
 currently active), a one-shot "banked" extra
 play for a specific player's next turn — however many turns from now
 that turns out to be — for another player (Generosity) or yourself
-(Joy), consulted by that same `computeFreshGrants()`, and an opponent's
+(Joy), tracked per player (`game_players.banked_extra_plays`,
+`BoardState::bankExtraPlay()`/`consumeBankedExtraPlaysFor()`, migration
+`0089`) rather than as a tag on the card itself the way it briefly was —
+a card-bound tag broke the moment the SAME physical card left play and
+was later replayed by a *different* player (e.g. stolen mid-round by
+Regret): the original beneficiary's banked play went silently unfired
+while the card sat outside play, and the replay's own tag write then
+overwrote it outright once the card came back, reassigning what had
+been banked for the first player to whoever replayed it. Tracking it
+per player instead makes each banking its own independent entry,
+consumed by that same `computeFreshGrants()`, and an opponent's
 own choice among their qualifying moods — a genuine mid-play pause for
 that other player's own answer, see `RequiresOpponentDecision` below —
 tied to a "give it back if you still have it" cascade that fires only
