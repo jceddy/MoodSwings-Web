@@ -34,7 +34,7 @@
         <button id="user-info-button" type="button">User info</button>
         <button id="spectate-button" type="button">Spectate</button>
         <button id="stats-button" type="button">Stats</button>
-        <button id="notifications-button" type="button">Notifications</button>
+        <button id="settings-button" type="button">Settings</button>
         <button id="logout-button">Log out</button>
 
         <section id="lobby-view">
@@ -679,37 +679,65 @@
         <button id="game-chat-close-button" type="button">Close</button>
     </dialog>
 
-    <!-- Browser push notifications (issue #108) -- see initNotifications()
-         in game.js and NotificationService.php. The same notify-me-when
-         preferences fieldset applies to every linked channel at once
-         (push and/or Discord) -- issue #232's own DiscordOAuthService/
-         DiscordAccountRepository handle account linking, and
-         Discord\DiscordNotificationChannel actually sends the DM (see
-         php-app/README.md's own "Discord" section). -->
-    <dialog id="notifications-dialog">
-        <h2>Notifications</h2>
-        <p id="notifications-unsupported" hidden>Your browser doesn't support push notifications.</p>
-        <p id="notifications-blocked" hidden>Notifications are blocked for this site in your browser settings.</p>
-        <div id="notifications-controls">
-            <button id="notifications-enable-button" type="button">Enable push notifications</button>
-            <button id="notifications-disable-button" type="button" hidden>Disable push notifications</button>
-            <fieldset id="notifications-preferences" disabled>
-                <legend>Notify me when...</legend>
-                <label><input type="checkbox" id="notify-your-turn-checkbox"> It's my turn</label>
-                <label><input type="checkbox" id="notify-friend-request-checkbox"> I receive a friend request</label>
-                <label><input type="checkbox" id="notify-game-finished-checkbox"> One of my games finishes</label>
-                <label><input type="checkbox" id="notify-chat-message-checkbox"> I receive an in-game chat message</label>
-                <label><input type="checkbox" id="disable-cooldown-checkbox"> Send every notification immediately (disable the 5-minute cooldown)</label>
-            </fieldset>
-        </div>
-        <p id="notifications-error" class="error" hidden></p>
+    <!-- Settings dialog: replaces the old standalone Notifications dialog
+         (issue #108) -- its own controls now live in the "Notifications"
+         section below, unchanged, alongside a new "Game defaults" section
+         (issue #274's own default selections mode, but as a personal
+         preference this time -- see settings-default-selections-checkbox
+         below). -->
+    <dialog id="settings-dialog">
+        <h2>Settings</h2>
+
+        <!-- Default selections mode as a personal preference -- distinct
+             from games.default_selections_mode (issue #274), which is a
+             per-game setting chosen once at creation and fixed for that
+             game's whole lifetime (see php-app/README.md). This is instead
+             this user's own default for that per-game checkbox's initial
+             state in the New Game dialog -- purely a convenience so a
+             player who always wants it on (or off) doesn't have to
+             re-check it every time; still freely changeable per game
+             before creating it. Disabled by default (unchecked), matching
+             users.default_selections_mode_preference's own DEFAULT 0. -->
+        <section id="settings-game-defaults-section">
+            <h3>Game defaults</h3>
+            <label><input type="checkbox" id="settings-default-selections-checkbox"> Default selections mode (pre-fill card choices with a reasonable default when starting a new game; still changeable per game before creating it)</label>
+        </section>
+
         <hr>
-        <div id="discord-controls">
-            <p id="discord-status">Discord: <span id="discord-status-text">checking&hellip;</span></p>
-            <button id="discord-connect-link" type="button">Connect Discord</button>
-            <button id="discord-disconnect-button" type="button" hidden>Disconnect Discord</button>
-        </div>
-        <button id="notifications-close-button" type="button">Close</button>
+
+        <!-- Browser push notifications (issue #108) -- see initNotifications()
+             in game.js and NotificationService.php. The same notify-me-when
+             preferences fieldset applies to every linked channel at once
+             (push and/or Discord) -- issue #232's own DiscordOAuthService/
+             DiscordAccountRepository handle account linking, and
+             Discord\DiscordNotificationChannel actually sends the DM (see
+             php-app/README.md's own "Discord" section). -->
+        <section id="settings-notifications-section">
+            <h3>Notifications</h3>
+            <p id="notifications-unsupported" hidden>Your browser doesn't support push notifications.</p>
+            <p id="notifications-blocked" hidden>Notifications are blocked for this site in your browser settings.</p>
+            <div id="notifications-controls">
+                <button id="notifications-enable-button" type="button">Enable push notifications</button>
+                <button id="notifications-disable-button" type="button" hidden>Disable push notifications</button>
+                <fieldset id="notifications-preferences" disabled>
+                    <legend>Notify me when...</legend>
+                    <label><input type="checkbox" id="notify-your-turn-checkbox"> It's my turn</label>
+                    <label><input type="checkbox" id="notify-friend-request-checkbox"> I receive a friend request</label>
+                    <label><input type="checkbox" id="notify-game-finished-checkbox"> One of my games finishes</label>
+                    <label><input type="checkbox" id="notify-chat-message-checkbox"> I receive an in-game chat message</label>
+                    <label><input type="checkbox" id="disable-cooldown-checkbox"> Send every notification immediately (disable the 5-minute cooldown)</label>
+                </fieldset>
+            </div>
+            <p id="notifications-error" class="error" hidden></p>
+            <hr>
+            <div id="discord-controls">
+                <p id="discord-status">Discord: <span id="discord-status-text">checking&hellip;</span></p>
+                <button id="discord-connect-link" type="button">Connect Discord</button>
+                <button id="discord-disconnect-button" type="button" hidden>Disconnect Discord</button>
+            </div>
+        </section>
+
+        <button id="settings-close-button" type="button">Close</button>
     </dialog>
 
     <dialog id="friends-dialog">

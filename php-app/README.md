@@ -53,7 +53,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
-| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. |
+| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). |
 | GET    | `/friends`      | —                                                                 | Requires auth. Lists accepted friends (`friend_id`, `friend_username`, `created_at`, `presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below). |
 | GET    | `/friends/invites` | —                                                              | Requires auth. Returns `{"incoming": [...], "outgoing": [...]}`, each entry has `other_user_id`/`other_username`/`created_at`. |
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
@@ -98,6 +98,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
 | GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
+| POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
@@ -4397,9 +4398,37 @@ same code every pending-decision field already rendered through, so no
 new UI code was needed to support the "pending decisions too" scope
 decision, only the two backend injection points above. The New Game
 dialog (`web-static/game/index.html`) gets a `default_selections_mode`
-checkbox (unchecked/`false` by default, matching the column's own
-`DEFAULT 0`), read by `game.js`'s New Game submit handler and passed
-through `app.js`'s `createGame()` wrapper to `POST /games`.
+checkbox, read by `game.js`'s New Game submit handler and passed
+through `app.js`'s `createGame()` wrapper to `POST /games`. Its own
+*initial* checked state on dialog open is no longer a hardcoded
+unchecked/`false` -- see "Personal preference for the New Game dialog's
+default" immediately below.
+
+#### Personal preference for the New Game dialog's default
+
+The per-game setting above is still exactly what its own opening
+paragraph says -- NOT a personal preference, fixed once at creation for
+that game's whole lifetime. What IS a personal preference is a separate
+column, `users.default_selections_mode_preference` (migration `0093`,
+defaults to `0`/unchecked), surfaced in the Settings dialog's own "Game
+defaults" section (`web-static/game/index.html`'s `#settings-dialog` --
+see "New game dialog"/"Settings dialog" in `web-static/README.md`).
+This only controls the New Game dialog's `default_selections_mode`
+checkbox's *initial* state the next time that dialog is opened -- a
+convenience for a player who always wants it on (or off) so they don't
+have to re-check it every single game -- and has zero effect on any
+already-created game or on the checkbox's own freely-editable behavior
+once the dialog is open.
+
+Current value rides on `GET /me`'s own `user.default_selections_mode_preference`
+field (`AuthService::currentUser()`, same "no separate GET needed"
+pattern `share_presence` already established for "Online/presence
+indicator" below) and is written via `POST
+/user/default-selections-mode-preference` (see the API table above) --
+`UserRepository::setDefaultSelectionsModePreference()` is the one write
+path, called from the Settings dialog checkbox's own `change` listener,
+same auto-save-on-toggle pattern the notification preference checkboxes
+in that same dialog already use.
 
 ### Practice bots (issue #140)
 

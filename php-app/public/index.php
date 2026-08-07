@@ -783,6 +783,29 @@ if ($path === '/user/presence-preference' && $method === 'POST') {
     respond(200, ['status' => 'ok']);
 }
 
+// "Default selections mode" as a personal preference (Settings dialog's
+// "Game defaults" section) -- this user's own default for the New Game
+// dialog's default-selections-mode checkbox, distinct from
+// games.default_selections_mode (issue #274, the actual per-game
+// setting sent as part of POST /games). Current value is already
+// carried on GET /me's own user object (see AuthService::currentUser()),
+// so this route is write-only, same pattern as
+// /user/presence-preference above.
+if ($path === '/user/default-selections-mode-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('default_selections_mode_preference', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'default_selections_mode_preference is required.']);
+    }
+
+    (new UserRepository())->setDefaultSelectionsModePreference(
+        (int) $currentUser['id'],
+        (bool) $input['default_selections_mode_preference']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't
