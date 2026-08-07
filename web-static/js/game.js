@@ -6100,8 +6100,36 @@
         return choices;
     }
 
+    // A card whose ENTIRE choice_fields is a single optional mood/player/
+    // hand_card/discard_card field (Anger, Hate, Denial, Shock, Creativity,
+    // etc. -- see "'Are you sure?' on a targetless play" in README.md) does
+    // nothing beyond entering play if that one field is left blank --
+    // Creativity's own label spells this out directly: "otherwise it's just
+    // a blue card worth 0." Deliberately narrow (exactly one field, and
+    // only these four "pick something" types) rather than flagging every
+    // card with an optional field left blank -- a card with 2+ fields (e.g.
+    // Worry, Charity, Guilt) or a bare bool/value/mode field (Wrath,
+    // Repentance) still has real, ambiguous-to-classify partial effects
+    // even when nothing is selected, so those are left alone rather than
+    // guessed at.
+    const TARGETLESS_CONFIRM_FIELD_TYPES = ['mood', 'player', 'hand_card', 'discard_card'];
+
+    function cardHasNoTargetSelected(card, choices) {
+        if (card.choice_fields.length !== 1) {
+            return false;
+        }
+        const field = card.choice_fields[0];
+        return !field.required
+            && TARGETLESS_CONFIRM_FIELD_TYPES.includes(field.type)
+            && !(field.key in choices);
+    }
+
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
+        if (cardHasNoTargetSelected(selectedCard, choices)
+            && !window.confirm(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`)) {
+            return;
+        }
         const playButton = document.getElementById('play-card-button');
         // Disabled + relabeled immediately (not after the request settles)
         // so a slow response can't be mistaken for a missed click and

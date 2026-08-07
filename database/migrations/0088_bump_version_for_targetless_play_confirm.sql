@@ -1,0 +1,14 @@
+-- No schema change: clicking Play on a card whose entire choice_fields is
+-- a single optional mood/player/hand_card/discard_card field left blank
+-- (Anger, Hate, Denial, Shock, Creativity with no copy target, etc.) now
+-- shows a window.confirm() before submitting, since that field is the
+-- card's whole point and leaving it blank means the play does nothing
+-- beyond entering the mood -- see cardHasNoTargetSelected() in
+-- web-static/js/game.js. Entirely client-side; no server/schema change.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0087 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.11.18' WHERE id = 1;
