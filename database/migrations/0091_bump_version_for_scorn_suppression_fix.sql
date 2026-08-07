@@ -1,0 +1,17 @@
+-- No schema change: BoardState::cascadeMoodLeavingPlay() used to clear
+-- EVERY suppression a leaving card was the source of, regardless of its
+-- own expiry -- correct for a 'while_source_in_play' suppression
+-- (Guilt/Pacifism/Meekness/Faith/Shame), but wrong for Scorn's own
+-- 'end_of_round' one, which the card's own printed text ties to the
+-- round, not to Scorn's own continued presence in play (an ownership
+-- change already got this right, via giveInPlayToPlayer()'s own
+-- narrower clearSuppressionsFrom() call -- only "leaves play" was
+-- affected). Now scoped to 'while_source_in_play' only, matching that
+-- same distinction.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0090 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.11.21' WHERE id = 1;
