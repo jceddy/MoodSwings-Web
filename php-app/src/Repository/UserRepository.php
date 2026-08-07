@@ -76,6 +76,25 @@ final class UserRepository
         $stmt->execute(['share_presence' => $sharePresence ? 1 : 0, 'id' => $id]);
     }
 
+    /**
+     * "Default selections mode" as a personal preference (Settings
+     * dialog's "Game defaults" section) -- this user's own default for
+     * the New Game dialog's default-selections-mode checkbox, distinct
+     * from games.default_selections_mode (issue #274), the actual
+     * per-game setting. Defaults to false (unchecked); see migration
+     * 0093.
+     */
+    public function setDefaultSelectionsModePreference(int $id, bool $defaultSelectionsModePreference): void
+    {
+        $stmt = Connection::get()->prepare(
+            'UPDATE users SET default_selections_mode_preference = :default_selections_mode_preference WHERE id = :id'
+        );
+        $stmt->execute([
+            'default_selections_mode_preference' => $defaultSelectionsModePreference ? 1 : 0,
+            'id' => $id,
+        ]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM users WHERE id = :id');

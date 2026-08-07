@@ -213,6 +213,27 @@ final class AuthIntegrationTest extends TestCase
         self::assertFalse($currentAfterOptOut['user']['share_presence']);
     }
 
+    /**
+     * "Default selections mode" as a personal preference (Settings
+     * dialog's "Game defaults" section) -- defaults to false (unchecked)
+     * for every user, and currentUser()'s own user object reflects a
+     * later update immediately, same pattern share_presence's own test
+     * above covers.
+     */
+    public function testCurrentUserDefaultSelectionsModePreferenceDefaultsFalseAndReflectsUpdates(): void
+    {
+        $registered = $this->registerAndVerify('mallory');
+        $result = $this->auth->login('mallory', 'correcthorsebattery', null, null);
+
+        $current = $this->auth->currentUser($result['token']);
+        self::assertFalse($current['user']['default_selections_mode_preference']);
+
+        (new UserRepository())->setDefaultSelectionsModePreference((int) $registered['user']['id'], true);
+
+        $currentAfterOptIn = $this->auth->currentUser($result['token']);
+        self::assertTrue($currentAfterOptIn['user']['default_selections_mode_preference']);
+    }
+
     public function testResendVerificationIssuesNewTokenAndRevokesOld(): void
     {
         $registered = $this->auth->register('henry', 'henry@example.com', 'correcthorsebattery', null);

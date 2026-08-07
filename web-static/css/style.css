@@ -247,7 +247,7 @@ dialog#resources-dialog #resources-close-button {
 dialog#friends-dialog,
 dialog#decks-dialog,
 dialog#deck-view-dialog,
-dialog#notifications-dialog {
+dialog#settings-dialog {
     box-sizing: border-box;
     max-width: 30rem;
     width: 90%;
@@ -259,7 +259,8 @@ dialog#notifications-dialog {
 }
 
 dialog#friends-dialog section,
-dialog#decks-dialog section {
+dialog#decks-dialog section,
+dialog#settings-dialog section {
     margin-bottom: 1.5rem;
 }
 
@@ -287,7 +288,7 @@ dialog#friends-dialog li button + button {
     margin-left: 0.25rem;
 }
 
-dialog#notifications-dialog #notifications-preferences {
+dialog#settings-dialog #notifications-preferences {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
@@ -296,7 +297,7 @@ dialog#notifications-dialog #notifications-preferences {
     border-radius: 0.25rem;
 }
 
-dialog#notifications-dialog #notifications-preferences label {
+dialog#settings-dialog #notifications-preferences label {
     display: flex;
     align-items: center;
     gap: 0.5rem;
@@ -305,7 +306,7 @@ dialog#notifications-dialog #notifications-preferences label {
 /* Same reasoning as #new-game-close-button et al above -- without this,
    Close sits flush against whichever of Connect/Disconnect Discord is
    currently visible directly above it. */
-#notifications-close-button {
+#settings-close-button {
     margin-top: 0.5rem;
 }
 
