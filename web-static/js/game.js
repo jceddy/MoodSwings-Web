@@ -1670,6 +1670,12 @@
                 container.append(', ');
             }
             container.append(player.username);
+            if (player.is_bot) {
+                // Practice bot (issue #140) -- plain text here (not a
+                // styled tag the way renderBoard()'s own does) since this
+                // whole line is already just comma-joined plain text.
+                container.append(' (bot)');
+            }
             if (game.current_turn_username === player.username) {
                 container.appendChild(buildPlayerFlag('onTurn', player.username + "'s turn", 'player-flag--turn'));
             }
@@ -2052,6 +2058,39 @@
         return format === 'duel' ? 1 : 3;
     }
 
+    // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
+    // exactly: Traditional/Duel only, and only for a deck_type that needs
+    // no per-player setup of its own (no custom decklist to write on a
+    // bot's behalf, no draft picks for it to make).
+    function botsSupportedFor(format, deckType) {
+        return (format === 'standard' || format === 'duel')
+            && ['structure', 'power', 'jceddys_75', 'one_of_each'].includes(deckType);
+    }
+
+    // Hides (and, if checked, unchecks) every bot checkbox -- and their
+    // own "Practice bots" heading -- whenever the current format/deck_type
+    // combination doesn't support seating one (see botsSupportedFor()).
+    // Run on the same format/deck-type change events updateDeckTypeAvailability()
+    // already listens to.
+    function updateBotCheckboxAvailability() {
+        const format = document.getElementById('new-game-format').value;
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const supported = botsSupportedFor(format, deckType);
+
+        const heading = document.getElementById('bot-checkboxes-heading');
+        if (heading) {
+            heading.hidden = !supported;
+        }
+        for (const box of opponentCheckboxes.querySelectorAll('input[data-is-bot]')) {
+            box.closest('label').hidden = !supported;
+            if (!supported && box.checked) {
+                box.checked = false;
+            }
+        }
+
+        updateOpponentSelectionLimit();
+    }
+
     function updateOpponentSelectionLimit() {
         const format = document.getElementById('new-game-format').value;
         const maxOpponents = opponentSelectionMax(format);
@@ -2078,11 +2117,20 @@
         updateDraftPoolSourceOptionLabels();
     }
 
+    // Order matters for the two bot-related listeners here: a bot
+    // checkbox has to be hidden/unchecked (updateBotCheckboxAvailability())
+    // BEFORE updateTeamFields() reads "which opponents are currently
+    // checked" to populate the partner dropdown -- otherwise switching
+    // straight into a team format could offer a bot as a partner
+    // candidate for the one instant before its own checkbox gets
+    // unchecked.
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
+    document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
@@ -2177,8 +2225,9 @@
         submitButton.textContent = 'Create game';
         updateDeckTypeAvailability();
 
-        const { ok, body } = await listFriends();
+        const [{ ok, body }, botsResp] = await Promise.all([listFriends(), listPracticeBots()]);
         const friends = ok ? body.friends : [];
+        const bots = botsResp.ok ? botsResp.body.bots : [];
 
         opponentCheckboxes.innerHTML = '';
         document.getElementById('opponent-checkboxes-empty').hidden = friends.length > 0;
@@ -2195,6 +2244,34 @@
             opponentCheckboxes.appendChild(label);
         }
 
+        // Practice bots (issue #140): a separate, clearly-labeled section
+        // below the real friends -- there's no friendship requirement to
+        // seat one (GameService::createGame() accepts a bot's user id the
+        // same as any opponent's), so keeping them visually distinct here
+        // is purely so a bot is never mistaken for a real friend. Hidden
+        // (via updateBotCheckboxAvailability(), called below) whenever the
+        // dialog's current format/deck_type doesn't support one.
+        if (bots.length > 0) {
+            const heading = document.createElement('p');
+            heading.id = 'bot-checkboxes-heading';
+            heading.textContent = 'Practice bots:';
+            opponentCheckboxes.appendChild(heading);
+
+            for (const bot of bots) {
+                const label = document.createElement('label');
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = bot.user_id;
+                checkbox.dataset.isBot = 'true';
+                checkbox.addEventListener('change', updateOpponentSelectionLimit);
+                checkbox.addEventListener('change', updateTeamFields);
+                label.appendChild(checkbox);
+                label.append(' ' + bot.username + ' (practice bot)');
+                opponentCheckboxes.appendChild(label);
+            }
+        }
+
+        updateBotCheckboxAvailability();
         updateTeamFields();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
         // Issue #290's own three draft-type pickers, sharing the exact
@@ -3592,6 +3669,15 @@
 
                 const nameEl = document.createElement('span');
                 nameEl.appendChild(document.createTextNode(player.username));
+                if (player.is_bot) {
+                    // Practice bot (issue #140) -- same "its own span, not
+                    // folded into the username text" tag pattern as (you)/
+                    // (resigned) below.
+                    const botTag = document.createElement('span');
+                    botTag.className = 'player-bot-tag';
+                    botTag.textContent = ' (bot)';
+                    nameEl.appendChild(botTag);
+                }
                 if (isYou) {
                     // Its own span/color rather than folded into the plain
                     // username text, so it reads as a tag rather than

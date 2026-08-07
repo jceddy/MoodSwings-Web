@@ -736,7 +736,28 @@ too, proportional to the smaller card width.
     flush against each other)
     picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
     Duel, Draft, Open Team Play, or Closed Team Play), then calls
-    `POST /games`. A `#new-game-default-selections` checkbox (issue #274,
+    `POST /games`. Below the friend checkboxes, a separate "Practice
+    bots:" section (issue #140, `GET /games/bots`, its own heading and
+    checkboxes appended into the *same* `#opponent-checkboxes` container
+    -- no backend friendship check applies to a bot any more than to a
+    real friend, so `newGameForm`'s submit handler needs no changes at
+    all: it already just reads every *checked* `<input>` in that
+    container, bot or friend alike) lists the bot roster, each labeled
+    "`{username}` (practice bot)" so it's never mistaken for a real
+    friend. `updateBotCheckboxAvailability()` (wired to the same format/
+    deck-type `change` events `updateDeckTypeAvailability()` already
+    uses, always running *before* `updateTeamFields()` on those same
+    events -- see its own inline comment for why the order matters: a
+    bot checkbox has to be hidden/unchecked before `updateTeamFields()`
+    reads "which opponents are currently checked" to populate the
+    partner dropdown, or a bot could flash into that list for one tick
+    when switching straight into a team format) hides the whole section
+    -- and force-unchecks any bot that was checked -- whenever the
+    current format/deck_type combination doesn't support one, mirroring
+    `GameService::botsSupportedFor()` exactly (client-side `deckType`
+    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`). See
+    "Practice bots" in `php-app/README.md` for the full feature. A
+    `#new-game-default-selections` checkbox (issue #274,
     unchecked by default, matching `default_selections_mode`'s own
     `DEFAULT 0`) sends `default_selections_mode` alongside the rest --
     see "Default selections mode" in `php-app/README.md` for what it
@@ -1968,7 +1989,13 @@ too, proportional to the smaller card width.
     similar-looking usernames. The suffix has its own `.player-you-tag`
     color (`--color-info`, bold) rather than being plain text, so it reads
     as a tag next to the name instead of looking like part of the username
-    itself. It also shows each player's seat,
+    itself. A practice bot (issue #140, `player.is_bot`) gets the same
+    tag treatment -- its own muted, italicized `" (bot)"` suffix
+    (`.player-bot-tag`), appended right after the username and before the
+    "(you)"/"(resigned)" tags -- and the lobby's own opponent-list line
+    (`appendPlayersWithFlags()`, `buildGameRow()`) appends the same
+    `" (bot)"` as plain text there instead, since that whole line is
+    already just comma-joined plain text with no per-name styling. It also shows each player's seat,
     current point total, win count, and hand size as small inline SVG
     icons (issue #143) rather than spelled-out text — a bench (seat), a
     star (points), a trophy (wins), and two overlapping cards (hand size)
