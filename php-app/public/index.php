@@ -866,6 +866,13 @@ if ($path === '/games' && $method === 'POST') {
     // "Default selections" mode (issue #274) -- a per-game toggle, chosen
     // once here alongside format/deck_type, not a personal preference.
     $defaultSelectionsMode = (bool) ($body['default_selections_mode'] ?? false);
+    // Only meaningful (and required) when deck_type is 'custom_duel' and
+    // one of opponent_user_ids is a practice bot (issue #140) -- the
+    // bot's own decklist, supplied by the creator since the bot can
+    // never submit one itself via POST /games/decklist the way its human
+    // opponent does. See createGame()'s own docblock.
+    $botDecklistText = isset($body['bot_decklist_text']) ? (string) $body['bot_decklist_text'] : null;
+    $botSavedDecklistId = isset($body['bot_saved_decklist_id']) ? (int) $body['bot_saved_decklist_id'] : null;
 
     try {
         $gameId = $games->createGame(
@@ -885,6 +892,8 @@ if ($path === '/games' && $method === 'POST') {
             $gridDraftCustomPoolText,
             $savedDecklistId,
             $defaultSelectionsMode,
+            $botDecklistText,
+            $botSavedDecklistId,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {

@@ -125,7 +125,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -162,6 +162,13 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // once here alongside format/deck_type. See "Default
             // selections mode" in web-static/README.md.
             default_selections_mode: defaultSelectionsMode,
+            // Only meaningful for deck_type 'custom_duel' with a practice
+            // bot seated (issue #140's Duel extension) -- the bot can't
+            // submit its own decklist via POST /games/decklist the way a
+            // human opponent does, so its creator supplies it here
+            // instead. See "Practice bots" in web-static/README.md.
+            bot_decklist_text: botDecklistText,
+            bot_saved_decklist_id: botSavedDecklistId,
         }),
     });
 }

@@ -755,8 +755,33 @@ too, proportional to the smaller card width.
     -- and force-unchecks any bot that was checked -- whenever the
     current format/deck_type combination doesn't support one, mirroring
     `GameService::botsSupportedFor()` exactly (client-side `deckType`
-    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`). See
-    "Practice bots" in `php-app/README.md` for the full feature. A
+    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`, plus the
+    same `format === 'duel' && deckType === 'custom_duel'` special case
+    the server checks). See "Practice bots" in `php-app/README.md` for
+    the full feature.
+
+    Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
+    extension -- see "Practice bots in Duel with a custom decklist" in
+    `php-app/README.md`) reveals `#new-game-bot-decklist-fields`: a
+    saved-deck `<select>` (`#new-game-bot-saved-decklist`, populated via
+    `populateSavedDecklistSelect()` the same as the dialog's other saved-
+    decklist pickers) plus a fallback file-upload/paste pair
+    (`#new-game-bot-decklist-file`/`#new-game-bot-decklist-text`, shown
+    only while no saved deck is chosen) -- since the bot can't submit its
+    own decklist the normal post-creation way, its creator picks one for
+    it right here. `updateBotDecklistFieldsVisibility()` computes this
+    visibility from *two* things at once, unlike every other deck-type-
+    driven field in this dialog: `deckType === 'custom_duel'` AND
+    `anyBotChecked()` (any `input[data-is-bot]` in `#opponent-checkboxes`
+    currently checked) -- so it's called from all three places either
+    input can change: `updateDeckTypeDescription()` (deck-type changes),
+    `updateBotCheckboxAvailability()` (format changes, which can hide/
+    force-uncheck a bot outright), and every bot checkbox's own `change`
+    listener. Submitting sends whichever of `bot_decklist_text`/
+    `bot_saved_decklist_id` is populated (mirroring how the dialog's
+    other saved-deck-vs-paste fields already resolve to one shared
+    param) alongside the rest of the request -- both omitted whenever no
+    bot is checked or `deckType` isn't `custom_duel`. A
     `#new-game-default-selections` checkbox (issue #274,
     unchecked by default, matching `default_selections_mode`'s own
     `DEFAULT 0`) sends `default_selections_mode` alongside the rest --

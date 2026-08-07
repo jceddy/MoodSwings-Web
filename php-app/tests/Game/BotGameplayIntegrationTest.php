@@ -65,6 +65,7 @@ final class BotGameplayIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE games');
         $pdo->exec('TRUNCATE TABLE user_lifetime_stats');
         $pdo->exec('TRUNCATE TABLE card_stats');
+        $pdo->exec('TRUNCATE TABLE user_decklists');
         $pdo->exec('TRUNCATE TABLE users');
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
 
@@ -108,6 +109,17 @@ final class BotGameplayIntegrationTest extends TestCase
              VALUES (:username, :email, 'hash', NOW(), 1)"
         );
         $stmt->execute(['username' => $username, 'email' => "{$username}@example.com"]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    /** @param int[] $cardIds */
+    private function insertSavedDecklist(int $userId, string $name, array $cardIds): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO user_decklists (user_id, name, card_ids, visibility) VALUES (:user_id, :name, :card_ids, 'private')"
+        );
+        $stmt->execute(['user_id' => $userId, 'name' => $name, 'card_ids' => json_encode($cardIds)]);
 
         return (int) $this->pdo->lastInsertId();
     }
@@ -169,6 +181,14 @@ final class BotGameplayIntegrationTest extends TestCase
         return $stmt->fetch();
     }
 
+    private function fetchGame(int $gameId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM games WHERE id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+
+        return $stmt->fetch();
+    }
+
     // -- createGame() validation --------------------------------------
 
     public function testCreateGameRejectsABotInOpenTeamPlay(): void
@@ -199,6 +219,111 @@ final class BotGameplayIntegrationTest extends TestCase
         $gameId = $this->games->createGame($human, [$human, $bot], format: 'standard', deckType: 'structure');
 
         self::assertGreaterThan(0, $gameId);
+    }
+
+    public function testCreateGameRejectsABotInCustomDuelWithoutABotDecklist(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame($human, [$human, $bot], format: 'duel', deckType: 'custom_duel');
+    }
+
+    public function testCreateGameWritesTheBotsOwnDecklistFromPlainText(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklistText: "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith",
+        );
+
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $stmt = $this->pdo->prepare('SELECT custom_deck_card_ids FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $botPlayerId]);
+        $cardIds = json_decode((string) $stmt->fetchColumn(), true);
+
+        self::assertCount(7, $cardIds);
+    }
+
+    public function testCreateGameWritesTheBotsOwnDecklistFromASavedDecklistAuthorizedAgainstTheCreator(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+        // The saved decklist belongs to the CREATOR, not the bot -- a bot
+        // has no saved decklists (or friendships) of its own, so this
+        // only works if createGame() authorizes the lookup against
+        // $human rather than $bot's own user id.
+        $decklistId = $this->insertSavedDecklist($human, "Human's deck", [3, 4, 5, 2, 6, 11, 12]);
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botSavedDecklistId: $decklistId,
+        );
+
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+        $stmt = $this->pdo->prepare('SELECT custom_deck_card_ids FROM game_players WHERE id = :id');
+        $stmt->execute(['id' => $botPlayerId]);
+        $cardIds = json_decode((string) $stmt->fetchColumn(), true);
+
+        self::assertEqualsCanonicalizing([3, 4, 5, 2, 6, 11, 12], $cardIds);
+    }
+
+    public function testCreateGameRejectsAnInvalidBotDecklist(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $this->expectException(GameStateException::class);
+        $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 10], // only 2 cards given below
+            botDecklistText: "1 Charity\n1 Dignity",
+        );
+    }
+
+    /**
+     * End to end: the bot's own decklist is supplied at creation time,
+     * the human still submits their own separately (exactly like a real
+     * custom_duel game between two humans), and the game starts normally
+     * once both are in -- startGame()'s own "both seats submitted" gate
+     * doesn't need to know or care that one of those two submissions
+     * happened at createGame() time instead of via POST /games/decklist.
+     */
+    public function testACustomDuelBotGameStartsOnceTheHumanAlsoSubmitsADeck(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklistText: "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith",
+        );
+        $humanPlayerId = $this->games->gamePlayerIdFor($gameId, $human);
+
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']); // still waiting on the human's own deck
+
+        $this->games->submitCustomDuelDeck($gameId, $humanPlayerId, "1 Courage\n1 Discipline\n1 Guilt\n1 Honor\n1 Kindness\n1 Meekness\n1 Pacifism");
+        $this->games->startGame($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
     }
 
     // -- advanceBotTurns() ----------------------------------------------

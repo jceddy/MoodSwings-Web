@@ -1496,6 +1496,7 @@
         if (deckType === 'grid_draft') {
             updateGridDraftPoolSourceVisibility();
         }
+        updateBotDecklistFieldsVisibility();
     }
 
     // Shows the custom-pool file/textarea fields only for the 'custom'
@@ -2060,11 +2061,37 @@
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
     // exactly: Traditional/Duel only, and only for a deck_type that needs
-    // no per-player setup of its own (no custom decklist to write on a
-    // bot's behalf, no draft picks for it to make).
+    // no per-player setup of its own (no draft picks for a bot to make) --
+    // 'custom_duel' is its own special case, since #new-game-bot-decklist-fields
+    // below lets the creator supply the bot's own decklist directly rather
+    // than needing the bot to submit one itself.
     function botsSupportedFor(format, deckType) {
+        if (format === 'duel' && deckType === 'custom_duel') {
+            return true;
+        }
         return (format === 'standard' || format === 'duel')
             && ['structure', 'power', 'jceddys_75', 'one_of_each'].includes(deckType);
+    }
+
+    // Whether any practice bot checkbox is currently checked.
+    function anyBotChecked() {
+        return Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot]')).some((box) => box.checked);
+    }
+
+    // #new-game-bot-decklist-fields (the bot's own decklist, since it can
+    // never submit one itself the way its human opponent does after the
+    // game is created) only makes sense once BOTH a bot is actually
+    // checked AND deck_type is 'custom_duel' -- unlike every other
+    // deck-type-driven field, this can't be computed from deckType alone.
+    // Called from updateDeckTypeDescription() (deck-type changes),
+    // updateBotCheckboxAvailability() (format changes, which can hide/
+    // uncheck a bot outright), and every bot checkbox's own 'change'.
+    function updateBotDecklistFieldsVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = deckType === 'custom_duel' && anyBotChecked();
+        document.getElementById('new-game-bot-decklist-fields').hidden = !show;
+        document.getElementById('new-game-bot-decklist-paste-fields').hidden =
+            !show || document.getElementById('new-game-bot-saved-decklist').value !== '';
     }
 
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
@@ -2089,6 +2116,7 @@
         }
 
         updateOpponentSelectionLimit();
+        updateBotDecklistFieldsVisibility();
     }
 
     function updateOpponentSelectionLimit() {
@@ -2132,6 +2160,7 @@
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
+    document.getElementById('new-game-bot-saved-decklist').addEventListener('change', updateBotDecklistFieldsVisibility);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
@@ -2174,6 +2203,16 @@
         }
 
         document.getElementById('new-game-decklist-text').value = await file.text();
+    });
+
+    // Same pattern for the practice bot's own decklist file (custom_duel).
+    document.getElementById('new-game-bot-decklist-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-game-bot-decklist-text').value = await file.text();
     });
 
     // Reads the four rarity rows' own optional "max total"/"max
@@ -2265,6 +2304,7 @@
                 checkbox.dataset.isBot = 'true';
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
+                checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
                 label.appendChild(checkbox);
                 label.append(' ' + bot.username + ' (practice bot)');
                 opponentCheckboxes.appendChild(label);
@@ -2274,6 +2314,7 @@
         updateBotCheckboxAvailability();
         updateTeamFields();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
+        await populateSavedDecklistSelect(document.getElementById('new-game-bot-saved-decklist'));
         // Issue #290's own three draft-type pickers, sharing the exact
         // same decks (own + friends') as the 'custom' deck_type's own
         // select above -- just a different placeholder, since there's no
@@ -2349,6 +2390,16 @@
             : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
             : undefined;
         const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
+        // Only meaningful for deck_type 'custom_duel' with a bot checked --
+        // see updateBotDecklistFieldsVisibility() for when these fields are
+        // actually shown to the creator.
+        const botCheckedForCustomDuel = deckType === 'custom_duel' && anyBotChecked();
+        const botSavedDecklistId = botCheckedForCustomDuel
+            ? Number(document.getElementById('new-game-bot-saved-decklist').value) || undefined
+            : undefined;
+        const botDecklistText = botCheckedForCustomDuel && botSavedDecklistId === undefined
+            ? document.getElementById('new-game-bot-decklist-text').value
+            : undefined;
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -2365,6 +2416,8 @@
             gridDraftCustomPoolText,
             savedDecklistId,
             defaultSelectionsMode,
+            botDecklistText,
+            botSavedDecklistId,
         );
 
         if (!ok) {
