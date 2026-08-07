@@ -121,7 +121,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -154,6 +154,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // freshly-pasted/uploaded text. See "Saved decklists" in
             // web-static/README.md.
             saved_decklist_id: savedDecklistId,
+            // Per-game, not a personal preference (issue #274) -- chosen
+            // once here alongside format/deck_type. See "Default
+            // selections mode" in web-static/README.md.
+            default_selections_mode: defaultSelectionsMode,
         }),
     });
 }

@@ -12882,4 +12882,266 @@ final class GameServiceIntegrationTest extends TestCase
         $totalPicks = (int) $this->pdo->query('SELECT SUM(grid_draft_pick_round_count) FROM card_stats')->fetchColumn();
         self::assertSame($draftedCount, $totalPicks);
     }
+
+    // -- "Default selections" mode (issue #274) -----------------------------
+
+    /**
+     * Same raw-INSERT shape every other fixture in this file uses for a
+     * hand-built 'in_progress' game (see e.g.
+     * testDisillusionmentQueuesEveryPlayerIncludingTheActorAndOnlyCompletesAfterTheLastResponds()),
+     * just with default_selections_mode threaded through -- buildThreePlayerFixture()
+     * and friends have no way to turn it on, since it's always 0 there.
+     */
+    private function insertGameRow(string $format, int $winsNeeded, int $createdByUserId, bool $defaultSelectionsMode = false): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed, default_selections_mode)
+             VALUES (:format, 'in_progress', :created_by, :wins_needed, :default_selections_mode)"
+        );
+        $stmt->execute([
+            'format' => $format,
+            'created_by' => $createdByUserId,
+            'wins_needed' => $winsNeeded,
+            'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    public function testCreateGameDefaultSelectionsModeDefaultsOffAndCanBeEnabled(): void
+    {
+        $u1 = $this->insertUser('dsoff1');
+        $u2 = $this->insertUser('dsoff2');
+        $offGameId = $this->games->createGame($u1, [$u1, $u2], format: 'duel', deckType: 'structure');
+        self::assertFalse($this->games->getState($offGameId, $u1)['game']['default_selections_mode']);
+
+        $u3 = $this->insertUser('dson1');
+        $u4 = $this->insertUser('dson2');
+        $onGameId = $this->games->createGame($u3, [$u3, $u4], format: 'duel', deckType: 'structure', defaultSelectionsMode: true);
+        self::assertTrue($this->games->getState($onGameId, $u3)['game']['default_selections_mode']);
+    }
+
+    /**
+     * A best-of-three Quick/Winston/Grid Draft match's own "default
+     * selections" setting is decided once at the match's own creation
+     * (issue #274 is a per-game -- really per-match, for a multi-game
+     * draft -- setting, not a personal preference), not re-chosen game to
+     * game -- mirrors testResignInDraftFormatAdvancesTheMatchLikeAnyOther
+     * GameWin()'s own resign-induced advanceDraftMatch() trigger.
+     */
+    public function testDefaultSelectionsModeCarriesThroughToTheNextGameInADraftMatch(): void
+    {
+        $u1 = $this->insertUser('dsdraft1');
+        $u2 = $this->insertUser('dsdraft2');
+        $gameId = $this->games->createGame(
+            $u1,
+            [$u1, $u2],
+            format: 'draft',
+            winsNeeded: 1,
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'random_48',
+            defaultSelectionsMode: true,
+        );
+        $this->driveQuickDraftToDeckBuilding($gameId, $u1, $u2);
+        $this->submitFullQuickDraftDeck($gameId, $u1);
+        $this->submitFullQuickDraftDeck($gameId, $u2);
+        $this->games->startGame($gameId);
+
+        $p1 = $this->games->gamePlayerIdFor($gameId, $u1);
+        $this->games->resignGame($gameId, $p1);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $nextGameStmt = $this->pdo->prepare(
+            'SELECT id FROM games WHERE draft_match_id = :match_id AND match_game_number = 2'
+        );
+        $nextGameStmt->execute(['match_id' => $draftMatchId]);
+        $nextGameId = (int) $nextGameStmt->fetchColumn();
+        self::assertTrue((bool) $this->fetchGame($nextGameId)['default_selections_mode']);
+    }
+
+    /**
+     * Wonder (required 'mode' field, options FIVE_COLORS, no hand-authored
+     * override) defaults to its first option ('white') -- the cheap,
+     * general baseline withChoiceDefault()'s own docblock describes for
+     * every required 'mode' field besides Imagination's own hand-authored
+     * exception (see the two tests below).
+     */
+    public function testDefaultSelectionsModePreFillsARequiredModeFieldWithItsFirstOption(): void
+    {
+        $u1 = $this->insertUser('dswonder1');
+        $u2 = $this->insertUser('dswonder2');
+        $gameId = $this->insertGameRow('standard', 2, $u1, defaultSelectionsMode: true);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $wonderId = $this->insertGameCard($gameId, 133, 'hand', $p1); // Wonder
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $colorField = self::findFieldByKey(self::findByCardId($hand, $wonderId)['choice_fields'], 'color');
+        self::assertSame('white', $colorField['default']);
+    }
+
+    /**
+     * Dignity's own optional discard-to-boost (required: false) -- the
+     * issue's own example of a field whose "reasonable default" is simply
+     * not using the optional effect at all. No `default` key at all
+     * (rather than e.g. an explicit null) -- the existing blank/unselected
+     * state already IS that default, so there's nothing to add.
+     */
+    public function testDefaultSelectionsModeLeavesAnOptionalFieldWithoutADefault(): void
+    {
+        $u1 = $this->insertUser('dsdignity1');
+        $u2 = $this->insertUser('dsdignity2');
+        $gameId = $this->insertGameRow('standard', 2, $u1, defaultSelectionsMode: true);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $dignityId = $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $discardField = self::findFieldByKey(self::findByCardId($hand, $dignityId)['choice_fields'], 'discard_card_id');
+        self::assertArrayNotHasKey('default', $discardField);
+    }
+
+    /**
+     * Guile's own required "an opponent's mood to take" -- exactly the
+     * kind of field the issue itself calls out as unsafe to auto-pick
+     * ("picking a random opponent's mood to discard is not 'reasonable'
+     * just because it's legal"). Stays blank even though required,
+     * degrading to today's behavior, per the decision to leave every
+     * required-but-risky field alone rather than guess.
+     */
+    public function testDefaultSelectionsModeLeavesARequiredOpponentTargetingFieldWithoutADefault(): void
+    {
+        $u1 = $this->insertUser('dsguile1');
+        $u2 = $this->insertUser('dsguile2');
+        $gameId = $this->insertGameRow('standard', 2, $u1, defaultSelectionsMode: true);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $guileId = $this->insertGameCard($gameId, 40, 'hand', $p1); // Guile
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // spare hand card -- part of Guile's own discard cost
+        $this->insertGameCard($gameId, 9, 'hand', $p1); // spare hand card -- part of Guile's own discard cost
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $choiceFields = self::findByCardId($hand, $guileId)['choice_fields'];
+        self::assertArrayNotHasKey('default', self::findFieldByKey($choiceFields, 'target_mood_id'));
+        // The discard cost is just as required, but not type 'mode' either
+        // -- same "no obviously-safe generic pick" reasoning applies to a
+        // mandatory self-cost as it does to an opponent target.
+        self::assertArrayNotHasKey('default', self::findFieldByKey($choiceFields, 'discard_card_ids'));
+    }
+
+    /**
+     * Imagination's own hand-authored override (the issue's flagship
+     * example): defaults to whichever color is most represented among the
+     * player's own moods currently in play, not just the first option.
+     */
+    public function testDefaultSelectionsModeDefaultsImaginationsColorToTheMostRepresentedColorInPlay(): void
+    {
+        $u1 = $this->insertUser('dsimag1');
+        $u2 = $this->insertUser('dsimag2');
+        $gameId = $this->insertGameRow('standard', 2, $u1, defaultSelectionsMode: true);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $imaginationId = $this->insertGameCard($gameId, 42, 'hand', $p1); // Imagination
+        $this->insertGameCard($gameId, 107, 'in_play', $p1); // Awe, green
+        $this->insertGameCard($gameId, 107, 'in_play', $p1); // Awe, green -- 2 green vs. 1 blue below
+        $this->insertGameCard($gameId, 27, 'in_play', $p1); // Ambivalence, blue
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $colorField = self::findFieldByKey(self::findByCardId($hand, $imaginationId)['choice_fields'], 'color');
+        self::assertSame('green', $colorField['default']);
+    }
+
+    public function testDefaultSelectionsModeDefaultsImaginationsColorToFirstOptionWhenNothingInPlay(): void
+    {
+        $u1 = $this->insertUser('dsimagempty1');
+        $u2 = $this->insertUser('dsimagempty2');
+        $gameId = $this->insertGameRow('standard', 2, $u1, defaultSelectionsMode: true);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $imaginationId = $this->insertGameCard($gameId, 42, 'hand', $p1); // Imagination
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $colorField = self::findFieldByKey(self::findByCardId($hand, $imaginationId)['choice_fields'], 'color');
+        self::assertSame('white', $colorField['default']); // falls back to the first FIVE_COLORS entry
+    }
+
+    /**
+     * The exact same Wonder fixture as
+     * testDefaultSelectionsModePreFillsARequiredModeFieldWithItsFirstOption()
+     * above, just with the game's own mode left off (the default) --
+     * proves this is entirely opt-in per game, never applied unless
+     * explicitly chosen at creation.
+     */
+    public function testDefaultSelectionsModeOffLeavesEveryFieldWithoutADefault(): void
+    {
+        $u1 = $this->insertUser('dsmodeoff1');
+        $u2 = $this->insertUser('dsmodeoff2');
+        $gameId = $this->insertGameRow('standard', 2, $u1); // defaultSelectionsMode left at its own false default
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $wonderId = $this->insertGameCard($gameId, 133, 'hand', $p1); // Wonder
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $hand = $this->games->getState($gameId, $u1)['you']['hand'];
+        $colorField = self::findFieldByKey(self::findByCardId($hand, $wonderId)['choice_fields'], 'color');
+        self::assertArrayNotHasKey('default', $colorField);
+    }
+
+    /**
+     * "Default selections" mode applies to a pending-decision response
+     * too, not just the initial choices panel -- both share the exact
+     * same field shape and withChoiceDefault() enrichment (see
+     * serializePendingDecision()'s own docblock). Disillusionment's own
+     * field is required: false (its "may" choose a color), so this proves
+     * the SAME "optional stays skip" policy holds along this second code
+     * path, mirroring
+     * testDisillusionmentQueuesEveryPlayerIncludingTheActorAndOnlyCompletesAfterTheLastResponds()'s
+     * own fixture shape.
+     */
+    public function testDefaultSelectionsModeLeavesAnOptionalPendingDecisionFieldWithoutADefault(): void
+    {
+        $u1 = $this->insertUser('dspendopt1');
+        $u2 = $this->insertUser('dspendopt2');
+        $gameId = $this->insertGameRow('standard', 3, $u1, defaultSelectionsMode: true);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $disillusionmentId = $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $disillusionmentId, []);
+
+        $decisionField = $this->games->getState($gameId, $u2)['round']['pending_decision']['field'];
+        self::assertSame('chosen_color_' . $p2, $decisionField['key']);
+        self::assertArrayNotHasKey('default', $decisionField);
+    }
+
+    /**
+     * Compulsion's own pending decision ("choose a card from your hand to
+     * give up") is required but not type 'mode' -- same "no obviously-safe
+     * generic pick" reasoning as Guile's opponent target above applies
+     * here too, just reached via the pending-decision path instead of
+     * choice_fields.
+     */
+    public function testDefaultSelectionsModeLeavesARequiredPendingDecisionFieldWithoutADefault(): void
+    {
+        $u1 = $this->insertUser('dspendreq1');
+        $u2 = $this->insertUser('dspendreq2');
+        $gameId = $this->insertGameRow('standard', 3, $u1, defaultSelectionsMode: true);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $p1); // Compulsion
+        $this->insertGameCard($gameId, 3, 'hand', $p2); // p2 needs a hand to give a card up from
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $compulsionId, ['target_player_id' => $p2]);
+
+        $decisionField = $this->games->getState($gameId, $u2)['round']['pending_decision']['field'];
+        self::assertSame('given_card_id', $decisionField['key']);
+        self::assertArrayNotHasKey('default', $decisionField);
+    }
 }
