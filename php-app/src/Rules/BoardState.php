@@ -668,11 +668,16 @@ final class BoardState
 
     /**
      * Runs whenever $cardId itself (not just some other mood it suppressed
-     * or stole) leaves play: lifts any suppression it was the source of
-     * (see clearSuppressionsFrom()) and returns any mood tagged as "give
-     * this back if you still have it when I leave play" (Arrogance) to its
-     * original owner, provided the Arrogance player still actually holds
-     * it -- see ArrogranceEffect. Also records (see $pendingGrantsLost) any
+     * or stole) leaves play: lifts any 'while_source_in_play' suppression
+     * it was the source of (see clearSuppressionsFrom()'s own docblock --
+     * an 'end_of_round' one, e.g. Scorn's, is unconditional on its
+     * source's continued presence in play, exactly like giveInPlayToPlayer()
+     * already treats an ownership change, so it's deliberately left alone
+     * here too, to be lifted only by clearEndOfRoundSuppressions() at
+     * scoring) and returns any mood tagged as "give this back if you still
+     * have it when I leave play" (Arrogance) to its original owner,
+     * provided the Arrogance player still actually holds it -- see
+     * ArrogranceEffect. Also records (see $pendingGrantsLost) any
      * still-outstanding 'requiresSourceInPlay' grant $cardId was
      * responsible for -- grantIsActive() would silently start reading it
      * as inactive the instant $cardId is gone from $moodsInPlay (already
@@ -682,7 +687,7 @@ final class BoardState
      */
     private function cascadeMoodLeavingPlay(int $cardId): void
     {
-        $this->clearSuppressionsFrom($cardId);
+        $this->clearSuppressionsFrom($cardId, 'while_source_in_play');
 
         foreach ($this->playGrants as $restriction) {
             if (($restriction['requiresSourceInPlay'] ?? false) && $restriction['sourceCardId'] === $cardId) {

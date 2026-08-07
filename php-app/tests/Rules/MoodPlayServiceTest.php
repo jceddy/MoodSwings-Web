@@ -4291,6 +4291,27 @@ final class MoodPlayServiceTest extends TestCase
         self::assertTrue($state->isSuppressed(5));
     }
 
+    /**
+     * Regression test for a real bug: BoardState::cascadeMoodLeavingPlay()
+     * used to clear EVERY suppression a leaving card was the source of,
+     * regardless of its own expiry -- correct for a 'while_source_in_play'
+     * suppression (Guilt/Pacifism/Meekness/Faith/Shame), but wrong for
+     * Scorn's own 'end_of_round' one, which the card's own printed text
+     * ties to the round, not to Scorn's own continued presence in play.
+     */
+    public function testScornsEndOfRoundSuppressionSurvivesScornLeavingPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [24, 5]]); // Scorn, Complacency
+        $state->moveHandToInPlay(1, 5);
+        $state->startTurn(1);
+        $this->plays->playMood($state, 1, 24, new PlayerChoices(['target_mood_id' => 5]));
+        self::assertTrue($state->isSuppressed(5));
+
+        $state->moveInPlayToDiscard(24); // Scorn itself leaves play
+
+        self::assertTrue($state->isSuppressed(5));
+    }
+
     public function testScornSuppressesAnyMoodWhenPlayed(): void
     {
         $state = $this->boardState(hands: [1 => [24, 5]]); // Scorn, Complacency
