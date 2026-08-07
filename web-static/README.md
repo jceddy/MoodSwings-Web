@@ -776,10 +776,10 @@ too, proportional to the smaller card width.
     -- and force-unchecks any bot that was checked -- whenever the
     current format/deck_type combination doesn't support one, mirroring
     `GameService::botsSupportedFor()` exactly (client-side `deckType`
-    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`, plus the
-    same `format === 'duel' && deckType === 'custom_duel'` special case
-    the server checks). See "Practice bots" in `php-app/README.md` for
-    the full feature.
+    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`/`custom`,
+    plus the same `format === 'duel' && deckType === 'custom_duel'`
+    special case the server checks). See "Practice bots" in
+    `php-app/README.md` for the full feature.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in

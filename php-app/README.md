@@ -4464,20 +4464,27 @@ populate its own bot picker -- see "New game dialog" in
 
 **Scope.** `GameService::botsSupportedFor(string $format, string
 $deckType): bool` -- Traditional (`standard`) or Duel only, and only for
-a deck_type that needs no per-player setup of its own: `structure`,
-`power`, `jceddys_75`, `one_of_each` (`BOT_SUPPORTED_DECK_TYPES`), plus
-one special case: Duel with `custom_duel` (see "Practice bots in Duel
-with a custom decklist" below) -- `botsSupportedFor()` returns `true` for
-that combination outright, bypassing `BOT_SUPPORTED_DECK_TYPES`
-entirely, since a bot's decklist there is supplied by its creator up
-front rather than needing the bot to submit one itself the normal way.
-Every other deck_type stays excluded because it would need the bot to do
-something this feature doesn't implement -- make its own draft picks
+a deck_type that needs no PER-PLAYER setup of its own: `structure`,
+`power`, `jceddys_75`, `one_of_each`, and `custom`
+(`BOT_SUPPORTED_DECK_TYPES`), plus one special case: Duel with
+`custom_duel` (see "Practice bots in Duel with a custom decklist"
+below) -- `botsSupportedFor()` returns `true` for that combination
+outright, bypassing `BOT_SUPPORTED_DECK_TYPES` entirely, since a bot's
+decklist there is supplied by its creator up front rather than needing
+the bot to submit one itself the normal way. `custom` belongs in
+`BOT_SUPPORTED_DECK_TYPES` itself (not a `custom_duel`-style special
+case) despite needing a decklist at all: unlike `custom_duel`, it's a
+single TABLE-wide shared deck (`games.custom_deck_card_ids`, built once
+from the human creator's own `decklist_text`/`saved_decklist_id` before
+any seat -- bot or human -- is ever dealt from it; see
+`deckCardIdsFor()`'s `'custom'` branch) rather than a per-seat one, so a
+bot needs to do nothing whatsoever to "have" one -- exactly like
+`structure`/`power`/`jceddys_75`/`one_of_each`. Every OTHER deck_type
+stays excluded because it would need the bot to do something this
+feature doesn't implement -- make its own draft picks
 (`quick_draft`/`winston_draft`/`grid_draft`, which also implies
-`format: 'draft'`), or (for plain `custom`, i.e. Traditional/standard
-with a custom decklist) submit one via the single-shared-decklist path
-`deck_type: 'custom'` uses, which has no per-seat submission step for
-`createGame()` to hook the way `custom_duel` does. Team formats
+`format: 'draft'`) or submit its own separate decklist
+(`custom_duel`'s per-seat submission, see above). Team formats
 (`team`/`closed_team`) are excluded for a different reason: a bot would
 additionally have to answer Open/Closed Team Play's own turn-order
 propose/confirm decisions (`POST /games/team-decision`) and, for Closed

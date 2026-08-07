@@ -2083,16 +2083,22 @@
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
     // exactly: Traditional/Duel only, and only for a deck_type that needs
-    // no per-player setup of its own (no draft picks for a bot to make) --
-    // 'custom_duel' is its own special case, since #new-game-bot-decklist-fields
-    // below lets the creator supply the bot's own decklist directly rather
-    // than needing the bot to submit one itself.
+    // no per-player setup of its own (no draft picks for a bot to make).
+    // 'custom' belongs in this list despite needing a decklist at all --
+    // it's a single table-wide shared deck (built once from the human
+    // creator's own paste/upload/saved-deck choice, same as this dialog
+    // already requires with or without a bot seated), not a per-seat one,
+    // so a bot needs nothing extra to "have" one. 'custom_duel' is its
+    // own separate special case (still not in this list), since it's a
+    // genuinely per-seat decklist -- #new-game-bot-decklist-fields below
+    // lets the creator supply the bot's own decklist directly for that
+    // one, rather than needing the bot to submit one itself.
     function botsSupportedFor(format, deckType) {
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
         return (format === 'standard' || format === 'duel')
-            && ['structure', 'power', 'jceddys_75', 'one_of_each'].includes(deckType);
+            && ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
     }
 
     // Whether any practice bot checkbox is currently checked.

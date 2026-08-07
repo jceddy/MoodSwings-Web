@@ -1,0 +1,16 @@
+-- No schema change: extends practice bots (issue #140) to deck_type
+-- 'custom' for Traditional (standard) games. 'custom' is a single
+-- table-wide shared deck (games.custom_deck_card_ids, migration 0018),
+-- fully built at createGame() time from the human creator's own
+-- decklist_text/saved_decklist_id before any seat -- bot or human -- is
+-- ever dealt from it (see GameService::deckCardIdsFor()'s 'custom'
+-- branch), so a bot needs nothing extra to "have" one, exactly like
+-- 'structure'/'power'/'jceddys_75'/'one_of_each'. Simply adds 'custom'
+-- to GameService::BOT_SUPPORTED_DECK_TYPES.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0093 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.13.0' WHERE id = 1;

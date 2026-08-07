@@ -202,13 +202,87 @@ final class BotGameplayIntegrationTest extends TestCase
         $this->games->createGame($human, [$human, $bot, $u2, $u3], format: 'team', partnerUserId: $bot);
     }
 
-    public function testCreateGameRejectsABotWithACustomDeckType(): void
+    /**
+     * 'custom' is a single table-wide shared deck (unlike 'custom_duel'),
+     * fully built at createGame() time from the human creator's own
+     * decklistText -- a bot needs nothing extra to "have" one, same as
+     * 'structure'/'power'/etc. Still validated the same way it always
+     * is: an empty decklist is rejected regardless of whether a bot is
+     * seated.
+     */
+    public function testCreateGameRejectsAnEmptyCustomDeckTypeDecklistEvenWithABotSeated(): void
     {
         $human = $this->insertUser('human1');
         $bot = $this->insertBotUser('bot1');
 
         $this->expectException(GameStateException::class);
         $this->games->createGame($human, [$human, $bot], deckType: 'custom', decklistText: '');
+    }
+
+    public function testCreateGameAcceptsABotInStandardFormatWithACustomDeck(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'standard',
+            deckType: 'custom',
+            // 15 distinct cards -- the 2-player minimum (15 * (playerCount - 1)).
+            decklistText: "1 Altruism\n1 Benevolence\n1 Charity\n1 Chivalry\n1 Complacency\n1 Conviction\n1 Courage\n"
+                . "1 Dignity\n1 Discipline\n1 Disillusionment\n1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Honor",
+        );
+
+        self::assertGreaterThan(0, $gameId);
+    }
+
+    /**
+     * End to end: the shared decklist a bot's own seat draws from is
+     * exactly the same one the human creator supplied at creation time --
+     * no bot-specific handling needed anywhere in startGame()'s own
+     * dealing, unlike 'custom_duel' (see
+     * testACustomDuelBotGameStartsOnceTheHumanAlsoSubmitsADeck() above).
+     */
+    public function testACustomDeckTypeBotGameStartsImmediately(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'standard',
+            deckType: 'custom',
+            decklistText: "1 Altruism\n1 Benevolence\n1 Charity\n1 Chivalry\n1 Complacency\n1 Conviction\n1 Courage\n"
+                . "1 Dignity\n1 Discipline\n1 Disillusionment\n1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Honor",
+        );
+
+        $this->games->startGame($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * Also usable via a saved decklist (issue #92) instead of pasted
+     * text -- same $savedDecklistId path a human-only game already uses,
+     * unaffected by a bot being one of the seats.
+     */
+    public function testCreateGameAcceptsABotInStandardFormatWithASavedCustomDeck(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+        $decklistId = $this->insertSavedDecklist($human, "Human's deck", range(1, 15));
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'standard',
+            deckType: 'custom',
+            savedDecklistId: $decklistId,
+        );
+
+        self::assertGreaterThan(0, $gameId);
     }
 
     public function testCreateGameAcceptsABotInStandardFormatWithAStructureDeck(): void
