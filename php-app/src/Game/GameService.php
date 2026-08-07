@@ -594,16 +594,19 @@ final class GameService
 
         // Practice bots (issue #140): Traditional/Duel with a deck_type
         // that needs no per-player setup of its own (Structure/Power/
-        // jceddy's 75/One of Each), or Duel with 'custom_duel' -- the one
-        // deck_type that DOES need per-player setup, but which this call
-        // itself supplies on the bot's behalf via $botDecklistText/
-        // $botSavedDecklistId below, rather than the bot ever needing to
-        // submit one itself. Checked up front, ahead of the deck-type-
-        // specific validation/building below, so a doomed request never
-        // gets as far as e.g. parsing a decklist.
+        // jceddy's 75/One of Each/Custom Decklist -- the last of these is
+        // a single table-wide shared deck, not per-seat, so it needs no
+        // special-casing either, see BOT_SUPPORTED_DECK_TYPES's own
+        // docblock), or Duel with 'custom_duel' -- the one deck_type that
+        // DOES need per-player setup, but which this call itself supplies
+        // on the bot's behalf via $botDecklistText/$botSavedDecklistId
+        // below, rather than the bot ever needing to submit one itself.
+        // Checked up front, ahead of the deck-type-specific validation/
+        // building below, so a doomed request never gets as far as e.g.
+        // parsing a decklist.
         $botUserId = $this->botUserIdAmong($userIds);
         if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel games using a Structure, Power, jceddy\'s 75 Card, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
         }
         if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
             throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
@@ -797,15 +800,19 @@ final class GameService
     /**
      * Every deck_type a practice bot (issue #140) can be seated in a game
      * with *without* createGame() itself supplying anything extra on its
-     * behalf -- none of these four need any per-player setup a bot would
-     * otherwise have to do itself (a custom decklist to submit, a draft
-     * to pick through), unlike 'custom'/'quick_draft'/'winston_draft'/
-     * 'grid_draft'. 'custom_duel' is deliberately NOT here even though a
-     * bot supports it too -- see botsSupportedFor()'s own handling of it,
-     * which needs $botDecklistText/$botSavedDecklistId, unlike every deck
-     * type in this list.
+     * behalf -- none of these five need any PER-PLAYER setup a bot would
+     * otherwise have to do itself, unlike 'quick_draft'/'winston_draft'/
+     * 'grid_draft' (each player makes their own draft picks) or
+     * 'custom_duel' (each duel player submits their own separate
+     * decklist). 'custom' belongs here despite needing a decklist at all
+     * -- unlike 'custom_duel', it's a single TABLE-wide shared deck
+     * (games.custom_deck_card_ids, built once from the human creator's
+     * own $decklistText/$savedDecklistId before any seat -- bot or
+     * human -- is dealt from it; see deckCardIdsFor()'s 'custom' branch),
+     * so a bot needs to do nothing whatsoever to "have" one, same as
+     * 'structure'/'power'/'jceddys_75'/'one_of_each'.
      */
-    private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each'];
+    private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'];
 
     /**
      * Whether a practice bot (issue #140) can be seated in a game with
@@ -815,11 +822,13 @@ final class GameService
      * pass) and because the 'draft' format needs a bot to make its own
      * draft picks -- neither of which BotPlayerService implements yet.
      * Within Duel, 'custom_duel' is its own special case: unlike every
-     * deck_type in BOT_SUPPORTED_DECK_TYPES, it needs per-player setup
-     * (a decklist to build, against $duelDeckRules) -- but rather than
-     * teach BotPlayerService a fifth thing to decide (the same way it
-     * doesn't decide draft picks), createGame() lets the human supply the
-     * bot's own decklist directly at creation time (see its own
+     * deck_type in BOT_SUPPORTED_DECK_TYPES (including 'custom' -- see
+     * its own docblock for why that one needs no special-casing at all),
+     * 'custom_duel' needs PER-PLAYER setup (each duel player's own
+     * decklist, built against $duelDeckRules) -- but rather than teach
+     * BotPlayerService a fifth thing to decide (the same way it doesn't
+     * decide draft picks), createGame() lets the human supply the bot's
+     * own decklist directly at creation time (see its own
      * $botDecklistText/$botSavedDecklistId params, and
      * submitCustomDuelDeck()'s own $accessCheckUserId), so the bot itself
      * never has to submit anything for this deck_type either.

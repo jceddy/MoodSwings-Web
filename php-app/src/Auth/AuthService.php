@@ -224,7 +224,7 @@ final class AuthService
     }
 
     /**
-     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool}, expiresAt: DateTimeImmutable}|null
+     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
     {
@@ -249,6 +249,14 @@ final class AuthService
                 // toggle. See PresenceService for how a shared status is
                 // actually computed for someone else's view.
                 'share_presence' => (bool) $session['share_presence'],
+                // "Default selections mode" as a personal preference
+                // (Settings dialog's "Game defaults" section) -- this
+                // user's own default for the New Game dialog's
+                // default-selections-mode checkbox, distinct from
+                // games.default_selections_mode (issue #274, the actual
+                // per-game setting). See UserRepository::
+                // setDefaultSelectionsModePreference().
+                'default_selections_mode_preference' => (bool) $session['default_selections_mode_preference'],
             ],
             'expiresAt' => $expiresAt,
         ];

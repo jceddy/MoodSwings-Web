@@ -493,65 +493,86 @@ too, proportional to the smaller card width.
       `#replay-controls`, returning to the ordinary lobby the same way
       exiting spectator mode does. See "Watch replay" in
       `../php-app/README.md`.
-  - **Browser push notifications** (issue #108): a "Notifications" button
-    (`#notifications-button`) opens `#notifications-dialog`.
-    `service-worker.js` (a site-root file, not under `js/`, registered as
-    `navigator.serviceWorker.register('/service-worker.js')` so its
-    default scope covers every page regardless of which one happens to be
-    open) is the actual Service Worker; `initNotifications()` in
-    `js/game.js` does everything else. If `serviceWorker`/`PushManager`/`Notification` aren't
-    all present (or registration itself throws), the dialog shows
-    `#notifications-unsupported` and hides the controls -- nothing else
-    below runs. Otherwise, opening the dialog calls `pushManager
-    .getSubscription()` to decide which of `#notifications-enable-button`/
-    `#notifications-disable-button` to show, and -- only once subscribed
-    -- fetches `GET /notifications/preferences` to populate the five
-    `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
-    `notify-friend-request-checkbox`/`notify-game-finished-checkbox`/
-    `notify-chat-message-checkbox`/`disable-cooldown-checkbox`, disabled
-    via the `<fieldset>` until a subscription exists). The last ("Send
-    every notification immediately (disable the 5-minute cooldown)") maps
-    to the server's own `disable_cooldown` preference -- off by default,
-    so the cooldown stays on until a player explicitly opts out of it (see
-    "Browser push notifications" in `../php-app/README.md` for what it
-    actually does); `notify-chat-message-checkbox` ("I receive an in-game
-    chat message", issue #109) is otherwise wired up identically to the
-    first three. "Enable"
-    calls `Notification.requestPermission()`, then `GET
-    /notifications/vapid-public-key` for the server's public key (converted
-    from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs
-    via `urlBase64ToUint8Array()`), then `pushManager.subscribe()` itself,
-    then `POST /notifications/subscribe` with the resulting
-    `PushSubscription.toJSON()`. "Disable" does the reverse (`POST
-    /notifications/unsubscribe` with the subscription's own `endpoint`,
-    then `subscription.unsubscribe()`). Each checkbox's own `change` event
-    calls `POST /notifications/preferences` directly -- no separate "Save"
-    button. If `Notification.requestPermission()` comes back `'denied'`
-    (the user blocked notifications for this site at the browser level),
-    `#notifications-blocked` is shown instead of erroring. See "Browser
-    push notifications" in `../php-app/README.md` for what actually gets
-    sent and when. A friend-request notification's own click-through URL
-    (`/game/?open_friends=1` -- there's no standalone `/friends/` page,
-    just `#friends-dialog` on this same lobby) is handled by the startup
-    IIFE at the bottom of `js/game.js`: after `showLobby()`, an
-    `open_friends=1` query param opens that dialog directly, the same
-    `?spectate_game_id` deep-links straight into spectator mode just
-    above it.
-  - **Discord account linking** (issue #232), same `#notifications-dialog`:
-    a `#discord-controls` block below the push-notification controls shows
-    `GET /discord/status` (fetched whenever the dialog opens, alongside
-    the push-subscription refresh) as either "not connected" with a
-    `#discord-connect-link` (a plain `<a href="/discord/oauth/start">`,
-    not a `fetch()` call -- it's a real page navigation into Discord's own
-    OAuth consent screen) or "connected as `{username}`" with a
-    `#discord-disconnect-button` (`POST /discord/unlink`). The startup
-    IIFE's own `discord_linked=1`/`discord_link_error=<message>` query-param
-    handling (set by `GET /discord/oauth/callback`'s own redirect back
-    here) strips those params via `history.replaceState()` and reopens
-    `#notifications-dialog` by dispatching a click on `#notifications-button`
-    itself, showing the error in `#notifications-error` if there was one.
-    See "Discord" in `../php-app/README.md` -- linking is implemented;
-    actually sending a notification over Discord is still a follow-up.
+  - **Settings dialog**: a "Settings" button (`#settings-button`) opens
+    `#settings-dialog` (`initSettings()` in `js/game.js`, formerly
+    `initNotifications()` -- renamed since it now does more than
+    notifications). Two sections:
+    - **Game defaults**: a single `#settings-default-selections-checkbox`
+      ("Default selections mode") -- this user's own personal default for
+      the New Game dialog's own `#new-game-default-selections` checkbox
+      (see below), distinct from that per-game setting itself. Its
+      current value already rides on `getCurrentUser()`'s own
+      `user.default_selections_mode_preference` field (fetched once at
+      page load, same as `share_presence` on the User info page), so
+      it's initialized directly from that -- no separate `GET` needed --
+      and its own `change` listener both updates the in-memory `user`
+      object (so the New Game dialog picks up the new value immediately,
+      without a page reload) and calls `POST
+      /user/default-selections-mode-preference`
+      (`saveDefaultSelectionsModePreference()` in `js/app.js`) to persist
+      it -- no separate "Save" button, same auto-save-on-toggle pattern
+      the notification checkboxes below use. See "Personal preference for
+      the New Game dialog's default" in `../php-app/README.md`.
+    - **Notifications** (issue #108, unchanged from the old standalone
+      Notifications dialog, just re-homed one level deeper):
+      `service-worker.js` (a site-root file, not under `js/`, registered
+      as `navigator.serviceWorker.register('/service-worker.js')` so its
+      default scope covers every page regardless of which one happens to
+      be open) is the actual Service Worker; the rest of `initSettings()`
+      does everything else. If `serviceWorker`/`PushManager`/`Notification`
+      aren't all present (or registration itself throws), the dialog shows
+      `#notifications-unsupported` and hides the controls -- nothing else
+      below runs. Otherwise, opening the dialog calls `pushManager
+      .getSubscription()` to decide which of `#notifications-enable-button`/
+      `#notifications-disable-button` to show, and -- only once subscribed
+      -- fetches `GET /notifications/preferences` to populate the five
+      `#notifications-preferences` checkboxes (`notify-your-turn-checkbox`/
+      `notify-friend-request-checkbox`/`notify-game-finished-checkbox`/
+      `notify-chat-message-checkbox`/`disable-cooldown-checkbox`, disabled
+      via the `<fieldset>` until a subscription exists). The last ("Send
+      every notification immediately (disable the 5-minute cooldown)") maps
+      to the server's own `disable_cooldown` preference -- off by default,
+      so the cooldown stays on until a player explicitly opts out of it (see
+      "Browser push notifications" in `../php-app/README.md` for what it
+      actually does); `notify-chat-message-checkbox` ("I receive an in-game
+      chat message", issue #109) is otherwise wired up identically to the
+      first three. "Enable"
+      calls `Notification.requestPermission()`, then `GET
+      /notifications/vapid-public-key` for the server's public key (converted
+      from URL-safe base64 to the raw bytes `pushManager.subscribe()` needs
+      via `urlBase64ToUint8Array()`), then `pushManager.subscribe()` itself,
+      then `POST /notifications/subscribe` with the resulting
+      `PushSubscription.toJSON()`. "Disable" does the reverse (`POST
+      /notifications/unsubscribe` with the subscription's own `endpoint`,
+      then `subscription.unsubscribe()`). Each checkbox's own `change` event
+      calls `POST /notifications/preferences` directly -- no separate "Save"
+      button. If `Notification.requestPermission()` comes back `'denied'`
+      (the user blocked notifications for this site at the browser level),
+      `#notifications-blocked` is shown instead of erroring. See "Browser
+      push notifications" in `../php-app/README.md` for what actually gets
+      sent and when. A friend-request notification's own click-through URL
+      (`/game/?open_friends=1` -- there's no standalone `/friends/` page,
+      just `#friends-dialog` on this same lobby) is handled by the startup
+      IIFE at the bottom of `js/game.js`: after `showLobby()`, an
+      `open_friends=1` query param opens that dialog directly, the same
+      `?spectate_game_id` deep-links straight into spectator mode just
+      above it.
+    - **Discord account linking** (issue #232), same "Notifications"
+      section: a `#discord-controls` block below the push-notification
+      controls shows `GET /discord/status` (fetched whenever the dialog
+      opens, alongside the push-subscription refresh) as either "not
+      connected" with a `#discord-connect-link` (a plain `<a
+      href="/discord/oauth/start">`, not a `fetch()` call -- it's a real
+      page navigation into Discord's own OAuth consent screen) or
+      "connected as `{username}`" with a `#discord-disconnect-button`
+      (`POST /discord/unlink`). The startup IIFE's own
+      `discord_linked=1`/`discord_link_error=<message>` query-param
+      handling (set by `GET /discord/oauth/callback`'s own redirect back
+      here) strips those params via `history.replaceState()` and reopens
+      `#settings-dialog` by dispatching a click on `#settings-button`
+      itself, showing the error in `#notifications-error` if there was one.
+      See "Discord" in `../php-app/README.md` -- linking is implemented;
+      actually sending a notification over Discord is still a follow-up.
   - **Lobby**: a "New game" button (`#new-game-button`, also with its own
     `margin-bottom` so it doesn't touch `#games-list` directly beneath it)
     opens the New game dialog described below. Your games (via
@@ -755,10 +776,10 @@ too, proportional to the smaller card width.
     -- and force-unchecks any bot that was checked -- whenever the
     current format/deck_type combination doesn't support one, mirroring
     `GameService::botsSupportedFor()` exactly (client-side `deckType`
-    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`, plus the
-    same `format === 'duel' && deckType === 'custom_duel'` special case
-    the server checks). See "Practice bots" in `php-app/README.md` for
-    the full feature.
+    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`/`custom`,
+    plus the same `format === 'duel' && deckType === 'custom_duel'`
+    special case the server checks). See "Practice bots" in
+    `php-app/README.md` for the full feature.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in
@@ -782,14 +803,20 @@ too, proportional to the smaller card width.
     other saved-deck-vs-paste fields already resolve to one shared
     param) alongside the rest of the request -- both omitted whenever no
     bot is checked or `deckType` isn't `custom_duel`. A
-    `#new-game-default-selections` checkbox (issue #274,
-    unchecked by default, matching `default_selections_mode`'s own
-    `DEFAULT 0`) sends `default_selections_mode` alongside the rest --
-    see "Default selections mode" in `php-app/README.md` for what it
-    actually does once the game starts; the dialog itself has nothing
-    further to say about it, since the effect is entirely in how
+    `#new-game-default-selections` checkbox (issue #274) sends
+    `default_selections_mode` alongside the rest -- see "Default
+    selections mode" in `php-app/README.md` for what it actually does
+    once the game starts; the dialog itself has nothing further to say
+    about it, since the effect is entirely in how
     `choice_fields`/`pending_decision.field` come back pre-filled later,
-    not in anything this dialog renders differently. `updateOpponentSelectionLimit()` caps how many friends
+    not in anything this dialog renders differently. Its own *initial*
+    checked state, set every time the dialog opens (right after
+    `newGameForm.reset()`, which would otherwise always reset it back to
+    the plain HTML default of unchecked), instead comes from this user's
+    own personal preference -- `user.default_selections_mode_preference`
+    -- rather than always starting unchecked; see "Settings dialog"
+    above and "Personal preference for the New Game dialog's default" in
+    `php-app/README.md`. `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
     3 normally, but only 1 for Duel or Draft, since both are exactly 2
     players and the server rejects anything else (see "Duel: separate

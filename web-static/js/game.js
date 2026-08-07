@@ -10,7 +10,7 @@
     startVersionWatcher();
     checkFriendRequestNotification();
     setInterval(checkFriendRequestNotification, 15000);
-    initNotifications();
+    initSettings();
 
     document.getElementById('logout-button').addEventListener('click', async () => {
         await logout();
@@ -125,8 +125,12 @@
         return outputArray;
     }
 
-    async function initNotifications() {
-        const dialog = document.getElementById('notifications-dialog');
+    // Settings dialog (formerly a standalone Notifications dialog, issue
+    // #108) -- now also hosts the "Default selections mode" personal
+    // preference (see settings-default-selections-checkbox's own wiring
+    // below) alongside the unchanged notification controls.
+    async function initSettings() {
+        const dialog = document.getElementById('settings-dialog');
         const unsupportedEl = document.getElementById('notifications-unsupported');
         const blockedEl = document.getElementById('notifications-blocked');
         const controlsEl = document.getElementById('notifications-controls');
@@ -202,12 +206,30 @@
             window.location.href = API_BASE + '/discord/oauth/start';
         });
 
+        // Personal "Default selections mode" preference -- distinct from
+        // games.default_selections_mode (issue #274), a per-game setting
+        // fixed at creation; this is instead this user's own default for
+        // that per-game checkbox's initial state in the New Game dialog
+        // (see #new-game-button's own click listener below). Initialized
+        // from getCurrentUser()'s own user.default_selections_mode_preference
+        // (already fetched at page load), no separate GET needed; saved
+        // immediately on change, same auto-save-on-toggle pattern the
+        // notification preference checkboxes above use. Also keeps the
+        // in-memory `user` object in sync so the New Game dialog picks up
+        // the latest value without a page reload.
+        const defaultSelectionsPreferenceCheckbox = document.getElementById('settings-default-selections-checkbox');
+        defaultSelectionsPreferenceCheckbox.checked = user.default_selections_mode_preference;
+        defaultSelectionsPreferenceCheckbox.addEventListener('change', () => {
+            user.default_selections_mode_preference = defaultSelectionsPreferenceCheckbox.checked;
+            saveDefaultSelectionsModePreference(defaultSelectionsPreferenceCheckbox.checked);
+        });
+
         // The dialog itself (and its "not supported" message) must still be
         // reachable even when push isn't supported at all -- otherwise
-        // clicking "Notifications" would silently do nothing instead of
+        // clicking "Settings" would silently do nothing instead of
         // explaining why. Only the enable/disable/preferences wiring below
         // is skipped in that case.
-        document.getElementById('notifications-button').addEventListener('click', async () => {
+        document.getElementById('settings-button').addEventListener('click', async () => {
             errorEl.hidden = true;
             dialog.showModal();
             if (registration !== null) {
@@ -216,7 +238,7 @@
             await refreshDiscordStatus();
         });
 
-        document.getElementById('notifications-close-button').addEventListener('click', () => {
+        document.getElementById('settings-close-button').addEventListener('click', () => {
             dialog.close();
         });
 
@@ -2061,16 +2083,22 @@
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
     // exactly: Traditional/Duel only, and only for a deck_type that needs
-    // no per-player setup of its own (no draft picks for a bot to make) --
-    // 'custom_duel' is its own special case, since #new-game-bot-decklist-fields
-    // below lets the creator supply the bot's own decklist directly rather
-    // than needing the bot to submit one itself.
+    // no per-player setup of its own (no draft picks for a bot to make).
+    // 'custom' belongs in this list despite needing a decklist at all --
+    // it's a single table-wide shared deck (built once from the human
+    // creator's own paste/upload/saved-deck choice, same as this dialog
+    // already requires with or without a bot seated), not a per-seat one,
+    // so a bot needs nothing extra to "have" one. 'custom_duel' is its
+    // own separate special case (still not in this list), since it's a
+    // genuinely per-seat decklist -- #new-game-bot-decklist-fields below
+    // lets the creator supply the bot's own decklist directly for that
+    // one, rather than needing the bot to submit one itself.
     function botsSupportedFor(format, deckType) {
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
         return (format === 'standard' || format === 'duel')
-            && ['structure', 'power', 'jceddys_75', 'one_of_each'].includes(deckType);
+            && ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
     }
 
     // Whether any practice bot checkbox is currently checked.
@@ -2259,6 +2287,12 @@
     document.getElementById('new-game-button').addEventListener('click', async () => {
         newGameError.hidden = true;
         newGameForm.reset();
+        // Initialize this per-game checkbox's default state from the
+        // user's own personal preference (Settings dialog's "Game
+        // defaults" section) rather than always starting unchecked --
+        // form.reset() above already restored every other field to its
+        // plain HTML default, so this runs after it.
+        document.getElementById('new-game-default-selections').checked = user.default_selections_mode_preference;
         const submitButton = document.getElementById('new-game-submit-button');
         submitButton.disabled = false;
         submitButton.textContent = 'Create game';
@@ -6607,7 +6641,7 @@
 
         // /discord/oauth/callback's own redirect back here once "Connect
         // Discord" finishes (or fails) -- see index.php. Reuses the
-        // notifications button's own click handler (which already opens
+        // Settings button's own click handler (which already opens
         // the dialog and refreshes Discord's linked status) rather than
         // duplicating that logic; the query params are stripped right
         // after so refreshing the page doesn't reopen the dialog or
@@ -6616,7 +6650,7 @@
         if (params.has('discord_linked') || params.has('discord_link_error')) {
             const linkError = params.get('discord_link_error');
             history.replaceState(null, '', window.location.pathname);
-            document.getElementById('notifications-button').click();
+            document.getElementById('settings-button').click();
             if (linkError) {
                 const errorEl = document.getElementById('notifications-error');
                 errorEl.textContent = linkError;

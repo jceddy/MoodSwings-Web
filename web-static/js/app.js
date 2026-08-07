@@ -229,6 +229,20 @@ function savePresencePreference(sharePresence) {
     });
 }
 
+// Default selections mode as a personal preference (Settings dialog's
+// "Game defaults" section) -- write-only, same reasoning as
+// savePresencePreference() above: the current value already rides on
+// getCurrentUser()'s own user.default_selections_mode_preference field.
+// Distinct from games.default_selections_mode (issue #274), the actual
+// per-game setting sent as part of createGame() itself -- this only
+// controls that checkbox's own default state in the New Game dialog.
+function saveDefaultSelectionsModePreference(defaultSelectionsModePreference) {
+    return apiRequest('/user/default-selections-mode-preference', {
+        method: 'POST',
+        body: JSON.stringify({ default_selections_mode_preference: defaultSelectionsModePreference }),
+    });
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.
