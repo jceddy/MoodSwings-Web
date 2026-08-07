@@ -561,7 +561,10 @@ too, proportional to the smaller card width.
     Structure deck" -- built from the same `format`/`deck_type` labels
     (`formatLabel()`/`deckTypeLabel()`) the board's own title uses,
     substituting the game's `custom_deck_name` for a `custom` deck_type
-    just like the board title does. `custom_duel` falls back to
+    just like the board title does, with a trailing ", default
+    selections" appended whenever `game.default_selections_mode` is true
+    (issue #274 -- the same suffix the board title itself gets, see
+    "Default selections mode" in `php-app/README.md`). `custom_duel` falls back to
     `deckTypeLabel()`'s generic label here since each player's own
     submitted deck name (unlike `custom`'s single game-wide name) only
     comes back from `GET /games/:id`, not the lobby list. Second, its own
@@ -733,7 +736,60 @@ too, proportional to the smaller card width.
     flush against each other)
     picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
     Duel, Draft, Open Team Play, or Closed Team Play), then calls
-    `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
+    `POST /games`. Below the friend checkboxes, a separate "Practice
+    bots:" section (issue #140, `GET /games/bots`, its own heading and
+    checkboxes appended into the *same* `#opponent-checkboxes` container
+    -- no backend friendship check applies to a bot any more than to a
+    real friend, so `newGameForm`'s submit handler needs no changes at
+    all: it already just reads every *checked* `<input>` in that
+    container, bot or friend alike) lists the bot roster, each labeled
+    "`{username}` (practice bot)" so it's never mistaken for a real
+    friend. `updateBotCheckboxAvailability()` (wired to the same format/
+    deck-type `change` events `updateDeckTypeAvailability()` already
+    uses, always running *before* `updateTeamFields()` on those same
+    events -- see its own inline comment for why the order matters: a
+    bot checkbox has to be hidden/unchecked before `updateTeamFields()`
+    reads "which opponents are currently checked" to populate the
+    partner dropdown, or a bot could flash into that list for one tick
+    when switching straight into a team format) hides the whole section
+    -- and force-unchecks any bot that was checked -- whenever the
+    current format/deck_type combination doesn't support one, mirroring
+    `GameService::botsSupportedFor()` exactly (client-side `deckType`
+    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`, plus the
+    same `format === 'duel' && deckType === 'custom_duel'` special case
+    the server checks). See "Practice bots" in `php-app/README.md` for
+    the full feature.
+
+    Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
+    extension -- see "Practice bots in Duel with a custom decklist" in
+    `php-app/README.md`) reveals `#new-game-bot-decklist-fields`: a
+    saved-deck `<select>` (`#new-game-bot-saved-decklist`, populated via
+    `populateSavedDecklistSelect()` the same as the dialog's other saved-
+    decklist pickers) plus a fallback file-upload/paste pair
+    (`#new-game-bot-decklist-file`/`#new-game-bot-decklist-text`, shown
+    only while no saved deck is chosen) -- since the bot can't submit its
+    own decklist the normal post-creation way, its creator picks one for
+    it right here. `updateBotDecklistFieldsVisibility()` computes this
+    visibility from *two* things at once, unlike every other deck-type-
+    driven field in this dialog: `deckType === 'custom_duel'` AND
+    `anyBotChecked()` (any `input[data-is-bot]` in `#opponent-checkboxes`
+    currently checked) -- so it's called from all three places either
+    input can change: `updateDeckTypeDescription()` (deck-type changes),
+    `updateBotCheckboxAvailability()` (format changes, which can hide/
+    force-uncheck a bot outright), and every bot checkbox's own `change`
+    listener. Submitting sends whichever of `bot_decklist_text`/
+    `bot_saved_decklist_id` is populated (mirroring how the dialog's
+    other saved-deck-vs-paste fields already resolve to one shared
+    param) alongside the rest of the request -- both omitted whenever no
+    bot is checked or `deckType` isn't `custom_duel`. A
+    `#new-game-default-selections` checkbox (issue #274,
+    unchecked by default, matching `default_selections_mode`'s own
+    `DEFAULT 0`) sends `default_selections_mode` alongside the rest --
+    see "Default selections mode" in `php-app/README.md` for what it
+    actually does once the game starts; the dialog itself has nothing
+    further to say about it, since the effect is entirely in how
+    `choice_fields`/`pending_decision.field` come back pre-filled later,
+    not in anything this dialog renders differently. `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
     3 normally, but only 1 for Duel or Draft, since both are exactly 2
     players and the server rejects anything else (see "Duel: separate
@@ -1299,7 +1355,23 @@ too, proportional to the smaller card width.
     clobber the server's actual rejection message that was just shown
     there) so the player can adjust their choice and try again; on success
     the whole panel closes anyway, so there's nothing left to re-enable.
-    Cards with
+    Clicking Play on a card whose entire `choice_fields` is a single
+    optional target left blank -- Anger, Hate, Denial, Shock, Creativity
+    with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
+    with a `window.confirm()` ("You haven't selected a target for
+    &lt;name&gt; -- its ability won't do anything. Play it anyway?", the
+    same native-dialog pattern the board's own Pass/Resign buttons already
+    use for their own "are you sure" moments) before the request is ever
+    sent; declining leaves the panel open with nothing submitted, same as
+    never having clicked Play. Deliberately narrow -- only a card whose
+    *entire* choice_fields is exactly one optional `mood`/`player`/
+    `hand_card`/`discard_card` field (so the card would otherwise do
+    nothing beyond entering play, Creativity's own field label spells
+    this out directly: "otherwise it's just a blue card worth 0") --
+    a card with 2+ fields (Worry, Charity, Guilt) or whose only optional
+    field is a bare `bool`/`value`/`mode` (Wrath, Repentance) still has a
+    real, harder-to-classify partial effect even with nothing selected,
+    so those are left alone rather than guessed at. Cards with
     no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
@@ -1382,6 +1454,21 @@ too, proportional to the smaller card width.
     `<option>` becomes the `<select>`'s own default, so
     `updateRespondButtonEnabled()`/`updatePlayButtonEnabled()` already see
     it filled at render time, with no explicit re-selection needed.
+    A field can also arrive with a server-computed `field.default` --
+    issue #274's "default selections" mode, only ever present when the
+    game itself has `default_selections_mode` on (see "Default selections
+    mode" in `php-app/README.md`), and only ever set on a field that
+    would otherwise still be blank. `buildFieldWidget()`'s generic
+    `<select>` branch sets `select.value` to it right after building the
+    options, exactly as if the player had picked it themselves -- it's
+    still an ordinary, fully-editable `<select>`, not a locked-in choice,
+    so `updateRespondButtonEnabled()`/`updatePlayButtonEnabled()` need no
+    changes to recognize it as already-filled, and picking something else
+    before submitting works exactly as it always has. This applies
+    identically whether the field belongs to the choices panel described
+    above or a pending-decision response, since both are rendered through
+    this same `buildFieldWidget()` code -- which is why supporting
+    pending-decision defaults needed no separate frontend handling at all.
     A `type: 'mood'` field's own options (e.g. Faith's `target_mood_id`)
     also mark a candidate mood with `card.has_unused_play_grant` (see
     `php-app/README.md`) with a trailing ` *` right after its name
@@ -1927,7 +2014,13 @@ too, proportional to the smaller card width.
     similar-looking usernames. The suffix has its own `.player-you-tag`
     color (`--color-info`, bold) rather than being plain text, so it reads
     as a tag next to the name instead of looking like part of the username
-    itself. It also shows each player's seat,
+    itself. A practice bot (issue #140, `player.is_bot`) gets the same
+    tag treatment -- its own muted, italicized `" (bot)"` suffix
+    (`.player-bot-tag`), appended right after the username and before the
+    "(you)"/"(resigned)" tags -- and the lobby's own opponent-list line
+    (`appendPlayersWithFlags()`, `buildGameRow()`) appends the same
+    `" (bot)"` as plain text there instead, since that whole line is
+    already just comma-joined plain text with no per-name styling. It also shows each player's seat,
     current point total, win count, and hand size as small inline SVG
     icons (issue #143) rather than spelled-out text — a bench (seat), a
     star (points), a trophy (wins), and two overlapping cards (hand size)

@@ -817,6 +817,16 @@ function canSpectateGame(GameService $games, FriendshipService $friendships, int
     return false;
 }
 
+// Practice bots (issue #140): the New Game dialog's own bot picker, a
+// small fixed roster (migration 0090) rather than anything scoped to the
+// caller specifically -- every authenticated user sees the same list, the
+// same way GET /cards/catalog is public knowledge rather than per-user.
+if ($path === '/games/bots' && $method === 'GET') {
+    requireAuth($auth);
+
+    respond(200, ['status' => 'ok', 'bots' => $games->listPracticeBots()]);
+}
+
 if ($path === '/games' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
@@ -853,6 +863,16 @@ if ($path === '/games' && $method === 'POST') {
     // *_custom_pool_text) -- loading a previously-saved decklist (issue
     // #92) instead of parsing freshly-pasted/uploaded text.
     $savedDecklistId = isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null;
+    // "Default selections" mode (issue #274) -- a per-game toggle, chosen
+    // once here alongside format/deck_type, not a personal preference.
+    $defaultSelectionsMode = (bool) ($body['default_selections_mode'] ?? false);
+    // Only meaningful (and required) when deck_type is 'custom_duel' and
+    // one of opponent_user_ids is a practice bot (issue #140) -- the
+    // bot's own decklist, supplied by the creator since the bot can
+    // never submit one itself via POST /games/decklist the way its human
+    // opponent does. See createGame()'s own docblock.
+    $botDecklistText = isset($body['bot_decklist_text']) ? (string) $body['bot_decklist_text'] : null;
+    $botSavedDecklistId = isset($body['bot_saved_decklist_id']) ? (int) $body['bot_saved_decklist_id'] : null;
 
     try {
         $gameId = $games->createGame(
@@ -871,6 +891,9 @@ if ($path === '/games' && $method === 'POST') {
             $gridDraftPoolSource,
             $gridDraftCustomPoolText,
             $savedDecklistId,
+            $defaultSelectionsMode,
+            $botDecklistText,
+            $botSavedDecklistId,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1128,7 +1151,11 @@ if ($path === '/games/start' && $method === 'POST') {
 
     try {
         $games->startGame($gameId);
-        respond(200, ['status' => 'ok']);
+        // Practice bots (issue #140): the very first turn of the game
+        // might already belong to a bot -- see the identical comment on
+        // POST /games/play above.
+        $botResult = $games->advanceBotTurns($gameId);
+        respond(200, ['status' => 'ok', ...($botResult ?? [])]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
@@ -1145,6 +1172,17 @@ if ($path === '/games/play' && $method === 'POST') {
 
     try {
         $result = $games->playMood($gameId, $gamePlayerId, $cardId, $choices);
+        // Practice bots (issue #140): if this play handed the turn (or a
+        // pending decision) to a bot, drive its own action(s) right here
+        // -- possibly several in a row -- before responding, so the human
+        // who just moved sees the game already advanced past them rather
+        // than having to poll and wait. See GameService::advanceBotTurns()'s
+        // own docblock; a null return means no bot ever got a turn, so
+        // $result stays exactly what the human's own play produced.
+        $botResult = $games->advanceBotTurns($gameId);
+        if ($botResult !== null) {
+            $result = $botResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (InvalidChoiceException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1164,6 +1202,12 @@ if ($path === '/games/pass' && $method === 'POST') {
 
     try {
         $result = $games->pass($gameId, $gamePlayerId);
+        // Practice bots (issue #140) -- see the identical comment on
+        // POST /games/play above.
+        $botResult = $games->advanceBotTurns($gameId);
+        if ($botResult !== null) {
+            $result = $botResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1179,6 +1223,14 @@ if ($path === '/games/resign' && $method === 'POST') {
 
     try {
         $result = $games->resignGame($gameId, $gamePlayerId);
+        // Practice bots (issue #140): a resignation in a 3-4 player
+        // standard game can hand the turn straight to a bot without the
+        // game actually ending -- see the identical comment on
+        // POST /games/play above.
+        $botResult = $games->advanceBotTurns($gameId);
+        if ($botResult !== null) {
+            $result = $botResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1255,6 +1307,12 @@ if ($path === '/games/respond' && $method === 'POST') {
 
     try {
         $result = $games->respondToDecision($gameId, $gamePlayerId, $choices);
+        // Practice bots (issue #140) -- see the identical comment on
+        // POST /games/play above.
+        $botResult = $games->advanceBotTurns($gameId);
+        if ($botResult !== null) {
+            $result = $botResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (InvalidChoiceException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);

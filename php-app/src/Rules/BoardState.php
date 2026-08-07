@@ -66,6 +66,9 @@ final class BoardState
      */
     private array $discardOwners;
 
+    /** @var array<int, array<int, array{sourceCardId: int}>> playerId => every play Joy/Generosity has banked for them, not yet fired -- see bankExtraPlay()/consumeBankedExtraPlaysFor(). */
+    private array $bankedExtraPlays;
+
     /** @var array<int, MoodInPlay> cardId (instance id) => the mood currently in play. Keyed by instance id rather than catalog id so two players' identical printed cards can both be in play simultaneously without one clobbering the other. */
     private array $moodsInPlay = [];
 
@@ -283,6 +286,11 @@ final class BoardState
      *     game with no resignations (and every pre-resign test), in which
      *     case isResigned() always returns false and activePlayerOrder()
      *     exactly equals playerOrder(). See isResigned()'s own docblock.
+     * @param array<int, array<int, array{sourceCardId: int}>> $bankedExtraPlays
+     *     game_players.banked_extra_plays, playerId => every play Joy/
+     *     Generosity has banked for them that hasn't fired yet -- empty
+     *     for every game with none outstanding (and every pre-existing
+     *     test). See bankExtraPlay()'s own docblock.
      */
     public function __construct(
         private readonly array $catalog,
@@ -296,11 +304,13 @@ final class BoardState
         private readonly array $catalogCardIdFor = [],
         private readonly array $teamIdByPlayer = [],
         private readonly array $resignedPlayerIds = [],
+        array $bankedExtraPlays = [],
     ) {
         $this->hands = $hands;
         $this->decks = $hasSeparateDecks ? $deck : [self::SHARED_DECK_KEY => $deck];
         $this->discard = $discard;
         $this->discardOwners = $discardOwners;
+        $this->bankedExtraPlays = $bankedExtraPlays;
     }
 
     /**
@@ -658,11 +668,16 @@ final class BoardState
 
     /**
      * Runs whenever $cardId itself (not just some other mood it suppressed
-     * or stole) leaves play: lifts any suppression it was the source of
-     * (see clearSuppressionsFrom()) and returns any mood tagged as "give
-     * this back if you still have it when I leave play" (Arrogance) to its
-     * original owner, provided the Arrogance player still actually holds
-     * it -- see ArrogranceEffect. Also records (see $pendingGrantsLost) any
+     * or stole) leaves play: lifts any 'while_source_in_play' suppression
+     * it was the source of (see clearSuppressionsFrom()'s own docblock --
+     * an 'end_of_round' one, e.g. Scorn's, is unconditional on its
+     * source's continued presence in play, exactly like giveInPlayToPlayer()
+     * already treats an ownership change, so it's deliberately left alone
+     * here too, to be lifted only by clearEndOfRoundSuppressions() at
+     * scoring) and returns any mood tagged as "give this back if you still
+     * have it when I leave play" (Arrogance) to its original owner,
+     * provided the Arrogance player still actually holds it -- see
+     * ArrogranceEffect. Also records (see $pendingGrantsLost) any
      * still-outstanding 'requiresSourceInPlay' grant $cardId was
      * responsible for -- grantIsActive() would silently start reading it
      * as inactive the instant $cardId is gone from $moodsInPlay (already
@@ -672,7 +687,7 @@ final class BoardState
      */
     private function cascadeMoodLeavingPlay(int $cardId): void
     {
-        $this->clearSuppressionsFrom($cardId);
+        $this->clearSuppressionsFrom($cardId, 'while_source_in_play');
 
         foreach ($this->playGrants as $restriction) {
             if (($restriction['requiresSourceInPlay'] ?? false) && $restriction['sourceCardId'] === $cardId) {
@@ -1491,6 +1506,66 @@ final class BoardState
         $this->pendingGrantsLost = [];
 
         return $grants;
+    }
+
+    // --- banked extra plays (Joy/Generosity) ---
+
+    /**
+     * Banks an extra play for $beneficiaryPlayerId to receive at the start
+     * of their own next turn -- Joy's own "after playing this mood, you
+     * may play an additional mood on your next turn" (targeting the
+     * acting player themselves) and Generosity's identical text targeting
+     * a chosen opponent instead. Tracked per player (game_players.
+     * banked_extra_plays, via BoardStateRepository), entirely independent
+     * of $sourceCardId's own zone -- unlike an ordinary effectState tag
+     * (see setEffectState()), a banked play survives $sourceCardId
+     * leaving play, being discarded, returned to hand, or stolen by
+     * another player, all the way through to $beneficiaryPlayerId's next
+     * turn, however many turns from now that is. Each call appends its
+     * own independent entry rather than overwriting a single per-card
+     * slot, so the SAME physical card being played more than once (e.g.
+     * after being stolen back to hand and replayed by a different
+     * player) correctly banks a separate play for whoever played it each
+     * time, rather than a later play silently erasing an earlier
+     * player's own already-banked claim on it. See
+     * GameService::computeFreshGrants(), which consumes these via
+     * consumeBankedExtraPlaysFor() at the start of $beneficiaryPlayerId's
+     * own next turn.
+     */
+    public function bankExtraPlay(int $beneficiaryPlayerId, int $sourceCardId): void
+    {
+        $this->bankedExtraPlays[$beneficiaryPlayerId][] = ['sourceCardId' => $sourceCardId];
+    }
+
+    /**
+     * Returns and clears every play banked for $playerId via
+     * bankExtraPlay() so far -- called once, at the start of $playerId's
+     * own turn (see GameService::computeFreshGrants()), the same
+     * consume-before-granting convention useGrantFor() itself follows for
+     * a single grant.
+     *
+     * @return array<int, array{sourceCardId: int}>
+     */
+    public function consumeBankedExtraPlaysFor(int $playerId): array
+    {
+        $banked = $this->bankedExtraPlays[$playerId] ?? [];
+        $this->bankedExtraPlays[$playerId] = [];
+
+        return $banked;
+    }
+
+    /**
+     * The full banked-plays map (every player id with 1+ still-outstanding
+     * banked play, in bankExtraPlay()'s own shape) -- exposed purely for
+     * BoardStateRepository::save() to persist, the same "BoardState is
+     * the source of truth, the repository just mirrors it" relationship
+     * moodsInPlay()/hand()/decks()/discardPile() already have.
+     *
+     * @return array<int, array<int, array{sourceCardId: int}>>
+     */
+    public function bankedExtraPlaysByPlayer(): array
+    {
+        return $this->bankedExtraPlays;
     }
 
     public function playsRemaining(): int

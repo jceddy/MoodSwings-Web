@@ -43,7 +43,7 @@ final class BoardStateRepository
         $hasSeparateDecks = in_array($formatStmt->fetchColumn(), ['duel', 'draft'], true);
 
         $playersStmt = $pdo->prepare(
-            'SELECT id, team_id, resigned_at FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+            'SELECT id, team_id, resigned_at, banked_extra_plays FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
         );
         $playersStmt->execute(['game_id' => $gameId]);
         $playerRows = $playersStmt->fetchAll();
@@ -54,12 +54,18 @@ final class BoardStateRepository
         // See GameService::resignGame() / BoardState::isResigned() -- empty
         // for every game with no resignations.
         $resignedPlayerIds = [];
+        // See BoardState::bankExtraPlay() -- empty for every game with no
+        // outstanding Joy/Generosity plays banked.
+        $bankedExtraPlays = [];
         foreach ($playerRows as $row) {
             if ($row['team_id'] !== null) {
                 $teamIdByPlayer[(int) $row['id']] = (int) $row['team_id'];
             }
             if ($row['resigned_at'] !== null) {
                 $resignedPlayerIds[] = (int) $row['id'];
+            }
+            if ($row['banked_extra_plays'] !== null) {
+                $bankedExtraPlays[(int) $row['id']] = json_decode((string) $row['banked_extra_plays'], true);
             }
         }
 
@@ -117,7 +123,7 @@ final class BoardStateRepository
         }
         $deck = $hasSeparateDecks ? $deckByOwnerPosition : ($deckByOwnerPosition[BoardState::SHARED_DECK_KEY] ?? []);
 
-        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds);
+        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds, $bankedExtraPlays);
 
         foreach ($inPlayRows as $row) {
             $state->restoreMoodInPlay(
@@ -251,6 +257,25 @@ final class BoardStateRepository
                 $mood->suppressionSourceCardId,
                 $mood->effectState,
             );
+        }
+
+        // Same "always rewrite every row" convention as the game_cards
+        // updates above, one UPDATE per seat regardless of whether that
+        // player's own banked plays actually changed this request -- see
+        // BoardState::bankExtraPlay()'s own docblock for why this is
+        // tracked per game_player_id rather than piggybacked on a card's
+        // effect_state the way it used to be.
+        $updatePlayer = $pdo->prepare(
+            'UPDATE game_players SET banked_extra_plays = :banked_extra_plays WHERE id = :id AND game_id = :game_id'
+        );
+        $bankedExtraPlays = $state->bankedExtraPlaysByPlayer();
+        foreach ($state->playerOrder() as $playerId) {
+            $banked = $bankedExtraPlays[$playerId] ?? [];
+            $updatePlayer->execute([
+                'id' => $playerId,
+                'game_id' => $gameId,
+                'banked_extra_plays' => $banked === [] ? null : json_encode($banked),
+            ]);
         }
     }
 

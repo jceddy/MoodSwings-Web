@@ -53,6 +53,18 @@ final class ReplayStateBuilderTest extends TestCase
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE game_cards');
+        // Truncated before game_rounds itself: game_pending_decision_batches
+        // FKs to game_rounds.id, and TRUNCATE resets AUTO_INCREMENT back to
+        // 1 -- without also clearing these two, a leftover unresolved
+        // batch/decision row from another test class (e.g. one of
+        // GameServiceIntegrationTest's own "default selections" pending-
+        // decision tests, which deliberately leave a decision unanswered
+        // to inspect its still-pending field) can end up pointing at a
+        // game_round_id a FRESH round created here just happens to reuse,
+        // making assertNoPendingDecision() see a phantom pending decision
+        // that has nothing to do with this test's own game at all.
+        $pdo->exec('TRUNCATE TABLE game_pending_decisions');
+        $pdo->exec('TRUNCATE TABLE game_pending_decision_batches');
         $pdo->exec('TRUNCATE TABLE game_rounds');
         $pdo->exec('TRUNCATE TABLE game_players');
         $pdo->exec('TRUNCATE TABLE games');

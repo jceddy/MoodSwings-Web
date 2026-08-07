@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace MoodSwings\Game;
 
+use MoodSwings\Bot\BotChoiceResolver;
+use MoodSwings\Bot\BotPlayerService;
 use MoodSwings\Database\Connection;
 use MoodSwings\Deck\UserDecklistService;
 use MoodSwings\Game\Exceptions\GameStateException;
@@ -470,6 +472,7 @@ final class GameService
         private readonly GameNoteRepository $notes = new GameNoteRepository(),
         private readonly CardStatsService $cardStats = new CardStatsService(),
         private readonly GameChatRepository $chat = new GameChatRepository(),
+        private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
     ) {
     }
 
@@ -518,6 +521,29 @@ final class GameService
      *        sources' own per-deck_type params, it's the same underlying
      *        "which saved decklist" concept regardless of which one is
      *        active, and only one deck_type is ever in effect per call.
+     * @param bool $defaultSelectionsMode "default selections" mode (issue
+     *        #274) -- a per-game toggle, not a personal preference, chosen
+     *        once here and applying to every seated player for the whole
+     *        game's lifetime, the same shape as $format/$deckType. Threaded
+     *        straight into the games row with no validation of its own
+     *        (a plain boolean, unlike $format/$deckType there's nothing to
+     *        reject). See serializeCard()/serializePendingDecision()'s own
+     *        docblocks for what it actually changes once the game is
+     *        underway.
+     * @param ?string $botDecklistText only meaningful (and, alongside
+     *        $botSavedDecklistId, required) when $deckType is 'custom_duel'
+     *        and one of $userIds is a practice bot (issue #140) -- the
+     *        bot's own decklist, submitted here on its behalf since a bot
+     *        can never call submitCustomDuelDeck() itself the way its human
+     *        opponent does (via POST /games/decklist, after this call
+     *        returns). Same format as $decklistText/DecklistParser,
+     *        validated against this same call's own $duelDeckRules.
+     * @param ?int $botSavedDecklistId an alternative to $botDecklistText,
+     *        same idea as $savedDecklistId -- but authorized against
+     *        $createdByUserId's own accessible decklists (own or a
+     *        friend's shared one), not the bot's, since a bot has no
+     *        decklists or friendships of its own; see
+     *        submitCustomDuelDeck()'s own $accessCheckUserId param.
      */
     public function createGame(
         int $createdByUserId,
@@ -535,6 +561,9 @@ final class GameService
         ?string $gridDraftPoolSource = null,
         ?string $gridDraftCustomPoolText = null,
         ?int $savedDecklistId = null,
+        bool $defaultSelectionsMode = false,
+        ?string $botDecklistText = null,
+        ?int $botSavedDecklistId = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -561,6 +590,23 @@ final class GameService
             if ($deckType === 'power') {
                 throw new GameStateException('The "power" deck type is too small for Team Play\'s ' . self::MIN_TEAM_DECK_SIZE . '-card minimum -- choose a different deck type');
             }
+        }
+
+        // Practice bots (issue #140): Traditional/Duel with a deck_type
+        // that needs no per-player setup of its own (Structure/Power/
+        // jceddy's 75/One of Each), or Duel with 'custom_duel' -- the one
+        // deck_type that DOES need per-player setup, but which this call
+        // itself supplies on the bot's behalf via $botDecklistText/
+        // $botSavedDecklistId below, rather than the bot ever needing to
+        // submit one itself. Checked up front, ahead of the deck-type-
+        // specific validation/building below, so a doomed request never
+        // gets as far as e.g. parsing a decklist.
+        $botUserId = $this->botUserIdAmong($userIds);
+        if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel games using a Structure, Power, jceddy\'s 75 Card, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
+        }
+        if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
+            throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
         }
 
         $customDeckName = null;
@@ -642,12 +688,12 @@ final class GameService
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, match_game_number,
-                    status, created_by_user_id, wins_needed
+                    status, created_by_user_id, wins_needed, default_selections_mode
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :match_game_number,
-                    'waiting', :created_by, :wins_needed
+                    'waiting', :created_by, :wins_needed, :default_selections_mode
                  )"
             );
             $insertGame->execute([
@@ -664,6 +710,7 @@ final class GameService
                 'match_game_number' => $draftMatchId !== null ? 1 : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
+                'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -675,6 +722,7 @@ final class GameService
                 'closed_team' => $this->seatOrderForClosedTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
                 default => array_values($userIds),
             };
+            $botGamePlayerId = null;
             foreach ($seatedUserIds as $seatOrder => $userId) {
                 $teamId = match ($format) {
                     'team' => (int) ($seatOrder >= 2),
@@ -687,6 +735,26 @@ final class GameService
                     'seat_order' => $seatOrder,
                     'team_id' => $teamId,
                 ]);
+                if ($userId === $botUserId) {
+                    $botGamePlayerId = (int) $pdo->lastInsertId();
+                }
+            }
+
+            // Practice bots (issue #140) in a 'custom_duel' game: submit
+            // the bot's own decklist right here, on its behalf, the same
+            // validate-then-write submitCustomDuelDeck() its human
+            // opponent will separately call themselves (via
+            // POST /games/decklist) once this request returns --
+            // $createdByUserId is passed as the access-check override
+            // since a saved decklist has to be authorized against the
+            // human choosing it, not the bot's own (nonexistent) access.
+            // Still inside this same transaction: submitCustomDuelDeck()
+            // only issues plain SELECT/UPDATE statements of its own (no
+            // nested transaction), so it safely sees this call's
+            // just-inserted games/game_players rows and rolls back
+            // alongside everything else if its own validation throws.
+            if ($botGamePlayerId !== null && $deckType === 'custom_duel') {
+                $this->submitCustomDuelDeck($gameId, $botGamePlayerId, $botDecklistText, $botSavedDecklistId, $createdByUserId);
             }
 
             if ($draftMatchId !== null) {
@@ -724,6 +792,85 @@ final class GameService
         }
 
         return $gameId;
+    }
+
+    /**
+     * Every deck_type a practice bot (issue #140) can be seated in a game
+     * with *without* createGame() itself supplying anything extra on its
+     * behalf -- none of these four need any per-player setup a bot would
+     * otherwise have to do itself (a custom decklist to submit, a draft
+     * to pick through), unlike 'custom'/'quick_draft'/'winston_draft'/
+     * 'grid_draft'. 'custom_duel' is deliberately NOT here even though a
+     * bot supports it too -- see botsSupportedFor()'s own handling of it,
+     * which needs $botDecklistText/$botSavedDecklistId, unlike every deck
+     * type in this list.
+     */
+    private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each'];
+
+    /**
+     * Whether a practice bot (issue #140) can be seated in a game with
+     * this $format/$deckType combination -- Traditional/Duel only, both
+     * because Team Play needs a bot to also answer turn-order propose/
+     * confirm decisions (and, for Closed Team Play, a blind pregame card
+     * pass) and because the 'draft' format needs a bot to make its own
+     * draft picks -- neither of which BotPlayerService implements yet.
+     * Within Duel, 'custom_duel' is its own special case: unlike every
+     * deck_type in BOT_SUPPORTED_DECK_TYPES, it needs per-player setup
+     * (a decklist to build, against $duelDeckRules) -- but rather than
+     * teach BotPlayerService a fifth thing to decide (the same way it
+     * doesn't decide draft picks), createGame() lets the human supply the
+     * bot's own decklist directly at creation time (see its own
+     * $botDecklistText/$botSavedDecklistId params, and
+     * submitCustomDuelDeck()'s own $accessCheckUserId), so the bot itself
+     * never has to submit anything for this deck_type either.
+     */
+    private function botsSupportedFor(string $format, string $deckType): bool
+    {
+        if ($format === 'duel' && $deckType === 'custom_duel') {
+            return true;
+        }
+
+        return in_array($format, ['standard', 'duel'], true) && in_array($deckType, self::BOT_SUPPORTED_DECK_TYPES, true);
+    }
+
+    /**
+     * The full practice-bot (issue #140) roster -- every users.is_bot
+     * row, ordered by id (i.e. migration 0090's own seeding order,
+     * BotAlice/BotBen/BotCleo), for the New Game dialog's own bot picker.
+     *
+     * @return array<int, array{user_id: int, username: string}>
+     */
+    public function listPracticeBots(): array
+    {
+        $stmt = Connection::get()->query('SELECT id, username FROM users WHERE is_bot = 1 ORDER BY id ASC');
+
+        return array_map(
+            static fn (array $row) => ['user_id' => (int) $row['id'], 'username' => $row['username']],
+            $stmt->fetchAll(),
+        );
+    }
+
+    /**
+     * The one practice bot (users.is_bot) among $userIds, if any -- see
+     * botsSupportedFor(). At most one, never more: $userIds always
+     * includes $createdByUserId (a real human, the only kind of account
+     * that can call createGame() at all), and the only format a bot's
+     * own scope allows with a second opponent seat at all is 'duel',
+     * which is capped at exactly 2 players total -- so a duel is
+     * (human, bot) at most, never (bot, bot).
+     */
+    private function botUserIdAmong(array $userIds): ?int
+    {
+        if ($userIds === []) {
+            return null;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT id FROM users WHERE id IN ({$placeholders}) AND is_bot = 1 LIMIT 1");
+        $stmt->execute(array_values($userIds));
+        $id = $stmt->fetchColumn();
+
+        return $id !== false ? (int) $id : null;
     }
 
     /**
@@ -951,8 +1098,18 @@ final class GameService
      * around, and startGame() only ever reads the latest. startGame()
      * itself refuses to deal for this deck_type until both seats have a
      * non-null custom_deck_card_ids.
+     *
+     * $accessCheckUserId overrides whose accessible decklists
+     * $savedDecklistId is authorized against (own or a friend's shared
+     * one) -- defaults to $gamePlayerId's own seat owner, the ordinary
+     * case (POST /games/decklist, a player submitting their own deck).
+     * The one exception is createGame() submitting a practice bot's own
+     * decklist on its behalf (issue #140): a bot has no saved decklists
+     * or friendships of its own, so that call passes the human creator's
+     * user id here instead, letting them pick from their own accessible
+     * decklists for the bot the same way they already do for themselves.
      */
-    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null): void
+    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null, ?int $accessCheckUserId = null): void
     {
         $game = $this->fetchGame($gameId);
         if ($game['deck_type'] !== 'custom_duel') {
@@ -963,8 +1120,8 @@ final class GameService
         }
 
         // Widened from "SELECT COUNT(*)" to also return user_id -- needed
-        // to authorize a $savedDecklistId lookup below without adding a
-        // new parameter to this method's own signature/callers.
+        // as the default $accessCheckUserId for a $savedDecklistId lookup
+        // below.
         $ownerStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id AND game_id = :game_id');
         $ownerStmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
         $ownerRow = $ownerStmt->fetch();
@@ -975,7 +1132,7 @@ final class GameService
         $catalog = $this->loadCardCatalog();
 
         if ($savedDecklistId !== null) {
-            $parsed = $this->userDecklists->cardIdsForUse((int) $ownerRow['user_id'], $savedDecklistId);
+            $parsed = $this->userDecklists->cardIdsForUse($accessCheckUserId ?? (int) $ownerRow['user_id'], $savedDecklistId);
         } else {
             if ($decklistText === null || trim($decklistText) === '') {
                 throw new GameStateException('A decklist is required');
@@ -3106,6 +3263,102 @@ final class GameService
     }
 
     /**
+     * Generous but bounded -- covers even a long chain of grant-fueled
+     * bot turns/decisions in a row (advanceBotTurns()) without risking a
+     * genuine engine bug (e.g. a mutually-triggering pair of effects)
+     * looping forever.
+     */
+    private const MAX_BOT_ACTIONS_PER_REQUEST = 200;
+
+    /**
+     * Drives every practice bot's (issue #140) own turn/decision-answer
+     * in a row, immediately after a human's own playMood()/pass()/
+     * respondToDecision() call has already fully returned -- called from
+     * the three matching routes in public/index.php, right after each
+     * one, so a solo human never has to manually advance a bot's turn
+     * themselves. See php-app/README.md's "Practice bots" section for
+     * the full design (why a wrapper around these three rather than
+     * something threaded into their own internals).
+     *
+     * Each iteration takes a FRESH BoardState/DB read (not carried over
+     * from a previous iteration) and drives at most one bot action
+     * through the exact same public playMood()/pass()/
+     * respondToDecision() entry points a real player's own request would
+     * use -- each still gets its own withGameLock() cycle, taken fresh
+     * after the previous one (including the human's own triggering call)
+     * has already released it, sidestepping any question of MySQL's
+     * GET_LOCK()'s reentrancy within one connection.
+     *
+     * @return array<string, mixed>|null the LAST bot action's own result
+     *     (the same shape playMood()/pass()/respondToDecision() return),
+     *     which the caller should use IN PLACE of the human's own result
+     *     once any bot has acted, since it's now the more current picture
+     *     of the game (e.g. a bot's own play might be what actually
+     *     completed the game). Null if no bot ever got to act (no bots
+     *     seated in this game, or it was never actually their turn),
+     *     in which case the caller keeps the human's own original result.
+     */
+    public function advanceBotTurns(int $gameId): ?array
+    {
+        $botGamePlayerIds = $this->botGamePlayerIds($gameId);
+        if ($botGamePlayerIds === []) {
+            return null;
+        }
+
+        $lastResult = null;
+        for ($i = 0; $i < self::MAX_BOT_ACTIONS_PER_REQUEST; $i++) {
+            try {
+                $round = $this->currentRound($gameId);
+            } catch (GameStateException) {
+                break; // game completed/abandoned -- nothing left to drive
+            }
+            $roundId = (int) $round['id'];
+
+            $batch = $this->activePendingBatch($roundId);
+            if ($batch !== null) {
+                $decision = $this->activePendingDecision((int) $batch['id']);
+                $targetGamePlayerId = $decision !== null ? (int) $decision['target_game_player_id'] : null;
+                if ($targetGamePlayerId === null || !in_array($targetGamePlayerId, $botGamePlayerIds, true)) {
+                    break; // waiting on a real player (or a batch with nothing left unresolved -- shouldn't happen)
+                }
+
+                $field = json_decode((string) $decision['field'], true);
+                $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId);
+                $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
+                continue;
+            }
+
+            $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
+            if ($currentTurnGamePlayerId === null || !in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
+                break; // waiting on a real player, or a frozen round (team formats never seat a bot -- see botsSupportedFor())
+            }
+
+            $state = $this->boardStates->load($gameId);
+            $playableCardIds = array_values(array_filter(
+                $state->hand($currentTurnGamePlayerId),
+                fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
+            ));
+            $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
+            $lastResult = $action !== null
+                ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
+                : $this->pass($gameId, $currentTurnGamePlayerId);
+        }
+
+        return $lastResult;
+    }
+
+    /** @return int[] every game_players.id in $gameId whose seat is a practice bot (users.is_bot) */
+    private function botGamePlayerIds(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id AND u.is_bot = 1'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
      * Lets a seated player give up instead of playing a game out.
      *
      * Team-format games (always exactly two opposing SIDES -- a 2v2 team
@@ -4364,19 +4617,39 @@ final class GameService
      * that reaches game completion already funnels through here, so
      * that's the only place this needs to be called from, rather than
      * duplicating it at each of this method's own call sites.
+     *
+     * Neither of those two stats updates happens at all when any seated
+     * player is a practice bot (issue #140) -- see botsSupportedFor()'s
+     * own docblock for why a bot is only ever seated in the first place
+     * for exactly this kind of low-stakes practice game. Beating (or
+     * losing to) a bot repeatedly shouldn't be able to inflate a real
+     * player's own win rate, and a bot's own "deck" (whichever
+     * non-custom deck_type the human picked for the whole game) has
+     * nothing to do with real card-performance data either. The game
+     * still completes normally in every other way -- still shows up in
+     * that player's own GET /games/past (clearly marked via
+     * game_players[].is_bot), still sends the ordinary "game finished"
+     * notification below -- only the two aggregate stats updates are
+     * skipped.
      */
     private function recordGameCompletionStats(int $gameId, int $winnerGamePlayerId, ?int $winnerTeamId, ?int $excludeGamePlayerId = null): void
     {
-        $stmt = Connection::get()->prepare('SELECT id, user_id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id, gp.user_id, gp.team_id, u.is_bot FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id'
+        );
         $stmt->execute(['game_id' => $gameId]);
         $players = $stmt->fetchAll();
 
         $excludeUserId = null;
         $winningUserIds = [];
         $losingUserIds = [];
+        $containsBot = false;
         foreach ($players as $player) {
             if ($excludeGamePlayerId !== null && (int) $player['id'] === $excludeGamePlayerId) {
                 $excludeUserId = (int) $player['user_id'];
+            }
+            if ((bool) $player['is_bot']) {
+                $containsBot = true;
             }
 
             $isWinner = $winnerTeamId !== null
@@ -4389,9 +4662,11 @@ final class GameService
             }
         }
 
-        $this->bumpLifetimeStats($winningUserIds, 'game_wins');
-        $this->bumpLifetimeStats($losingUserIds, 'game_losses');
-        $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
+        if (!$containsBot) {
+            $this->bumpLifetimeStats($winningUserIds, 'game_wins');
+            $this->bumpLifetimeStats($losingUserIds, 'game_losses');
+            $this->cardStats->recordGameCompletion($gameId, $winningUserIds, $losingUserIds);
+        }
 
         foreach ($winningUserIds as $userId) {
             if ($userId === $excludeUserId) {
@@ -4941,8 +5216,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -4951,6 +5226,12 @@ final class GameService
             'match_game_number' => (int) $game['match_game_number'] + 1,
             'created_by' => (int) $game['created_by_user_id'],
             'wins_needed' => (int) $game['wins_needed'],
+            // Carried over from the game that just finished, same as
+            // format/deck_type/wins_needed above -- a best-of-three
+            // match's own "default selections" setting is decided once
+            // at the match's own creation (issue #274's per-game, not
+            // per-user, decision), not re-chosen game to game.
+            'default_selections_mode' => (int) $game['default_selections_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -5743,12 +6024,13 @@ final class GameService
      * perpetual or banked grants their board currently entitles them to --
      * Hope's unconditional extra play, Grace's discard-sourced
      * color-matching one, Stubbornness's conditional one (only if another
-     * player currently has more moods in play), and one grant per
-     * still-outstanding Generosity/Joy 'banksExtraPlayForPlayerId' tag
-     * targeting this player, cleared here since each only ever covers a
-     * single turn. Hope/Grace's *same*-turn bonus (for the turn either
-     * card is actually played) is granted separately, in MoodPlayService,
-     * since it isn't tied to a turn boundary at all.
+     * player currently has more moods in play), and one grant per still-
+     * outstanding Generosity/Joy banked play targeting this player (see
+     * BoardState::consumeBankedExtraPlaysFor(), which also clears each one
+     * consumed here, since it only ever covers a single turn). Hope/
+     * Grace's *same*-turn bonus (for the turn either card is actually
+     * played) is granted separately, in MoodPlayService, since it isn't
+     * tied to a turn boundary at all.
      *
      * Every one of these four carries 'sourceCardId' (via
      * effectiveSourceCardIds(), which follows a Creativity copy back to
@@ -5808,11 +6090,8 @@ final class GameService
             }
         }
 
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'banksExtraPlayForPlayerId') === $playerId) {
-                $state->clearEffectState($mood->cardId, 'banksExtraPlayForPlayerId');
-                $grants[] = ['sourceCardId' => $state->effectiveCardId($mood->cardId)];
-            }
+        foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
+            $grants[] = ['sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
         }
 
         return $grants;
@@ -6338,7 +6617,7 @@ final class GameService
         $game = $this->fetchGame($gameId);
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, u.username, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -6355,6 +6634,11 @@ final class GameService
                 'user_id' => (int) $row['user_id'],
                 'username' => $row['username'],
                 'seat_order' => (int) $row['seat_order'],
+                // Practice bot (issue #140) -- see "Practice bots" in
+                // php-app/README.md. Surfaced here (GET /games, GET
+                // /games/past) so the lobby can badge a bot player the
+                // same way GET /games/state's own 'players' does.
+                'is_bot' => (bool) $row['is_bot'],
             ];
         }
 
@@ -6439,6 +6723,7 @@ final class GameService
             'custom_deck_name' => $game['custom_deck_name'],
             'status' => $game['status'],
             'wins_needed' => (int) $game['wins_needed'],
+            'default_selections_mode' => (bool) $game['default_selections_mode'],
             'created_at' => $game['created_at'],
             'started_at' => $game['started_at'],
             'last_move_at' => $game['last_move_at'],
@@ -7533,7 +7818,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.share_presence FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.share_presence, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -7579,6 +7864,9 @@ final class GameService
                 // format, since game_players.team_id is never written
                 // otherwise.
                 'team_id' => $row['team_id'] !== null ? (int) $row['team_id'] : null,
+                // Practice bot (issue #140) -- see "Practice bots" in
+                // php-app/README.md.
+                'is_bot' => (bool) $row['is_bot'],
                 'hand_count' => $handCounts[(int) $row['id']] ?? 0,
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
                 // Overwritten below with the live sum of this player's
@@ -7652,6 +7940,17 @@ final class GameService
                 ] : null,
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
+                // "Default selections" mode (issue #274) -- a per-game
+                // toggle set once at createGame() time, applying to
+                // every seated player for this game's whole lifetime.
+                // See withChoiceDefault()'s own docblock for what it
+                // actually changes; surfaced here purely so the frontend
+                // can show players it's on (per the issue's own "visible
+                // to the players playing it" requirement), not because
+                // choice_fields/pending_decision.field need it -- those
+                // already carry a `default` key per field wherever one
+                // was computed, with no client-side re-derivation needed.
+                'default_selections_mode' => (bool) $game['default_selections_mode'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
                 // Every winning username -- both teammates' for a
                 // team-format win, just the one player's otherwise. Empty
@@ -7807,7 +8106,7 @@ final class GameService
                 'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
                 'banned_colors' => $state->bannedColorsThisRound(),
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
-                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId),
+                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId, $state, (bool) $game['default_selections_mode']),
                 'scoring_preview' => $this->serializeScoringPreview($state, (int) $roundRow['id']),
                 'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
                 'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
@@ -7819,7 +8118,7 @@ final class GameService
 
         if ($viewerGamePlayerId !== null) {
             $response['you']['hand'] = array_map(
-                fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
+                fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId, (bool) $game['default_selections_mode']),
                 $state->hand($viewerGamePlayerId)
             );
         }
@@ -7954,10 +8253,10 @@ final class GameService
         // cards right now -- see MoodPlayService::isPlayable() and
         // BoardState::grantAllows()'s 'source' => 'discard' handling.
         $response['discard_pile'] = array_map(
-            function (int $cardId) use ($state, $names, $viewerGamePlayerId, $playerNames): array {
+            function (int $cardId) use ($state, $names, $viewerGamePlayerId, $playerNames, $game): array {
                 $lastOwnerId = $state->discardOwnerOf($cardId);
                 return [
-                    ...$this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
+                    ...$this->serializeCard($state, $cardId, $names, $viewerGamePlayerId, (bool) $game['default_selections_mode']),
                     // Two players' identical catalog cards can both sit in
                     // the discard pile at once (a 'duel' game gives each
                     // player their own deck -- see BoardState::
@@ -8340,7 +8639,7 @@ final class GameService
         $pdo = Connection::get();
 
         $playersStmt = $pdo->prepare(
-            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username FROM game_players gp
+            'SELECT gp.id, gp.user_id, gp.seat_order, gp.team_id, gp.custom_deck_name, gp.custom_deck_card_ids, gp.resigned_at, u.username, u.is_bot FROM game_players gp
              JOIN users u ON u.id = gp.user_id
              WHERE gp.game_id = :game_id ORDER BY gp.seat_order ASC'
         );
@@ -8358,6 +8657,9 @@ final class GameService
                 'username' => $row['username'],
                 'seat_order' => (int) $row['seat_order'],
                 'team_id' => $row['team_id'] !== null ? (int) $row['team_id'] : null,
+                // Practice bot (issue #140) -- see "Practice bots" in
+                // php-app/README.md.
+                'is_bot' => (bool) $row['is_bot'],
                 'hand_count' => count($state->hand((int) $row['id'])),
                 'total_wins' => $this->totalWinsFor($gameId, (int) $row['id']),
                 'total_score' => $this->boardPointTotalFor($state, (int) $row['id']),
@@ -9084,7 +9386,15 @@ final class GameService
      * @param array<int, string> $names
      * @return array{card_id:int,catalog_card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
-    private function serializeCard(BoardState $state, int $cardId, array $names, ?int $reactingViewerId = null): array
+    /**
+     * "Default selections" mode (issue #274) -- $defaultSelectionsMode
+     * true only for the two real "about to submit a play" call sites in
+     * buildGameState() (the viewer's own hand, and the discard pile for
+     * the rare discard-sourced play grant), never for a read-only
+     * teammate-hand/spectator/replay serialization, where nothing is
+     * ever actually submitted from what's shown.
+     */
+    private function serializeCard(BoardState $state, int $cardId, array $names, ?int $reactingViewerId = null, bool $defaultSelectionsMode = false): array
     {
         $catalog = $state->catalogRow($cardId);
         $inPlay = $state->isInPlay($cardId);
@@ -9158,6 +9468,13 @@ final class GameService
                     ...$choiceFields,
                 ];
             }
+
+            if ($defaultSelectionsMode) {
+                $choiceFields = array_map(
+                    fn (array $field) => $this->withChoiceDefault($state, $field, $catalog['effectKey'], $reactingViewerId),
+                    $choiceFields
+                );
+            }
         }
 
         return [
@@ -9190,6 +9507,96 @@ final class GameService
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
         ];
+    }
+
+    /**
+     * "Default selections" mode (issue #274): computes a `default` value
+     * to pre-fill a choice field with, following the policy settled on
+     * for the issue -- only a REQUIRED 'mode' field ever gets one:
+     *
+     * - A field with `required: false` is left alone (no `default` key
+     *   added at all) -- the existing blank/unchecked/empty state IS
+     *   already "no discard"/"don't take the bonus"/etc., which for an
+     *   optional effect already reads as the obviously reasonable
+     *   default (see Dignity's own example in the issue). Nothing to add.
+     * - A REQUIRED field whose type is anything other than 'mode'
+     *   (hand_card/discard_card/mood/player/value/bool) is ALSO left
+     *   alone, regardless of scope -- these are exactly the fields with
+     *   no obviously-safe generic pick: a mandatory cost (which of your
+     *   own cards/moods to give up to pay for the play), a specific
+     *   value to force-discard, or a player/mood target that may affect
+     *   an opponent (positively or negatively). None of those are
+     *   "obvious" the way an abstract mode/color/direction choice is, so
+     *   this degrades to today's blank-field behavior for all of them --
+     *   the player still has to make an explicit, deliberate choice, the
+     *   same as without this mode on.
+     * - A REQUIRED 'mode' field (a plain enumerated choice among
+     *   `options` -- a color to declare, which direction to pass, single
+     *   vs. all) defaults to its first option, UNLESS $effectKey has its
+     *   own hand-authored override -- currently just Imagination's own
+     *   'color' field, which defaults to whichever color is most
+     *   represented among $ownerId's own moods currently in play (the
+     *   issue's own flagship example of a smarter-than-generic default),
+     *   falling back to the same first-option baseline if $ownerId has
+     *   no moods in play yet to have a most-represented color at all.
+     */
+    private function withChoiceDefault(BoardState $state, array $field, string $effectKey, int $ownerId): array
+    {
+        if (($field['required'] ?? false) !== true || ($field['type'] ?? null) !== 'mode') {
+            return $field;
+        }
+
+        $options = $field['options'] ?? [];
+        if ($options === []) {
+            return $field;
+        }
+
+        if ($effectKey === 'imagination' && $field['key'] === 'color') {
+            $mostRepresented = $this->mostRepresentedColorInPlay($state, $ownerId, $options);
+            if ($mostRepresented !== null) {
+                return [...$field, 'default' => $mostRepresented];
+            }
+        }
+
+        return [...$field, 'default' => $options[0]];
+    }
+
+    /**
+     * Imagination's own hand-authored default (see withChoiceDefault()'s
+     * own docblock) -- tallies $ownerId's own moods currently in play by
+     * color, returning whichever of $colorOptions has the highest count.
+     * Ties (including "every count is 0, nothing in play yet") resolve to
+     * whichever candidate comes first in $colorOptions, via arsort()'s
+     * PHP 8+ stable-sort guarantee preserving the array's own insertion
+     * order (built from $colorOptions itself) among equal values -- the
+     * same deterministic "first legal option" fallback every other
+     * required 'mode' field already uses, just reached via a tie/no-data
+     * case here instead of being the immediate answer.
+     *
+     * @param string[] $colorOptions
+     */
+    private function mostRepresentedColorInPlay(BoardState $state, int $ownerId, array $colorOptions): ?string
+    {
+        $counts = array_fill_keys($colorOptions, 0);
+        $anyInPlay = false;
+        foreach ($state->moodsInPlay() as $cardId => $mood) {
+            if ($mood->ownerId !== $ownerId) {
+                continue;
+            }
+            $color = $state->colorOf($cardId);
+            if (isset($counts[$color])) {
+                $counts[$color]++;
+                $anyInPlay = true;
+            }
+        }
+
+        if (!$anyInPlay) {
+            return null;
+        }
+
+        arsort($counts);
+
+        return array_key_first($counts);
     }
 
     /**
@@ -9756,7 +10163,19 @@ final class GameService
      *
      * @return array<string, mixed>|null
      */
-    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId): ?array
+    /**
+     * "Default selections" mode (issue #274) applies here too, not just
+     * to serializeCard()'s own choice_fields -- $field mirrors
+     * CardChoiceSchema's field shape (see this method's own docblock
+     * above) and is rendered client-side by the exact same
+     * buildFieldRow()/buildFieldWidget() code either way, so the
+     * withChoiceDefault() enrichment is the same policy applied to the
+     * one field a pending decision carries, rather than an array of
+     * them. Only for $isYou, matching the gate 'field' itself was
+     * already behind (the decision's own private choice payload is
+     * still never populated for anyone else).
+     */
+    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId, ?BoardState $state = null, bool $defaultSelectionsMode = false): ?array
     {
         $batchRow = $this->activePendingBatch($roundId);
         if ($batchRow === null) {
@@ -9788,7 +10207,12 @@ final class GameService
         ];
 
         if ($isYou) {
-            $result['field'] = json_decode((string) $decisionRow['field'], true);
+            $field = json_decode((string) $decisionRow['field'], true);
+            if ($defaultSelectionsMode && $state !== null) {
+                $effectKey = $state->catalogRow($playedCardId)['effectKey'] ?? '';
+                $field = $this->withChoiceDefault($state, $field, $effectKey, $targetGamePlayerId);
+            }
+            $result['field'] = $field;
         }
 
         return $result;

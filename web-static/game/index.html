@@ -439,6 +439,23 @@
                 </div>
             </div>
 
+            <div id="new-game-bot-decklist-fields" hidden>
+                <p>Choose the practice bot's own deck (it can't submit one itself):</p>
+                <label>Use a saved deck
+                    <select id="new-game-bot-saved-decklist">
+                        <option value="">Paste/upload a decklist instead</option>
+                    </select>
+                </label>
+                <div id="new-game-bot-decklist-paste-fields">
+                    <label>Upload a decklist file
+                        <input type="file" id="new-game-bot-decklist-file" accept=".txt,text/plain">
+                    </label>
+                    <label>Or paste the bot's decklist
+                        <textarea id="new-game-bot-decklist-text" class="decklist-textarea" rows="10"></textarea>
+                    </label>
+                </div>
+            </div>
+
             <div id="new-game-quick-draft-fields" hidden>
                 <p>Choose the shared pool to draft from:</p>
                 <label>Pool
@@ -527,6 +544,8 @@
                     </label>
                 </div>
             </div>
+
+            <label class="new-game-field"><input type="checkbox" id="new-game-default-selections"> Default selections mode (pre-fill card choices with a reasonable default; still changeable before submitting)</label>
 
             <button id="new-game-submit-button" type="submit">Create game</button>
         </form>

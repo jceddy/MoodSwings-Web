@@ -13,12 +13,12 @@ use MoodSwings\Rules\PlayerChoices;
  * next turn." Same mechanism as Generosity, just self-targeted --
  * see GenerosityEffect and GameService::computeFreshGrants(). The "may"
  * refers to whether the banked play actually gets used once granted, not
- * whether the grant is created, so it's tagged unconditionally.
+ * whether the grant is created, so it's banked unconditionally.
  */
 final class JoyEffect extends AbstractMoodEffect
 {
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
     {
-        $state->setEffectState($cardId, 'banksExtraPlayForPlayerId', $playerId);
+        $state->bankExtraPlay($playerId, $cardId);
     }
 }

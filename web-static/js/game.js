@@ -1496,6 +1496,7 @@
         if (deckType === 'grid_draft') {
             updateGridDraftPoolSourceVisibility();
         }
+        updateBotDecklistFieldsVisibility();
     }
 
     // Shows the custom-pool file/textarea fields only for the 'custom'
@@ -1670,6 +1671,12 @@
                 container.append(', ');
             }
             container.append(player.username);
+            if (player.is_bot) {
+                // Practice bot (issue #140) -- plain text here (not a
+                // styled tag the way renderBoard()'s own does) since this
+                // whole line is already just comma-joined plain text.
+                container.append(' (bot)');
+            }
             if (game.current_turn_username === player.username) {
                 container.appendChild(buildPlayerFlag('onTurn', player.username + "'s turn", 'player-flag--turn'));
             }
@@ -1725,7 +1732,14 @@
                 : deckTypeLabel(game.deck_type) + ' deck';
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
-            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
+            // "Default selections" mode (issue #274) -- a per-game
+            // setting decided once at creation, so this is the one place
+            // (other than the board title itself, see renderBoard()) a
+            // seated player can tell it's on without opening the game --
+            // per the issue's own "visible to the players playing it (at
+            // least in the lobby)" requirement.
+            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription +
+                (game.default_selections_mode ? ', default selections' : '');
             infoEl.appendChild(formatEl);
         }
 
@@ -2045,6 +2059,66 @@
         return format === 'duel' ? 1 : 3;
     }
 
+    // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
+    // exactly: Traditional/Duel only, and only for a deck_type that needs
+    // no per-player setup of its own (no draft picks for a bot to make) --
+    // 'custom_duel' is its own special case, since #new-game-bot-decklist-fields
+    // below lets the creator supply the bot's own decklist directly rather
+    // than needing the bot to submit one itself.
+    function botsSupportedFor(format, deckType) {
+        if (format === 'duel' && deckType === 'custom_duel') {
+            return true;
+        }
+        return (format === 'standard' || format === 'duel')
+            && ['structure', 'power', 'jceddys_75', 'one_of_each'].includes(deckType);
+    }
+
+    // Whether any practice bot checkbox is currently checked.
+    function anyBotChecked() {
+        return Array.from(opponentCheckboxes.querySelectorAll('input[data-is-bot]')).some((box) => box.checked);
+    }
+
+    // #new-game-bot-decklist-fields (the bot's own decklist, since it can
+    // never submit one itself the way its human opponent does after the
+    // game is created) only makes sense once BOTH a bot is actually
+    // checked AND deck_type is 'custom_duel' -- unlike every other
+    // deck-type-driven field, this can't be computed from deckType alone.
+    // Called from updateDeckTypeDescription() (deck-type changes),
+    // updateBotCheckboxAvailability() (format changes, which can hide/
+    // uncheck a bot outright), and every bot checkbox's own 'change'.
+    function updateBotDecklistFieldsVisibility() {
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const show = deckType === 'custom_duel' && anyBotChecked();
+        document.getElementById('new-game-bot-decklist-fields').hidden = !show;
+        document.getElementById('new-game-bot-decklist-paste-fields').hidden =
+            !show || document.getElementById('new-game-bot-saved-decklist').value !== '';
+    }
+
+    // Hides (and, if checked, unchecks) every bot checkbox -- and their
+    // own "Practice bots" heading -- whenever the current format/deck_type
+    // combination doesn't support seating one (see botsSupportedFor()).
+    // Run on the same format/deck-type change events updateDeckTypeAvailability()
+    // already listens to.
+    function updateBotCheckboxAvailability() {
+        const format = document.getElementById('new-game-format').value;
+        const deckType = document.getElementById('new-game-deck-type').value;
+        const supported = botsSupportedFor(format, deckType);
+
+        const heading = document.getElementById('bot-checkboxes-heading');
+        if (heading) {
+            heading.hidden = !supported;
+        }
+        for (const box of opponentCheckboxes.querySelectorAll('input[data-is-bot]')) {
+            box.closest('label').hidden = !supported;
+            if (!supported && box.checked) {
+                box.checked = false;
+            }
+        }
+
+        updateOpponentSelectionLimit();
+        updateBotDecklistFieldsVisibility();
+    }
+
     function updateOpponentSelectionLimit() {
         const format = document.getElementById('new-game-format').value;
         const maxOpponents = opponentSelectionMax(format);
@@ -2071,12 +2145,22 @@
         updateDraftPoolSourceOptionLabels();
     }
 
+    // Order matters for the two bot-related listeners here: a bot
+    // checkbox has to be hidden/unchecked (updateBotCheckboxAvailability())
+    // BEFORE updateTeamFields() reads "which opponents are currently
+    // checked" to populate the partner dropdown -- otherwise switching
+    // straight into a team format could offer a bot as a partner
+    // candidate for the one instant before its own checkbox gets
+    // unchecked.
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
+    document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
+    document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-saved-decklist').addEventListener('change', updateDeckTypeDescription);
+    document.getElementById('new-game-bot-saved-decklist').addEventListener('change', updateBotDecklistFieldsVisibility);
     document.getElementById('new-game-duel-rules-preset').addEventListener('change', updateDuelRulesPresetVisibility);
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
@@ -2119,6 +2203,16 @@
         }
 
         document.getElementById('new-game-decklist-text').value = await file.text();
+    });
+
+    // Same pattern for the practice bot's own decklist file (custom_duel).
+    document.getElementById('new-game-bot-decklist-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-game-bot-decklist-text').value = await file.text();
     });
 
     // Reads the four rarity rows' own optional "max total"/"max
@@ -2170,8 +2264,9 @@
         submitButton.textContent = 'Create game';
         updateDeckTypeAvailability();
 
-        const { ok, body } = await listFriends();
+        const [{ ok, body }, botsResp] = await Promise.all([listFriends(), listPracticeBots()]);
         const friends = ok ? body.friends : [];
+        const bots = botsResp.ok ? botsResp.body.bots : [];
 
         opponentCheckboxes.innerHTML = '';
         document.getElementById('opponent-checkboxes-empty').hidden = friends.length > 0;
@@ -2188,8 +2283,38 @@
             opponentCheckboxes.appendChild(label);
         }
 
+        // Practice bots (issue #140): a separate, clearly-labeled section
+        // below the real friends -- there's no friendship requirement to
+        // seat one (GameService::createGame() accepts a bot's user id the
+        // same as any opponent's), so keeping them visually distinct here
+        // is purely so a bot is never mistaken for a real friend. Hidden
+        // (via updateBotCheckboxAvailability(), called below) whenever the
+        // dialog's current format/deck_type doesn't support one.
+        if (bots.length > 0) {
+            const heading = document.createElement('p');
+            heading.id = 'bot-checkboxes-heading';
+            heading.textContent = 'Practice bots:';
+            opponentCheckboxes.appendChild(heading);
+
+            for (const bot of bots) {
+                const label = document.createElement('label');
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = bot.user_id;
+                checkbox.dataset.isBot = 'true';
+                checkbox.addEventListener('change', updateOpponentSelectionLimit);
+                checkbox.addEventListener('change', updateTeamFields);
+                checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
+                label.appendChild(checkbox);
+                label.append(' ' + bot.username + ' (practice bot)');
+                opponentCheckboxes.appendChild(label);
+            }
+        }
+
+        updateBotCheckboxAvailability();
         updateTeamFields();
         await populateSavedDecklistSelect(document.getElementById('new-game-saved-decklist'));
+        await populateSavedDecklistSelect(document.getElementById('new-game-bot-saved-decklist'));
         // Issue #290's own three draft-type pickers, sharing the exact
         // same decks (own + friends') as the 'custom' deck_type's own
         // select above -- just a different placeholder, since there's no
@@ -2264,6 +2389,17 @@
             : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
             : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
             : undefined;
+        const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
+        // Only meaningful for deck_type 'custom_duel' with a bot checked --
+        // see updateBotDecklistFieldsVisibility() for when these fields are
+        // actually shown to the creator.
+        const botCheckedForCustomDuel = deckType === 'custom_duel' && anyBotChecked();
+        const botSavedDecklistId = botCheckedForCustomDuel
+            ? Number(document.getElementById('new-game-bot-saved-decklist').value) || undefined
+            : undefined;
+        const botDecklistText = botCheckedForCustomDuel && botSavedDecklistId === undefined
+            ? document.getElementById('new-game-bot-decklist-text').value
+            : undefined;
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -2279,6 +2415,9 @@
             gridDraftPoolSource,
             gridDraftCustomPoolText,
             savedDecklistId,
+            defaultSelectionsMode,
+            botDecklistText,
+            botSavedDecklistId,
         );
 
         if (!ok) {
@@ -3489,8 +3628,13 @@
             : state.game.deck_type === 'custom_duel'
                 ? (you && you.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(state.game.deck_type) + ' deck';
+        // "Default selections" mode (issue #274) -- mirrors the lobby
+        // row's own indicator (buildGameRow()) so it's visible once a
+        // player has actually opened the board too, not just from the
+        // lobby list.
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
+            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription +
+            (state.game.default_selections_mode ? ', default selections' : '') + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
         // only a real seated player can mint/share this game's own code,
@@ -3578,6 +3722,15 @@
 
                 const nameEl = document.createElement('span');
                 nameEl.appendChild(document.createTextNode(player.username));
+                if (player.is_bot) {
+                    // Practice bot (issue #140) -- same "its own span, not
+                    // folded into the username text" tag pattern as (you)/
+                    // (resigned) below.
+                    const botTag = document.createElement('span');
+                    botTag.className = 'player-bot-tag';
+                    botTag.textContent = ' (bot)';
+                    nameEl.appendChild(botTag);
+                }
                 if (isYou) {
                     // Its own span/color rather than folded into the plain
                     // username text, so it reads as a tag rather than
@@ -5481,6 +5634,19 @@
                 select.appendChild(new Option(option.label, option.value));
             }
         }
+
+        // "Default selections" mode (issue #274) -- field.default is only
+        // ever present on a required 'mode' field (a plain enumerated
+        // choice: a color/direction/single-vs-all, never a target/cost),
+        // computed server-side (GameService::withChoiceDefault()) so
+        // every viewer agrees on what "the default" is for the same
+        // field, rather than each client deriving its own. Pre-selects
+        // it, but the player can still change it before submitting --
+        // this is a starting point, not a locked-in answer.
+        if (!field.multi && field.default !== undefined && field.default !== null) {
+            select.value = String(field.default);
+        }
+
         return select;
     }
 
@@ -6073,8 +6239,36 @@
         return choices;
     }
 
+    // A card whose ENTIRE choice_fields is a single optional mood/player/
+    // hand_card/discard_card field (Anger, Hate, Denial, Shock, Creativity,
+    // etc. -- see "'Are you sure?' on a targetless play" in README.md) does
+    // nothing beyond entering play if that one field is left blank --
+    // Creativity's own label spells this out directly: "otherwise it's just
+    // a blue card worth 0." Deliberately narrow (exactly one field, and
+    // only these four "pick something" types) rather than flagging every
+    // card with an optional field left blank -- a card with 2+ fields (e.g.
+    // Worry, Charity, Guilt) or a bare bool/value/mode field (Wrath,
+    // Repentance) still has real, ambiguous-to-classify partial effects
+    // even when nothing is selected, so those are left alone rather than
+    // guessed at.
+    const TARGETLESS_CONFIRM_FIELD_TYPES = ['mood', 'player', 'hand_card', 'discard_card'];
+
+    function cardHasNoTargetSelected(card, choices) {
+        if (card.choice_fields.length !== 1) {
+            return false;
+        }
+        const field = card.choice_fields[0];
+        return !field.required
+            && TARGETLESS_CONFIRM_FIELD_TYPES.includes(field.type)
+            && !(field.key in choices);
+    }
+
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
+        if (cardHasNoTargetSelected(selectedCard, choices)
+            && !window.confirm(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`)) {
+            return;
+        }
         const playButton = document.getElementById('play-card-button');
         // Disabled + relabeled immediately (not after the request settles)
         // so a slow response can't be mistaken for a missed click and

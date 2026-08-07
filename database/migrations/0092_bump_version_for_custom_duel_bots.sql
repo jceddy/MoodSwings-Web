@@ -1,0 +1,18 @@
+-- No schema change: extends practice bots (issue #140, migration 0090)
+-- to support format 'duel' with deck_type 'custom_duel' -- previously
+-- excluded because each duel player normally submits their own
+-- decklist separately after the game exists, which a bot can never do
+-- itself. The bot's creator now supplies the bot's own decklist
+-- directly at game-creation time (POST /games' new bot_decklist_text/
+-- bot_saved_decklist_id params), written via GameService::
+-- submitCustomDuelDeck() for the bot's own seat before the transaction
+-- commits. Uses only the existing game_players.custom_deck_name/
+-- custom_deck_card_ids columns (migration 0019) -- no new columns
+-- needed.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0091 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.11.22' WHERE id = 1;
