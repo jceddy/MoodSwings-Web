@@ -1309,7 +1309,23 @@ too, proportional to the smaller card width.
     clobber the server's actual rejection message that was just shown
     there) so the player can adjust their choice and try again; on success
     the whole panel closes anyway, so there's nothing left to re-enable.
-    Cards with
+    Clicking Play on a card whose entire `choice_fields` is a single
+    optional target left blank -- Anger, Hate, Denial, Shock, Creativity
+    with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
+    with a `window.confirm()` ("You haven't selected a target for
+    &lt;name&gt; -- its ability won't do anything. Play it anyway?", the
+    same native-dialog pattern the board's own Pass/Resign buttons already
+    use for their own "are you sure" moments) before the request is ever
+    sent; declining leaves the panel open with nothing submitted, same as
+    never having clicked Play. Deliberately narrow -- only a card whose
+    *entire* choice_fields is exactly one optional `mood`/`player`/
+    `hand_card`/`discard_card` field (so the card would otherwise do
+    nothing beyond entering play, Creativity's own field label spells
+    this out directly: "otherwise it's just a blue card worth 0") --
+    a card with 2+ fields (Worry, Charity, Guilt) or whose only optional
+    field is a bare `bool`/`value`/`mode` (Wrath, Repentance) still has a
+    real, harder-to-classify partial effect even with nothing selected,
+    so those are left alone rather than guessed at. Cards with
     no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
