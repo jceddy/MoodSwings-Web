@@ -853,6 +853,9 @@ if ($path === '/games' && $method === 'POST') {
     // *_custom_pool_text) -- loading a previously-saved decklist (issue
     // #92) instead of parsing freshly-pasted/uploaded text.
     $savedDecklistId = isset($body['saved_decklist_id']) ? (int) $body['saved_decklist_id'] : null;
+    // "Default selections" mode (issue #274) -- a per-game toggle, chosen
+    // once here alongside format/deck_type, not a personal preference.
+    $defaultSelectionsMode = (bool) ($body['default_selections_mode'] ?? false);
 
     try {
         $gameId = $games->createGame(
@@ -871,6 +874,7 @@ if ($path === '/games' && $method === 'POST') {
             $gridDraftPoolSource,
             $gridDraftCustomPoolText,
             $savedDecklistId,
+            $defaultSelectionsMode,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {

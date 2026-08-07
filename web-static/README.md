@@ -561,7 +561,10 @@ too, proportional to the smaller card width.
     Structure deck" -- built from the same `format`/`deck_type` labels
     (`formatLabel()`/`deckTypeLabel()`) the board's own title uses,
     substituting the game's `custom_deck_name` for a `custom` deck_type
-    just like the board title does. `custom_duel` falls back to
+    just like the board title does, with a trailing ", default
+    selections" appended whenever `game.default_selections_mode` is true
+    (issue #274 -- the same suffix the board title itself gets, see
+    "Default selections mode" in `php-app/README.md`). `custom_duel` falls back to
     `deckTypeLabel()`'s generic label here since each player's own
     submitted deck name (unlike `custom`'s single game-wide name) only
     comes back from `GET /games/:id`, not the lobby list. Second, its own
@@ -733,7 +736,14 @@ too, proportional to the smaller card width.
     flush against each other)
     picks 1-3 friends (via `GET /friends`) plus a format (Traditional,
     Duel, Draft, Open Team Play, or Closed Team Play), then calls
-    `POST /games`. `updateOpponentSelectionLimit()` caps how many friends
+    `POST /games`. A `#new-game-default-selections` checkbox (issue #274,
+    unchecked by default, matching `default_selections_mode`'s own
+    `DEFAULT 0`) sends `default_selections_mode` alongside the rest --
+    see "Default selections mode" in `php-app/README.md` for what it
+    actually does once the game starts; the dialog itself has nothing
+    further to say about it, since the effect is entirely in how
+    `choice_fields`/`pending_decision.field` come back pre-filled later,
+    not in anything this dialog renders differently. `updateOpponentSelectionLimit()` caps how many friends
     can be checked at once to match the format's actual player count --
     3 normally, but only 1 for Duel or Draft, since both are exactly 2
     players and the server rejects anything else (see "Duel: separate
@@ -1382,6 +1392,21 @@ too, proportional to the smaller card width.
     `<option>` becomes the `<select>`'s own default, so
     `updateRespondButtonEnabled()`/`updatePlayButtonEnabled()` already see
     it filled at render time, with no explicit re-selection needed.
+    A field can also arrive with a server-computed `field.default` --
+    issue #274's "default selections" mode, only ever present when the
+    game itself has `default_selections_mode` on (see "Default selections
+    mode" in `php-app/README.md`), and only ever set on a field that
+    would otherwise still be blank. `buildFieldWidget()`'s generic
+    `<select>` branch sets `select.value` to it right after building the
+    options, exactly as if the player had picked it themselves -- it's
+    still an ordinary, fully-editable `<select>`, not a locked-in choice,
+    so `updateRespondButtonEnabled()`/`updatePlayButtonEnabled()` need no
+    changes to recognize it as already-filled, and picking something else
+    before submitting works exactly as it always has. This applies
+    identically whether the field belongs to the choices panel described
+    above or a pending-decision response, since both are rendered through
+    this same `buildFieldWidget()` code -- which is why supporting
+    pending-decision defaults needed no separate frontend handling at all.
     A `type: 'mood'` field's own options (e.g. Faith's `target_mood_id`)
     also mark a candidate mood with `card.has_unused_play_grant` (see
     `php-app/README.md`) with a trailing ` *` right after its name

@@ -518,6 +518,15 @@ final class GameService
      *        sources' own per-deck_type params, it's the same underlying
      *        "which saved decklist" concept regardless of which one is
      *        active, and only one deck_type is ever in effect per call.
+     * @param bool $defaultSelectionsMode "default selections" mode (issue
+     *        #274) -- a per-game toggle, not a personal preference, chosen
+     *        once here and applying to every seated player for the whole
+     *        game's lifetime, the same shape as $format/$deckType. Threaded
+     *        straight into the games row with no validation of its own
+     *        (a plain boolean, unlike $format/$deckType there's nothing to
+     *        reject). See serializeCard()/serializePendingDecision()'s own
+     *        docblocks for what it actually changes once the game is
+     *        underway.
      */
     public function createGame(
         int $createdByUserId,
@@ -535,6 +544,7 @@ final class GameService
         ?string $gridDraftPoolSource = null,
         ?string $gridDraftCustomPoolText = null,
         ?int $savedDecklistId = null,
+        bool $defaultSelectionsMode = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -642,12 +652,12 @@ final class GameService
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, match_game_number,
-                    status, created_by_user_id, wins_needed
+                    status, created_by_user_id, wins_needed, default_selections_mode
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :match_game_number,
-                    'waiting', :created_by, :wins_needed
+                    'waiting', :created_by, :wins_needed, :default_selections_mode
                  )"
             );
             $insertGame->execute([
@@ -664,6 +674,7 @@ final class GameService
                 'match_game_number' => $draftMatchId !== null ? 1 : null,
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
+                'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -4941,8 +4952,8 @@ final class GameService
         $seats = $seatStmt->fetchAll();
 
         $insertGame = $pdo->prepare(
-            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed)
-             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed)"
+            "INSERT INTO games (format, deck_type, draft_match_id, match_game_number, status, created_by_user_id, wins_needed, default_selections_mode)
+             VALUES (:format, :deck_type, :draft_match_id, :match_game_number, 'waiting', :created_by, :wins_needed, :default_selections_mode)"
         );
         $insertGame->execute([
             'format' => $game['format'],
@@ -4951,6 +4962,12 @@ final class GameService
             'match_game_number' => (int) $game['match_game_number'] + 1,
             'created_by' => (int) $game['created_by_user_id'],
             'wins_needed' => (int) $game['wins_needed'],
+            // Carried over from the game that just finished, same as
+            // format/deck_type/wins_needed above -- a best-of-three
+            // match's own "default selections" setting is decided once
+            // at the match's own creation (issue #274's per-game, not
+            // per-user, decision), not re-chosen game to game.
+            'default_selections_mode' => (int) $game['default_selections_mode'],
         ]);
         $nextGameId = (int) $pdo->lastInsertId();
 
@@ -6439,6 +6456,7 @@ final class GameService
             'custom_deck_name' => $game['custom_deck_name'],
             'status' => $game['status'],
             'wins_needed' => (int) $game['wins_needed'],
+            'default_selections_mode' => (bool) $game['default_selections_mode'],
             'created_at' => $game['created_at'],
             'started_at' => $game['started_at'],
             'last_move_at' => $game['last_move_at'],
@@ -7652,6 +7670,17 @@ final class GameService
                 ] : null,
                 'status' => $game['status'],
                 'wins_needed' => (int) $game['wins_needed'],
+                // "Default selections" mode (issue #274) -- a per-game
+                // toggle set once at createGame() time, applying to
+                // every seated player for this game's whole lifetime.
+                // See withChoiceDefault()'s own docblock for what it
+                // actually changes; surfaced here purely so the frontend
+                // can show players it's on (per the issue's own "visible
+                // to the players playing it" requirement), not because
+                // choice_fields/pending_decision.field need it -- those
+                // already carry a `default` key per field wherever one
+                // was computed, with no client-side re-derivation needed.
+                'default_selections_mode' => (bool) $game['default_selections_mode'],
                 'winner_game_player_id' => $game['winner_game_player_id'] !== null ? (int) $game['winner_game_player_id'] : null,
                 // Every winning username -- both teammates' for a
                 // team-format win, just the one player's otherwise. Empty
@@ -7807,7 +7836,7 @@ final class GameService
                 'hurt_feelings_game_player_id' => $roundRow['hurt_feelings_game_player_id'] !== null ? (int) $roundRow['hurt_feelings_game_player_id'] : null,
                 'banned_colors' => $state->bannedColorsThisRound(),
                 'discarded_this_round' => (bool) $roundRow['discarded_this_round'],
-                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId),
+                'pending_decision' => $this->serializePendingDecision((int) $roundRow['id'], $viewerGamePlayerId, $state, (bool) $game['default_selections_mode']),
                 'scoring_preview' => $this->serializeScoringPreview($state, (int) $roundRow['id']),
                 'scoring_effects' => $this->scoringEffectEntries($state, $names, $playerNames),
                 'board_effects' => $this->boardEffectEntries($state, $names, $playerNames),
@@ -7819,7 +7848,7 @@ final class GameService
 
         if ($viewerGamePlayerId !== null) {
             $response['you']['hand'] = array_map(
-                fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
+                fn (int $cardId) => $this->serializeCard($state, $cardId, $names, $viewerGamePlayerId, (bool) $game['default_selections_mode']),
                 $state->hand($viewerGamePlayerId)
             );
         }
@@ -7954,10 +7983,10 @@ final class GameService
         // cards right now -- see MoodPlayService::isPlayable() and
         // BoardState::grantAllows()'s 'source' => 'discard' handling.
         $response['discard_pile'] = array_map(
-            function (int $cardId) use ($state, $names, $viewerGamePlayerId, $playerNames): array {
+            function (int $cardId) use ($state, $names, $viewerGamePlayerId, $playerNames, $game): array {
                 $lastOwnerId = $state->discardOwnerOf($cardId);
                 return [
-                    ...$this->serializeCard($state, $cardId, $names, $viewerGamePlayerId),
+                    ...$this->serializeCard($state, $cardId, $names, $viewerGamePlayerId, (bool) $game['default_selections_mode']),
                     // Two players' identical catalog cards can both sit in
                     // the discard pile at once (a 'duel' game gives each
                     // player their own deck -- see BoardState::
@@ -9084,7 +9113,15 @@ final class GameService
      * @param array<int, string> $names
      * @return array{card_id:int,catalog_card_id:int,name:string,color:string,base_color:string,value:int,base_value:int,alt_value:?int,effect_key:string,rules_text:string,has_dice_value:bool,choice_fields:array<int,array<string,mixed>>,is_playable:bool,copy_simulation:?array<int,array{extra_fields:array<int,array<string,mixed>>,cost_payable:bool}>}
      */
-    private function serializeCard(BoardState $state, int $cardId, array $names, ?int $reactingViewerId = null): array
+    /**
+     * "Default selections" mode (issue #274) -- $defaultSelectionsMode
+     * true only for the two real "about to submit a play" call sites in
+     * buildGameState() (the viewer's own hand, and the discard pile for
+     * the rare discard-sourced play grant), never for a read-only
+     * teammate-hand/spectator/replay serialization, where nothing is
+     * ever actually submitted from what's shown.
+     */
+    private function serializeCard(BoardState $state, int $cardId, array $names, ?int $reactingViewerId = null, bool $defaultSelectionsMode = false): array
     {
         $catalog = $state->catalogRow($cardId);
         $inPlay = $state->isInPlay($cardId);
@@ -9158,6 +9195,13 @@ final class GameService
                     ...$choiceFields,
                 ];
             }
+
+            if ($defaultSelectionsMode) {
+                $choiceFields = array_map(
+                    fn (array $field) => $this->withChoiceDefault($state, $field, $catalog['effectKey'], $reactingViewerId),
+                    $choiceFields
+                );
+            }
         }
 
         return [
@@ -9190,6 +9234,96 @@ final class GameService
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
         ];
+    }
+
+    /**
+     * "Default selections" mode (issue #274): computes a `default` value
+     * to pre-fill a choice field with, following the policy settled on
+     * for the issue -- only a REQUIRED 'mode' field ever gets one:
+     *
+     * - A field with `required: false` is left alone (no `default` key
+     *   added at all) -- the existing blank/unchecked/empty state IS
+     *   already "no discard"/"don't take the bonus"/etc., which for an
+     *   optional effect already reads as the obviously reasonable
+     *   default (see Dignity's own example in the issue). Nothing to add.
+     * - A REQUIRED field whose type is anything other than 'mode'
+     *   (hand_card/discard_card/mood/player/value/bool) is ALSO left
+     *   alone, regardless of scope -- these are exactly the fields with
+     *   no obviously-safe generic pick: a mandatory cost (which of your
+     *   own cards/moods to give up to pay for the play), a specific
+     *   value to force-discard, or a player/mood target that may affect
+     *   an opponent (positively or negatively). None of those are
+     *   "obvious" the way an abstract mode/color/direction choice is, so
+     *   this degrades to today's blank-field behavior for all of them --
+     *   the player still has to make an explicit, deliberate choice, the
+     *   same as without this mode on.
+     * - A REQUIRED 'mode' field (a plain enumerated choice among
+     *   `options` -- a color to declare, which direction to pass, single
+     *   vs. all) defaults to its first option, UNLESS $effectKey has its
+     *   own hand-authored override -- currently just Imagination's own
+     *   'color' field, which defaults to whichever color is most
+     *   represented among $ownerId's own moods currently in play (the
+     *   issue's own flagship example of a smarter-than-generic default),
+     *   falling back to the same first-option baseline if $ownerId has
+     *   no moods in play yet to have a most-represented color at all.
+     */
+    private function withChoiceDefault(BoardState $state, array $field, string $effectKey, int $ownerId): array
+    {
+        if (($field['required'] ?? false) !== true || ($field['type'] ?? null) !== 'mode') {
+            return $field;
+        }
+
+        $options = $field['options'] ?? [];
+        if ($options === []) {
+            return $field;
+        }
+
+        if ($effectKey === 'imagination' && $field['key'] === 'color') {
+            $mostRepresented = $this->mostRepresentedColorInPlay($state, $ownerId, $options);
+            if ($mostRepresented !== null) {
+                return [...$field, 'default' => $mostRepresented];
+            }
+        }
+
+        return [...$field, 'default' => $options[0]];
+    }
+
+    /**
+     * Imagination's own hand-authored default (see withChoiceDefault()'s
+     * own docblock) -- tallies $ownerId's own moods currently in play by
+     * color, returning whichever of $colorOptions has the highest count.
+     * Ties (including "every count is 0, nothing in play yet") resolve to
+     * whichever candidate comes first in $colorOptions, via arsort()'s
+     * PHP 8+ stable-sort guarantee preserving the array's own insertion
+     * order (built from $colorOptions itself) among equal values -- the
+     * same deterministic "first legal option" fallback every other
+     * required 'mode' field already uses, just reached via a tie/no-data
+     * case here instead of being the immediate answer.
+     *
+     * @param string[] $colorOptions
+     */
+    private function mostRepresentedColorInPlay(BoardState $state, int $ownerId, array $colorOptions): ?string
+    {
+        $counts = array_fill_keys($colorOptions, 0);
+        $anyInPlay = false;
+        foreach ($state->moodsInPlay() as $cardId => $mood) {
+            if ($mood->ownerId !== $ownerId) {
+                continue;
+            }
+            $color = $state->colorOf($cardId);
+            if (isset($counts[$color])) {
+                $counts[$color]++;
+                $anyInPlay = true;
+            }
+        }
+
+        if (!$anyInPlay) {
+            return null;
+        }
+
+        arsort($counts);
+
+        return array_key_first($counts);
     }
 
     /**
@@ -9756,7 +9890,19 @@ final class GameService
      *
      * @return array<string, mixed>|null
      */
-    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId): ?array
+    /**
+     * "Default selections" mode (issue #274) applies here too, not just
+     * to serializeCard()'s own choice_fields -- $field mirrors
+     * CardChoiceSchema's field shape (see this method's own docblock
+     * above) and is rendered client-side by the exact same
+     * buildFieldRow()/buildFieldWidget() code either way, so the
+     * withChoiceDefault() enrichment is the same policy applied to the
+     * one field a pending decision carries, rather than an array of
+     * them. Only for $isYou, matching the gate 'field' itself was
+     * already behind (the decision's own private choice payload is
+     * still never populated for anyone else).
+     */
+    private function serializePendingDecision(int $roundId, ?int $viewerGamePlayerId, ?BoardState $state = null, bool $defaultSelectionsMode = false): ?array
     {
         $batchRow = $this->activePendingBatch($roundId);
         if ($batchRow === null) {
@@ -9788,7 +9934,12 @@ final class GameService
         ];
 
         if ($isYou) {
-            $result['field'] = json_decode((string) $decisionRow['field'], true);
+            $field = json_decode((string) $decisionRow['field'], true);
+            if ($defaultSelectionsMode && $state !== null) {
+                $effectKey = $state->catalogRow($playedCardId)['effectKey'] ?? '';
+                $field = $this->withChoiceDefault($state, $field, $effectKey, $targetGamePlayerId);
+            }
+            $result['field'] = $field;
         }
 
         return $result;

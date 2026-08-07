@@ -1725,7 +1725,14 @@
                 : deckTypeLabel(game.deck_type) + ' deck';
             const formatEl = document.createElement('div');
             formatEl.className = 'lobby-format';
-            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription;
+            // "Default selections" mode (issue #274) -- a per-game
+            // setting decided once at creation, so this is the one place
+            // (other than the board title itself, see renderBoard()) a
+            // seated player can tell it's on without opening the game --
+            // per the issue's own "visible to the players playing it (at
+            // least in the lobby)" requirement.
+            formatEl.textContent = formatLabel(game.format) + ', ' + deckDescription +
+                (game.default_selections_mode ? ', default selections' : '');
             infoEl.appendChild(formatEl);
         }
 
@@ -2264,6 +2271,7 @@
             : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
             : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
             : undefined;
+        const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -2279,6 +2287,7 @@
             gridDraftPoolSource,
             gridDraftCustomPoolText,
             savedDecklistId,
+            defaultSelectionsMode,
         );
 
         if (!ok) {
@@ -3489,8 +3498,13 @@
             : state.game.deck_type === 'custom_duel'
                 ? (you && you.custom_deck_name || 'Uploaded Deck')
                 : deckTypeLabel(state.game.deck_type) + ' deck';
+        // "Default selections" mode (issue #274) -- mirrors the lobby
+        // row's own indicator (buildGameRow()) so it's visible once a
+        // player has actually opened the board too, not just from the
+        // lobby list.
         document.getElementById('board-title').textContent =
-            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription + ')';
+            'Game #' + state.game.id + ' (' + formatLabel(state.game.format) + ', ' + deckDescription +
+            (state.game.default_selections_mode ? ', default selections' : '') + ')';
 
         // Spectator mode (issue #128)/Watch game replay (issue #240) --
         // only a real seated player can mint/share this game's own code,
@@ -5481,6 +5495,19 @@
                 select.appendChild(new Option(option.label, option.value));
             }
         }
+
+        // "Default selections" mode (issue #274) -- field.default is only
+        // ever present on a required 'mode' field (a plain enumerated
+        // choice: a color/direction/single-vs-all, never a target/cost),
+        // computed server-side (GameService::withChoiceDefault()) so
+        // every viewer agrees on what "the default" is for the same
+        // field, rather than each client deriving its own. Pre-selects
+        // it, but the player can still change it before submitting --
+        // this is a starting point, not a locked-in answer.
+        if (!field.multi && field.default !== undefined && field.default !== null) {
+            select.value = String(field.default);
+        }
+
         return select;
     }
 
