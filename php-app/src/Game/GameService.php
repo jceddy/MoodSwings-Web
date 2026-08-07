@@ -5760,12 +5760,13 @@ final class GameService
      * perpetual or banked grants their board currently entitles them to --
      * Hope's unconditional extra play, Grace's discard-sourced
      * color-matching one, Stubbornness's conditional one (only if another
-     * player currently has more moods in play), and one grant per
-     * still-outstanding Generosity/Joy 'banksExtraPlayForPlayerId' tag
-     * targeting this player, cleared here since each only ever covers a
-     * single turn. Hope/Grace's *same*-turn bonus (for the turn either
-     * card is actually played) is granted separately, in MoodPlayService,
-     * since it isn't tied to a turn boundary at all.
+     * player currently has more moods in play), and one grant per still-
+     * outstanding Generosity/Joy banked play targeting this player (see
+     * BoardState::consumeBankedExtraPlaysFor(), which also clears each one
+     * consumed here, since it only ever covers a single turn). Hope/
+     * Grace's *same*-turn bonus (for the turn either card is actually
+     * played) is granted separately, in MoodPlayService, since it isn't
+     * tied to a turn boundary at all.
      *
      * Every one of these four carries 'sourceCardId' (via
      * effectiveSourceCardIds(), which follows a Creativity copy back to
@@ -5825,11 +5826,8 @@ final class GameService
             }
         }
 
-        foreach ($state->moodsInPlay() as $mood) {
-            if ($state->effectState($mood->cardId, 'banksExtraPlayForPlayerId') === $playerId) {
-                $state->clearEffectState($mood->cardId, 'banksExtraPlayForPlayerId');
-                $grants[] = ['sourceCardId' => $state->effectiveCardId($mood->cardId)];
-            }
+        foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
+            $grants[] = ['sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
         }
 
         return $grants;
