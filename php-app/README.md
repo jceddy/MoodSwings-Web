@@ -60,7 +60,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
 | GET    | `/games/bots`   | —                                                                 | Requires auth. The full practice-bot roster (issue #140) -- `{"bots": [{"user_id", "username"}]}`, every `users.is_bot` row (migration `0090`), same for every caller. See "Practice bots" below. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?, "bot_decklist_text"?, "bot_saved_decklist_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `bot_decklist_text`/`bot_saved_decklist_id` supply a practice bot's own decklist for `deck_type: 'custom_duel'` (the bot's creator picks it, since the bot can never submit one itself the normal way) -- exactly one is required whenever `opponent_user_ids` includes a bot for that `format`/`deck_type` combination, and both are ignored otherwise; see "Practice bots in Duel with a custom decklist" below. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), a bot is seated in a `custom_duel` game with neither `bot_decklist_text` nor `bot_saved_decklist_id` given, the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size, or -- for the bot's own decklist -- the same validation `POST /games/decklist` applies), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id`/`bot_saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"?, "saved_decklist_id"?}`           | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, either as pasted/uploaded text or by referencing one of their own or a friend's shared saved decklists (see "Saved decklists" below), validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it. Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | GET    | `/cards/catalog` | —                                                                | Requires auth. Every printed card, hydrated the same way `/decklists/view` hydrates a saved decklist's cards (now including `rarity`, which no other card-view route needed until this one). Not scoped to a game/decklist -- the catalog itself is public knowledge, same reasoning as `/games/log`. Returns `{"cards": [...]}`. Powers the deck builder's (issue #93) own catalog-browsing panel -- see "Deck builder" below. |
 | GET    | `/decklists`    | —                                                                 | Requires auth. Returns `{"own": [...], "friends": [{"friend_id", "friend_username", "decklists": [...]}]}` -- summaries only (`id`/`name`/`card_count`/`sideboard_card_count`/`visibility`/`created_at`/`updated_at`, never card contents). `friends` only lists friends who have 1+ decks shared with you. See "Saved decklists" below. |
@@ -4436,23 +4436,32 @@ populate its own bot picker -- see "New game dialog" in
 **Scope.** `GameService::botsSupportedFor(string $format, string
 $deckType): bool` -- Traditional (`standard`) or Duel only, and only for
 a deck_type that needs no per-player setup of its own: `structure`,
-`power`, `jceddys_75`, `one_of_each` (`BOT_SUPPORTED_DECK_TYPES`). Every
-other deck_type is excluded because it would need the bot to do
-something this feature doesn't implement -- submit its own custom
-decklist (`custom`/`custom_duel`) or make its own draft picks
+`power`, `jceddys_75`, `one_of_each` (`BOT_SUPPORTED_DECK_TYPES`), plus
+one special case: Duel with `custom_duel` (see "Practice bots in Duel
+with a custom decklist" below) -- `botsSupportedFor()` returns `true` for
+that combination outright, bypassing `BOT_SUPPORTED_DECK_TYPES`
+entirely, since a bot's decklist there is supplied by its creator up
+front rather than needing the bot to submit one itself the normal way.
+Every other deck_type stays excluded because it would need the bot to do
+something this feature doesn't implement -- make its own draft picks
 (`quick_draft`/`winston_draft`/`grid_draft`, which also implies
-`format: 'draft'`). Team formats (`team`/`closed_team`) are excluded for
-a different reason: a bot would additionally have to answer Open/Closed
-Team Play's own turn-order propose/confirm decisions
-(`POST /games/team-decision`) and, for Closed Team Play, its blind
-pregame card pass (`POST /games/initial-pass`) -- a materially bigger
-decision surface than "play a card, answer a pending decision" that this
-feature doesn't cover yet. `createGame()` rejects (`GameStateException`)
-any attempt to seat a bot outside this scope, checked once, up front,
-via `containsBotUser(array $userIds): bool` (a single `is_bot` lookup
-against every id in `$userIds`) -- before any of the deck-type-specific
-validation/building below it even runs, so a doomed request never gets
-as far as e.g. parsing a decklist.
+`format: 'draft'`), or (for plain `custom`, i.e. Traditional/standard
+with a custom decklist) submit one via the single-shared-decklist path
+`deck_type: 'custom'` uses, which has no per-seat submission step for
+`createGame()` to hook the way `custom_duel` does. Team formats
+(`team`/`closed_team`) are excluded for a different reason: a bot would
+additionally have to answer Open/Closed Team Play's own turn-order
+propose/confirm decisions (`POST /games/team-decision`) and, for Closed
+Team Play, its blind pregame card pass (`POST /games/initial-pass`) -- a
+materially bigger decision surface than "play a card, answer a pending
+decision" that this feature doesn't cover yet. `createGame()` rejects
+(`GameStateException`) any attempt to seat a bot outside this scope,
+checked once, up front, via `botUserIdAmong(array $userIds): ?int` (a
+single `is_bot` lookup against every id in `$userIds`, returning the
+bot's own id rather than just a bool -- see "Practice bots in Duel with
+a custom decklist" below for why the id itself is needed) -- before any
+of the deck-type-specific validation/building below it even runs, so a
+doomed request never gets as far as e.g. parsing a decklist.
 
 **Picking a legal move: `MoodSwings\Bot\BotChoiceResolver`.** A
 server-side equivalent of `web-static/js/game.js`'s own `fieldOptions()`/
@@ -4584,6 +4593,55 @@ frontend can badge it -- see "New game dialog"/board `players-list` in
 `web-static/README.md`), and the ordinary "game finished" push
 notification (issue #108) still fires for the human same as always --
 only the two aggregate stats updates are skipped.
+
+**Practice bots in Duel with a custom decklist.** `custom_duel` is
+otherwise excluded from bot support (see "Scope" above) because each of
+Duel's 2 players normally submits their own decklist separately, after
+the game already exists, via `POST /games/decklist`
+(`GameService::submitCustomDuelDeck()`) -- something a bot can never do
+on its own. Instead, the bot's creator supplies the bot's own decklist
+directly at game-creation time: `POST /games` accepts two extra
+optional params, `bot_decklist_text` (pasted/uploaded text, same format
+`decklist_text`/`POST /games/decklist` already accept) and
+`bot_saved_decklist_id` (one of the creator's own or a friend's shared
+saved decklists -- issue #92 -- loaded the same way `saved_decklist_id`
+already is elsewhere). Exactly one is required whenever a bot is seated
+in a `format: 'duel'`, `deck_type: 'custom_duel'` game; `createGame()`
+rejects (`GameStateException`) an attempt to seat one with neither
+supplied.
+
+Rather than duplicating `submitCustomDuelDeck()`'s validation (against
+the game's own `duel_deck_rules`) and write logic, `createGame()` calls
+it directly -- same connection, same transaction -- for the bot's own
+freshly-inserted `game_players` row, immediately after the seat-insert
+loop and before the transaction commits. The bot's own `game_players.id`
+is captured mid-loop (`$botGamePlayerId = (int) $pdo->lastInsertId()`
+the moment that seat's row is inserted) since nothing about seat
+insertion order otherwise ties a `user_id` back to its own
+`game_players.id` ahead of time. If the bot's decklist is invalid --
+too few cards, a rarity/duplicate limit violation, an unparseable line
+-- creation fails the same way an invalid `decklist_text` always has,
+rolling back the whole transaction (no game left half-created).
+
+One access-control wrinkle: `submitCustomDuelDeck()`'s
+`$savedDecklistId` branch normally authorizes the lookup against the
+seat's own `user_id` (`UserDecklistService::cardIdsForUse()`) -- correct
+for the normal `POST /games/decklist` flow, where a player only ever
+submits their own saved deck. A bot has no saved decklists or
+friendships of its own, so that check would always `403` for
+`bot_saved_decklist_id`. `submitCustomDuelDeck()` therefore takes an
+extra `?int $accessCheckUserId = null` param (defaulting to the seat
+owner, preserving `POST /games/decklist`'s existing behavior exactly);
+`createGame()` passes the *creator's* own user id when submitting the
+bot's deck, so the human can use their own -- or a friend's
+shared -- saved decklist "on the bot's behalf."
+
+The human opponent still submits their own decklist the normal way,
+after creation, via `POST /games/decklist`; `startGame()`'s existing
+"both seats need a non-null `custom_deck_card_ids`" gate is untouched,
+so the game simply sits `waiting` (bot's deck already submitted, human's
+still pending) until the human does. See "New game dialog" in
+`web-static/README.md` for the picker/decklist fields this adds.
 
 ### Duel: separate per-player decks
 

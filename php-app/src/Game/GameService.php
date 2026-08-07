@@ -530,6 +530,20 @@ final class GameService
      *        reject). See serializeCard()/serializePendingDecision()'s own
      *        docblocks for what it actually changes once the game is
      *        underway.
+     * @param ?string $botDecklistText only meaningful (and, alongside
+     *        $botSavedDecklistId, required) when $deckType is 'custom_duel'
+     *        and one of $userIds is a practice bot (issue #140) -- the
+     *        bot's own decklist, submitted here on its behalf since a bot
+     *        can never call submitCustomDuelDeck() itself the way its human
+     *        opponent does (via POST /games/decklist, after this call
+     *        returns). Same format as $decklistText/DecklistParser,
+     *        validated against this same call's own $duelDeckRules.
+     * @param ?int $botSavedDecklistId an alternative to $botDecklistText,
+     *        same idea as $savedDecklistId -- but authorized against
+     *        $createdByUserId's own accessible decklists (own or a
+     *        friend's shared one), not the bot's, since a bot has no
+     *        decklists or friendships of its own; see
+     *        submitCustomDuelDeck()'s own $accessCheckUserId param.
      */
     public function createGame(
         int $createdByUserId,
@@ -548,6 +562,8 @@ final class GameService
         ?string $gridDraftCustomPoolText = null,
         ?int $savedDecklistId = null,
         bool $defaultSelectionsMode = false,
+        ?string $botDecklistText = null,
+        ?int $botSavedDecklistId = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -576,14 +592,21 @@ final class GameService
             }
         }
 
-        // Practice bots (issue #140) only support the simplest case for
-        // now: Traditional/Duel with a deck_type that needs no per-player
-        // setup of its own (no custom decklist to write on the bot's
-        // behalf, no draft picks for it to make). Checked up front, ahead
-        // of the deck-type-specific validation/building below, so a
-        // doomed request never gets as far as e.g. parsing a decklist.
-        if ($this->containsBotUser($userIds) && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel games using a Structure, Power, jceddy\'s 75 Card, or One of Each Card deck');
+        // Practice bots (issue #140): Traditional/Duel with a deck_type
+        // that needs no per-player setup of its own (Structure/Power/
+        // jceddy's 75/One of Each), or Duel with 'custom_duel' -- the one
+        // deck_type that DOES need per-player setup, but which this call
+        // itself supplies on the bot's behalf via $botDecklistText/
+        // $botSavedDecklistId below, rather than the bot ever needing to
+        // submit one itself. Checked up front, ahead of the deck-type-
+        // specific validation/building below, so a doomed request never
+        // gets as far as e.g. parsing a decklist.
+        $botUserId = $this->botUserIdAmong($userIds);
+        if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel games using a Structure, Power, jceddy\'s 75 Card, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
+        }
+        if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
+            throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
         }
 
         $customDeckName = null;
@@ -699,6 +722,7 @@ final class GameService
                 'closed_team' => $this->seatOrderForClosedTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
                 default => array_values($userIds),
             };
+            $botGamePlayerId = null;
             foreach ($seatedUserIds as $seatOrder => $userId) {
                 $teamId = match ($format) {
                     'team' => (int) ($seatOrder >= 2),
@@ -711,6 +735,26 @@ final class GameService
                     'seat_order' => $seatOrder,
                     'team_id' => $teamId,
                 ]);
+                if ($userId === $botUserId) {
+                    $botGamePlayerId = (int) $pdo->lastInsertId();
+                }
+            }
+
+            // Practice bots (issue #140) in a 'custom_duel' game: submit
+            // the bot's own decklist right here, on its behalf, the same
+            // validate-then-write submitCustomDuelDeck() its human
+            // opponent will separately call themselves (via
+            // POST /games/decklist) once this request returns --
+            // $createdByUserId is passed as the access-check override
+            // since a saved decklist has to be authorized against the
+            // human choosing it, not the bot's own (nonexistent) access.
+            // Still inside this same transaction: submitCustomDuelDeck()
+            // only issues plain SELECT/UPDATE statements of its own (no
+            // nested transaction), so it safely sees this call's
+            // just-inserted games/game_players rows and rolls back
+            // alongside everything else if its own validation throws.
+            if ($botGamePlayerId !== null && $deckType === 'custom_duel') {
+                $this->submitCustomDuelDeck($gameId, $botGamePlayerId, $botDecklistText, $botSavedDecklistId, $createdByUserId);
             }
 
             if ($draftMatchId !== null) {
@@ -751,26 +795,41 @@ final class GameService
     }
 
     /**
-     * Every deck_type a practice bot (issue #140) can currently be seated
-     * in a game with -- none of the four need any per-player setup a bot
-     * would have to do itself (a custom decklist to submit, a draft to
-     * pick through), unlike 'custom'/'custom_duel'/'quick_draft'/
-     * 'winston_draft'/'grid_draft'. See botsSupportedFor().
+     * Every deck_type a practice bot (issue #140) can be seated in a game
+     * with *without* createGame() itself supplying anything extra on its
+     * behalf -- none of these four need any per-player setup a bot would
+     * otherwise have to do itself (a custom decklist to submit, a draft
+     * to pick through), unlike 'custom'/'quick_draft'/'winston_draft'/
+     * 'grid_draft'. 'custom_duel' is deliberately NOT here even though a
+     * bot supports it too -- see botsSupportedFor()'s own handling of it,
+     * which needs $botDecklistText/$botSavedDecklistId, unlike every deck
+     * type in this list.
      */
     private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each'];
 
     /**
      * Whether a practice bot (issue #140) can be seated in a game with
-     * this $format/$deckType combination -- Traditional/Duel only for
-     * now, both because Team Play needs a bot to also answer turn-order
-     * propose/confirm decisions (and, for Closed Team Play, a blind
-     * pregame card pass) and because the 'draft' format needs a bot to
-     * make its own draft picks -- neither of which BotPlayerService
-     * implements yet. See BOT_SUPPORTED_DECK_TYPES for the deck_type half
-     * of this restriction.
+     * this $format/$deckType combination -- Traditional/Duel only, both
+     * because Team Play needs a bot to also answer turn-order propose/
+     * confirm decisions (and, for Closed Team Play, a blind pregame card
+     * pass) and because the 'draft' format needs a bot to make its own
+     * draft picks -- neither of which BotPlayerService implements yet.
+     * Within Duel, 'custom_duel' is its own special case: unlike every
+     * deck_type in BOT_SUPPORTED_DECK_TYPES, it needs per-player setup
+     * (a decklist to build, against $duelDeckRules) -- but rather than
+     * teach BotPlayerService a fifth thing to decide (the same way it
+     * doesn't decide draft picks), createGame() lets the human supply the
+     * bot's own decklist directly at creation time (see its own
+     * $botDecklistText/$botSavedDecklistId params, and
+     * submitCustomDuelDeck()'s own $accessCheckUserId), so the bot itself
+     * never has to submit anything for this deck_type either.
      */
     private function botsSupportedFor(string $format, string $deckType): bool
     {
+        if ($format === 'duel' && $deckType === 'custom_duel') {
+            return true;
+        }
+
         return in_array($format, ['standard', 'duel'], true) && in_array($deckType, self::BOT_SUPPORTED_DECK_TYPES, true);
     }
 
@@ -791,18 +850,27 @@ final class GameService
         );
     }
 
-    /** Whether any of $userIds is a practice bot (users.is_bot) -- see botsSupportedFor(). */
-    private function containsBotUser(array $userIds): bool
+    /**
+     * The one practice bot (users.is_bot) among $userIds, if any -- see
+     * botsSupportedFor(). At most one, never more: $userIds always
+     * includes $createdByUserId (a real human, the only kind of account
+     * that can call createGame() at all), and the only format a bot's
+     * own scope allows with a second opponent seat at all is 'duel',
+     * which is capped at exactly 2 players total -- so a duel is
+     * (human, bot) at most, never (bot, bot).
+     */
+    private function botUserIdAmong(array $userIds): ?int
     {
         if ($userIds === []) {
-            return false;
+            return null;
         }
 
         $placeholders = implode(',', array_fill(0, count($userIds), '?'));
-        $stmt = Connection::get()->prepare("SELECT COUNT(*) FROM users WHERE id IN ({$placeholders}) AND is_bot = 1");
+        $stmt = Connection::get()->prepare("SELECT id FROM users WHERE id IN ({$placeholders}) AND is_bot = 1 LIMIT 1");
         $stmt->execute(array_values($userIds));
+        $id = $stmt->fetchColumn();
 
-        return ((int) $stmt->fetchColumn()) > 0;
+        return $id !== false ? (int) $id : null;
     }
 
     /**
@@ -1030,8 +1098,18 @@ final class GameService
      * around, and startGame() only ever reads the latest. startGame()
      * itself refuses to deal for this deck_type until both seats have a
      * non-null custom_deck_card_ids.
+     *
+     * $accessCheckUserId overrides whose accessible decklists
+     * $savedDecklistId is authorized against (own or a friend's shared
+     * one) -- defaults to $gamePlayerId's own seat owner, the ordinary
+     * case (POST /games/decklist, a player submitting their own deck).
+     * The one exception is createGame() submitting a practice bot's own
+     * decklist on its behalf (issue #140): a bot has no saved decklists
+     * or friendships of its own, so that call passes the human creator's
+     * user id here instead, letting them pick from their own accessible
+     * decklists for the bot the same way they already do for themselves.
      */
-    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null): void
+    public function submitCustomDuelDeck(int $gameId, int $gamePlayerId, ?string $decklistText, ?int $savedDecklistId = null, ?int $accessCheckUserId = null): void
     {
         $game = $this->fetchGame($gameId);
         if ($game['deck_type'] !== 'custom_duel') {
@@ -1042,8 +1120,8 @@ final class GameService
         }
 
         // Widened from "SELECT COUNT(*)" to also return user_id -- needed
-        // to authorize a $savedDecklistId lookup below without adding a
-        // new parameter to this method's own signature/callers.
+        // as the default $accessCheckUserId for a $savedDecklistId lookup
+        // below.
         $ownerStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE id = :id AND game_id = :game_id');
         $ownerStmt->execute(['id' => $gamePlayerId, 'game_id' => $gameId]);
         $ownerRow = $ownerStmt->fetch();
@@ -1054,7 +1132,7 @@ final class GameService
         $catalog = $this->loadCardCatalog();
 
         if ($savedDecklistId !== null) {
-            $parsed = $this->userDecklists->cardIdsForUse((int) $ownerRow['user_id'], $savedDecklistId);
+            $parsed = $this->userDecklists->cardIdsForUse($accessCheckUserId ?? (int) $ownerRow['user_id'], $savedDecklistId);
         } else {
             if ($decklistText === null || trim($decklistText) === '') {
                 throw new GameStateException('A decklist is required');
