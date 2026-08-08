@@ -806,6 +806,26 @@ if ($path === '/user/default-selections-mode-preference' && $method === 'POST') 
     respond(200, ['status' => 'ok']);
 }
 
+// "Auto-pass on empty hand" as a personal preference (Settings dialog's
+// "Game defaults" section) -- see GameService::advanceAutomatedTurns()
+// for the server-side behavior this drives. Current value is already
+// carried on GET /me's own user object, so this route is write-only,
+// same pattern as /user/default-selections-mode-preference above.
+if ($path === '/user/auto-pass-on-empty-hand-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('auto_pass_on_empty_hand', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'auto_pass_on_empty_hand is required.']);
+    }
+
+    (new UserRepository())->setAutoPassOnEmptyHand(
+        (int) $currentUser['id'],
+        (bool) $input['auto_pass_on_empty_hand']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't
@@ -1174,11 +1194,12 @@ if ($path === '/games/start' && $method === 'POST') {
 
     try {
         $games->startGame($gameId);
-        // Practice bots (issue #140): the very first turn of the game
-        // might already belong to a bot -- see the identical comment on
-        // POST /games/play above.
-        $botResult = $games->advanceBotTurns($gameId);
-        respond(200, ['status' => 'ok', ...($botResult ?? [])]);
+        // Practice bots (issue #140)/auto-pass on empty hand: the very
+        // first turn of the game might already belong to a bot, or to an
+        // opted-in player dealt an empty hand -- see the identical
+        // comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        respond(200, ['status' => 'ok', ...($autoResult ?? [])]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
     }
@@ -1195,16 +1216,18 @@ if ($path === '/games/play' && $method === 'POST') {
 
     try {
         $result = $games->playMood($gameId, $gamePlayerId, $cardId, $choices);
-        // Practice bots (issue #140): if this play handed the turn (or a
-        // pending decision) to a bot, drive its own action(s) right here
-        // -- possibly several in a row -- before responding, so the human
-        // who just moved sees the game already advanced past them rather
-        // than having to poll and wait. See GameService::advanceBotTurns()'s
-        // own docblock; a null return means no bot ever got a turn, so
-        // $result stays exactly what the human's own play produced.
-        $botResult = $games->advanceBotTurns($gameId);
-        if ($botResult !== null) {
-            $result = $botResult;
+        // Practice bots (issue #140)/auto-pass on empty hand: if this play
+        // handed the turn (or a pending decision) to a bot, or to an
+        // opted-in player now holding an empty hand, drive its own
+        // action(s) right here -- possibly several in a row -- before
+        // responding, so the human who just moved sees the game already
+        // advanced past them rather than having to poll and wait. See
+        // GameService::advanceAutomatedTurns()'s own docblock; a null
+        // return means nothing automated ever got a turn, so $result
+        // stays exactly what the human's own play produced.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
         }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (InvalidChoiceException $e) {
@@ -1225,11 +1248,11 @@ if ($path === '/games/pass' && $method === 'POST') {
 
     try {
         $result = $games->pass($gameId, $gamePlayerId);
-        // Practice bots (issue #140) -- see the identical comment on
-        // POST /games/play above.
-        $botResult = $games->advanceBotTurns($gameId);
-        if ($botResult !== null) {
-            $result = $botResult;
+        // Practice bots (issue #140)/auto-pass on empty hand -- see the
+        // identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
         }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
@@ -1246,13 +1269,14 @@ if ($path === '/games/resign' && $method === 'POST') {
 
     try {
         $result = $games->resignGame($gameId, $gamePlayerId);
-        // Practice bots (issue #140): a resignation in a 3-4 player
-        // standard game can hand the turn straight to a bot without the
-        // game actually ending -- see the identical comment on
+        // Practice bots (issue #140)/auto-pass on empty hand: a
+        // resignation in a 3-4 player standard game can hand the turn
+        // straight to a bot (or an opted-in empty-handed player) without
+        // the game actually ending -- see the identical comment on
         // POST /games/play above.
-        $botResult = $games->advanceBotTurns($gameId);
-        if ($botResult !== null) {
-            $result = $botResult;
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
         }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException | IllegalPlayException $e) {
@@ -1330,11 +1354,11 @@ if ($path === '/games/respond' && $method === 'POST') {
 
     try {
         $result = $games->respondToDecision($gameId, $gamePlayerId, $choices);
-        // Practice bots (issue #140) -- see the identical comment on
-        // POST /games/play above.
-        $botResult = $games->advanceBotTurns($gameId);
-        if ($botResult !== null) {
-            $result = $botResult;
+        // Practice bots (issue #140)/auto-pass on empty hand -- see the
+        // identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
         }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (InvalidChoiceException $e) {

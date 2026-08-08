@@ -21,7 +21,7 @@ use PDOException;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #140: practice bots. Exercises GameService::advanceBotTurns() (and
+ * Issue #140: practice bots. Exercises GameService::advanceAutomatedTurns() (and
  * createGame()'s own bot-seating validation) end to end, against a real
  * database -- MoodSwings\Tests\Bot\BotChoiceResolverTest/
  * BotPlayerServiceTest already cover the choice-picking policy itself in
@@ -400,7 +400,7 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
     }
 
-    // -- advanceBotTurns() ----------------------------------------------
+    // -- advanceAutomatedTurns() ----------------------------------------------
 
     public function testAdvanceBotTurnsReturnsNullWhenNoBotsAreSeated(): void
     {
@@ -409,9 +409,14 @@ final class BotGameplayIntegrationTest extends TestCase
         $gameId = $this->insertGame('standard', 'structure', $u1);
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $this->insertGamePlayer($gameId, $u2, 1);
+        // A non-empty hand -- insertUser() opts every user into auto-pass
+        // on empty hand by default (see AutoPassOnEmptyHandIntegrationTest),
+        // so an empty hand here would auto-pass rather than genuinely
+        // returning null the way this test means to check.
+        $this->insertGameCard($gameId, 8, 'hand', $p1);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        self::assertNull($this->games->advanceBotTurns($gameId));
+        self::assertNull($this->games->advanceAutomatedTurns($gameId));
     }
 
     public function testBotPlaysItsHighestValuePlayableCardOnItsOwnTurn(): void
@@ -427,9 +432,15 @@ final class BotGameplayIntegrationTest extends TestCase
         // the higher-value card, with no choices needed.
         $this->insertGameCard($gameId, 8, 'hand', $botPlayerId);
         $this->insertGameCard($gameId, 55, 'hand', $botPlayerId);
+        // A non-empty hand for the human too -- otherwise auto-pass on
+        // empty hand (on by default -- see
+        // AutoPassOnEmptyHandIntegrationTest) would keep the loop going
+        // straight through the human's own turn as well, rather than
+        // stopping there the way this test means to check.
+        $this->insertGameCard($gameId, 3, 'hand', $p1);
         $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
 
-        $result = $this->games->advanceBotTurns($gameId);
+        $result = $this->games->advanceAutomatedTurns($gameId);
 
         self::assertNotNull($result);
         self::assertTrue($this->cardIsInPlay($gameId, 55));
@@ -448,10 +459,18 @@ final class BotGameplayIntegrationTest extends TestCase
         $p1 = $this->insertGamePlayer($gameId, $u1, 0);
         $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
 
-        // Empty hand -- nothing at all playable, so the bot must pass.
+        // The bot's own hand is empty -- nothing at all playable, so the
+        // bot must pass. The human's own hand is deliberately non-empty
+        // (unlike the bot's) so auto-pass on empty hand (on by default --
+        // see AutoPassOnEmptyHandIntegrationTest) doesn't also carry the
+        // loop straight through the human's own turn once it comes back
+        // around, which would otherwise ping-pong the two passes back and
+        // forth rather than landing on the human's turn the way this
+        // test means to check.
+        $this->insertGameCard($gameId, 8, 'hand', $p1);
         $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
 
-        $result = $this->games->advanceBotTurns($gameId);
+        $result = $this->games->advanceAutomatedTurns($gameId);
 
         self::assertNotNull($result);
         $round = $this->fetchRound($gameId);
@@ -469,7 +488,7 @@ final class BotGameplayIntegrationTest extends TestCase
         $this->insertGameCard($gameId, 8, 'hand', $p1);
         $this->insertGameRound($gameId, 1, $p1, $p1, 1); // it's the HUMAN's turn
 
-        self::assertNull($this->games->advanceBotTurns($gameId));
+        self::assertNull($this->games->advanceAutomatedTurns($gameId));
         $round = $this->fetchRound($gameId);
         self::assertSame($p1, (int) $round['current_turn_game_player_id']); // untouched
     }
@@ -496,7 +515,7 @@ final class BotGameplayIntegrationTest extends TestCase
         // The route-handler-level wrapper this mirrors (see index.php)
         // calls this right after -- the bot should immediately answer
         // its own pending decision without anyone else acting.
-        $botResult = $this->games->advanceBotTurns($gameId);
+        $botResult = $this->games->advanceAutomatedTurns($gameId);
         self::assertNotNull($botResult);
 
         // Its only hand card is now the human's (moved over as Compulsion's

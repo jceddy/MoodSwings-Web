@@ -512,7 +512,18 @@ too, proportional to the smaller card width.
       (`saveDefaultSelectionsModePreference()` in `js/app.js`) to persist
       it -- no separate "Save" button, same auto-save-on-toggle pattern
       the notification checkboxes below use. See "Personal preference for
-      the New Game dialog's default" in `../php-app/README.md`.
+      the New Game dialog's default" in `../php-app/README.md`. Right
+      below it, `#settings-auto-pass-checkbox` ("Auto-pass when your
+      hand is empty on your turn") -- CHECKED by default (unlike the
+      checkbox above), matching `users.auto_pass_on_empty_hand`'s own
+      `DEFAULT 1`. Same exact wiring pattern (`user.auto_pass_on_empty_hand`/
+      `POST /user/auto-pass-on-empty-hand-preference`/
+      `saveAutoPassOnEmptyHandPreference()`), except there's no second
+      dialog's own field to keep in sync -- this preference has no
+      client-side effect of its own at all; it purely drives
+      `GameService::advanceAutomatedTurns()` server-side (see "Auto-pass
+      on empty hand" in `../php-app/README.md`), so persisting the
+      value is the checkbox's whole job.
     - **Notifications** (issue #108, unchanged from the old standalone
       Notifications dialog, just re-homed one level deeper):
       `service-worker.js` (a site-root file, not under `js/`, registered

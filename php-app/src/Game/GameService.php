@@ -3273,49 +3273,68 @@ final class GameService
 
     /**
      * Generous but bounded -- covers even a long chain of grant-fueled
-     * bot turns/decisions in a row (advanceBotTurns()) without risking a
-     * genuine engine bug (e.g. a mutually-triggering pair of effects)
-     * looping forever.
+     * bot/auto-pass turns/decisions in a row (advanceAutomatedTurns())
+     * without risking a genuine engine bug (e.g. a mutually-triggering
+     * pair of effects) looping forever.
      */
-    private const MAX_BOT_ACTIONS_PER_REQUEST = 200;
+    private const MAX_AUTOMATED_ACTIONS_PER_REQUEST = 200;
 
     /**
-     * Drives every practice bot's (issue #140) own turn/decision-answer
-     * in a row, immediately after a human's own playMood()/pass()/
-     * respondToDecision() call has already fully returned -- called from
-     * the three matching routes in public/index.php, right after each
-     * one, so a solo human never has to manually advance a bot's turn
-     * themselves. See php-app/README.md's "Practice bots" section for
-     * the full design (why a wrapper around these three rather than
-     * something threaded into their own internals).
+     * Drives every practice bot's (issue #140) own turn/decision-answer,
+     * AND every opted-in real player's own empty-hand auto-pass (see
+     * "Auto-pass on empty hand" below), in a row -- immediately after a
+     * human's own playMood()/pass()/respondToDecision() call has already
+     * fully returned. Called from the matching routes in public/index.php,
+     * right after each one, so a solo human never has to manually advance
+     * a bot's turn (or their own empty-hand turn) themselves. See
+     * php-app/README.md's "Practice bots"/"Auto-pass on empty hand"
+     * sections for the full design (why a wrapper around these calls
+     * rather than something threaded into their own internals).
      *
      * Each iteration takes a FRESH BoardState/DB read (not carried over
-     * from a previous iteration) and drives at most one bot action
+     * from a previous iteration) and drives at most one automated action
      * through the exact same public playMood()/pass()/
      * respondToDecision() entry points a real player's own request would
      * use -- each still gets its own withGameLock() cycle, taken fresh
      * after the previous one (including the human's own triggering call)
      * has already released it, sidestepping any question of MySQL's
-     * GET_LOCK()'s reentrancy within one connection.
+     * GET_LOCK()'s reentrancy within one connection. This is also why a
+     * bot's turn and an opted-in human's empty-hand turn can freely
+     * interleave (bot, then an empty-handed opted-in human, then another
+     * bot, ...) within the same call -- both are just different
+     * per-iteration checks over the exact same loop, not two separate
+     * passes that could miss a later opportunity the earlier one
+     * created.
      *
-     * @return array<string, mixed>|null the LAST bot action's own result
-     *     (the same shape playMood()/pass()/respondToDecision() return),
-     *     which the caller should use IN PLACE of the human's own result
-     *     once any bot has acted, since it's now the more current picture
-     *     of the game (e.g. a bot's own play might be what actually
-     *     completed the game). Null if no bot ever got to act (no bots
-     *     seated in this game, or it was never actually their turn),
-     *     in which case the caller keeps the human's own original result.
+     * "Auto-pass on empty hand" only ever applies to a fresh TURN (the
+     * play-or-pass decision), never to answering a pending decision --
+     * every pending-decision field that could target a player at all
+     * already requires a non-empty hand/discard pile to even be created
+     * in the first place (e.g. Suspicion's own hand-emptiness check
+     * before offering its discard decision), so there's no "auto-pass
+     * out of a decision" case to cover.
+     *
+     * @return array<string, mixed>|null the LAST automated action's own
+     *     result (the same shape playMood()/pass()/respondToDecision()
+     *     return), which the caller should use IN PLACE of the human's
+     *     own result once anything automated has acted, since it's now
+     *     the more current picture of the game (e.g. a bot's own play
+     *     might be what actually completed the game). Null if nothing
+     *     automated ever got to act (no bots seated and no opted-in
+     *     empty-handed player in this game, or it was never actually
+     *     their turn), in which case the caller keeps the human's own
+     *     original result.
      */
-    public function advanceBotTurns(int $gameId): ?array
+    public function advanceAutomatedTurns(int $gameId): ?array
     {
         $botGamePlayerIds = $this->botGamePlayerIds($gameId);
-        if ($botGamePlayerIds === []) {
+        $autoPassGamePlayerIds = $this->autoPassEmptyHandGamePlayerIds($gameId);
+        if ($botGamePlayerIds === [] && $autoPassGamePlayerIds === []) {
             return null;
         }
 
         $lastResult = null;
-        for ($i = 0; $i < self::MAX_BOT_ACTIONS_PER_REQUEST; $i++) {
+        for ($i = 0; $i < self::MAX_AUTOMATED_ACTIONS_PER_REQUEST; $i++) {
             try {
                 $round = $this->currentRound($gameId);
             } catch (GameStateException) {
@@ -3338,19 +3357,30 @@ final class GameService
             }
 
             $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
-            if ($currentTurnGamePlayerId === null || !in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
-                break; // waiting on a real player, or a frozen round (team formats never seat a bot -- see botsSupportedFor())
+            if ($currentTurnGamePlayerId === null) {
+                break; // frozen round (e.g. a team format's own turn_order decision still open)
             }
 
-            $state = $this->boardStates->load($gameId);
-            $playableCardIds = array_values(array_filter(
-                $state->hand($currentTurnGamePlayerId),
-                fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
-            ));
-            $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
-            $lastResult = $action !== null
-                ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
-                : $this->pass($gameId, $currentTurnGamePlayerId);
+            if (in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
+                $state = $this->boardStates->load($gameId);
+                $playableCardIds = array_values(array_filter(
+                    $state->hand($currentTurnGamePlayerId),
+                    fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
+                ));
+                $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
+                $lastResult = $action !== null
+                    ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
+                    : $this->pass($gameId, $currentTurnGamePlayerId);
+                continue;
+            }
+
+            if (in_array($currentTurnGamePlayerId, $autoPassGamePlayerIds, true)
+                && $this->boardStates->load($gameId)->hand($currentTurnGamePlayerId) === []) {
+                $lastResult = $this->pass($gameId, $currentTurnGamePlayerId);
+                continue;
+            }
+
+            break; // waiting on a real, non-empty-handed player
         }
 
         return $lastResult;
@@ -3361,6 +3391,24 @@ final class GameService
     {
         $stmt = Connection::get()->prepare(
             'SELECT gp.id FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id AND u.is_bot = 1'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * @return int[] every game_players.id in $gameId whose owning user
+     *     opted into "auto-pass on empty hand" (users.auto_pass_on_empty_hand,
+     *     migration 0096) -- whether their hand is ACTUALLY empty right
+     *     now is checked separately, per iteration, in
+     *     advanceAutomatedTurns() itself, since that can change from one
+     *     iteration to the next.
+     */
+    private function autoPassEmptyHandGamePlayerIds(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id AND u.auto_pass_on_empty_hand = 1'
         );
         $stmt->execute(['game_id' => $gameId]);
 

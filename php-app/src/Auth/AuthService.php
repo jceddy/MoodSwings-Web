@@ -224,7 +224,7 @@ final class AuthService
     }
 
     /**
-     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool}, expiresAt: DateTimeImmutable}|null
+     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
     {
@@ -257,6 +257,13 @@ final class AuthService
                 // per-game setting). See UserRepository::
                 // setDefaultSelectionsModePreference().
                 'default_selections_mode_preference' => (bool) $session['default_selections_mode_preference'],
+                // "Auto-pass on empty hand" as a personal preference
+                // (Settings dialog's "Game defaults" section) -- drives
+                // GameService::advanceAutomatedTurns()'s own server-side
+                // auto-pass for this user whenever it's their turn and
+                // their hand is empty. See UserRepository::
+                // setAutoPassOnEmptyHand().
+                'auto_pass_on_empty_hand' => (bool) $session['auto_pass_on_empty_hand'],
             ],
             'expiresAt' => $expiresAt,
         ];
