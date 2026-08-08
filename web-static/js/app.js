@@ -243,6 +243,19 @@ function saveDefaultSelectionsModePreference(defaultSelectionsModePreference) {
     });
 }
 
+// Auto-pass on empty hand as a personal preference (Settings dialog's
+// "Game defaults" section) -- write-only, same reasoning as
+// saveDefaultSelectionsModePreference() above: the current value already
+// rides on getCurrentUser()'s own user.auto_pass_on_empty_hand field.
+// Drives GameService::advanceAutomatedTurns()'s own server-side behavior
+// entirely -- there's no client-side effect to apply beyond persisting it.
+function saveAutoPassOnEmptyHandPreference(autoPassOnEmptyHand) {
+    return apiRequest('/user/auto-pass-on-empty-hand-preference', {
+        method: 'POST',
+        body: JSON.stringify({ auto_pass_on_empty_hand: autoPassOnEmptyHand }),
+    });
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.

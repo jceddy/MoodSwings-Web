@@ -288,16 +288,21 @@ dialog#friends-dialog li button + button {
     margin-left: 0.25rem;
 }
 
-dialog#settings-dialog #notifications-preferences {
+dialog#settings-dialog #notifications-preferences,
+dialog#settings-dialog #settings-game-defaults-section {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+}
+
+dialog#settings-dialog #notifications-preferences {
     margin-top: 1rem;
     border: 1px solid var(--color-border-subtle);
     border-radius: 0.25rem;
 }
 
-dialog#settings-dialog #notifications-preferences label {
+dialog#settings-dialog #notifications-preferences label,
+dialog#settings-dialog #settings-game-defaults-section label {
     display: flex;
     align-items: center;
     gap: 0.5rem;

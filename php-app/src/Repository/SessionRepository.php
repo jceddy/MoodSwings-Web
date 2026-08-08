@@ -33,7 +33,7 @@ final class SessionRepository
     {
         $stmt = Connection::get()->prepare(
             'SELECT sessions.id, sessions.user_id, users.username, users.email, users.phone_number, users.share_presence,
-                    users.default_selections_mode_preference
+                    users.default_selections_mode_preference, users.auto_pass_on_empty_hand
              FROM sessions
              INNER JOIN users ON users.id = sessions.user_id
              WHERE sessions.token_hash = :token_hash AND sessions.expires_at > NOW()'

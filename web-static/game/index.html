@@ -701,6 +701,13 @@
         <section id="settings-game-defaults-section">
             <h3>Game defaults</h3>
             <label><input type="checkbox" id="settings-default-selections-checkbox"> Default selections mode (pre-fill card choices with a reasonable default when starting a new game; still changeable per game before creating it)</label>
+            <!-- Auto-pass on empty hand: unlike the checkbox above, this
+                 one starts CHECKED, matching users.auto_pass_on_empty_hand's
+                 own DEFAULT 1 -- when your hand is empty on your turn,
+                 there's nothing else legal to do besides pass anyway, so
+                 this is a pure convenience with no real behavior change to
+                 opt into (see GameService::advanceAutomatedTurns()). -->
+            <label><input type="checkbox" id="settings-auto-pass-checkbox" checked> Auto-pass when your hand is empty on your turn</label>
         </section>
 
         <hr>
