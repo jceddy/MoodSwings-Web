@@ -151,4 +151,76 @@ final class BotChoiceResolverTest extends TestCase
 
         self::assertNull($this->resolver->resolve($state, $field, 1, 0, ''));
     }
+
+    /**
+     * Curiosity's own optional target_player_id (ALWAYS_FILLED_OPTIONAL_FIELDS)
+     * is resolved despite required being false -- unlike an ordinary
+     * optional field (see testOptionalFieldIsNeverResolved() above).
+     */
+    public function testCuriositysOptionalPlayerFieldIsAlwaysFilledDespiteBeingOptional(): void
+    {
+        $state = $this->boardState(); // players [1, 2, 3]
+        $field = ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false];
+
+        self::assertSame(2, $this->resolver->resolve($state, $field, 1, 0, 'curiosity'));
+    }
+
+    /**
+     * scope 'any' would otherwise permit self-targeting, but a forced
+     * field always excludes the acting player anyway (see
+     * ALWAYS_FILLED_OPTIONAL_FIELDS's own docblock).
+     */
+    public function testCuriositysForcedFieldNeverTargetsTheActingPlayerItself(): void
+    {
+        $state = $this->boardState(); // players [1, 2, 3]
+        $field = ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false];
+
+        $chosen = $this->resolver->resolve($state, $field, 1, 0, 'curiosity');
+
+        self::assertNotSame(1, $chosen);
+    }
+
+    /**
+     * Suspicion's own player_ids field takes every legal opponent, not
+     * just count.min (which would default to 1 -- see pickIdCandidates()'s
+     * own $takeAll behavior) -- "choose any number of players" has no
+     * downside to choosing more, so the bot chooses all of them.
+     */
+    public function testSuspicionsForcedMultiFieldTakesEveryOpponentInsteadOfJustCountMin(): void
+    {
+        $state = $this->boardState(hands: [2 => [8], 3 => [55]]); // players [1, 2, 3]
+        $field = ['key' => 'player_ids', 'type' => 'player', 'scope' => 'any', 'multi' => true, 'required' => false, 'filter' => ['min_hand_count' => 1]];
+
+        self::assertSame([2, 3], $this->resolver->resolve($state, $field, 1, 0, 'suspicion'));
+    }
+
+    /**
+     * If nothing qualifies (here, every other player's hand is empty, so
+     * the field's own min_hand_count filter excludes everyone), a forced
+     * field resolves to null exactly like an unfillable required one --
+     * BotPlayerService is the one that treats a forced field's own null
+     * differently from a required field's (see its own test coverage).
+     */
+    public function testSuspicionsForcedFieldReturnsNullWhenNoOpponentsQualify(): void
+    {
+        $state = $this->boardState(); // no hands at all
+        $field = ['key' => 'player_ids', 'type' => 'player', 'scope' => 'any', 'multi' => true, 'required' => false, 'filter' => ['min_hand_count' => 1]];
+
+        self::assertNull($this->resolver->resolve($state, $field, 1, 0, 'suspicion'));
+    }
+
+    /**
+     * A similarly-shaped optional target_player_id field on any OTHER
+     * effect key -- e.g. Malice, which grants the target extra plays, a
+     * real trade-off unlike Curiosity/Suspicion's own free targets -- is
+     * still never resolved, proving this is a narrow per-card exception,
+     * not a blanket "always fill optional player fields" policy change.
+     */
+    public function testOptionalPlayerFieldsOnOtherEffectKeysAreStillNeverResolved(): void
+    {
+        $state = $this->boardState();
+        $field = ['key' => 'target_player_id', 'type' => 'player', 'scope' => 'any', 'required' => false];
+
+        self::assertNull($this->resolver->resolve($state, $field, 1, 0, 'malice'));
+    }
 }

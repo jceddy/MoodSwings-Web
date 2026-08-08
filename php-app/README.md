@@ -4513,7 +4513,26 @@ per-card special case:
   for an optional bonus/cost nobody asked for, the same "leave it blank"
   bias issue #274's default-selections mode applies to a risky/optional
   field, just pushed all the way to "never even consider it" since
-  there's no human here to fill anything in afterward.
+  there's no human here to fill anything in afterward. **Except**
+  `ALWAYS_FILLED_OPTIONAL_FIELDS`, a small hand-picked list of optional
+  fields with NO real cost to the acting player at all -- Curiosity's
+  "you may choose a player" (a free reveal, at best a value boost,
+  nothing given up) and Suspicion's "choose any number of players"
+  (forces a discard from each, again nothing the acting player gives
+  up) -- which get filled in anyway. Both also exclude the acting
+  player from their own candidate pool even though their schema's own
+  `scope` is `'any'` (which would otherwise permit self-targeting,
+  since a human might have an obscure reason to); Suspicion's own multi
+  field additionally takes *every* legal candidate rather than just
+  `count.min`, since "choose any number" has no downside to choosing
+  more. Contrast Malice's similarly-shaped optional `target_player_id`
+  (deliberately NOT on this list): it grants the target extra plays
+  too, a real trade-off this policy still leaves for a human to judge.
+  `BotPlayerService::buildChoicesForCard()` treats a forced field's own
+  "no legal candidate" result differently from a required field's,
+  too: the field just stays unfilled (the card is still playable
+  without it) rather than making the whole card unplayable the way an
+  actually-required field's own empty result does.
 - A required `'mode'` field takes its first option, except a small
   hand-authored override table (`MODE_FIELD_OVERRIDES`) for the one
   shape that would otherwise backfire: Guilt/Contempt/Redemption's own

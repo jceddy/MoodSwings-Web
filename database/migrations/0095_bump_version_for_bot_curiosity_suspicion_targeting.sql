@@ -1,0 +1,11 @@
+-- No schema change: fixes practice bots (issue #140) always leaving
+-- Curiosity's and Suspicion's own optional target fields unfilled --
+-- both are free, no-downside effects (unlike similarly-shaped optional
+-- targets like Malice's, which grants the target extra plays too), so
+-- a bot skipping them was leaving value on the table rather than
+-- following any real cost-benefit judgment. BotChoiceResolver's new
+-- ALWAYS_FILLED_OPTIONAL_FIELDS list forces these two fields to be
+-- filled anyway -- Suspicion's own multi field takes every legal
+-- opponent (not just one), and both exclude the acting player from
+-- their own candidate pool even though their schema's scope is 'any'.
+UPDATE schema_version SET version = '1.13.1' WHERE id = 1;

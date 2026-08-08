@@ -31,9 +31,12 @@ final class BotPlayerService
      * The highest-printed-value card in $playableCardIds (a plain-and-
      * simple stand-in for "which play matters most" -- see this class's
      * own docblock), with only that card's own REQUIRED choice_fields
-     * filled in -- optional ones are always left alone, the same "don't
+     * filled in -- optional ones are left alone (the same "don't
      * volunteer for a bonus/cost nobody asked for" bias BotChoiceResolver
-     * itself applies per field. If the highest-value card's own required
+     * itself applies per field), except for BotChoiceResolver's own small
+     * ALWAYS_FILLED_OPTIONAL_FIELDS list (Curiosity/Suspicion today),
+     * which get filled in anyway via buildChoicesForCard()'s own
+     * required-or-forced check. If the highest-value card's own required
      * fields can't all be legally filled (rare -- would mean
      * isPlayable() said yes but some required field still came up
      * empty), the next-highest is tried instead, all the way down to
@@ -79,13 +82,26 @@ final class BotPlayerService
         $choices = [];
 
         foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
-            if (($field['required'] ?? false) !== true) {
+            $required = ($field['required'] ?? false) === true;
+            $forced = !$required && $this->resolver->isAlwaysFilledOptionalField($effectKey, $field['key']);
+            if (!$required && !$forced) {
                 continue;
             }
 
             $value = $this->resolver->resolve($state, $field, $botGamePlayerId, $cardId, $effectKey);
             if ($value === null) {
-                return null;
+                // A required field with no legal value makes the whole
+                // card unplayable this way (existing behavior). A forced
+                // OPTIONAL field (see ALWAYS_FILLED_OPTIONAL_FIELDS) with
+                // no legal candidate -- e.g. Suspicion when every other
+                // player's hand is empty -- just stays unfilled instead;
+                // the card is still perfectly playable without it, same
+                // as if it had never been forced at all.
+                if ($required) {
+                    return null;
+                }
+
+                continue;
             }
 
             $choices[$field['key']] = $value;

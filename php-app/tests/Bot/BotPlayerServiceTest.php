@@ -84,6 +84,55 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(55, $action['card_id']);
     }
 
+    /**
+     * Curiosity (id 33) has one optional target_player_id field, in
+     * BotChoiceResolver's own ALWAYS_FILLED_OPTIONAL_FIELDS list -- unlike
+     * Dignity's own optional field above (testChooseActionLeavesAnOptionalFieldUnfilled()),
+     * this one gets filled in.
+     */
+    public function testChooseActionFillsCuriositysOptionalTargetField(): void
+    {
+        $state = $this->boardState(hands: [1 => [33], 2 => [8]]); // Curiosity; player 2 has a card to reveal
+
+        $action = $this->bot->chooseAction($state, [33], 1);
+
+        self::assertSame(33, $action['card_id']);
+        self::assertSame(['target_player_id' => 2], $action['choices']);
+    }
+
+    /**
+     * Suspicion (id 78) has one optional multi player_ids field, also in
+     * ALWAYS_FILLED_OPTIONAL_FIELDS -- every legal opponent is targeted,
+     * not just one.
+     */
+    public function testChooseActionTargetsEveryOpponentWithSuspicion(): void
+    {
+        $state = $this->boardState(hands: [1 => [78], 2 => [8], 3 => [55]]); // Suspicion; players 2 and 3 both have a card to discard
+
+        $action = $this->bot->chooseAction($state, [78], 1);
+
+        self::assertSame(78, $action['card_id']);
+        self::assertSame(['player_ids' => [2, 3]], $action['choices']);
+    }
+
+    /**
+     * Suspicion is still playable even when nothing qualifies for its own
+     * forced field (every other player's hand is empty) -- the field
+     * just stays unfilled, the same as an ordinary optional field would,
+     * rather than making the whole card unplayable the way a genuinely
+     * required field's own null would (see buildChoicesForCard()'s own
+     * required-vs-forced distinction).
+     */
+    public function testChooseActionStillPlaysSuspicionWhenNoOpponentsQualify(): void
+    {
+        $state = $this->boardState(hands: [1 => [78]]); // Suspicion only -- players 2/3 have empty hands
+
+        $action = $this->bot->chooseAction($state, [78], 1);
+
+        self::assertSame(78, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();
