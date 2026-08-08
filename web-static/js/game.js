@@ -224,6 +224,19 @@
             saveDefaultSelectionsModePreference(defaultSelectionsPreferenceCheckbox.checked);
         });
 
+        // "Auto-pass on empty hand" -- same wiring pattern as the
+        // checkbox above, just driving a purely server-side behavior
+        // (GameService::advanceAutomatedTurns()) instead of another
+        // dialog's own default -- there's nothing else for this page to
+        // apply the value to itself. Starts checked (on) by default,
+        // matching users.auto_pass_on_empty_hand's own DEFAULT 1.
+        const autoPassCheckbox = document.getElementById('settings-auto-pass-checkbox');
+        autoPassCheckbox.checked = user.auto_pass_on_empty_hand;
+        autoPassCheckbox.addEventListener('change', () => {
+            user.auto_pass_on_empty_hand = autoPassCheckbox.checked;
+            saveAutoPassOnEmptyHandPreference(autoPassCheckbox.checked);
+        });
+
         // The dialog itself (and its "not supported" message) must still be
         // reachable even when push isn't supported at all -- otherwise
         // clicking "Settings" would silently do nothing instead of

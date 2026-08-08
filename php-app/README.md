@@ -53,7 +53,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
-| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). |
+| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. |
 | GET    | `/friends`      | —                                                                 | Requires auth. Lists accepted friends (`friend_id`, `friend_username`, `created_at`, `presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below). |
 | GET    | `/friends/invites` | —                                                              | Requires auth. Returns `{"incoming": [...], "outgoing": [...]}`, each entry has `other_user_id`/`other_username`/`created_at`. |
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
@@ -99,6 +99,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
+| POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
@@ -4513,7 +4514,26 @@ per-card special case:
   for an optional bonus/cost nobody asked for, the same "leave it blank"
   bias issue #274's default-selections mode applies to a risky/optional
   field, just pushed all the way to "never even consider it" since
-  there's no human here to fill anything in afterward.
+  there's no human here to fill anything in afterward. **Except**
+  `ALWAYS_FILLED_OPTIONAL_FIELDS`, a small hand-picked list of optional
+  fields with NO real cost to the acting player at all -- Curiosity's
+  "you may choose a player" (a free reveal, at best a value boost,
+  nothing given up) and Suspicion's "choose any number of players"
+  (forces a discard from each, again nothing the acting player gives
+  up) -- which get filled in anyway. Both also exclude the acting
+  player from their own candidate pool even though their schema's own
+  `scope` is `'any'` (which would otherwise permit self-targeting,
+  since a human might have an obscure reason to); Suspicion's own multi
+  field additionally takes *every* legal candidate rather than just
+  `count.min`, since "choose any number" has no downside to choosing
+  more. Contrast Malice's similarly-shaped optional `target_player_id`
+  (deliberately NOT on this list): it grants the target extra plays
+  too, a real trade-off this policy still leaves for a human to judge.
+  `BotPlayerService::buildChoicesForCard()` treats a forced field's own
+  "no legal candidate" result differently from a required field's,
+  too: the field just stays unfilled (the card is still playable
+  without it) rather than making the whole card unplayable the way an
+  actually-required field's own empty result does.
 - A required `'mode'` field takes its first option, except a small
   hand-authored override table (`MODE_FIELD_OVERRIDES`) for the one
   shape that would otherwise backfire: Guilt/Contempt/Redemption's own
@@ -4572,38 +4592,43 @@ since it already holds that dependency):
   Avoidance, Arrogance, Malice, Intimidation's own revealed-card grant,
   the after-scoring order decision).
 
-**Driving a bot's turn: `GameService::advanceBotTurns(int $gameId):
-?array`.** Called immediately after a human's own `playMood()`/`pass()`/
-`respondToDecision()`/`startGame()`/`resignGame()` call has already
-fully returned -- from the matching routes in `public/index.php`, right
-after each one -- so a solo human never has to manually advance a bot's
-turn themselves; if the human's own action (or a chain of bot actions
-after it) handed the turn, or a pending decision, to a bot, this drives
-it, possibly several actions in a row (across turns, across round
-boundaries -- Joy/Generosity-style banked plays and all), until either a
-real player is up next or the game completes. Each iteration takes a
-*fresh* `BoardState`/DB read (never one left over from a previous
-iteration) and drives at most one action through the exact same public
-`playMood()`/`pass()`/`respondToDecision()` entry points a real player's
-own request would use -- each still gets its own `withGameLock()` cycle,
-taken *after* the previous one (including the human's own triggering
-call) has already released it, sidestepping any question of MySQL's
-`GET_LOCK()`'s reentrancy within one connection. Bounded at
-`MAX_BOT_ACTIONS_PER_REQUEST` (200) iterations -- generous enough for
-even a long grant-fueled chain of bot turns/decisions in a row, but
-bounded against a genuine engine bug (e.g. a mutually-triggering pair of
-effects) looping forever. Returns the LAST bot action's own result (same
-shape `playMood()`/etc. themselves return) for the caller to use IN
-PLACE of the human's own result once any bot has acted -- e.g. a bot's
-own play might be what actually completed the game, and the human's own
-`POST /games/play` response needs to say so -- or `null` if no bot ever
-got to act (no bots seated in this game at all, or it simply wasn't
-their turn), in which case the caller keeps the human's own original
-result unchanged. `botGamePlayerIds(int $gameId): int[]` (one
-`game_players ⋈ users` query, cached for the whole call rather than
-re-queried per iteration, since a game's own bot roster is fixed at
-creation time) is the one query needed to tell "is this game_player_id a
-bot" apart from a real seat.
+**Driving a bot's turn: `GameService::advanceAutomatedTurns(int
+$gameId): ?array`.** Called immediately after a human's own
+`playMood()`/`pass()`/`respondToDecision()`/`startGame()`/`resignGame()`
+call has already fully returned -- from the matching routes in
+`public/index.php`, right after each one -- so a solo human never has
+to manually advance a bot's turn themselves; if the human's own action
+(or a chain of automated actions after it) handed the turn, or a
+pending decision, to a bot, this drives it, possibly several actions in
+a row (across turns, across round boundaries -- Joy/Generosity-style
+banked plays and all), until either a real player is up next or the
+game completes. This same method also drives "Auto-pass on empty hand"
+below -- see that section for why the two share one loop rather than
+each getting its own. Each iteration takes a *fresh* `BoardState`/DB
+read (never one left over from a previous iteration) and drives at most
+one action through the exact same public
+`playMood()`/`pass()`/`respondToDecision()` entry points a real
+player's own request would use -- each still gets its own
+`withGameLock()` cycle, taken *after* the previous one (including the
+human's own triggering call) has already released it, sidestepping any
+question of MySQL's `GET_LOCK()`'s reentrancy within one connection.
+Bounded at `MAX_AUTOMATED_ACTIONS_PER_REQUEST` (200) iterations --
+generous enough for even a long grant-fueled chain of automated turns/
+decisions in a row, but bounded against a genuine engine bug (e.g. a
+mutually-triggering pair of effects) looping forever. Returns the LAST
+automated action's own result (same shape `playMood()`/etc. themselves
+return) for the caller to use IN PLACE of the human's own result once
+anything automated has acted -- e.g. a bot's own play might be what
+actually completed the game, and the human's own `POST /games/play`
+response needs to say so -- or `null` if nothing automated ever got to
+act (no bots seated and no opted-in empty-handed player in this game,
+or it simply wasn't their turn), in which case the caller keeps the
+human's own original result unchanged. `botGamePlayerIds(int $gameId):
+int[]` (one `game_players ⋈ users` query, cached for the whole call
+rather than re-queried per iteration, since a game's own bot roster is
+fixed at creation time) is the one query needed to tell "is this
+game_player_id a bot" apart from a real seat; `autoPassEmptyHandGamePlayerIds()`
+is its exact counterpart for "Auto-pass on empty hand" below.
 
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is
@@ -4678,6 +4703,51 @@ after creation, via `POST /games/decklist`; `startGame()`'s existing
 so the game simply sits `waiting` (bot's deck already submitted, human's
 still pending) until the human does. See "New game dialog" in
 `web-static/README.md` for the picker/decklist fields this adds.
+
+### Auto-pass on empty hand
+
+A personal preference (`users.auto_pass_on_empty_hand`, migration
+`0096`, defaults to `1`/on -- unlike default selections mode's own
+default-off, this is a pure convenience with no real behavior change to
+opt into: an empty hand always meant "pass" anyway, since playing a
+card always requires one from hand and there's no other legal action a
+turn offers). Surfaced in the Settings dialog's own "Game defaults"
+section (`web-static/game/index.html`'s `#settings-dialog`, alongside
+default selections mode's own checkbox -- see "New game dialog"/
+"Settings dialog" in `web-static/README.md`) and written via `POST
+/user/auto-pass-on-empty-hand-preference` (see the API table above),
+the same write-only, no-separate-GET pattern `share_presence`/default
+selections mode already established.
+
+Rather than a client-side auto-click (which would need the browser tab
+open and JS running, and wouldn't help a player who's stepped away),
+this is driven entirely server-side by `GameService::
+advanceAutomatedTurns()` -- the exact same turn-advancing loop practice
+bots (#140) already use, extended with one more per-iteration check:
+alongside "is the current turn holder a bot" (drive its own
+play/pass), a fresh check for "is the current turn holder an opted-in
+player (`autoPassEmptyHandGamePlayerIds()`, `users.auto_pass_on_empty_hand
+= 1`) whose hand is currently empty" -- if so, `pass()` is called on
+their behalf and the loop continues, exactly like a bot's own pass
+would. Unifying both checks into the SAME loop (rather than two
+separate passes) is what lets a bot's turn and an opted-in human's
+empty-hand turn freely interleave within one call -- bot, then an
+empty-handed opted-in human, then another bot, and so on -- since a
+second, independent pass over the game could easily miss a later
+opportunity the first one just created. Renamed from the
+bots-only `advanceBotTurns()`/`MAX_BOT_ACTIONS_PER_REQUEST` this method
+and constant used to be, now that they cover both mechanisms.
+
+Only ever applies to a fresh TURN (the play-or-pass decision), never to
+answering a pending decision -- every pending-decision field that could
+target a player at all already requires a non-empty hand/discard pile
+to even be created in the first place (e.g. Suspicion's own
+hand-emptiness check before offering its discard decision), so there's
+no "auto-pass out of a decision" case to cover. A forced-empty-hand
+check happens fresh each loop iteration (never cached alongside the
+opted-in id list itself), since whether a given player's hand is
+*currently* empty can change from one iteration to the next as earlier
+iterations play out.
 
 ### Duel: separate per-player decks
 

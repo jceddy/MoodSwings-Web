@@ -95,6 +95,18 @@ final class UserRepository
         ]);
     }
 
+    /**
+     * "Auto-pass on empty hand" as a personal preference (Settings
+     * dialog's "Game defaults" section) -- see GameService::
+     * advanceAutomatedTurns() for the server-side behavior this drives.
+     * Defaults to true (on); see migration 0096.
+     */
+    public function setAutoPassOnEmptyHand(int $id, bool $autoPassOnEmptyHand): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET auto_pass_on_empty_hand = :auto_pass_on_empty_hand WHERE id = :id');
+        $stmt->execute(['auto_pass_on_empty_hand' => $autoPassOnEmptyHand ? 1 : 0, 'id' => $id]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM users WHERE id = :id');
