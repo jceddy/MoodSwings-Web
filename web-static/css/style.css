@@ -1609,7 +1609,8 @@ dialog#deck-builder-dialog[open] {
 
 #choices-panel,
 #pending-decision-panel,
-#team-decision-panel {
+#team-decision-panel,
+#initial-card-pass-panel {
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     padding: 1rem;
