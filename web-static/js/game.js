@@ -1021,6 +1021,25 @@
     const pendingDecisionPanel = document.getElementById('pending-decision-panel');
     const cardDetailDialog = document.getElementById('card-detail-dialog');
 
+    // Loading overlay (see #loading-overlay's own comment in
+    // game/index.html) -- shown for the span of a fresh view's own
+    // initial data fetch (showLobby()/showBoard()/showSpectatorBoard()/
+    // showReplayBoard(), each wrapping their own first refresh call in
+    // showLoadingOverlay()/hideLoadingOverlay() via .finally(), so it
+    // hides whether that fetch succeeds or fails), never for a routine
+    // poll or an in-game action -- those already have their own feedback
+    // (the board simply re-rendering, or boardError) and showing this on
+    // every 4-second tick would be distracting rather than useful.
+    const loadingOverlay = document.getElementById('loading-overlay');
+
+    function showLoadingOverlay() {
+        loadingOverlay.hidden = false;
+    }
+
+    function hideLoadingOverlay() {
+        loadingOverlay.hidden = true;
+    }
+
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
@@ -1111,7 +1130,8 @@
         boardView.hidden = true;
         lobbyView.hidden = false;
         showCurrentGamesSection();
-        refreshLobby();
+        showLoadingOverlay();
+        refreshLobby().finally(hideLoadingOverlay);
         // Picks up a game created by another player (or this same player,
         // from a second tab) without needing a hard reload -- the same
         // 4-second cadence showBoard()'s own poll uses, and mutually
@@ -1143,7 +1163,8 @@
         quickDraftPickSelection = new Set();
         quickDraftPickSelectionKey = null;
         quickDraftDeckSelectionInitialized = false;
-        refreshBoard();
+        showLoadingOverlay();
+        refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
             clearInterval(pollTimer);
         }
@@ -1170,7 +1191,8 @@
         lobbyView.hidden = true;
         boardView.hidden = false;
         boardMessage.hidden = true;
-        refreshBoard();
+        showLoadingOverlay();
+        refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
             clearInterval(pollTimer);
         }
@@ -1207,7 +1229,8 @@
         // unlike a spectator arriving at an already-finished game (see
         // loadReplayEventsAndShow()'s own defaultToLastStep, used instead
         // wherever spectating hands off into replay controls below).
-        await loadReplayEventsAndShow();
+        showLoadingOverlay();
+        await loadReplayEventsAndShow().finally(hideLoadingOverlay);
     }
 
     // Shared by showReplayBoard() above and spectator mode watching a
