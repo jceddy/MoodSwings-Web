@@ -1409,15 +1409,15 @@ too, proportional to the smaller card width.
     a card with 2+ fields (Worry, Charity, Guilt) or whose only optional
     field is a bare `bool`/`value`/`mode` (Repentance) still has a
     real, harder-to-classify partial effect even with nothing selected,
-    so those are left alone rather than guessed at -- except Wrath
-    (`cardIsWrathWithoutItsBoxChecked()`), a narrow, hand-picked
-    exception: leaving its own single bare-`bool` field unchecked does
-    nothing whatsoever beyond entering play (`WrathEffect` returns
-    immediately), so it gets the identical `window.confirm()` treatment
-    ("You haven't checked &lt;field label&gt; -- &lt;name&gt;'s ability
-    won't do anything. Play it anyway?") on its own. Rage has the exact
-    same shape/behavior (its own docblock even says "Like Wrath") but
-    isn't included, since only Wrath's own case was asked for. Cards with
+    so those are left alone rather than guessed at -- except Wrath and
+    Rage (`cardHasAnUncheckedConfirmBox()`, keyed by effect key via
+    `UNCHECKED_BOX_CONFIRM_FIELD_KEYS`), a narrow, hand-picked exception:
+    leaving either one's own single bare-`bool` field unchecked does
+    nothing whatsoever beyond entering play (`WrathEffect` and
+    `RageEffect` both return immediately -- `RageEffect`'s own docblock
+    even says "Like Wrath"), so each gets the identical `window.confirm()`
+    treatment ("You haven't checked &lt;field label&gt; -- &lt;name&gt;'s
+    ability won't do anything. Play it anyway?") on its own. Cards with
     no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a

@@ -6297,8 +6297,8 @@
     // Worry, Charity, Guilt) or a bare bool/value/mode field (Repentance)
     // still has real, ambiguous-to-classify partial effects even when
     // nothing is selected, so those are left alone rather than guessed at.
-    // Wrath is the one deliberate, hand-picked exception -- see
-    // cardIsWrathWithoutItsBoxChecked() below.
+    // Wrath and Rage are the deliberate, hand-picked exceptions -- see
+    // UNCHECKED_BOX_CONFIRM_FIELD_KEYS below.
     const TARGETLESS_CONFIRM_FIELD_TYPES = ['mood', 'player', 'hand_card', 'discard_card'];
 
     function cardHasNoTargetSelected(card, choices) {
@@ -6311,22 +6311,28 @@
             && !(field.key in choices);
     }
 
-    // Wrath's own single choice_field ("Put every other mood in play into
-    // the discard pile") is a bare bool, which cardHasNoTargetSelected()
+    // Wrath's ("Put every other mood in play into the discard pile") and
+    // Rage's ("Put every mood valued 3 or less into the discard pile")
+    // own single choice_field is a bare bool, which cardHasNoTargetSelected()
     // above deliberately leaves unguarded for every card shaped like it
-    // (see its own comment). Wrath gets its own narrow, hand-picked
-    // exception here instead: leaving its box unchecked does nothing
-    // whatsoever beyond entering play (WrathEffect returns immediately),
-    // the same unambiguous "missed click" case the generic mechanism
-    // already guards against for other field types. Rage (effect key
-    // 'rage') has the exact same shape/behavior -- its own docblock even
-    // says "Like Wrath" -- but isn't included here, since only Wrath's
-    // own case was asked for; extending to Rage (or generalizing this
-    // into TARGETLESS_CONFIRM_FIELD_TYPES/cardHasNoTargetSelected() by
-    // adding 'bool' there directly) would be a natural, low-risk
-    // follow-up if that's ever wanted too.
-    function cardIsWrathWithoutItsBoxChecked(card, choices) {
-        return card.effect_key === 'wrath' && !choices.discard_all_other_moods;
+    // (see its own comment) -- a bool/value/mode field's "nothing
+    // selected" state is ambiguous to classify in general (e.g.
+    // Repentance's own optional value). These two are the narrow,
+    // hand-picked exception: leaving either box unchecked does nothing
+    // whatsoever beyond entering play (WrathEffect/RageEffect both just
+    // return immediately -- RageEffect's own docblock even says "Like
+    // Wrath"), the same unambiguous "missed click" case the generic
+    // mechanism already guards against for other field types. Keyed by
+    // effect key -> that card's own single field key, so both share one
+    // check/message instead of two near-identical copies.
+    const UNCHECKED_BOX_CONFIRM_FIELD_KEYS = {
+        wrath: 'discard_all_other_moods',
+        rage: 'discard_qualifying_moods',
+    };
+
+    function cardHasAnUncheckedConfirmBox(card, choices) {
+        const fieldKey = UNCHECKED_BOX_CONFIRM_FIELD_KEYS[card.effect_key];
+        return fieldKey !== undefined && !choices[fieldKey];
     }
 
     document.getElementById('play-card-button').addEventListener('click', async () => {
@@ -6335,14 +6341,17 @@
             && !window.confirm(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`)) {
             return;
         }
-        // Looked up by key, not choice_fields[0] -- a card with an
-        // available banked extra play (Joy/Generosity) can have a
-        // server-injected "which play to use" mode field ahead of Wrath's
-        // own in choice_fields, so position alone isn't reliable here.
-        const wrathBoxField = selectedCard.choice_fields.find((field) => field.key === 'discard_all_other_moods');
-        if (cardIsWrathWithoutItsBoxChecked(selectedCard, choices)
-            && !window.confirm(`You haven't checked "${wrathBoxField.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`)) {
-            return;
+        if (cardHasAnUncheckedConfirmBox(selectedCard, choices)) {
+            // Looked up by key, not choice_fields[0] -- a card with an
+            // available banked extra play (Joy/Generosity) can have a
+            // server-injected "which play to use" mode field ahead of
+            // this one in choice_fields, so position alone isn't
+            // reliable here.
+            const fieldKey = UNCHECKED_BOX_CONFIRM_FIELD_KEYS[selectedCard.effect_key];
+            const field = selectedCard.choice_fields.find((f) => f.key === fieldKey);
+            if (!window.confirm(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`)) {
+                return;
+            }
         }
         const playButton = document.getElementById('play-card-button');
         // Disabled + relabeled immediately (not after the request settles)
