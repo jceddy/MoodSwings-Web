@@ -1001,6 +1001,21 @@ if ($path === '/games/state' && $method === 'GET') {
     $gameId = (int) ($_GET['game_id'] ?? 0);
 
     requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    // Practice bots (issue #140)/auto-pass on empty hand: every other
+    // trigger for GameService::advanceAutomatedTurns() is a human's own
+    // WRITE call elsewhere in this game (see that method's own docblock)
+    // -- but a frozen round awaiting an ALL-BOT team's own turn_order/
+    // draw_recipient decision (both propose/confirm candidates bots) has
+    // no such call anywhere: every other seated player is frozen too, so
+    // there's nothing left for any human to do that would otherwise ever
+    // reach this loop, and the game would simply deadlock forever without
+    // this. This ordinary polling GET is the one call guaranteed to keep
+    // happening regardless, so it doubles as that missing trigger --
+    // cheap to call here even when nothing's actually stuck (two early-out
+    // queries, see botGamePlayerIds()/autoPassEmptyHandGamePlayerIds()),
+    // and its own result is simply discarded in favor of the fresh
+    // getState() read below either way.
+    $games->advanceAutomatedTurns($gameId);
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 

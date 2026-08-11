@@ -4794,6 +4794,28 @@ fixed at creation time) is the one query needed to tell "is this
 game_player_id a bot" apart from a real seat; `autoPassEmptyHandGamePlayerIds()`
 is its exact counterpart for "Auto-pass on empty hand" below.
 
+**`GET /games/state` also drives it -- a real deadlock, caught live.**
+Every write route above is a HUMAN's own action, but a Closed/Open Team
+Play round can freeze waiting on a team decision (`turn_order`/
+`draw_recipient`) whose BOTH propose/confirm candidates happen to be
+bots (`advanceBotTeamDecision()`) -- and while that decision is open,
+every OTHER seated player is frozen too (nothing to play, nothing to
+pass, nothing to respond to), so there's no human write call left
+anywhere in the game to ever reach `advanceAutomatedTurns()` and drive
+those two bots' own propose/confirm. Without this, an all-bot team's
+own decision deadlocks the game forever, visible as a team-decision
+panel permanently reading "Waiting for `<bot>` or `<bot>` to..." no
+matter how long anyone waits. `GET /games/state`'s own route calls
+`advanceAutomatedTurns($gameId)` before reading state back out, purely
+because it's the one call guaranteed to keep happening regardless (the
+board's own poll timer) -- cheap even when nothing's actually stuck,
+since the method's own early-out (no bots seated and no opted-in
+empty-handed player) is just two lookups. `GET /games/spectate/state`
+deliberately does NOT get the same treatment -- a spectator watching
+isn't a seated player's own action, and every *seated* game already
+gets this via its own `GET /games/state` poll regardless of whether
+anyone's spectating it too.
+
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is
 already, since it's an ordinary `game_players` row with no special
