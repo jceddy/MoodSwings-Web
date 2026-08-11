@@ -2645,6 +2645,52 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A real bug, caught live: Duplicity never offered to repeat Anger's
+     * own effect, because the old design stored the repeat-eligible-
+     * sources snapshot on the just-played card's own BoardState
+     * effectState -- destroyed the instant Anger discarded itself (a
+     * fully legal choice, its own base value is 0). Exercises the REAL
+     * round trip this needed fixing at: playMood() writes the pending
+     * batch (game_pending_decision_batches.duplicity_eligible_sources,
+     * migration 0107) in one call, respondToDecision() reads it back in
+     * a separate one, same as GameService's own two public entry points a
+     * real client actually calls across two separate HTTP requests.
+     */
+    public function testRespondToDecisionOffersAndResolvesDuplicitysRepeatOfAngerAfterAngerDiscardedItself(): void
+    {
+        $u1 = $this->insertUser('angerdup1');
+        $u2 = $this->insertUser('angerdup2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $angerId = $this->insertGameCard($gameId, 80, 'hand', $p1); // Anger, value 0
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $angerId, ['target_mood_ids' => [$angerId]]);
+        self::assertTrue($playResult['pending_decision'] ?? false, "Duplicity's own repeat offer should be pending even though Anger just discarded itself");
+
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('duplicity_repeat_offer', $pending['decision_type']);
+
+        $respondResult = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['target_mood_ids' => []]],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame([$angerId], $state->discardPile()); // Anger's own repeat had nothing left to target -- no-op, not an error
+    }
+
+    /**
      * Hurt Feelings' own second base play must be described as
      * attributable to Hurt Feelings, not render as an indistinguishable
      * second "Your normal turn" -- see

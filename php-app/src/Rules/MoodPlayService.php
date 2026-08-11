@@ -209,15 +209,19 @@ final class MoodPlayService
      * repeat-offer's own "choices" sub-bag for a repeat (see
      * resolveDuplicityRepeatOffer()).
      *
-     * Duplicity's own repeat-eligibility is snapshotted here (via
-     * BoardState::setDuplicityEligibleSources()), before this invocation's
-     * own effect gets to mutate anything -- see continueAfterPlayingChain()'s
-     * docblock for why the timing matters. This has to happen whether the
-     * effect resolves synchronously below or pauses for an opponent's own
-     * decision first (RequiresOpponentDecision), since either way
+     * Duplicity's own repeat-eligibility is snapshotted here into a local
+     * variable, before this invocation's own effect gets to mutate
+     * anything -- see continueAfterPlayingChain()'s docblock for why the
+     * timing matters. This has to happen whether the effect resolves
+     * synchronously below or pauses for an opponent's own decision first
+     * (RequiresOpponentDecision), since either way
      * continueAfterPlayingChain() eventually needs this invocation's
      * *pre*-mutation count, not whatever the count happens to be by the
-     * time it actually runs.
+     * time it actually runs -- so every PlayResult::pending() below
+     * carries it along (persisted as that pause's own
+     * game_pending_decision_batches.duplicity_eligible_sources, see
+     * PlayResult's own docblock for why it can no longer live on
+     * BoardState).
      */
     private function resolveAfterPlayingChain(
         BoardState $state,
@@ -237,25 +241,24 @@ final class MoodPlayService
 
         $duplicitySources = $state->countMoodsInPlayWithEffectiveKey($playerId, 'duplicity');
         $eligibleSources = $effectiveEffectKey === 'duplicity' ? $duplicitySources - 1 : $duplicitySources;
-        $state->setDuplicityEligibleSources($cardId, $eligibleSources);
 
         if ($effect instanceof RequiresOpponentDecision) {
             $pendingDecisions = $effect->pendingDecisionsFor($state, $cardId, $playerId, $invocationChoices);
             if ($pendingDecisions !== []) {
-                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq, $invocationChoices);
+                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq, $invocationChoices, $eligibleSources);
             }
             // Nothing to ask for this specific play (e.g. declined, or no
             // qualifying target/candidate) -- same as an ordinary no-op
             // afterPlaying().
             $followUpDecisions = $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, []);
             if ($followUpDecisions !== []) {
-                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices);
+                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $eligibleSources);
             }
         } else {
             $effect->afterPlaying($state, $cardId, $playerId, $invocationChoices);
         }
 
-        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq);
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $eligibleSources);
     }
 
     /**
@@ -274,6 +277,16 @@ final class MoodPlayService
      * $invocationChoices is passed through unchanged, so a later round
      * can still read whatever the first round's own choices bag carried.
      *
+     * $duplicityEligibleSources is this invocation's own pre-mutation
+     * snapshot, read back from wherever GameService persisted it when
+     * this invocation first paused (game_pending_decision_batches.
+     * duplicity_eligible_sources -- see PlayResult's own docblock) --
+     * carried through to continueAfterPlayingChain() unchanged, exactly
+     * like $invocationChoices already is, since resolveDecisions() below
+     * may itself be what causes $cardId to leave play (e.g. Malice
+     * discarding itself as part of its own color cascade) and this value
+     * has to survive that regardless.
+     *
      * @param array<string, PlayerChoices> $answers
      */
     public function resolvePendingDecisions(
@@ -284,6 +297,7 @@ final class MoodPlayService
         PlayerChoices $invocationChoices,
         int $invocationSeq,
         array $answers,
+        int $duplicityEligibleSources,
     ): PlayResult {
         if (isset($answers[self::DUPLICITY_REPEAT_KEY])) {
             return $this->resolveDuplicityRepeatOffer($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $answers[self::DUPLICITY_REPEAT_KEY]);
@@ -297,10 +311,10 @@ final class MoodPlayService
 
         $followUpDecisions = $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, $answers);
         if ($followUpDecisions !== []) {
-            return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices);
+            return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $duplicityEligibleSources);
         }
 
-        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq);
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $duplicityEligibleSources);
     }
 
     /**
@@ -319,19 +333,25 @@ final class MoodPlayService
      *
      * $eligibleSources is resolveAfterPlayingChain()'s own snapshot of
      * this invocation's Duplicity count, taken *before* this invocation's
-     * effect ran (BoardState::duplicityEligibleSources()) -- NOT a fresh
-     * recount taken here, after the mutation. This matters for a card like
-     * Chaos, which reassigns every in-play mood's owner (including
-     * Duplicity itself) as its OWN after-playing effect: per an official
-     * ruling, Duplicity's opportunity to repeat is judged at the moment
-     * the mood is played, not after that mood's own effect resolves, so
-     * gaining OR losing Duplicity control as a side effect of THIS SAME
-     * invocation must never change whether a repeat gets offered here.
-     * (It also doesn't matter whether the acting player still controls
-     * that Duplicity by the time they're actually asked to repeat --
-     * losing it after the fact doesn't retroactively cancel an
-     * opportunity that already triggered.) The count is still taken fresh
-     * per invocation, not once for the whole chain -- a later repeat's own
+     * effect ran and threaded through as a plain parameter ever since
+     * (see PlayResult's own docblock for why it can no longer live on
+     * BoardState) -- NOT a fresh recount taken here, after the mutation.
+     * This matters for a card like Chaos, which reassigns every in-play
+     * mood's owner (including Duplicity itself) as its OWN after-playing
+     * effect: per an official ruling, Duplicity's opportunity to repeat
+     * is judged at the moment the mood is played, not after that mood's
+     * own effect resolves, so gaining OR losing Duplicity control as a
+     * side effect of THIS SAME invocation must never change whether a
+     * repeat gets offered here. (It also doesn't matter whether the
+     * acting player still controls that Duplicity by the time they're
+     * actually asked to repeat -- losing it after the fact doesn't
+     * retroactively cancel an opportunity that already triggered, and
+     * likewise doesn't matter whether $cardId itself is still in play --
+     * Anger/Hate discarding/bottom-decking themselves, or Malice
+     * discarding itself as part of its own color cascade, must not
+     * un-trigger a repeat opportunity that already existed the moment
+     * they were played either.) The count is still taken fresh per
+     * invocation, not once for the whole chain -- a later repeat's own
      * snapshot naturally reflects whatever the previous invocation's
      * effect just did, since that's the state as it stood right before
      * THIS invocation's own mutation began.
@@ -362,17 +382,23 @@ final class MoodPlayService
         int $playerId,
         PlayerChoices $topLevelChoices,
         int $invocationSeq,
+        int $eligibleSources,
     ): PlayResult {
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
-        $eligibleSources = $state->duplicityEligibleSources($cardId);
 
         if ($invocationSeq < $eligibleSources) {
             // The repeat-offer's own answer is resolved directly by
             // resolveDuplicityRepeatOffer() below, which never reads the
             // batch's stored invocation_choices -- $topLevelChoices here
             // is just a harmless, always-valid placeholder to satisfy
-            // PlayResult::pending()'s signature.
-            return PlayResult::pending([$this->duplicityRepeatOfferRequest($playerId, $effectiveEffectKey)], $cardId, $invocationSeq, $topLevelChoices);
+            // PlayResult::pending()'s signature. $eligibleSources itself
+            // rides along too (unchanged) purely so a still-open repeat
+            // offer keeps reporting the same count if this same pause is
+            // read back again before being answered -- resolveDecisions()
+            // never actually needs it for this particular decision type,
+            // since resolveDuplicityRepeatOffer() below always recomputes
+            // its own fresh count on repeat (see resolveAfterPlayingChain()).
+            return PlayResult::pending([$this->duplicityRepeatOfferRequest($playerId, $effectiveEffectKey)], $cardId, $invocationSeq, $topLevelChoices, $eligibleSources);
         }
 
         return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);

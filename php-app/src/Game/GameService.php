@@ -4074,6 +4074,7 @@ final class GameService
                 $invocationChoices = new PlayerChoices((array) json_decode((string) $batchRow['invocation_choices'], true));
                 $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
                 $invocationSeq = (int) $batchRow['invocation_seq'];
+                $duplicityEligibleSources = (int) $batchRow['duplicity_eligible_sources'];
 
                 $result = $this->plays->resolvePendingDecisions(
                     $state,
@@ -4083,6 +4084,7 @@ final class GameService
                     $invocationChoices,
                     $invocationSeq,
                     $answers,
+                    $duplicityEligibleSources,
                 );
 
                 // Logged only now, after resolvePendingDecisions() has
@@ -5751,7 +5753,7 @@ final class GameService
         // never read back (see respondToDecision()'s own scoring branch),
         // the same harmless-placeholder precedent Duplicity's repeat
         // offer already established.
-        $result = PlayResult::pending([$request], $decision['cardId'], 0, new PlayerChoices([]));
+        $result = PlayResult::pending([$request], $decision['cardId'], 0, new PlayerChoices([]), 0);
 
         $this->writePendingBatch($gameId, $roundId, $decision['ownerId'], new PlayerChoices([]), new PlayerChoices([]), $result);
     }
@@ -6220,7 +6222,7 @@ final class GameService
         // this just names the first (default-order) pending card; nothing
         // downstream ever reads it back as anything more specific than
         // "which decision is this."
-        $result = PlayResult::pending([$request], $decision['groups'][0]['cardId'], 0, new PlayerChoices([]));
+        $result = PlayResult::pending([$request], $decision['groups'][0]['cardId'], 0, new PlayerChoices([]), 0);
 
         $this->writePendingBatch($gameId, $roundId, $decision['ownerId'], new PlayerChoices([]), new PlayerChoices([]), $result);
     }
@@ -10917,8 +10919,8 @@ final class GameService
 
         $insertBatch = $pdo->prepare(
             'INSERT INTO game_pending_decision_batches
-                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices)
-             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices)'
+                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices, duplicity_eligible_sources)
+             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices, :duplicity_eligible_sources)'
         );
 
         try {
@@ -10930,6 +10932,7 @@ final class GameService
                 'initiator' => $initiatingPlayerId,
                 'top_level_choices' => json_encode($topLevelChoices->toArray()),
                 'invocation_choices' => json_encode($invocationChoices->toArray()),
+                'duplicity_eligible_sources' => $result->duplicityEligibleSources,
             ]);
         } catch (PDOException $e) {
             if ($e->getCode() === '23000') {
