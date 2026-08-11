@@ -25,8 +25,13 @@ use PHPUnit\Framework\TestCase;
  * GameService::advanceAutomatedTurns() -- the same turn-advancing loop
  * practice bots (issue #140, see BotGameplayIntegrationTest) already
  * use -- to automatically pass on an opted-in player's behalf whenever
- * it's their turn and their hand is empty, since there is nothing else
- * they could legally do that turn either way.
+ * it's their turn and they have no legal play at all (GameService::
+ * candidatePlayCardIds(), hand plus the whole discard pile, filtered
+ * through MoodPlayService::isPlayable()) -- NOT simply whenever their
+ * hand is empty, since Angst/Harmony/Grief/Melancholy can each leave a
+ * completely legal discard-sourced play available with an empty hand
+ * (see testDoesNotAutoPassAnOptedInPlayerWithAnEmptyHandButAUsableDiscardSourcedGrant()
+ * below, a real bug this regression covers).
  */
 final class AutoPassOnEmptyHandIntegrationTest extends TestCase
 {
@@ -184,6 +189,42 @@ final class AutoPassOnEmptyHandIntegrationTest extends TestCase
         self::assertNotNull($result);
         $round = $this->fetchRound($gameId);
         self::assertSame($p2, (int) $round['current_turn_game_player_id']);
+    }
+
+    /**
+     * The real bug this regression covers: an opted-in player's HAND can
+     * be empty while they still have a completely legal play available,
+     * sourced from the discard pile instead (Angst/Harmony/Grief/
+     * Melancholy's own grants -- see AngstEffect's own docblock). The old
+     * "hand is empty => nothing else legal" assumption silently passed
+     * this away; candidatePlayCardIds() (hand plus the whole discard
+     * pile) is what makes this test pass now. game_rounds.pending_play_grants
+     * (BoardStateRepository::load()'s own restore path) is written
+     * directly here to simulate a grant that already existed BEFORE this
+     * call, the same as it would right after Angst's own afterPlaying()
+     * resolved and the player declined a Duplicity repeat -- see
+     * MoodPlayService::resolveDuplicityRepeatOffer().
+     */
+    public function testDoesNotAutoPassAnOptedInPlayerWithAnEmptyHandButAUsableDiscardSourcedGrant(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $u2 = $this->insertUser('human2');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        // p1's hand is empty, but Charity (no "to play" cost) sits in the
+        // shared discard pile, and p1 has an outstanding discard-sourced
+        // play grant (exactly what Angst's own afterPlaying() leaves
+        // behind) -- there IS a legal play here, so this must NOT auto-pass.
+        $this->insertGameCard($gameId, 3, 'discard', $p1); // Charity
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->pdo->prepare('UPDATE game_rounds SET pending_play_grants = :grants WHERE game_id = :game_id')
+            ->execute(['grants' => json_encode([['source' => 'discard']]), 'game_id' => $gameId]);
+
+        self::assertNull($this->games->advanceAutomatedTurns($gameId));
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id']); // untouched
     }
 
     public function testDoesNotAutoPassAnOptedInPlayerWithCardsInHand(): void

@@ -3352,6 +3352,18 @@ final class GameService
      * passes that could miss a later opportunity the earlier one
      * created.
      *
+     * "Auto-pass on empty hand" doesn't ACTUALLY mean "hand is empty" --
+     * a handful of grants (Angst/Harmony/Grief/Melancholy) let a player
+     * play a mood from the discard pile even with nothing left in hand,
+     * so passing on an empty hand alone would wrongly skip a real,
+     * still-outstanding play (a bug caught live: Angst's own discard-
+     * sourced grant going unused because the acting player's hand
+     * happened to already be empty when it was offered). The real check
+     * is "no legal play at all" -- candidatePlayCardIds() below (hand
+     * plus the whole discard pile) filtered through isPlayable(), same
+     * as the bot branch just above uses to decide whether it has
+     * anything to play either.
+     *
      * "Auto-pass on empty hand" only ever applies to a fresh TURN (the
      * play-or-pass decision), never to answering a pending decision --
      * every pending-decision field that could target a player at all
@@ -3432,7 +3444,7 @@ final class GameService
             if (in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
                 $state = $this->boardStates->load($gameId);
                 $playableCardIds = array_values(array_filter(
-                    $state->hand($currentTurnGamePlayerId),
+                    $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ));
                 $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
@@ -3442,13 +3454,19 @@ final class GameService
                 continue;
             }
 
-            if (in_array($currentTurnGamePlayerId, $autoPassGamePlayerIds, true)
-                && $this->boardStates->load($gameId)->hand($currentTurnGamePlayerId) === []) {
-                $lastResult = $this->pass($gameId, $currentTurnGamePlayerId);
-                continue;
+            if (in_array($currentTurnGamePlayerId, $autoPassGamePlayerIds, true)) {
+                $state = $this->boardStates->load($gameId);
+                $hasLegalPlay = array_filter(
+                    $this->candidatePlayCardIds($state, $currentTurnGamePlayerId),
+                    fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
+                ) !== [];
+                if (!$hasLegalPlay) {
+                    $lastResult = $this->pass($gameId, $currentTurnGamePlayerId);
+                    continue;
+                }
             }
 
-            break; // waiting on a real, non-empty-handed player
+            break; // waiting on a real player who actually has a legal play
         }
 
         return $lastResult;
@@ -3554,6 +3572,26 @@ final class GameService
         return $this->confirmTeamDecision($gameId, $confirmerId, true);
     }
 
+    /**
+     * Every card $playerId could conceivably play right now, before
+     * checking actual legality -- their own hand, plus the whole (shared)
+     * discard pile, since Angst/Harmony/Grief/Melancholy can each let a
+     * discard-pile card be played too. isPlayable()'s own
+     * BoardState::hasUsablePlayGrant() check still does the real
+     * filtering (a grant that actually covers this specific card, given
+     * its zone -- see BoardState::grantAllows()'s own hand-vs-discard
+     * 'source' check -- plus any "to play" cost, banned colors, etc.), so
+     * padding the candidate list with the entire discard pile here is
+     * always safe: a card nothing currently grants never comes back
+     * playable regardless of which list it appeared in.
+     *
+     * @return int[]
+     */
+    private function candidatePlayCardIds(BoardState $state, int $playerId): array
+    {
+        return [...$state->hand($playerId), ...$state->discardPile()];
+    }
+
     /** @return int[] every game_players.id in $gameId whose seat is a practice bot (users.is_bot) */
     private function botGamePlayerIds(int $gameId): array
     {
@@ -3568,10 +3606,10 @@ final class GameService
     /**
      * @return int[] every game_players.id in $gameId whose owning user
      *     opted into "auto-pass on empty hand" (users.auto_pass_on_empty_hand,
-     *     migration 0096) -- whether their hand is ACTUALLY empty right
-     *     now is checked separately, per iteration, in
-     *     advanceAutomatedTurns() itself, since that can change from one
-     *     iteration to the next.
+     *     migration 0096) -- whether they actually have no legal play
+     *     right now (see candidatePlayCardIds()) is checked separately,
+     *     per iteration, in advanceAutomatedTurns() itself, since that can
+     *     change from one iteration to the next.
      */
     private function autoPassEmptyHandGamePlayerIds(int $gameId): array
     {
