@@ -5223,10 +5223,20 @@
     document.getElementById('pass-button').addEventListener('click', async () => {
         boardError.hidden = true;
         boardMessage.hidden = true;
+        const passButton = document.getElementById('pass-button');
+        // Disabled immediately (not after the request settles), the same
+        // "slow response can't read as a missed click" guard the play
+        // button's own click handler already has -- a slow connection
+        // shouldn't let this fire twice. renderBoard()'s own
+        // `pass-button.disabled = !canAct` recomputes it correctly once
+        // refreshBoard() below re-renders on success; on failure that
+        // never runs, so it's re-enabled explicitly here instead.
+        passButton.disabled = true;
         const { ok, body } = await passTurn(currentGameId);
         if (!ok) {
             boardError.textContent = body.message || 'Could not pass.';
             boardError.hidden = false;
+            passButton.disabled = false;
             return;
         }
         // Passing is always valid even with a hand card's choices panel
