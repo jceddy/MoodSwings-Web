@@ -4579,9 +4579,28 @@ since it already holds that dependency):
   filled in. If the highest-value card's own required fields can't all
   be legally filled (rare -- would mean `isPlayable()` said yes but some
   required field still came up empty, e.g. Regret's exact-2-own-moods
-  cost with nothing at all in play), the next-highest is tried instead,
-  all the way down to `null` (pass) if truly nothing works -- a card is
-  never left half-chosen.
+  cost with nothing at all in play) or `isWorthPlaying()` vetoes it
+  outright (currently just Fury -- see below), the next-highest is
+  tried instead, all the way down to `null` (pass) if truly nothing
+  works -- a card is never left half-chosen.
+  `isWorthPlaying(BoardState $state, string $effectKey, int
+  $botGamePlayerId): bool` is a small, separate, per-effect-key veto
+  list layered on top of this ordering -- unlike `BotChoiceResolver`'s
+  own field-shape-driven policy above (which only ever decides HOW to
+  fill a `choice_field`), this looks at the whole-board CONSEQUENCE of
+  an effect that has no `choice_field` of its own for the acting player
+  to fill at all, so there's no field-level hook to veto it through.
+  Fury ("each player chooses one of their highest value moods and puts
+  it into the discard pile" -- every player, including whoever plays
+  it, via `RequiresOpponentDecision`, so `CardChoiceSchema` has no entry
+  for it at all) is the one card on this list today: only worth playing
+  if at least one OPPONENT's own highest-value mood is worth MORE than
+  the bot's own highest-value mood (a player with no moods in play
+  counts as `-1`, matching `FuryEffect`'s own sentinel) -- otherwise
+  it's a pure loss, trading the bot's own best mood for something equal
+  or worse. Everything not on this list defaults to "always worth
+  playing," the unconditional "yes" every effect already got before
+  this method existed.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's

@@ -36,11 +36,12 @@ final class BotPlayerService
      * itself applies per field), except for BotChoiceResolver's own small
      * ALWAYS_FILLED_OPTIONAL_FIELDS list (Curiosity/Suspicion today),
      * which get filled in anyway via buildChoicesForCard()'s own
-     * required-or-forced check. If the highest-value card's own required
-     * fields can't all be legally filled (rare -- would mean
-     * isPlayable() said yes but some required field still came up
-     * empty), the next-highest is tried instead, all the way down to
-     * passing if truly nothing works.
+     * required-or-forced check. A card isWorthPlaying() vetoes (Fury
+     * today -- see its own docblock) is skipped outright, same as one
+     * whose required fields can't all be legally filled (rare -- would
+     * mean isPlayable() said yes but some required field still came up
+     * empty); either way, the next-highest-value card is tried instead,
+     * all the way down to passing if truly nothing works.
      *
      * @param int[] $playableCardIds
      * @return ?array{card_id: int, choices: array<string, mixed>} null means pass.
@@ -53,6 +54,11 @@ final class BotPlayerService
         );
 
         foreach ($playableCardIds as $cardId) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+            if (!$this->isWorthPlaying($state, $effectKey, $botGamePlayerId)) {
+                continue;
+            }
+
             $choices = $this->buildChoicesForCard($state, $cardId, $botGamePlayerId);
             if ($choices !== null) {
                 return ['card_id' => $cardId, 'choices' => $choices];
@@ -60,6 +66,66 @@ final class BotPlayerService
         }
 
         return null;
+    }
+
+    /**
+     * A small set of additional per-card "is this actually worth
+     * playing" vetoes, layered on top of chooseAction()'s own highest-
+     * printed-value ordering -- unlike BotChoiceResolver's own field-
+     * shape-driven policy (which only ever decides HOW to fill a
+     * choice_field), these look at the whole-board CONSEQUENCE of an
+     * effect that has no choice_field of its own for the acting player
+     * to fill at all, so there's no field-level hook to veto it through
+     * (Fury's own "each player chooses..." decisions are all
+     * RequiresOpponentDecision, resolved after the card is already
+     * played -- see CardChoiceSchema's own docblock for why an effect
+     * like that carries no play-time choice_fields). Keyed by effect
+     * key; everything not listed here is always worth playing (the
+     * default, unconditional "yes" every other effect already got
+     * before this method existed).
+     */
+    private function isWorthPlaying(BoardState $state, string $effectKey, int $botGamePlayerId): bool
+    {
+        return match ($effectKey) {
+            'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
+            default => true,
+        };
+    }
+
+    /**
+     * Fury costs the bot its own highest-value mood too -- "each player
+     * chooses one of their highest value moods and puts it into the
+     * discard pile" (FuryEffect's own docblock) targets every player in
+     * the game, including whoever plays it. Only worth it if at least
+     * one opponent's own highest-value mood is worth MORE than the
+     * bot's own highest-value mood -- otherwise Fury just trades the
+     * bot's own best mood for something equal or worse, a pure loss no
+     * opponent's own equally-forced discard makes up for. A player with
+     * no moods in play at all has an effective highest value of -1 (see
+     * FuryEffect's own identical sentinel), so they never on their own
+     * make Fury worth playing -- there'd be nothing for them to lose.
+     */
+    private function furyIsWorthPlaying(BoardState $state, int $botGamePlayerId): bool
+    {
+        $ownHighestValue = $this->highestMoodValueOwnedBy($state, $botGamePlayerId);
+
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId && $this->highestMoodValueOwnedBy($state, $playerId) > $ownHighestValue) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function highestMoodValueOwnedBy(BoardState $state, int $playerId): int
+    {
+        $highestValue = -1;
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            $highestValue = max($highestValue, $state->valueOf($mood->cardId));
+        }
+
+        return $highestValue;
     }
 
     /** @return array<string, mixed> */
