@@ -748,6 +748,31 @@ const THEME_STORAGE_KEY = 'themePreference';
     });
 })();
 
+// Clicking a <dialog>'s own backdrop closes it, the same as Escape or a
+// Close button already does. `event.target === dialog` alone isn't
+// enough to detect this -- every dialog here has its own padding/border
+// around its content, and a click landing in THAT space (not on any
+// child element) still targets the dialog itself, which would read as a
+// backdrop click and close the dialog out from under a click that was
+// visually still inside it. Comparing against the dialog's own
+// `getBoundingClientRect()` instead correctly treats that padding as
+// "inside" regardless of what does or doesn't cover it, and needs no
+// cooperation from the dialog's own markup (an inner wrapper `<div>`
+// sized to the full content box would work too, but every dialog across
+// the site would need one). Shared here (rather than duplicated in
+// game.js, which wires up the site's other dozen-plus dialogs the same
+// way) since it's needed for this file's own #resources-dialog too.
+function closeDialogOnBackdropClick(dialog) {
+    dialog.addEventListener('click', (event) => {
+        const rect = dialog.getBoundingClientRect();
+        const clickedInside = event.clientX >= rect.left && event.clientX <= rect.right
+            && event.clientY >= rect.top && event.clientY <= rect.bottom;
+        if (!clickedInside) {
+            dialog.close();
+        }
+    });
+}
+
 // Resources link/dialog (issue #148) in every page's own footer, next to
 // the theme select -- a static <dialog> already present in each page's own
 // HTML (no per-page JS needed, so this lives here alongside the other
@@ -768,6 +793,8 @@ const THEME_STORAGE_KEY = 'themePreference';
     closeButton.addEventListener('click', () => {
         dialog.close();
     });
+
+    closeDialogOnBackdropClick(dialog);
 })();
 
 // Detects a new deploy landing while a session is already open (e.g. a
