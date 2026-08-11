@@ -806,21 +806,34 @@ one from the Creativity's repeat of it.
 
 That count is snapshotted by `MoodPlayService::resolveAfterPlayingChain()`
 *before* the current invocation's own `afterPlaying()`/`resolveDecisions()`
-gets to mutate anything (`BoardState::setDuplicityEligibleSources()`/
-`duplicityEligibleSources()`, piggybacking on the played card's own
-`effectState` bag so it automatically survives an opponent-decision pause
-the same way any other `effectState` does, but deliberately bypassing
-`recordEffectStateChange()` so this pure bookkeeping value never leaks
-into the event log's `effect_state_changes`) — not recomputed live from
-current board state once that invocation's effect has already run. This
-matters for a card like Chaos, which reassigns every in-play mood's owner
-(including Duplicity itself) as its OWN after-playing effect: per an
-official ruling, Duplicity's opportunity to repeat is judged at the
-moment the mood is played, not after that mood's own effect resolves, so
-Chaos's own shuffle handing Duplicity control to (or taking it away from)
-the very player who just played it must never change whether a repeat
-gets offered for *that* play — it doesn't matter whether they still
-control Duplicity by the time they're actually asked. The pending
+gets to mutate anything — not recomputed live from current board state
+once that invocation's effect has already run. This matters for a card
+like Chaos, which reassigns every in-play mood's owner (including
+Duplicity itself) as its OWN after-playing effect: per an official
+ruling, Duplicity's opportunity to repeat is judged at the moment the
+mood is played, not after that mood's own effect resolves, so Chaos's
+own shuffle handing Duplicity control to (or taking it away from) the
+very player who just played it must never change whether a repeat gets
+offered for *that* play — it doesn't matter whether they still control
+Duplicity by the time they're actually asked.
+
+Carried as a plain `PlayResult` field (`$duplicityEligibleSources`) from
+the moment it's snapshotted all the way to
+`continueAfterPlayingChain()`'s own read of it, threaded through
+`resolvePendingDecisions()` too for an invocation that pauses on the
+way. `GameService` persists it as a new
+`game_pending_decision_batches.duplicity_eligible_sources` column
+(migration `0107`) whenever a `PlayResult::pending()` gets written, and
+reads it back the same way it already reads `invocation_choices`/
+`invocation_seq` before calling `resolvePendingDecisions()` again. This
+replaced an earlier design that piggybacked the count directly on the
+played card's own `BoardState` `effectState` bag (keyed by its own
+`$cardId`) — a real bug, caught live: `effectState` lives on the card's
+own transient in-play entry, so a card whose own effect discards or
+bottom-decks *itself* (Anger, Hate, and Malice when it happens to share
+a color with one of its own `resolveDecisions()` targets) wiped out the
+snapshot the instant it left play, so Duplicity was never offered a
+repeat of any of those three at all. The pending
 decision's `field` is a `type: 'nested'` shape — a `repeat` boolean plus a
 `choices` sub-field wrapping the played card's own `afterPlayingFields()`
 (`stage: 'cost'` fields filtered out, since a repeat only re-invokes

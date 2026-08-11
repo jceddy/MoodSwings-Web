@@ -771,6 +771,7 @@ final class MoodPlayServiceTest extends TestCase
             ['duplicity_repeat' => new PlayerChoices([
                 'duplicity_repeat' => ['repeat' => true, 'choices' => ['color' => 'black']],
             ])],
+            0,
         );
 
         self::assertFalse($finalResult->isPending);
@@ -1353,6 +1354,7 @@ final class MoodPlayServiceTest extends TestCase
                 'discarded_mood_id_2' => new PlayerChoices(['discarded_mood_id_2' => 9]),
                 'discarded_mood_id_3' => new PlayerChoices(['discarded_mood_id_3' => 7]),
             ],
+            0,
         );
 
         self::assertFalse($state->isInPlay(91)); // player 1's highest (4 > 1)
@@ -1378,6 +1380,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 91, 1, $choices, $choices, 0,
             ['discarded_mood_id_1' => new PlayerChoices(['discarded_mood_id_1' => 30])],
+            0,
         );
 
         self::assertTrue($state->isInPlay(91)); // spared -- not tied for player 1's highest
@@ -1398,6 +1401,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 91, 1, $choices, $choices, 0,
             ['discarded_mood_id_1' => new PlayerChoices(['discarded_mood_id_1' => 3])],
+            0,
         );
     }
 
@@ -2265,6 +2269,7 @@ final class MoodPlayServiceTest extends TestCase
                 'discarded_card_id_2' => new PlayerChoices(['discarded_card_id_2' => 9]),
                 'discarded_card_id_3' => new PlayerChoices(['discarded_card_id_3' => 106]),
             ],
+            0,
         );
 
         self::assertSame([3], $state->hand(2));
@@ -2516,6 +2521,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 68, 1, $choices, $choices, 0,
             ['chosen_mood_ids' => new PlayerChoices(['chosen_mood_ids' => [9, 3]])],
+            0,
         );
 
         self::assertFalse($state->isInPlay(9));
@@ -2542,6 +2548,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 68, 1, $choices, $choices, 0,
             ['chosen_mood_ids' => new PlayerChoices(['chosen_mood_ids' => [9, 3]])],
+            0,
         );
 
         self::assertFalse($state->isInPlay(9));
@@ -2821,6 +2828,7 @@ final class MoodPlayServiceTest extends TestCase
                 'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
                 'given_mood_id_3' => new PlayerChoices(['given_mood_id_3' => 106]),
             ],
+            0,
         );
 
         self::assertSame(3, $state->ownerOf(29)); // player 1's only mood -- Avoidance itself
@@ -2845,6 +2853,7 @@ final class MoodPlayServiceTest extends TestCase
                 'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
                 'given_mood_id_3' => new PlayerChoices(['given_mood_id_3' => 106]),
             ],
+            0,
         );
 
         self::assertSame(2, $state->ownerOf(29));
@@ -2868,6 +2877,7 @@ final class MoodPlayServiceTest extends TestCase
                 'given_mood_id_1' => new PlayerChoices(['given_mood_id_1' => 9]), // not player 1's own mood
                 'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
             ],
+            0,
         );
     }
 
@@ -2903,6 +2913,7 @@ final class MoodPlayServiceTest extends TestCase
                 'given_mood_id_2' => new PlayerChoices(['given_mood_id_2' => 9]),
                 'given_mood_id_4' => new PlayerChoices(['given_mood_id_4' => 42]),
             ],
+            0,
         );
 
         // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
@@ -2956,6 +2967,7 @@ final class MoodPlayServiceTest extends TestCase
                 'given_card_id_2' => new PlayerChoices(['given_card_id_2' => 9]),
                 'given_card_id_3' => new PlayerChoices(['given_card_id_3' => 106]),
             ],
+            0,
         );
 
         self::assertTrue($state->isInHand(3, 3));
@@ -3003,6 +3015,7 @@ final class MoodPlayServiceTest extends TestCase
                 'given_card_id_2' => new PlayerChoices(['given_card_id_2' => 9]),
                 'given_card_id_4' => new PlayerChoices(['given_card_id_4' => 42]),
             ],
+            0,
         );
 
         // Seat order is [1,2,3,4] with 3 resigned; 'right' among active
@@ -3038,6 +3051,7 @@ final class MoodPlayServiceTest extends TestCase
                 'given_card_id_1' => new PlayerChoices(['given_card_id_1' => 3]),
                 'given_card_id_2' => new PlayerChoices(['given_card_id_2' => 3]), // not player 2's own card
             ],
+            0,
         );
     }
 
@@ -3138,6 +3152,7 @@ final class MoodPlayServiceTest extends TestCase
         $round2 = $this->plays->resolvePendingDecisions(
             $state, 96, 1, $choices, $choices, 0,
             ['taken_mood_id' => new PlayerChoices(['taken_mood_id' => 7])],
+            0,
         );
 
         self::assertSame(1, $state->ownerOf(7));
@@ -3155,6 +3170,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 96, 1, $choices, $choices, 0,
             ['given_mood_id' => new PlayerChoices(['given_mood_id' => 9])],
+            0,
         );
 
         self::assertSame(1, $state->ownerOf(7));
@@ -3182,10 +3198,12 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 96, 1, $choices, $choices, 0,
             ['taken_mood_id' => new PlayerChoices(['taken_mood_id' => 7])],
+            0,
         );
         $this->plays->resolvePendingDecisions(
             $state, 96, 1, $choices, $choices, 0,
             ['given_mood_id' => new PlayerChoices(['given_mood_id' => 96])],
+            0,
         );
 
         self::assertSame(1, $state->ownerOf(7));
@@ -3214,12 +3232,14 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 96, 1, $choices, $choices, 0,
             ['taken_mood_id' => new PlayerChoices(['taken_mood_id' => 7])],
+            0,
         );
         self::assertSame(1, $state->ownerOf(7));
 
         $result = $this->plays->resolvePendingDecisions(
             $state, 96, 1, $choices, $choices, 0,
             ['given_mood_id' => new PlayerChoices(['given_mood_id' => 7])],
+            0,
         );
 
         self::assertFalse($result->isPending);
@@ -3282,6 +3302,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 56, 1, $choices, $choices, 0,
             ['target_mood_id' => new PlayerChoices(['target_mood_id' => 3])],
+            0,
         );
 
         self::assertSame(2, $state->ownerOf(3));
@@ -3306,6 +3327,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 56, 1, $choices, $choices, 0,
             ['target_mood_id' => new PlayerChoices(['target_mood_id' => 56])],
+            0,
         );
 
         self::assertSame(2, $state->ownerOf(56));
@@ -3325,6 +3347,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 56, 1, $choices, $choices, 0,
             ['target_mood_id' => new PlayerChoices(['target_mood_id' => 3])],
+            0,
         );
     }
 
@@ -3613,6 +3636,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 22, 1, $choices, $choices, 0,
             ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+            0,
         );
         self::assertSame(1, $state->playsRemaining());
 
@@ -3656,6 +3680,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 22, 1, $choices, $choices, 0,
             ['target_player_id' => new PlayerChoices(['target_player_id' => 3])],
+            0,
         );
     }
 
@@ -3685,6 +3710,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 22, 1, $choices, $choices, 0,
             ['target_player_id' => new PlayerChoices(['target_player_id' => null])],
+            0,
         );
 
         self::assertSame(0, $state->playsRemaining());
@@ -3715,6 +3741,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 22, 1, $choices, $choices, 0,
             ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+            0,
         );
         // Player 1 has 1 mood (Pride) vs player 2's 2 -- still behind.
         self::assertSame(1, $state->playsRemaining());
@@ -3755,6 +3782,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 22, 1, $choices, $choices, 0,
             ['target_player_id' => new PlayerChoices(['target_player_id' => 2])],
+            0,
         );
         self::assertSame(1, $state->playsRemaining());
 
@@ -4174,6 +4202,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 82, 1, $choices, $choices, 0,
             ['chosen_mood_id' => new PlayerChoices(['chosen_mood_id' => 8])],
+            0,
         );
 
         self::assertSame(1, $state->ownerOf(8));
@@ -4223,6 +4252,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 82, 1, $choices, $choices, 0,
             ['chosen_mood_id' => new PlayerChoices(['chosen_mood_id' => 8])],
+            0,
         );
         self::assertSame(1, $state->ownerOf(8));
 
@@ -4243,6 +4273,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 82, 1, $choices, $choices, 0,
             ['chosen_mood_id' => new PlayerChoices(['chosen_mood_id' => 8])],
+            0,
         );
         self::assertSame(1, $state->ownerOf(8));
 
@@ -4471,6 +4502,7 @@ final class MoodPlayServiceTest extends TestCase
             $choices,
             0,
             ['given_card_id' => new PlayerChoices(['given_card_id' => 3])],
+            0,
         );
 
         self::assertFalse($finalResult->isPending);
@@ -4520,6 +4552,7 @@ final class MoodPlayServiceTest extends TestCase
             $choices,
             0,
             ['given_card_id' => new PlayerChoices(['given_card_id' => 3])],
+            0,
         );
 
         self::assertSame([3], $state->hand(1));
@@ -4545,6 +4578,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 67, 1, $choices, $choices, 0,
             ['revealed_card_id' => new PlayerChoices(['revealed_card_id' => 3])],
+            0,
         );
 
         self::assertContains(3, $state->hand(1));
@@ -4571,6 +4605,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 67, 1, $choices, $choices, 0,
             ['revealed_card_id' => new PlayerChoices(['revealed_card_id' => 3])],
+            0,
         );
 
         self::assertContains(3, $state->hand(1));
@@ -4585,6 +4620,7 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->resolvePendingDecisions(
             $state, 67, 1, $choices, $choices, 0,
             ['revealed_card_id' => new PlayerChoices(['revealed_card_id' => 3])],
+            0,
         );
 
         $this->expectException(IllegalPlayException::class);
@@ -4631,6 +4667,7 @@ final class MoodPlayServiceTest extends TestCase
                 'chosen_color_3' => new PlayerChoices(['chosen_color_3' => 'white']),
                 'chosen_color_1' => new PlayerChoices(['chosen_color_1' => 'white']),
             ],
+            0,
         );
 
         self::assertTrue($state->isInPlay(10));
@@ -4667,6 +4704,7 @@ final class MoodPlayServiceTest extends TestCase
                 'chosen_color_3' => new PlayerChoices(['chosen_color_3' => 'blue']),
                 'chosen_color_1' => new PlayerChoices(['chosen_color_1' => 'black']),
             ],
+            0,
         );
 
         self::assertTrue($state->isInPlay(10));
@@ -4707,6 +4745,7 @@ final class MoodPlayServiceTest extends TestCase
                 'chosen_color_3' => new PlayerChoices(['chosen_color_3' => null]),
                 'chosen_color_1' => new PlayerChoices(['chosen_color_1' => 'blue']),
             ],
+            0,
         );
 
         self::assertFalse($finalResult->isPending);
@@ -4753,6 +4792,7 @@ final class MoodPlayServiceTest extends TestCase
             ['duplicity_repeat' => new PlayerChoices([
                 'duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 7]],
             ])],
+            0,
         );
 
         self::assertFalse($finalResult->isPending);
@@ -4775,6 +4815,7 @@ final class MoodPlayServiceTest extends TestCase
         $finalResult = $this->plays->resolvePendingDecisions(
             $state, 8, 1, $choices, $choices, 0,
             ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => false]])],
+            0,
         );
 
         self::assertFalse($finalResult->isPending);
@@ -4818,6 +4859,7 @@ final class MoodPlayServiceTest extends TestCase
         $result2 = $this->plays->resolvePendingDecisions(
             $state, 8, 1, $choices, $choices, $result->invocationSeq,
             ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 4]]])],
+            0,
         );
         self::assertTrue($result2->isPending, 'a second independent Duplicity source should still be available');
         self::assertContains(4, $state->discardPile());
@@ -4825,6 +4867,7 @@ final class MoodPlayServiceTest extends TestCase
         $result3 = $this->plays->resolvePendingDecisions(
             $state, 8, 1, $choices, $choices, $result2->invocationSeq,
             ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => true, 'choices' => ['discard_card_id' => 6]]])],
+            0,
         );
         self::assertFalse($result3->isPending, 'no Duplicity sources left -- the chain has to stop here');
         self::assertContains(6, $state->discardPile());
@@ -4854,6 +4897,7 @@ final class MoodPlayServiceTest extends TestCase
         $result2 = $this->plays->resolvePendingDecisions(
             $state, 37, 1, new PlayerChoices([]), new PlayerChoices([]), $result->invocationSeq,
             ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => true, 'choices' => []]])],
+            0,
         );
         self::assertFalse($result2->isPending, 'the just-played Duplicity itself never offers to repeat its own instance');
         self::assertSame(2, $state->playsRemaining()); // original grant + the repeat's own grant
@@ -4967,6 +5011,76 @@ final class MoodPlayServiceTest extends TestCase
 
         self::assertTrue($state->isInPlay(89));
         self::assertContains(3, $state->discardPile());
+    }
+
+    /**
+     * A real bug, caught live: Duplicity's own repeat offer used to be
+     * stored on the just-played card's own BoardState effectState bag,
+     * keyed by its own card id -- broken the instant that card left play
+     * as a side effect of resolving its OWN effect, which is exactly what
+     * Anger does when it discards itself (a fully legal, often-efficient
+     * choice, since its own base value is 0 -- see AngerEffect's own
+     * docblock and CardChoiceSchema's 'includes_self' entry for 'anger').
+     * Duplicity's own repeat opportunity is judged at the moment Anger was
+     * played, not after Anger's own effect resolves, so it must still be
+     * offered even though card 80 is no longer in play by the time
+     * continueAfterPlayingChain() asks.
+     */
+    public function testDuplicityOffersARepeatOfAngerEvenThoughAngerDiscardedItself(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 80]]); // Duplicity, Anger
+        $state->startTurn(1);
+        $state->grantExtraPlay(1);
+        $this->plays->playMood($state, 1, 37, new PlayerChoices([]));
+
+        $result = $this->plays->playMood($state, 1, 80, new PlayerChoices(['target_mood_ids' => [80]]));
+
+        self::assertFalse($state->isInPlay(80)); // Anger already discarded itself
+        self::assertContains(80, $state->discardPile());
+        self::assertTrue($result->isPending, "Duplicity's own repeat offer should still be pending");
+        self::assertCount(1, $result->pendingDecisions);
+        self::assertSame('duplicity_repeat', $result->pendingDecisions[0]->key);
+        self::assertSame(1, $result->duplicityEligibleSources);
+    }
+
+    /**
+     * Same bug, but through a REAL cross-request-shaped pause: Malice is a
+     * RequiresOpponentDecision effect (the target player's own real
+     * choice), so resolvePendingDecisions() here is a genuinely separate
+     * call from playMood() -- exactly like GameService::respondToDecision()
+     * calling it in a later HTTP request, after reading
+     * game_pending_decision_batches.duplicity_eligible_sources back off
+     * the row playMood()'s own request wrote (migration 0107). Malice
+     * (black) discarding two black moods also discards itself, per its
+     * own docblock ("Note this can discard Malice itself, if it happens
+     * to share a color with one of the chosen moods") -- Duplicity's own
+     * repeat must still be offered afterward regardless.
+     */
+    public function testDuplicityOffersARepeatOfMaliceEvenThoughMaliceDiscardedItselfViaItsOwnColorCascade(): void
+    {
+        $state = $this->boardState(hands: [1 => [37, 68], 2 => [53, 58]]); // Duplicity, Malice; Ambition/Condescension (both black)
+        $state->moveHandToInPlay(2, 53);
+        $state->moveHandToInPlay(2, 58);
+        $state->startTurn(1);
+        $state->grantExtraPlay(2);
+        $this->plays->playMood($state, 1, 37, new PlayerChoices([])); // Duplicity
+
+        $choices = new PlayerChoices(['target_player_id' => 2]);
+        $result = $this->plays->playMood($state, 1, 68, $choices); // Malice
+        self::assertTrue($result->isPending);
+        self::assertSame('malice_choose_moods', $result->pendingDecisions[0]->decisionType);
+        self::assertSame(1, $result->duplicityEligibleSources); // Duplicity's own snapshot, taken before Malice's own cascade
+
+        $finalResult = $this->plays->resolvePendingDecisions(
+            $state, 68, 1, $choices, $choices, 0,
+            ['chosen_mood_ids' => new PlayerChoices(['chosen_mood_ids' => [53, 58]])],
+            $result->duplicityEligibleSources,
+        );
+
+        self::assertFalse($state->isInPlay(68)); // Malice shares black with its own 2 chosen targets -- discards itself too
+        self::assertEqualsCanonicalizing([53, 58, 68], $state->discardPile());
+        self::assertTrue($finalResult->isPending, "Duplicity's own repeat offer should still be pending");
+        self::assertSame('duplicity_repeat', $finalResult->pendingDecisions[0]->key);
     }
 
     public function testBlissRecordsTheDiscardedCardsColorAndDiscardsIt(): void
