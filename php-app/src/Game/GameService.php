@@ -624,17 +624,21 @@ final class GameService
         if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true)) {
             throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
         }
-        // Closed Team Play (issue #362) may also draft: each of the 4
-        // players drafts and builds their own deck completely
-        // independently, exactly like a normal individual draft --
-        // 'closed_team' only changes seating/scoring, applied afterward,
-        // the same way it already keeps a pre-built deck_type's own decks
-        // private between teammates today. Open Team Play ('team') isn't
-        // included yet -- its own picks pool per team rather than staying
-        // individual, which the deck-BUILDING step below doesn't support
-        // yet (see submitDraftDeck()).
-        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true) && !in_array($format, ['draft', 'closed_team'], true)) {
-            throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, or Closed Team Play");
+        // Team Play/Closed Team Play (issue #362) may also draft: each of
+        // the 4 players still drafts and builds their own deck
+        // independently -- 'team'/'closed_team' only change seating/
+        // scoring, applied afterward, the same way either already keeps a
+        // pre-built deck_type's own decks separate per player today. Open
+        // Team Play's teammates additionally get to SEE each other's own
+        // drafted/kept cards throughout the draft and deck-building steps
+        // (never the opposing team's), matching this format's existing
+        // "open information" premise for actual gameplay (`you.teammate_hand`)
+        // -- see quickDraftDraftingStateFor()'s/winstonDraftDraftingStateFor()'s/
+        // gridDraftDraftingStateFor()'s/draftDeckBuildingStateFor()'s own
+        // `team_drafted_cards` field. Closed Team Play stays fully private
+        // between teammates instead, exactly like Stage 1 left it.
+        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
+            throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, Team Play, or Closed Team Play");
         }
 
         if ($deckType === 'custom') {
@@ -7430,11 +7434,66 @@ final class GameService
     }
 
     /**
+     * $gameId's own game_players.team_id, keyed by user_id rather than
+     * game_player_id (unlike teamIdByGamePlayer()) since draft_match_players
+     * -- and every draft read-side state function below -- is keyed by
+     * user_id throughout. Empty for every format other than 'team': Closed
+     * Team Play's own draft stays fully private per player, exactly like
+     * Stage 1 left it (see "Closed Team Play" in php-app/README.md), so it
+     * never needs this. team_id itself is assigned at createGame() time,
+     * long before the draft match itself has any notion of teams.
+     *
+     * @return array<int, int> user_id => team_id
+     */
+    private function openTeamPlayTeamIdByUserId(int $gameId, string $format): array
+    {
+        if ($format !== 'team') {
+            return [];
+        }
+
+        $stmt = Connection::get()->prepare('SELECT user_id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+
+        $map = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $map[(int) $row['user_id']] = (int) $row['team_id'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * $viewerUserId's own Open Team Play teammate, for the "team-shared
+     * draft visibility" (issue #362 stage 2) every drafting/deck-building
+     * read-side state function below threads through -- null for every
+     * format other than 'team' (openTeamPlayTeamIdByUserId() above is
+     * empty then, so this always falls through to null).
+     */
+    private function openTeamPlayTeammateUserId(int $gameId, string $format, int $viewerUserId): ?int
+    {
+        $teamIdByUserId = $this->openTeamPlayTeamIdByUserId($gameId, $format);
+        if (!isset($teamIdByUserId[$viewerUserId])) {
+            return null;
+        }
+
+        $viewerTeamId = $teamIdByUserId[$viewerUserId];
+        foreach ($teamIdByUserId as $userId => $teamId) {
+            if ($userId !== $viewerUserId && $teamId === $viewerTeamId) {
+                return $userId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * getState()'s own 'quick_draft' field -- the match-level scoreline
      * (always present once a draft_match_id exists) plus whichever one of
      * 'drafting'/'deck_building' is currently live (null if the match has
-     * already completed). Never exposes the opponent's own drafted/kept
-     * cards -- only $viewerUserId's own. 'next_game_id' is only ever set
+     * already completed). Never exposes any other player's own drafted/kept
+     * cards except $viewerUserId's own Open Team Play teammate (see
+     * openTeamPlayTeammateUserId() and quickDraftDraftingStateFor()'s own
+     * 'team_drafted_cards'). 'next_game_id' is only ever set
      * once THIS game has completed and advanceDraftMatch() has
      * already created the next one (i.e. the match itself isn't
      * 'completed' either) -- lets the frontend offer a direct "Go to next
@@ -7501,8 +7560,10 @@ final class GameService
             'deck_building' => null,
         ];
 
+        $teammateUserId = $this->openTeamPlayTeammateUserId((int) $game['id'], $game['format'], $viewerUserId);
+
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->quickDraftDraftingStateFor($draftMatchId, (int) $match['current_round'], $viewerUserId, $userIds);
+            $state['drafting'] = $this->quickDraftDraftingStateFor($draftMatchId, (int) $match['current_round'], $viewerUserId, $userIds, $teammateUserId, $playersByUser);
         } elseif ($match['status'] === 'deck_building') {
             // Quick Draft's own max deck size is always however many
             // cards this player actually drafted (issue #189 -- no longer
@@ -7514,6 +7575,7 @@ final class GameService
                 array_values(array_diff($userIds, [$viewerUserId])),
                 self::QUICK_DRAFT_MIN_DECK_SIZE,
                 null,
+                $teammateUserId,
             );
         }
 
@@ -7536,6 +7598,16 @@ final class GameService
      * unchanged 2-player frontend keeps working verbatim; 'other_players'
      * (every one of them, with their own username/submitted flag) is what
      * a multiplayer-aware frontend should actually render from.
+     * $teammateUserId (issue #362 stage 2, openTeamPlayTeammateUserId())
+     * additionally surfaces that teammate's own drafted_card_ids via
+     * 'team_drafted_cards' -- Open Team Play's own "open information"
+     * premise carried into deck-building, matching the same match's
+     * drafting-phase visibility. Never populated for Closed Team Play or
+     * any non-team draft -- those keep every player's drafted pool
+     * private until the whole match completes (draftMatchPoolView()).
+     * Each player still submits their own separate deck from their own
+     * drafted pool either way; this only shares what's visible, never
+     * what's submitted.
      *
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      * @param int[] $otherUserIds
@@ -7546,6 +7618,7 @@ final class GameService
         array $otherUserIds,
         int $minDeckSize,
         ?int $maxDeckSize,
+        ?int $teammateUserId = null,
     ): array {
         $viewerRow = $playersByUser[$viewerUserId] ?? null;
         $draftedCardIds = $viewerRow !== null && $viewerRow['drafted_card_ids'] !== null
@@ -7573,6 +7646,19 @@ final class GameService
             ];
         }
 
+        $teamDraftedCards = null;
+        if ($teammateUserId !== null) {
+            $teammateRow = $playersByUser[$teammateUserId] ?? null;
+            $teammateDraftedCardIds = $teammateRow !== null && $teammateRow['drafted_card_ids'] !== null
+                ? array_map(intval(...), json_decode((string) $teammateRow['drafted_card_ids'], true))
+                : [];
+            $teamDraftedCards = [
+                'teammate_user_id' => $teammateUserId,
+                'teammate_username' => $teammateRow['username'] ?? null,
+                'cards' => $this->serializeCatalogCards([...$draftedCardIds, ...$teammateDraftedCardIds]),
+            ];
+        }
+
         return [
             'drafted_cards' => $this->serializeCatalogCards($draftedCardIds),
             'deck_card_ids' => $deckCardIds,
@@ -7582,6 +7668,7 @@ final class GameService
             'you_submitted' => $deckCardIds !== null,
             'opponent_submitted' => $otherPlayers[0]['submitted'] ?? false,
             'other_players' => $otherPlayers,
+            'team_drafted_cards' => $teamDraftedCards,
         ];
     }
 
@@ -7603,11 +7690,23 @@ final class GameService
      * whatever's already resolved this round) -- never any other player's
      * own kept/passed/discarded cards, which stay fully invisible until
      * the draft ends and every player's full drafted_card_ids is their own
-     * private data on draft_match_players.
+     * private data on draft_match_players -- EXCEPT $viewerUserId's own
+     * Open Team Play teammate (issue #362 stage 2, $teammateUserId from
+     * openTeamPlayTeammateUserId()), surfaced via 'team_drafted_cards'
+     * (the combined kept-so-far of both teammates) the same way Winston/
+     * Grid Draft's own 'team_drafted_cards' does -- see this format's
+     * "open information" premise in php-app/README.md's "Open Team Play"
+     * section. Quick Draft's own drafted_card_ids column stays empty
+     * until the whole draft finishes (finalizeQuickDraft()), so a
+     * teammate's kept-so-far is computed the exact same
+     * quickDraftKeptSoFarThroughRound() walk as $viewerUserId's own,
+     * rather than read off draft_match_players like Winston/Grid Draft's
+     * teammate cards are.
      *
      * @param int[] $userIds the match's user ids (any count 2-4), in seat order
+     * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id -- only used to look up $teammateUserId's own username
      */
-    private function quickDraftDraftingStateFor(int $draftMatchId, int $currentRound, int $viewerUserId, array $userIds): array
+    private function quickDraftDraftingStateFor(int $draftMatchId, int $currentRound, int $viewerUserId, array $userIds, ?int $teammateUserId = null, array $playersByUser = []): array
     {
         $playerCount = count($userIds);
         $direction = self::quickDraftPassDirection($currentRound);
@@ -7616,19 +7715,7 @@ final class GameService
         $drawnByRound = $this->loadDraftRoundPicks($draftMatchId);
         $stagePicksByRound = $this->loadDraftPileStagePicks($draftMatchId);
 
-        $keptSoFar = [];
-        foreach ($stagePicksByRound as $roundNumber => $pilesByOwner) {
-            if ($roundNumber >= $currentRound) {
-                continue;
-            }
-            foreach ($pilesByOwner as $stagesForPile) {
-                foreach ($stagesForPile as $stage) {
-                    if ($stage['holder_user_id'] === $viewerUserId) {
-                        $keptSoFar = [...$keptSoFar, ...$stage['kept_card_ids']];
-                    }
-                }
-            }
-        }
+        $keptSoFar = $this->quickDraftKeptSoFarThroughRound($stagePicksByRound, $currentRound, $viewerUserId);
 
         $stagePicksThisRound = $stagePicksByRound[$currentRound] ?? [];
 
@@ -7666,12 +7753,14 @@ final class GameService
             }
         }
 
-        foreach ($stagePicksThisRound as $stagesForPile) {
-            foreach ($stagesForPile as $stage) {
-                if ($stage['holder_user_id'] === $viewerUserId) {
-                    $keptSoFar = [...$keptSoFar, ...$stage['kept_card_ids']];
-                }
-            }
+        $teamDraftedCards = null;
+        if ($teammateUserId !== null) {
+            $teammateKeptSoFar = $this->quickDraftKeptSoFarThroughRound($stagePicksByRound, $currentRound, $teammateUserId);
+            $teamDraftedCards = [
+                'teammate_user_id' => $teammateUserId,
+                'teammate_username' => $playersByUser[$teammateUserId]['username'] ?? null,
+                'cards' => $this->serializeCatalogCards([...$keptSoFar, ...$teammateKeptSoFar]),
+            ];
         }
 
         return [
@@ -7683,7 +7772,42 @@ final class GameService
             'status' => $status,
             'pack' => $this->serializeCatalogCards($pack),
             'kept_so_far' => $this->serializeCatalogCards($keptSoFar),
+            'team_drafted_cards' => $teamDraftedCards,
         ];
+    }
+
+    /**
+     * Every card $userId has kept in this Quick Draft match's draft so
+     * far, through and including $currentRound (every completed round in
+     * full, plus whatever's already resolved this round) -- the walk
+     * quickDraftDraftingStateFor() uses for $viewerUserId's own
+     * 'kept_so_far', generalized to any seated user so Open Team Play's
+     * own 'team_drafted_cards' (issue #362 stage 2) can reuse it for a
+     * teammate too. draft_pile_stage_picks only ever holds already-
+     * submitted stage picks, so "every stage present in
+     * $stagePicksByRound[$currentRound]" already means "every stage
+     * resolved so far this round" with no extra filtering needed.
+     *
+     * @param array<int, array<int, array<int, array{holder_user_id:int, kept_card_ids:int[]}>>> $stagePicksByRound
+     * @return int[]
+     */
+    private function quickDraftKeptSoFarThroughRound(array $stagePicksByRound, int $currentRound, int $userId): array
+    {
+        $keptSoFar = [];
+        foreach ($stagePicksByRound as $roundNumber => $pilesByOwner) {
+            if ($roundNumber > $currentRound) {
+                continue;
+            }
+            foreach ($pilesByOwner as $stagesForPile) {
+                foreach ($stagesForPile as $stage) {
+                    if ($stage['holder_user_id'] === $userId) {
+                        $keptSoFar = [...$keptSoFar, ...$stage['kept_card_ids']];
+                    }
+                }
+            }
+        }
+
+        return $keptSoFar;
     }
 
     /**
@@ -7754,8 +7878,10 @@ final class GameService
             'deck_building' => null,
         ];
 
+        $teammateUserId = $this->openTeamPlayTeammateUserId((int) $game['id'], $game['format'], $viewerUserId);
+
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser);
+            $state['drafting'] = $this->winstonDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser, $teammateUserId);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
@@ -7763,6 +7889,7 @@ final class GameService
                 array_values(array_diff($userIds, [$viewerUserId])),
                 self::WINSTON_MIN_DECK_SIZE,
                 null,
+                $teammateUserId,
             );
         }
 
@@ -7796,11 +7923,18 @@ final class GameService
      * across the table would already see for themselves (a taken pile's
      * height and a rival's growing stack of face-down cards are
      * physically visible), unlike what's actually printed on those cards.
+     * $teammateUserId (issue #362 stage 2, openTeamPlayTeammateUserId())
+     * additionally surfaces $viewerUserId's own Open Team Play teammate's
+     * card IDENTITIES (not just their count) via 'team_drafted_cards' --
+     * this format's own "open information" premise (php-app/README.md's
+     * "Open Team Play" section) extended to the draft itself. Still never
+     * the opposing team's own card identities, only their counts via
+     * other_players exactly as before.
      *
      * @param int[] $userIds the match's user ids (any count 2-4), in seat order
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      */
-    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser): array
+    private function winstonDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser, ?int $teammateUserId = null): array
     {
         $stateStmt = Connection::get()->prepare('SELECT * FROM draft_winston_state WHERE draft_match_id = :id');
         $stateStmt->execute(['id' => $draftMatchId]);
@@ -7844,6 +7978,18 @@ final class GameService
         }, $otherUserIds);
         $firstOtherPlayer = $otherPlayers[0] ?? null;
 
+        $teamDraftedCards = null;
+        if ($teammateUserId !== null) {
+            $teamDraftedCards = [
+                'teammate_user_id' => $teammateUserId,
+                'teammate_username' => $playersByUser[$teammateUserId]['username'] ?? null,
+                'cards' => $this->serializeCatalogCards([
+                    ...$draftedCardIdsFor($viewerUserId),
+                    ...$draftedCardIdsFor($teammateUserId),
+                ]),
+            ];
+        }
+
         return [
             'is_your_turn' => $isYourTurn,
             'current_turn_username' => $playersByUser[$currentPlayerUserId]['username'] ?? null,
@@ -7856,6 +8002,7 @@ final class GameService
             'opponent_last_drew_from_deck' => $firstOtherPlayer['last_drew_from_deck'] ?? false,
             'opponent_drafted_card_count' => $firstOtherPlayer['drafted_card_count'] ?? 0,
             'other_players' => $otherPlayers,
+            'team_drafted_cards' => $teamDraftedCards,
         ];
     }
 
@@ -7921,8 +8068,10 @@ final class GameService
             'deck_building' => null,
         ];
 
+        $teamIdByUserId = $this->openTeamPlayTeamIdByUserId((int) $game['id'], $game['format']);
+
         if ($match['status'] === 'drafting') {
-            $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser);
+            $state['drafting'] = $this->gridDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser, $teamIdByUserId);
         } elseif ($match['status'] === 'deck_building') {
             $state['deck_building'] = $this->draftDeckBuildingStateFor(
                 $playersByUser,
@@ -7930,6 +8079,7 @@ final class GameService
                 array_values(array_diff($userIds, [$viewerUserId])),
                 self::GRID_DRAFT_MIN_DECK_SIZE,
                 null,
+                $this->openTeamPlayTeammateUserId((int) $game['id'], $game['format'], $viewerUserId),
             );
         }
 
@@ -7959,11 +8109,20 @@ final class GameService
      * other_players_drafted_so_far ({user_id, username, drafted_so_far}
      * per other player); opponent_drafted_so_far is kept as a
      * single-value fallback (the first of them) for a 2-player match.
+     * For Open Team Play (issue #362 stage 2, $teamIdByUserId non-empty),
+     * every player's drafted_so_far is ALREADY visible to everyone here --
+     * unlike Quick/Winston Draft, there's no privacy to add or preserve --
+     * so 'teams_drafted_so_far' simply regroups that same, already-open
+     * information by team_id (both teams, not just the viewer's own)
+     * rather than by individual player, matching how the frontend should
+     * actually display it for this format; other_players_drafted_so_far
+     * is left untouched alongside it.
      *
      * @param int[] $userIds the match's user ids (any count 2-4), in seat order
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
+     * @param array<int, int> $teamIdByUserId user_id => team_id (openTeamPlayTeamIdByUserId()) -- empty outside Open Team Play
      */
-    private function gridDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser): array
+    private function gridDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser, array $teamIdByUserId = []): array
     {
         $stateStmt = Connection::get()->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
         $stateStmt->execute(['id' => $draftMatchId]);
@@ -7982,6 +8141,29 @@ final class GameService
         $currentTurnUserId = (int) $gridState['current_turn_user_id'];
         $otherUserIds = array_values(array_diff($userIds, [$viewerUserId]));
         $opponentUserId = $otherUserIds[0] ?? null;
+
+        $teamsDraftedSoFar = null;
+        if ($teamIdByUserId !== []) {
+            $userIdsByTeam = [];
+            foreach ($userIds as $uid) {
+                $userIdsByTeam[$teamIdByUserId[$uid] ?? -1][] = $uid;
+            }
+            ksort($userIdsByTeam);
+
+            $teamsDraftedSoFar = array_map(function (array $teamUserIds) use ($teamIdByUserId, $viewerUserId, $playersByUser, $draftedCardIdsFor): array {
+                $teamCardIds = [];
+                foreach ($teamUserIds as $uid) {
+                    $teamCardIds = [...$teamCardIds, ...$draftedCardIdsFor($uid)];
+                }
+
+                return [
+                    'team_id' => $teamIdByUserId[$teamUserIds[0]],
+                    'is_your_team' => in_array($viewerUserId, $teamUserIds, true),
+                    'member_usernames' => array_map(fn (int $uid) => $playersByUser[$uid]['username'] ?? null, $teamUserIds),
+                    'drafted_so_far' => $this->serializeCatalogCards($teamCardIds),
+                ];
+            }, array_values($userIdsByTeam));
+        }
 
         return [
             'is_your_turn' => $currentTurnUserId === $viewerUserId,
@@ -8003,6 +8185,7 @@ final class GameService
                 'username' => $playersByUser[$uid]['username'] ?? null,
                 'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($uid)),
             ], $otherUserIds),
+            'teams_drafted_so_far' => $teamsDraftedSoFar,
         ];
     }
 

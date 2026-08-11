@@ -60,7 +60,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
 | GET    | `/games/bots`   | —                                                                 | Requires auth. The full practice-bot roster (issue #140) -- `{"bots": [{"user_id", "username"}]}`, every `users.is_bot` row (migration `0090`), same for every caller. See "Practice bots" below. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?, "bot_decklist_text"?, "bot_saved_decklist_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `bot_decklist_text`/`bot_saved_decklist_id` supply a practice bot's own decklist for `deck_type: 'custom_duel'` (the bot's creator picks it, since the bot can never submit one itself the normal way) -- exactly one is required whenever `opponent_user_ids` includes a bot for that `format`/`deck_type` combination, and both are ignored otherwise; see "Practice bots in Duel with a custom decklist" below. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), a bot is seated in a `custom_duel` game with neither `bot_decklist_text` nor `bot_saved_decklist_id` given, the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size, or -- for the bot's own decklist -- the same validation `POST /games/decklist` applies), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id`/`bot_saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?, "bot_decklist_text"?, "bot_saved_decklist_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `bot_decklist_text`/`bot_saved_decklist_id` supply a practice bot's own decklist for `deck_type: 'custom_duel'` (the bot's creator picks it, since the bot can never submit one itself the normal way) -- exactly one is required whenever `opponent_user_ids` includes a bot for that `format`/`deck_type` combination, and both are ignored otherwise; see "Practice bots in Duel with a custom decklist" below. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`/`'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), a bot is seated in a `custom_duel` game with neither `bot_decklist_text` nor `bot_saved_decklist_id` given, the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size, or -- for the bot's own decklist -- the same validation `POST /games/decklist` applies), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id`/`bot_saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"?, "saved_decklist_id"?}`           | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, either as pasted/uploaded text or by referencing one of their own or a friend's shared saved decklists (see "Saved decklists" below), validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it. Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | GET    | `/cards/catalog` | —                                                                | Requires auth. Every printed card, hydrated the same way `/decklists/view` hydrates a saved decklist's cards (now including `rarity`, which no other card-view route needed until this one). Not scoped to a game/decklist -- the catalog itself is public knowledge, same reasoning as `/games/log`. Returns `{"cards": [...]}`. Powers the deck builder's (issue #93) own catalog-browsing panel -- see "Deck builder" below. |
 | GET    | `/decklists`    | —                                                                 | Requires auth. Returns `{"own": [...], "friends": [{"friend_id", "friend_username", "decklists": [...]}]}` -- summaries only (`id`/`name`/`card_count`/`sideboard_card_count`/`visibility`/`created_at`/`updated_at`, never card contents). `friends` only lists friends who have 1+ decks shared with you. See "Saved decklists" below. |
@@ -2788,6 +2788,50 @@ actually took turn 1. `getState()`'s `round` now also exposes
 the same value Chivalry/Triumph already keyed off of, so it also already
 accounts for an Honor override) and the frontend badge uses that instead.
 
+**Drafting -- teammate visibility (issue #362 stage 2)** -- Open Team
+Play may draft (`quick_draft`/`winston_draft`/`grid_draft`, see
+"Drafting (issue #362)" under "Closed Team Play" below for the shared
+mechanics both team formats use); each player still drafts and builds
+their own deck completely independently, exactly like Closed Team Play.
+What differs is visibility: this format's own "open information" premise
+(teammates already see each other's hand during actual gameplay, above)
+extends into the draft match itself, so a teammate can see the OTHER
+teammate's own drafted/kept cards throughout both the picking phase and
+deck-building -- never the opposing team's, which stays exactly as
+invisible as it always has been.
+
+- **Quick Draft/Winston Draft** (`quickDraftDraftingStateFor()`/
+  `winstonDraftDraftingStateFor()`, and `draftDeckBuildingStateFor()` for
+  the deck-building step) add a `team_drafted_cards` field
+  (`{teammate_user_id, teammate_username, cards}`, the combined kept/
+  drafted cards of both teammates) -- `null` for every other format,
+  including Closed Team Play, which keeps every player's own draft fully
+  private the way Stage 1 left it.
+  `openTeamPlayTeammateUserId()`/`openTeamPlayTeamIdByUserId()` (reading
+  `game_players.team_id`, assigned at `createGame()` time long before the
+  draft match itself has any notion of teams) resolve who that teammate
+  actually is. Quick Draft's own `drafted_card_ids` column stays empty
+  until the whole draft finishes (`finalizeQuickDraft()`), so its own
+  teammate cards are computed the same `quickDraftKeptSoFarThroughRound()`
+  walk of `draft_pile_stage_picks` used for the viewer's own `kept_so_far`,
+  rather than read off `draft_match_players` the way Winston/Grid Draft's
+  own incrementally-updated `drafted_card_ids`
+  (`appendDraftedCardIds()`) allows.
+- **Grid Draft** (`gridDraftDraftingStateFor()`) is already open
+  information end to end -- every player's own `drafted_so_far` was
+  already visible to everyone, in every format, before this stage. The
+  only change here is display grouping: `teams_drafted_so_far` (present
+  only for `'team'`) regroups that same already-open information by
+  `team_id` instead of listing all 4 players individually --
+  `[{team_id, is_your_team, member_usernames, drafted_so_far}, ...]`,
+  always exactly 2 entries. `other_players_drafted_so_far` is left
+  untouched alongside it; the frontend simply prefers the team-grouped
+  view once it's present (`game.js`'s `renderGridDraftDrafting()`).
+
+Each player still submits their own separate deck from their own drafted
+pool either way -- none of this pools picks into a single shared
+resource, only what's *visible* changes.
+
 ### Closed Team Play
 
 `format: 'closed_team'` (issue #87) is Open Team Play's sibling variant --
@@ -2846,47 +2890,44 @@ work correctly here with zero changes). It differs in five concrete ways:
    partner is without exposing their hand). The `teammate-hand-section`
    in `web-static/game/index.html` simply never gets data to render for
    `closed_team`, so no extra guard was needed there.
-5. **Drafting (issue #362)** -- `closed_team` is the only team format
-   `createGame()` currently accepts a `quick_draft`/`winston_draft`/
-   `grid_draft` deck_type for. Each of the 4 seated players drafts and
-   builds their own deck completely independently, exactly like a normal
-   individual draft -- the team format only ever applies AFTERWARD
-   (seating/scoring), the same way it already keeps a pre-built
-   deck_type's own decks private between teammates today. This needed
-   two small fixes rather than new machinery: `createGame()`'s own
-   format<->deck_type validation (previously `'draft'`-only for the three
-   draft deck types) now also allows `'closed_team'`, and
-   `BoardStateRepository::load()`'s `$hasSeparateDecks` check (previously
-   purely `format`-based -- `'duel'`/`'draft'` only) now ALSO treats a
-   drafted `deck_type` as separate-decks regardless of format, since
-   unlike every other `deck_type` these two team formats support, a
-   drafted deck is genuinely different content per player, not one
-   shared/identical pool everyone draws from together (`startGame()`'s
-   own dealing branch got the identical fix). `MIN_TEAM_DECK_SIZE`
-   (45 cards) is never checked against a draft deck_type at all -- it
-   only ever rejects the fixed `'power'` deck_type by name, so a drafted
-   deck's much smaller size (12-16 cards, `WINSTON_MIN_DECK_SIZE` etc.)
-   was never in tension with it. A resignation during either phase of a
-   Closed Team Play draft always abandons the whole match outright
-   (`resignFromDraftMatch()`'s own team-format branch), rather than
-   letting 2+ survivors continue as a smaller match the way an
-   individual draft's identical resignation already does (or the way
-   Winston Draft's own drop-a-short-player finalization does,
-   `finalizeWinstonDraft()`'s own team-format branch) -- a dropped seat
-   leaves the OTHER team's own 2v2 broken no matter how many players
-   remain in total, matching `resignGame()`'s own "team games always
-   complete outright, never continue shorthanded" rule for an
-   already-`in_progress` game. `finishTeamScoringAndAdvance()`'s own
+5. **Drafting (issue #362)** -- `createGame()` accepts a
+   `quick_draft`/`winston_draft`/`grid_draft` deck_type for EITHER team
+   format. Each of the 4 seated players drafts and builds their own deck
+   completely independently, exactly like a normal individual draft -- the
+   team format only ever applies AFTERWARD (seating/scoring), the same
+   way it already keeps a pre-built deck_type's own decks private between
+   teammates today. This needed two small fixes rather than new
+   machinery: `createGame()`'s own format<->deck_type validation
+   (previously `'draft'`-only for the three draft deck types) now also
+   allows `'closed_team'`/`'team'`, and `BoardStateRepository::load()`'s
+   `$hasSeparateDecks` check (previously purely `format`-based --
+   `'duel'`/`'draft'` only) now ALSO treats a drafted `deck_type` as
+   separate-decks regardless of format, since unlike every other
+   `deck_type` these two team formats support, a drafted deck is
+   genuinely different content per player, not one shared/identical pool
+   everyone draws from together (`startGame()`'s own dealing branch got
+   the identical fix). `MIN_TEAM_DECK_SIZE` (45 cards) is never checked
+   against a draft deck_type at all -- it only ever rejects the fixed
+   `'power'` deck_type by name, so a drafted deck's much smaller size
+   (12-16 cards, `WINSTON_MIN_DECK_SIZE` etc.) was never in tension with
+   it. A resignation during either phase of a Closed Team Play draft
+   always abandons the whole match outright (`resignFromDraftMatch()`'s
+   own team-format branch), rather than letting 2+ survivors continue as
+   a smaller match the way an individual draft's identical resignation
+   already does (or the way Winston Draft's own drop-a-short-player
+   finalization does, `finalizeWinstonDraft()`'s own team-format branch)
+   -- a dropped seat leaves the OTHER team's own 2v2 broken no matter how
+   many players remain in total, matching `resignGame()`'s own "team
+   games always complete outright, never continue shorthanded" rule for
+   an already-`in_progress` game. `finishTeamScoringAndAdvance()`'s own
    game-completion branch now also calls `advanceDraftMatch()` (the
    non-team completion path already did) -- always resolving the whole
    match on that one call, since a team draft match is always
    best-of-one (`draftGamesToWin()` returns 1 once more than 2 players
-   share a match, and a team match is always exactly 4). Open Team Play
-   ('team') isn't included yet -- its own picks would need to pool per
-   team rather than stay individual, which needs a materially different,
-   not-yet-built deck-building step (see the New Game dialog's own
-   `isDeckTypeAvailableForFormat()` in `web-static/js/game.js` for the
-   exact same distinction client-side).
+   share a match, and a team match is always exactly 4). Open Team Play's
+   own additional teammate-visibility on top of all this (stage 2, still
+   fully independent per-player drafting/deck-building underneath) is
+   covered in "Open Team Play" below.
 
 Everything else -- team-aggregated scoring (`finishTeamScoringAndAdvance()`,
 already `team_id`-only and reused verbatim once its own format check
