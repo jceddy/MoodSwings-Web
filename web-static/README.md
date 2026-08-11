@@ -907,8 +907,13 @@ too, proportional to the smaller card width.
     formats share -- see "Open Team Play"/"Closed Team Play" in
     `php-app/README.md`), and -- since the Draft format supports only Quick
     Draft/Winston Draft/Grid Draft -- every option *except* those three
-    whenever Draft is selected, and Quick Draft/Winston Draft/Grid Draft
-    themselves whenever Draft *isn't* selected. If
+    whenever Draft is selected. Quick Draft/Winston Draft/Grid Draft
+    themselves are available whenever Draft *or Closed Team Play* is
+    selected (issue #362 -- each of the 4 players drafts and builds their
+    own deck completely independently there, exactly like a normal
+    individual draft), and hidden for every other format, including Open
+    Team Play -- its own picks would need to pool per team rather than
+    stay individual, which the deck-building step doesn't support yet. If
     the previously-selected option becomes unavailable, the dropdown falls
     back to the first option that's still available in document order --
     Structure for most formats, but Quick Draft for Draft (the first of the

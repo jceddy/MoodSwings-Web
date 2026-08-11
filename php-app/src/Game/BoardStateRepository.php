@@ -34,13 +34,22 @@ final class BoardStateRepository
     {
         $pdo = Connection::get();
 
-        $formatStmt = $pdo->prepare('SELECT format FROM games WHERE id = :game_id');
+        $formatStmt = $pdo->prepare('SELECT format, deck_type FROM games WHERE id = :game_id');
         $formatStmt->execute(['game_id' => $gameId]);
+        $gameRow = $formatStmt->fetch();
         // 'draft' (Quick Draft and future draft-style deck types, see
         // GameService's own "Quick Draft" docblock) reuses the Duel
         // engine's rules completely unchanged -- each player has their own
-        // separate deck, exactly like 'duel' itself.
-        $hasSeparateDecks = in_array($formatStmt->fetchColumn(), ['duel', 'draft'], true);
+        // separate deck, exactly like 'duel' itself. A drafted deck_type
+        // (issue #362) gives the same separate-deck treatment even under
+        // 'team'/'closed_team' -- unlike every OTHER deck_type those two
+        // formats support, a drafted deck is genuinely different content
+        // per player, not one shared/identical pool everyone draws from
+        // together, so it has to be checked independently of format here
+        // (contrast every other deck_type, where format alone already
+        // decides it).
+        $hasSeparateDecks = in_array($gameRow['format'], ['duel', 'draft'], true)
+            || in_array($gameRow['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true);
 
         $playersStmt = $pdo->prepare(
             'SELECT id, team_id, resigned_at, banked_extra_plays FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
