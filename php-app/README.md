@@ -3250,6 +3250,15 @@ own board state happens to score. Resigning while a decision is pending
 is disallowed (mirrors `playMood()`/`pass()`'s own
 `assertNoPendingDecision()` gate) -- resolve the decision first.
 
+An immediate-completion (team-format) resignation doesn't actually
+require `currentRound()` to find an `'in_progress'` round at all --
+Team Play's own `draw_recipient` window (a losing round already
+`'scored'`, with no successor round created yet) is a real state where
+none exists, and resigning there used to throw uncaught instead of
+completing the game (a bug caught live; see "`resignGame()` had the
+exact same bug" in "Practice bots" below for the full story and the
+`latestRound()` fallback that fixes it).
+
 For the "continue without them" `standard` 3-4 player path specifically
 (the immediate-completion paths above just end the game outright, so
 there's no ongoing board for a resigned player to keep interacting with),
@@ -4828,6 +4837,58 @@ deliberately does NOT get the same treatment -- a spectator watching
 isn't a seated player's own action, and every *seated* game already
 gets this via its own `GET /games/state` poll regardless of whether
 anyone's spectating it too.
+
+**The `draw_recipient` half of that fix didn't actually work -- caught
+live, again, after shipping the fix above.** `advanceAutomatedTurns()`
+used to call `currentRound($gameId)` (a round with `status =
+'in_progress'`, specifically) FIRST, at the very top of its loop, before
+ever trying `advanceBotTeamDecision()` at all -- catching the resulting
+`GameStateException` as "game completed/abandoned, nothing left to
+drive" if none existed. That's the right read for a genuinely finished
+game, but wrong here: a losing team's own `draw_recipient` decision (see
+"Open Team Play"/"Closed Team Play" below) opens the INSTANT its round's
+own status flips to `'scored'` (`finishTeamScoringAndAdvance()`), and the
+NEXT round doesn't get created until that decision itself resolves
+(`applyDrawRecipientDecision()`) -- so there's a real window where the
+game has NO round with status `'in_progress'` at all. `advanceBotTeamDecision()`
+itself needs no round (`activeTeamDecision()` queries `game_team_decisions`
+by `game_id` alone), so the loop was giving up on a fully resolvable
+all-bot decision purely because of *when* it happened to check. The fix:
+try `advanceBotTeamDecision()` unconditionally at the top of every loop
+iteration, before `currentRound()` is ever called -- it's always a safe
+no-op (`activeTeamDecision()` returns `null`) whenever no team decision
+is actually open, which is guaranteed true anyway while a round's own
+turns are still being played. The pre-existing test coverage for this
+(`testAdvanceBotTurnsResolvesATeamDecisionBetweenTwoBotTeammates`) never
+caught it because its own fixture (`insertFrozenTeamRound()`) always
+inserted the frozen round as `'in_progress'` -- correct for `turn_order`
+(which opens on a round already in progress), but not `draw_recipient`,
+and every earlier live-Playwright verification made the exact same
+fixture mistake. `testAdvanceBotTurnsResolvesADrawRecipientDecisionBetweenTwoBotTeammatesAfterTheirRoundHasAlreadyScored`
+(`BotGameplayIntegrationTest`) reproduces the real `'scored'`-round
+timing via a new `insertScoredTeamRound()` helper instead.
+
+**`resignGame()` had the exact same bug.** It also called
+`currentRound($gameId)` unconditionally (to find the round to mark
+`'abandoned'`), and let the resulting `GameStateException` escape
+uncaught -- so resigning from a team-format game during exactly this
+`draw_recipient` window (e.g. to escape the deadlock above, before it
+was fixed) silently failed: the frontend's confirm dialog closed
+normally, but the request itself 409'd with no visible feedback, and the
+game kept sitting in the lobby as "In Progress". Fixed with a
+`latestRound()` fallback (round rows for this game regardless of status,
+same query `buildGameState()` itself already uses) for team-format
+resignations specifically -- `completeGameByResignation()` only ever
+needs `$round['id']` to mark it abandoned, and does so through an
+`AND status = 'in_progress'` guard on that UPDATE so an already-`'scored'`
+round's real history is never overwritten into a misleading `'abandoned'`
+one. It also now closes out any still-open `game_team_decisions` row for
+the game, so a later `GET /games/state` on the now-`'completed'` game
+never shows a stale "Waiting for ... to choose" panel (`state.team_decision`
+is driven purely by `activeTeamDecision()`'s "any unresolved row for this
+game" query, with no game-status check of its own).
+`testResignDuringAnOpenDrawRecipientDecisionStillCompletesTheGame`
+(`GameServiceIntegrationTest`) covers it.
 
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is

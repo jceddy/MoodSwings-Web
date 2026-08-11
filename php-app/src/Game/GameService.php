@@ -3393,6 +3393,36 @@ final class GameService
 
         $lastResult = null;
         for ($i = 0; $i < self::MAX_AUTOMATED_ACTIONS_PER_REQUEST; $i++) {
+            // Team Play's own turn_order/draw_recipient decision (see
+            // activeTeamDecision()) is checked FIRST, before even trying
+            // to load a currently-in-progress round below -- a bug caught
+            // live: draw_recipient specifically is created right after a
+            // round's own status flips to 'scored' (see
+            // finishTeamScoringAndAdvance()), and the NEXT round doesn't
+            // get created until this decision actually resolves
+            // (applyDrawRecipientDecision()), so there's a real window
+            // where NO round in this game has status 'in_progress' at all
+            // while a draw_recipient decision sits open. currentRound()
+            // below requires exactly that status and throws otherwise --
+            // catching that as "nothing left to drive" (the right read
+            // for a genuinely completed/abandoned game) used to also
+            // wrongly give up on an all-bot draw_recipient decision the
+            // instant it was created, since this loop never got far
+            // enough to try advanceBotTeamDecision() at all, deadlocking
+            // the game forever. advanceBotTeamDecision() itself needs no
+            // round (activeTeamDecision() queries game_team_decisions by
+            // game_id alone), so trying it unconditionally here is always
+            // safe: it's a no-op (returns null) whenever no team decision
+            // is actually open, which is always true anyway while a
+            // round's own turns are still being played (see "Open Team
+            // Play"/"Closed Team Play" in php-app/README.md for exactly
+            // when each decision type opens).
+            $teamDecisionResult = $this->advanceBotTeamDecision($gameId, $botGamePlayerIds);
+            if ($teamDecisionResult !== null) {
+                $lastResult = $teamDecisionResult;
+                continue;
+            }
+
             try {
                 $round = $this->currentRound($gameId);
             } catch (GameStateException) {
@@ -3416,25 +3446,17 @@ final class GameService
 
             $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
             if ($currentTurnGamePlayerId === null) {
-                // Frozen round -- Team Play's own turn_order/draw_recipient
-                // decision (any format's round; see activeTeamDecision()) or,
-                // Closed Team Play only, round 1's blind pregame card pass
-                // (see pendingInitialCardPass()) haven't resolved yet. Each
-                // helper drives one bot step of its own kind if one's
-                // possible and returns its result, or null if nothing
-                // automated is left to do there (waiting on a real player,
-                // or that particular frozen state doesn't apply here at
-                // all) -- in which case the other is tried before finally
-                // giving up on this round.
+                // Frozen round -- Closed Team Play only, round 1's blind
+                // pregame card pass (see pendingInitialCardPass()) hasn't
+                // resolved yet. (An open turn_order/draw_recipient team
+                // decision is already handled unconditionally at the top
+                // of this loop, before $round was even loaded -- reaching
+                // here with $currentTurnGamePlayerId still null and no
+                // resolvable team decision left just means the card pass,
+                // if any, is itself waiting on a real player.)
                 $cardPassResult = $this->advanceBotInitialCardPass($gameId, $round, $botGamePlayerIds);
                 if ($cardPassResult !== null) {
                     $lastResult = $cardPassResult;
-                    continue;
-                }
-
-                $teamDecisionResult = $this->advanceBotTeamDecision($gameId, $botGamePlayerIds);
-                if ($teamDecisionResult !== null) {
-                    $lastResult = $teamDecisionResult;
                     continue;
                 }
 
@@ -3686,7 +3708,25 @@ final class GameService
                 throw new GameStateException("Player {$gamePlayerId} has already resigned");
             }
 
-            $round = $this->currentRound($gameId);
+            try {
+                $round = $this->currentRound($gameId);
+            } catch (GameStateException $e) {
+                // Team Play's own draw_recipient window (see
+                // latestRound()'s own docblock) -- completeGameByResignation(),
+                // the only path a team-format resignation can ever take
+                // (isTeamFormat() below is unconditional for it), only
+                // needs $round['id'] to mark it abandoned, so falling back
+                // to the latest round regardless of status still ends the
+                // game correctly. Any OTHER format hitting this is a
+                // genuine "nothing to resign from" state (already screened
+                // by the game['status'] !== 'in_progress' check above, so
+                // this shouldn't be reachable there anyway) -- rethrown
+                // rather than silently guessed at.
+                if (!self::isTeamFormat($game['format'])) {
+                    throw $e;
+                }
+                $round = $this->latestRound($gameId);
+            }
             $this->assertNoPendingDecision((int) $round['id']);
 
             Connection::get()->prepare('UPDATE game_players SET resigned_at = NOW() WHERE id = :id')
@@ -3872,13 +3912,22 @@ final class GameService
      * currentRound() -- the one thing gating playMood()/pass() -- can
      * never find an 'in_progress' round for this game again.
      *
+     * $round can also be an already-'scored' round here -- Team Play's
+     * own draw_recipient window, via resignGame()'s own latestRound()
+     * fallback (see that method's docblock) -- in which case there's
+     * nothing in progress to abandon at all (round $round already
+     * completed normally, and no successor round exists yet); the UPDATE
+     * below's own `status = 'in_progress'` guard makes that a harmless
+     * no-op instead of overwriting a round that actually finished with a
+     * winner into a misleadingly 'abandoned' one.
+     *
      * @param int[] $activeGamePlayerIds non-resigned seats, seat_order ASC (unused for team format)
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id: int}
      */
     private function completeGameByResignation(int $gameId, array $game, array $round, int $resigningGamePlayerId, array $activeGamePlayerIds): array
     {
         Connection::get()->prepare(
-            "UPDATE game_rounds SET status = 'abandoned', current_turn_game_player_id = NULL, plays_remaining = 0, pending_play_grants = '[]' WHERE id = :round_id"
+            "UPDATE game_rounds SET status = 'abandoned', current_turn_game_player_id = NULL, plays_remaining = 0, pending_play_grants = '[]' WHERE id = :round_id AND status = 'in_progress'"
         )->execute(['round_id' => (int) $round['id']]);
 
         $winnerTeamId = null;
@@ -3890,6 +3939,18 @@ final class GameService
             // convention -- winner_team_id (set below) stays the
             // authoritative record either way (see totalWinsForTeam()).
             $winnerGamePlayerId = $this->teamMembers($gameId, $winnerTeamId)[0];
+
+            // Closes out a still-open draw_recipient/turn_order decision
+            // (see latestRound()'s own docblock for how resignation can
+            // reach this method with one still open) -- getState() shows
+            // state.team_decision purely off activeTeamDecision()'s own
+            // "any unresolved row for this game" query, with no game
+            // status check of its own, so leaving it open here would keep
+            // showing a "Waiting for ... to choose" panel forever on a
+            // board that's actually already 'completed'.
+            Connection::get()->prepare(
+                'UPDATE game_team_decisions SET resolved_at = NOW() WHERE game_id = :game_id AND resolved_at IS NULL'
+            )->execute(['game_id' => $gameId]);
         } else {
             $winnerGamePlayerId = $activeGamePlayerIds[0];
         }
@@ -10438,6 +10499,34 @@ final class GameService
 
         if ($round === false) {
             throw new GameStateException("Game {$gameId} has no round in progress");
+        }
+
+        return $round;
+    }
+
+    /**
+     * The most recent round regardless of status -- resignGame()'s own
+     * fallback for Team Play's draw_recipient window (see
+     * finishTeamScoringAndAdvance()): the round that just scored has no
+     * successor yet (applyDrawRecipientDecision() only creates it once
+     * that decision resolves), so currentRound() above (status =
+     * 'in_progress' only) throws there even though the game is very much
+     * still 'in_progress' and resignable -- a bug caught live: resigning
+     * during exactly this window used to silently fail (the request threw
+     * a 409 the frontend gave no visible feedback for) instead of ending
+     * the game. Same query buildGameState() itself already uses to find
+     * the round to render regardless of status, for the same reason.
+     */
+    private function latestRound(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT * FROM game_rounds WHERE game_id = :game_id ORDER BY round_number DESC LIMIT 1'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+        $round = $stmt->fetch();
+
+        if ($round === false) {
+            throw new GameStateException("Game {$gameId} has no rounds at all");
         }
 
         return $round;

@@ -7038,6 +7038,33 @@ final class GameServiceIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
+    /**
+     * Already-'scored', with NO next round created yet -- the real state a
+     * losing team's own 'draw_recipient' decision opens in (see
+     * GameService::finishTeamScoringAndAdvance()), unlike
+     * insertTeamGameRound() above (always 'in_progress', which is correct
+     * for 'turn_order' but not this). See resignGame()'s own
+     * latestRound()-fallback docblock for the bug this reproduces: a
+     * still-'in_progress'-only currentRound() lookup used to make BOTH
+     * advanceAutomatedTurns() and resignGame() wrongly treat this real,
+     * resolvable state as "nothing left to do here".
+     */
+    private function insertScoredTeamRound(int $gameId, int $roundNumber, int $firstGamePlayerId, int $winnerTeamId): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status, winner_team_id, scored_at)
+             VALUES (:game_id, :round_number, :first_player, NULL, 0, 'scored', :winner_team_id, NOW())"
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'round_number' => $roundNumber,
+            'first_player' => $firstGamePlayerId,
+            'winner_team_id' => $winnerTeamId,
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
     /** @param int[] $candidateGamePlayerIds */
     private function insertTeamDecision(int $gameId, int $roundId, int $teamId, string $decisionType, array $candidateGamePlayerIds): int
     {
@@ -11139,6 +11166,64 @@ final class GameServiceIntegrationTest extends TestCase
         // matching finishTeamScoringAndAdvance()'s own representative
         // convention -- see resignGame()'s docblock.
         self::assertSame($p3, (int) $game['winner_game_player_id']);
+    }
+
+    /**
+     * A bug caught live: a losing team's own 'draw_recipient' decision
+     * (see finishTeamScoringAndAdvance()) opens the instant its round's
+     * status flips to 'scored' -- the NEXT round doesn't get created until
+     * that decision resolves (applyDrawRecipientDecision()), so there's a
+     * real window where the game has NO round with status 'in_progress'
+     * at all. resignGame() used to call currentRound() (status =
+     * 'in_progress' only) unconditionally and let a genuine
+     * GameStateException escape uncaught, so resigning during exactly
+     * this window silently failed (a 409 the frontend gave no visible
+     * feedback for) instead of ending the game -- especially bad when, as
+     * reported live, both draw_recipient candidates were bots and the
+     * game was otherwise deadlocked with no other way out.
+     */
+    public function testResignDuringAnOpenDrawRecipientDecisionStillCompletesTheGame(): void
+    {
+        $u1 = $this->insertUser('team1p1');
+        $u2 = $this->insertUser('team1p2');
+        $u3 = $this->insertUser('team2p1');
+        $u4 = $this->insertUser('team2p2');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $this->insertTeamGamePlayer($gameId, $u2, 1, 0);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 1);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        // Team 0 already won round 1; team 1 has an open, unresolved
+        // draw_recipient decision, and round 1 is already 'scored' -- no
+        // round 2 exists yet.
+        $roundId = $this->insertScoredTeamRound($gameId, 1, $p1, winnerTeamId: 0);
+        $decisionId = $this->insertTeamDecision($gameId, $roundId, 1, 'draw_recipient', [$p3, $p4]);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame(1, (int) $game['winner_team_id']);
+
+        // The already-'scored' round 1 stays 'scored' -- it genuinely
+        // completed normally, so it must NOT be overwritten to
+        // 'abandoned' just because there was nothing in_progress left to
+        // abandon at resignation time.
+        $round1 = $this->pdo->query("SELECT status FROM game_rounds WHERE game_id = {$gameId} AND round_number = 1")->fetch();
+        self::assertSame('scored', $round1['status']);
+
+        // The still-open draw_recipient decision is closed out too, so a
+        // later GET /games/state on this now-completed game never shows a
+        // stale "Waiting for ... to choose" panel.
+        $decisionStmt = $this->pdo->prepare('SELECT resolved_at FROM game_team_decisions WHERE id = :id');
+        $decisionStmt->execute(['id' => $decisionId]);
+        self::assertNotNull($decisionStmt->fetch()['resolved_at']);
     }
 
     public function testResigningOnYourOwnTurnSkipsToTheNextActivePlayerInStandardFormat(): void
