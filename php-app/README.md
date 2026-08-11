@@ -4873,16 +4873,14 @@ still pending) until the human does. See "New game dialog" in
 
 A personal preference (`users.auto_pass_on_empty_hand`, migration
 `0096`, defaults to `1`/on -- unlike default selections mode's own
-default-off, this is a pure convenience with no real behavior change to
-opt into: an empty hand always meant "pass" anyway, since playing a
-card always requires one from hand and there's no other legal action a
-turn offers). Surfaced in the Settings dialog's own "Game defaults"
-section (`web-static/game/index.html`'s `#settings-dialog`, alongside
-default selections mode's own checkbox -- see "New game dialog"/
-"Settings dialog" in `web-static/README.md`) and written via `POST
-/user/auto-pass-on-empty-hand-preference` (see the API table above),
-the same write-only, no-separate-GET pattern `share_presence`/default
-selections mode already established.
+default-off, this is meant as a pure convenience with no real behavior
+change to opt into). Surfaced in the Settings dialog's own "Game
+defaults" section (`web-static/game/index.html`'s `#settings-dialog`,
+alongside default selections mode's own checkbox -- see "New game
+dialog"/"Settings dialog" in `web-static/README.md`) and written via
+`POST /user/auto-pass-on-empty-hand-preference` (see the API table
+above), the same write-only, no-separate-GET pattern `share_presence`/
+default selections mode already established.
 
 Rather than a client-side auto-click (which would need the browser tab
 open and JS running, and wouldn't help a player who's stepped away),
@@ -4892,26 +4890,48 @@ bots (#140) already use, extended with one more per-iteration check:
 alongside "is the current turn holder a bot" (drive its own
 play/pass), a fresh check for "is the current turn holder an opted-in
 player (`autoPassEmptyHandGamePlayerIds()`, `users.auto_pass_on_empty_hand
-= 1`) whose hand is currently empty" -- if so, `pass()` is called on
-their behalf and the loop continues, exactly like a bot's own pass
+= 1`) with NO LEGAL PLAY available at all" -- if so, `pass()` is called
+on their behalf and the loop continues, exactly like a bot's own pass
 would. Unifying both checks into the SAME loop (rather than two
 separate passes) is what lets a bot's turn and an opted-in human's
-empty-hand turn freely interleave within one call -- bot, then an
-empty-handed opted-in human, then another bot, and so on -- since a
-second, independent pass over the game could easily miss a later
-opportunity the first one just created. Renamed from the
+auto-passed turn freely interleave within one call -- bot, then an
+opted-in human with nothing to play, then another bot, and so on --
+since a second, independent pass over the game could easily miss a
+later opportunity the first one just created. Renamed from the
 bots-only `advanceBotTurns()`/`MAX_BOT_ACTIONS_PER_REQUEST` this method
 and constant used to be, now that they cover both mechanisms.
+
+**"No legal play" is not the same as "empty hand"** -- a real bug,
+caught live: this feature originally passed whenever
+`hand($playerId) === []`, on the assumption that an empty hand always
+means "pass" anyway, since playing a card always requires one from
+hand. That's false for a handful of cards -- Angst/Harmony/Grief/
+Melancholy can each grant (or, for Melancholy, permanently allow) a
+play sourced from the DISCARD pile instead (`BoardState::grantAllows()`'s
+own `'source' => 'discard'` check) -- so an opted-in player could still
+have a completely legal play available with an empty hand, and the old
+check silently passed it away regardless (worst case: right after
+choosing to decline a Duplicity repeat of Angst's own effect, the very
+grant that discard-sourced play came from). `candidatePlayCardIds()`
+(hand plus the whole shared discard pile) filtered through
+`MoodPlayService::isPlayable()` is the real check now -- the same one
+the bot branch just above it already used (which had the identical gap
+for a bot, now fixed the same way): `isPlayable()`'s own
+`hasUsablePlayGrant()` call still does the actual legality filtering
+(only a card an active grant genuinely covers, given its hand-vs-discard
+zone, ever comes back playable), so padding the candidate list with
+every discard-pile card is always safe -- one nothing currently grants
+just never passes the filter, regardless of which list it came from.
 
 Only ever applies to a fresh TURN (the play-or-pass decision), never to
 answering a pending decision -- every pending-decision field that could
 target a player at all already requires a non-empty hand/discard pile
 to even be created in the first place (e.g. Suspicion's own
 hand-emptiness check before offering its discard decision), so there's
-no "auto-pass out of a decision" case to cover. A forced-empty-hand
-check happens fresh each loop iteration (never cached alongside the
-opted-in id list itself), since whether a given player's hand is
-*currently* empty can change from one iteration to the next as earlier
+no "auto-pass out of a decision" case to cover. The legal-play check
+happens fresh each loop iteration (never cached alongside the opted-in
+id list itself), since whether a given player currently has anything
+playable can change from one iteration to the next as earlier
 iterations play out.
 
 ### Duel: separate per-player decks
