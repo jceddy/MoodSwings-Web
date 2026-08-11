@@ -1035,6 +1035,30 @@ too, proportional to the smaller card width.
     views is ever visible at once) — so a game another player just
     created (or one you created yourself from a second tab) shows up on
     its own, without needing a hard reload.
+  - **Loading overlay** (`#loading-overlay` in `game/index.html`,
+    `showLoadingOverlay()`/`hideLoadingOverlay()` in `game.js`): a fixed,
+    full-viewport spinner + "Loading…" shown for the span of a fresh
+    view's own FIRST data fetch -- `showLobby()` (`GET /games`),
+    `showBoard()`/`showSpectatorBoard()` (`GET /games/state`/
+    `GET /games/spectate/state`), and `showReplayBoard()`
+    (`GET /games/log` then the first `GET /games/replay/state`) each wrap
+    their own initial fetch in `showLoadingOverlay()`/`hideLoadingOverlay()`
+    (the latter via `.finally()`, so it hides whether that fetch succeeds
+    or fails, leaving `boardError`/an empty list to explain what happened
+    either way). Deliberately NOT shown for the routine 4-second poll
+    tick or for an in-game action (play/pass/resign/respond to a
+    decision, proposing/confirming a team decision, etc.) -- those
+    already have their own feedback (the board simply re-rendering, or
+    `boardError` on failure), and re-showing a full-screen overlay on
+    every single one would be more distracting than useful. A sibling of
+    `#game-main` in the DOM (not nested inside it) so it can be toggled
+    independently of whichever view -- lobby or board -- happens to be
+    underneath it; `#loading-overlay[hidden] { display: none; }` in
+    `style.css` is required alongside its own `display: flex` (an author
+    rule always wins over the browser's own default
+    `[hidden] { display: none }` UA-stylesheet rule regardless of
+    selector specificity -- the exact same fix `.in-play-zone[hidden]`
+    already needed, see that rule's own comment).
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
     deck count, and your hand (via `GET /games/state`). For a
     `custom_duel` game still `waiting` to start, `renderDuelDeckSubmission()`

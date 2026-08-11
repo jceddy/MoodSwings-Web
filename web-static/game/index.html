@@ -26,6 +26,20 @@
     <link rel="stylesheet" href="../css/style.css">
 </head>
 <body class="game-page">
+    <!-- Loading overlay: shown while the initial lobby/board load (a
+         fresh view -- switching into the lobby, opening a game, spectating,
+         or watching a replay) is in flight, so that moment doesn't look
+         like a blank/broken page while the first GET /games/state (or
+         equivalent) request is still in the air. Deliberately NOT shown
+         for every routine 4-second poll or in-game action (play/pass/etc)
+         -- see showLoadingOverlay()/hideLoadingOverlay() in game.js. A
+         sibling of #game-main, not nested inside it, so it can be toggled
+         independently of whichever view is currently shown/hidden
+         underneath it. -->
+    <div id="loading-overlay" role="status" aria-live="polite" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Loading&hellip;</p>
+    </div>
     <main id="game-main" hidden>
         <h1>MoodSwings-Web</h1>
         <p>Welcome, <span id="username"></span>.</p>
