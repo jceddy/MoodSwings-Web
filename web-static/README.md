@@ -2236,7 +2236,14 @@ too, proportional to the smaller card width.
     can resolve *after* that action's own fresher render and silently
     overwrite it with stale data (e.g. showing this indicator again after
     the game started with an opponent going first, until the page was
-    reloaded).
+    reloaded). The Pass button itself disables the instant it's clicked
+    (mirrors the Play button's own identical "Playing..." guard above --
+    same slow-response-shouldn't-read-as-a-missed-click reasoning), and on
+    a server-side rejection re-enables it so the click can be retried; on
+    success it's left disabled for `refreshBoard()`'s own re-render to
+    settle -- `renderBoard()` recomputes `pass-button.disabled` from
+    `canAct` on every poll regardless, so there's nothing to explicitly
+    re-enable there once the turn has actually changed hands.
   - A "Resign game" button (`#resign-button`) sits right after Pass --
     unlike Pass, it isn't turn-gated (you can resign any time it's
     `in_progress`, not just on your own turn), so it's only ever hidden

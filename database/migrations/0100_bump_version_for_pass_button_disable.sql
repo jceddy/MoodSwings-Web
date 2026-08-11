@@ -1,0 +1,11 @@
+-- No schema change: the Pass button (#pass-button) now disables itself
+-- the instant it's clicked, the same "slow response can't read as a
+-- missed click" guard the Play button's own click handler already has
+-- (see web-static/README.md) -- without it, a slow connection left the
+-- button clickable for the whole round-trip, so an impatient second
+-- click could submit two pass requests in a row. Re-enabled on a
+-- server-side rejection so the click can be retried; on success,
+-- renderBoard()'s own `pass-button.disabled = !canAct` recomputes it
+-- correctly once refreshBoard() re-renders. Client-side only
+-- (web-static/js/game.js's #pass-button click handler).
+UPDATE schema_version SET version = '1.16.1' WHERE id = 1;
