@@ -215,6 +215,39 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * A round that has already scored (status 'scored', winner_team_id
+     * set) with NO next round created yet -- exactly the real state a
+     * losing team's own 'draw_recipient' decision opens in (see
+     * GameService::finishTeamScoringAndAdvance()), unlike
+     * insertFrozenTeamRound() above (used for 'turn_order', which always
+     * opens on an already-'in_progress' round). Deliberately a SEPARATE
+     * helper rather than a parameter on insertFrozenTeamRound() -- a bug
+     * caught live: advanceAutomatedTurns() used to unconditionally call
+     * currentRound() (status = 'in_progress' only) before ever trying to
+     * resolve a team decision at all, so every 'draw_recipient' test that
+     * (like insertFrozenTeamRound() always has) inserted its round as
+     * 'in_progress' was accidentally passing for a reason that could never
+     * happen in a real game, masking the actual deadlock.
+     *
+     * @return int game_rounds.id
+     */
+    private function insertScoredTeamRound(int $gameId, int $roundNumber, int $firstPlayerId, int $winnerTeamId): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status, winner_team_id, scored_at)
+             VALUES (:game_id, :round_number, :first_player, NULL, 0, 'scored', :winner_team_id, NOW())"
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'round_number' => $roundNumber,
+            'first_player' => $firstPlayerId,
+            'winner_team_id' => $winnerTeamId,
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    /**
      * @param int[] $candidateGamePlayerIds
      * @return int game_team_decisions.id
      */
@@ -773,6 +806,58 @@ final class BotGameplayIntegrationTest extends TestCase
         // open rather than also auto-resolved.
         $nextDecision = $this->fetchOpenTeamDecision($gameId);
         self::assertNotFalse($nextDecision);
+        self::assertSame(0, (int) $nextDecision['team_id']);
+    }
+
+    /**
+     * A bug caught live: the losing team's own 'draw_recipient' decision
+     * (see finishTeamScoringAndAdvance()) opens right after its round's
+     * own status flips to 'scored' -- the NEXT round doesn't get created
+     * until the decision itself resolves (applyDrawRecipientDecision()),
+     * so there's a real window where this game has NO round with status
+     * 'in_progress' at all. advanceAutomatedTurns() used to call
+     * currentRound() (status = 'in_progress' only) before ever trying to
+     * resolve any team decision, so it threw, was caught, and the whole
+     * loop gave up immediately -- deadlocking forever when, like here,
+     * both draw_recipient candidates are bots (no human anywhere in the
+     * game had any further action left to trigger this method again
+     * either). insertScoredTeamRound() reproduces the real timing (unlike
+     * insertFrozenTeamRound(), always 'in_progress', used by every OTHER
+     * team-decision test above).
+     */
+    public function testAdvanceBotTurnsResolvesADrawRecipientDecisionBetweenTwoBotTeammatesAfterTheirRoundHasAlreadyScored(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $bot1UserId = $this->insertBotUser('bot1');
+        $bot2UserId = $this->insertBotUser('bot2');
+        $gameId = $this->insertGame('closed_team', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0, teamId: 0);
+        $this->insertGamePlayer($gameId, $this->insertUser('human2'), 1, teamId: 0);
+        $bot1PlayerId = $this->insertGamePlayer($gameId, $bot1UserId, 2, teamId: 1);
+        $bot2PlayerId = $this->insertGamePlayer($gameId, $bot2UserId, 3, teamId: 1);
+
+        // Team 0 already won round 1; team 1 (both bots) has an open,
+        // unresolved draw_recipient decision, and round 1 is already
+        // 'scored' -- no round 2 exists yet.
+        $roundId = $this->insertScoredTeamRound($gameId, 1, $p1, winnerTeamId: 0);
+        $this->insertGameCard($gameId, 1, 'deck'); // shared deck -- the recipient's own draw
+        $decisionId = $this->insertTeamDecision($gameId, $roundId, 1, 'draw_recipient', [$bot1PlayerId, $bot2PlayerId]);
+
+        $result = $this->games->advanceAutomatedTurns($gameId);
+
+        self::assertNotNull($result);
+        self::assertNotNull($this->fetchTeamDecisionById($decisionId)['resolved_at']);
+
+        // applyDrawRecipientDecision() creates round 2 (in_progress) and
+        // team 0's own turn_order decision (both real humans -- correctly
+        // left open rather than also auto-resolved) the instant the draw
+        // recipient decision resolves.
+        $round = $this->fetchRound($gameId);
+        self::assertNotFalse($round);
+        self::assertSame(2, (int) $round['round_number']);
+        $nextDecision = $this->fetchOpenTeamDecision($gameId);
+        self::assertNotFalse($nextDecision);
+        self::assertSame('turn_order', $nextDecision['decision_type']);
         self::assertSame(0, (int) $nextDecision['team_id']);
     }
 
