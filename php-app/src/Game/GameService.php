@@ -624,8 +624,17 @@ final class GameService
         if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true)) {
             throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
         }
-        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true) && $format !== 'draft') {
-            throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format");
+        // Closed Team Play (issue #362) may also draft: each of the 4
+        // players drafts and builds their own deck completely
+        // independently, exactly like a normal individual draft --
+        // 'closed_team' only changes seating/scoring, applied afterward,
+        // the same way it already keeps a pre-built deck_type's own decks
+        // private between teammates today. Open Team Play ('team') isn't
+        // included yet -- its own picks pool per team rather than staying
+        // individual, which the deck-BUILDING step below doesn't support
+        // yet (see submitDraftDeck()).
+        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true) && !in_array($format, ['draft', 'closed_team'], true)) {
+            throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, or Closed Team Play");
         }
 
         if ($deckType === 'custom') {
@@ -1286,8 +1295,13 @@ final class GameService
             // therefore legitimately end up in both players' pools at
             // once; a card's identity within the game is its own
             // game_cards.id, not its catalog card_id -- see
-            // BoardState::$catalogCardIdFor.
-            if (self::isDuelShapedFormat($game['format'])) {
+            // BoardState::$catalogCardIdFor. A drafted deck_type (issue
+            // #362) gets the same separate-deck treatment under 'team'/
+            // 'closed_team' too, since it's the one deck_type those
+            // formats support that ISN'T one shared/identical pool --
+            // see BoardStateRepository::load()'s identical check.
+            if (self::isDuelShapedFormat($game['format'])
+                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true)) {
                 foreach ($playerIds as $playerId) {
                     $playerCardIds = match ($game['deck_type']) {
                         'custom_duel' => $customDuelDeckCardIds[$playerId],
@@ -2668,8 +2682,9 @@ final class GameService
             throw new GameStateException("Game {$gameId} is not a Winston Draft game");
         }
         $draftMatchId = (int) $game['draft_match_id'];
+        $format = $game['format'];
 
-        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $action): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $action, $format): array {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'drafting') {
                 throw new GameStateException('This match is not currently drafting');
@@ -2757,7 +2772,7 @@ final class GameService
 
             if ($draftCompleted) {
                 $pdo->prepare('DELETE FROM draft_winston_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
-                $this->finalizeWinstonDraft($gameId, $draftMatchId, $userIds);
+                $this->finalizeWinstonDraft($gameId, $draftMatchId, $userIds, $format);
 
                 return ['action_completed' => $action, 'turn_advanced' => false, 'draft_completed' => true];
             }
@@ -2828,7 +2843,7 @@ final class GameService
      *
      * @param int[] $userIds the match's user ids (any count 2-4)
      */
-    private function finalizeWinstonDraft(int $gameId, int $draftMatchId, array $userIds): void
+    private function finalizeWinstonDraft(int $gameId, int $draftMatchId, array $userIds, string $format): void
     {
         $pdo = Connection::get();
 
@@ -2844,6 +2859,18 @@ final class GameService
             fn (int $count): bool => $count < self::WINSTON_MIN_DECK_SIZE
         ));
         $survivingUserIds = array_values(array_diff($userIds, $shortUserIds));
+
+        // A team draft (issue #362) never drops a short player and
+        // continues shorthanded, even with 2+ survivors -- a dropped seat
+        // leaves the OTHER team's own 2v2 broken regardless of how many
+        // players remain in total. Matches resignFromDraftMatch()'s own
+        // identical team-format carve-out (see its docblock) for exactly
+        // the same reason.
+        if ($shortUserIds !== [] && self::isTeamFormat($format)) {
+            $this->abandonDraftMatch($gameId, $draftMatchId);
+
+            return;
+        }
 
         if ($survivingUserIds === []) {
             // Everyone came up short -- no one left to play at all.
@@ -3600,7 +3627,7 @@ final class GameService
                 && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true)
                 && $game['draft_match_id'] !== null
             ) {
-                return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id']);
+                return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id'], $game['format']);
             }
 
             if ($game['status'] !== 'in_progress') {
@@ -3673,6 +3700,16 @@ final class GameService
      *   remaining (every other player had already resigned first)
      *   abandons the match the same way the 'drafting' branch above does.
      *
+     * A team draft (issue #362) skips all of the above and always
+     * abandons outright, regardless of which of the two phases it's in --
+     * a dropped seat leaves the OTHER team's own 2v2 broken no matter how
+     * many players remain in total, so "survivors continue" (this
+     * function's own normal 'deck_building' behavior, and
+     * finalizeWinstonDraft()'s identical one) never applies; matches
+     * resignGame()'s own identical "team games always complete outright,
+     * never continue shorthanded" rule for an already-`in_progress` game
+     * (see completeGameByResignation()'s own call site).
+     *
      * $gameId is deliberately used as-is (not hardcoded to
      * match_game_number=1 the way finalizeWinstonDraft()'s own two
      * inline callers of this pattern are) -- a resignation between games
@@ -3683,7 +3720,7 @@ final class GameService
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
-    private function resignFromDraftMatch(int $gameId, int $gamePlayerId, int $draftMatchId): array
+    private function resignFromDraftMatch(int $gameId, int $gamePlayerId, int $draftMatchId, string $format): array
     {
         $match = $this->fetchDraftMatch($draftMatchId);
         if (!in_array($match['status'], ['drafting', 'deck_building'], true)) {
@@ -3710,7 +3747,7 @@ final class GameService
             ->execute(['id' => $gamePlayerId]);
         $this->logEvent($gameId, null, $gamePlayerId, 'draft_resigned', null, []);
 
-        if ($match['status'] === 'drafting') {
+        if ($match['status'] === 'drafting' || self::isTeamFormat($format)) {
             $this->abandonDraftMatch($gameId, $draftMatchId);
 
             return ['round_scored' => false, 'game_completed' => true];
@@ -5528,6 +5565,21 @@ final class GameService
             );
             $completeGame->execute(['winner' => $winnerRepresentative, 'winner_team' => $winningTeamId, 'game_id' => $gameId]);
             $this->recordGameCompletionStats($gameId, $winnerRepresentative, $winningTeamId, $requestingGamePlayerId);
+
+            // A no-op for every non-draft deck_type (games.draft_match_id
+            // is only ever set for one of the three draft-based ones) --
+            // see advanceDraftMatch()'s own docblock. A team draft (issue
+            // #362) is always best-of-one -- draftGamesToWin() returns 1
+            // once more than 2 players share a match, and a team match is
+            // always exactly 4 -- so this always resolves the whole match
+            // on THIS call; advanceDraftMatch()'s own "create the next
+            // game" branch (which doesn't thread team_id, see its own
+            // INSERT) is consequently unreachable here, not merely
+            // untested. Credits the winning TEAM's own representative
+            // game_player_id's user, the same stand-in convention
+            // winner_game_player_id already uses for every other
+            // team-format completion.
+            $this->advanceDraftMatch($gameId, $winnerRepresentative);
 
             return ['round_scored' => true, 'game_completed' => true, 'winner_game_player_id' => $winnerRepresentative];
         }

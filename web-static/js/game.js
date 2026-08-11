@@ -1584,11 +1584,18 @@
     // since it overrides every other rule below. Otherwise: 'custom'
     // decklists aren't supported for duel games, 'custom_duel' (each
     // player supplying their own decklist against rules the creator
-    // defines) only makes sense FOR a duel, and
-    // 'quick_draft'/'winston_draft'/'grid_draft' only make sense for
-    // 'draft'. Either team format similarly rules out 'power' -- its 15
-    // cards fall short of the 45-card minimum both team formats share
-    // (see php-app/README.md).
+    // defines) only makes sense FOR a duel, and 'quick_draft'/
+    // 'winston_draft'/'grid_draft' only make sense for 'draft' or
+    // 'closed_team' (issue #362 -- each of the 4 players drafts and
+    // builds their own deck completely independently there, exactly like
+    // a normal individual draft; 'team' isn't included yet -- its own
+    // picks pool per team rather than staying individual, which the
+    // deck-building step doesn't support yet). Either team format
+    // similarly rules out 'power' -- its 15 cards fall short of the
+    // 45-card minimum both team formats share for every OTHER deck_type
+    // (see php-app/README.md); a drafted deck never hits that minimum in
+    // the first place, so the three draft deck types are deliberately
+    // exempt from this same rule below.
     function isDeckTypeAvailableForFormat(deckType, format) {
         if (format === 'draft') {
             return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft';
@@ -1596,9 +1603,9 @@
         switch (deckType) {
             case 'custom': return format !== 'duel';
             case 'custom_duel': return format === 'duel';
-            case 'quick_draft': return false;
-            case 'winston_draft': return false;
-            case 'grid_draft': return false;
+            case 'quick_draft': return format === 'closed_team';
+            case 'winston_draft': return format === 'closed_team';
+            case 'grid_draft': return format === 'closed_team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }

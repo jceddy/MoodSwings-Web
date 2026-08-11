@@ -1,0 +1,33 @@
+-- No schema change: extends drafting (issue #362) to Closed Team Play --
+-- createGame() now accepts a quick_draft/winston_draft/grid_draft
+-- deck_type under format 'closed_team' the same way it already does
+-- under 'draft', letting a 4-player team game start from a live draft
+-- instead of only a pre-built/shared-decklist deck type. Each of the 4
+-- players drafts and builds their own deck completely independently,
+-- exactly like a normal individual draft -- the team format only ever
+-- applies afterward (seating/scoring), the same way it already keeps a
+-- pre-built deck_type's own decks private between teammates today.
+--
+-- Needed two small fixes rather than new machinery:
+-- BoardStateRepository::load()'s own $hasSeparateDecks check (and
+-- GameService::startGame()'s identical dealing-branch check) now also
+-- treats a drafted deck_type as separate-decks regardless of format,
+-- since unlike every other deck_type those two team formats support, a
+-- drafted deck is genuinely different content per player, not one
+-- shared/identical pool everyone draws from together;
+-- finishTeamScoringAndAdvance() now also calls advanceDraftMatch() on
+-- game completion (the non-team completion path already did), so a
+-- team draft match (always best-of-one -- draftGamesToWin() returns 1
+-- once more than 2 players share a match) actually reaches
+-- draft_matches.status = 'completed'. A resignation during either
+-- phase of a Closed Team Play draft, and Winston Draft's own
+-- drop-a-short-player finalization, now always abandon the whole match
+-- outright rather than letting 2+ survivors continue as a smaller
+-- match -- a dropped seat leaves the OTHER team's own 2v2 broken no
+-- matter how many players remain in total.
+--
+-- Open Team Play isn't included yet -- its own picks would need to
+-- pool per team rather than stay individual, which needs a materially
+-- different, not-yet-built deck-building step. See "Closed Team Play"
+-- in php-app/README.md for the full writeup.
+UPDATE schema_version SET version = '1.19.0' WHERE id = 1;

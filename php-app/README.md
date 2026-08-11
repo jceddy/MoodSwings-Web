@@ -1646,28 +1646,33 @@ one of these:
   programmer error, not a user-facing one), since there's no single "the"
   deck for a `custom_duel` game the way there is for every other type;
   `startGame()` reads each player's own submitted deck directly instead.
-- `quick_draft` -- for `format: 'draft'` games only (see "Draft format"
-  below): both players draft their own 16-card pool live from a shared
-  card pool, then play a best-of-three match built from it (see "Quick
-  Draft" below) -- like `custom_duel`,
-  `deckCardIdsFor()` explicitly refuses to build this one (a
-  `\LogicException`), since each player's own deck lives on
+- `quick_draft` -- for `format: 'draft'` games (see "Draft format"
+  below), or `'closed_team'` (issue #362 -- each of the 4 players drafts
+  and builds their own deck completely independently, exactly like a
+  normal individual draft; see "Closed Team Play" below): both/every
+  player drafts their own 16-card pool live from a shared card pool, then
+  plays a best-of-three match built from it (2-player only -- a 3-4
+  player match, including every Closed Team Play draft, is always
+  best-of-one instead, see `draftGamesToWin()`) (see "Quick Draft"
+  below) -- like
+  `custom_duel`, `deckCardIdsFor()` explicitly refuses to build this one
+  (a `\LogicException`), since each player's own deck lives on
   `draft_match_players.deck_card_ids`, not anywhere this method's `$game`
   argument alone can resolve; `startGame()` reads it directly via
   `requireDraftDecksSubmitted()` instead.
-- `winston_draft` -- also `format: 'draft'` only: an alternating,
-  single-active-player pile draft (see "Winston Draft" below) rather than
-  Quick Draft's simultaneous pack-passing, but the same story otherwise --
-  `deckCardIdsFor()` refuses to build this one too, since each player's
-  own deck lives on `draft_match_players.deck_card_ids` just as it does for
-  `quick_draft`; `startGame()` reads it via the same
-  `requireDraftDecksSubmitted()`.
-- `grid_draft` -- also `format: 'draft'` only: 2-4 players (issue #189)
-  each draft from a shared pool (54/72/96 cards for 2/3/4 players) by
-  taking a whole row or column of a grid (3x3 for 2-3 players, 4x4 for
-  exactly 4), dealt fresh over 6 rounds (4 for exactly 4 players, so each
-  player picks first in exactly 1 round) (see "Grid Draft" below) -- same
-  story again as `quick_draft`/
+- `winston_draft` -- same `format: 'draft'`/`'closed_team'` support as
+  `quick_draft` above: an alternating, single-active-player pile draft
+  (see "Winston Draft" below) rather than Quick Draft's simultaneous
+  pack-passing, but the same story otherwise -- `deckCardIdsFor()`
+  refuses to build this one too, since each player's own deck lives on
+  `draft_match_players.deck_card_ids` just as it does for `quick_draft`;
+  `startGame()` reads it via the same `requireDraftDecksSubmitted()`.
+- `grid_draft` -- same `format: 'draft'`/`'closed_team'` support again:
+  2-4 players (issue #189) each draft from a shared pool (54/72/96 cards
+  for 2/3/4 players) by taking a whole row or column of a grid (3x3 for
+  2-3 players, 4x4 for exactly 4), dealt fresh over 6 rounds (4 for
+  exactly 4 players, so each player picks first in exactly 1 round) (see
+  "Grid Draft" below) -- same story again as `quick_draft`/
   `winston_draft`: `deckCardIdsFor()` refuses to build this one too, and
   `startGame()` reads it via the same `requireDraftDecksSubmitted()`.
 - `one_of_each` -- the full 133-card pool, one copy of every printed card,
@@ -1855,13 +1860,19 @@ drafting process rather than an already-built pool/decklist, as opposed to
 `quick_draft` (below) was the first such deck_type; `winston_draft` and
 `grid_draft` (also below) followed, reusing as much of its own
 infrastructure as possible -- `createGame()` rejects a `'draft'` game with
-any other deck_type, and rejects `deck_type: 'quick_draft'`/`'winston_draft'`/
-`'grid_draft'` under any format other than `'draft'`. `quick_draft` started
-out as a `duel` deck_type during issue #88's own development, then was
-split into its own format once a second draft-style deck type was planned --
-none of which are expected to ever make sense under `'duel'` itself, whose
-own deck_type roster (`structure`/`power`/`jceddys_75`/`custom_duel`/
-`one_of_each`) is expected to stay exactly what it is.
+any other deck_type. `quick_draft`/`winston_draft`/`grid_draft` themselves
+are rejected under any format other than `'draft'` OR `'closed_team'`
+(issue #362 -- see "Closed Team Play" above) -- the latter is
+"duel-shaped" only in the separate-per-player-decks sense
+(`BoardStateRepository::load()`'s own `$hasSeparateDecks` check treats a
+drafted `deck_type` this way regardless of format), not in `format`
+itself, which stays `'closed_team'` throughout drafting, deck-building,
+and play. `quick_draft` started out as a `duel` deck_type during issue
+#88's own development, then was split into its own format once a second
+draft-style deck type was planned -- none of which are expected to ever
+make sense under `'duel'` itself, whose own deck_type roster
+(`structure`/`power`/`jceddys_75`/`custom_duel`/`one_of_each`) is
+expected to stay exactly what it is.
 
 ### Saved decklists
 
@@ -2785,7 +2796,7 @@ the same 4-player 2v2 structure, sharing most of its schema
 table) and every card-effect exclusion (`BoardState::isTeammate()` is
 format-agnostic -- it only ever compares `team_id`, never seat adjacency,
 so all 9 teammate-excluding cards and the Chivalry/Triumph fix already
-work correctly here with zero changes). It differs in four concrete ways:
+work correctly here with zero changes). It differs in five concrete ways:
 
 1. **Seating** -- partners sit ACROSS the table (`seatOrderForClosedTeamGame()`:
    creator seat 0, one opponent seat 1, the chosen partner seat 2, the
@@ -2835,6 +2846,47 @@ work correctly here with zero changes). It differs in four concrete ways:
    partner is without exposing their hand). The `teammate-hand-section`
    in `web-static/game/index.html` simply never gets data to render for
    `closed_team`, so no extra guard was needed there.
+5. **Drafting (issue #362)** -- `closed_team` is the only team format
+   `createGame()` currently accepts a `quick_draft`/`winston_draft`/
+   `grid_draft` deck_type for. Each of the 4 seated players drafts and
+   builds their own deck completely independently, exactly like a normal
+   individual draft -- the team format only ever applies AFTERWARD
+   (seating/scoring), the same way it already keeps a pre-built
+   deck_type's own decks private between teammates today. This needed
+   two small fixes rather than new machinery: `createGame()`'s own
+   format<->deck_type validation (previously `'draft'`-only for the three
+   draft deck types) now also allows `'closed_team'`, and
+   `BoardStateRepository::load()`'s `$hasSeparateDecks` check (previously
+   purely `format`-based -- `'duel'`/`'draft'` only) now ALSO treats a
+   drafted `deck_type` as separate-decks regardless of format, since
+   unlike every other `deck_type` these two team formats support, a
+   drafted deck is genuinely different content per player, not one
+   shared/identical pool everyone draws from together (`startGame()`'s
+   own dealing branch got the identical fix). `MIN_TEAM_DECK_SIZE`
+   (45 cards) is never checked against a draft deck_type at all -- it
+   only ever rejects the fixed `'power'` deck_type by name, so a drafted
+   deck's much smaller size (12-16 cards, `WINSTON_MIN_DECK_SIZE` etc.)
+   was never in tension with it. A resignation during either phase of a
+   Closed Team Play draft always abandons the whole match outright
+   (`resignFromDraftMatch()`'s own team-format branch), rather than
+   letting 2+ survivors continue as a smaller match the way an
+   individual draft's identical resignation already does (or the way
+   Winston Draft's own drop-a-short-player finalization does,
+   `finalizeWinstonDraft()`'s own team-format branch) -- a dropped seat
+   leaves the OTHER team's own 2v2 broken no matter how many players
+   remain in total, matching `resignGame()`'s own "team games always
+   complete outright, never continue shorthanded" rule for an
+   already-`in_progress` game. `finishTeamScoringAndAdvance()`'s own
+   game-completion branch now also calls `advanceDraftMatch()` (the
+   non-team completion path already did) -- always resolving the whole
+   match on that one call, since a team draft match is always
+   best-of-one (`draftGamesToWin()` returns 1 once more than 2 players
+   share a match, and a team match is always exactly 4). Open Team Play
+   ('team') isn't included yet -- its own picks would need to pool per
+   team rather than stay individual, which needs a materially different,
+   not-yet-built deck-building step (see the New Game dialog's own
+   `isDeckTypeAvailableForFormat()` in `web-static/js/game.js` for the
+   exact same distinction client-side).
 
 Everything else -- team-aggregated scoring (`finishTeamScoringAndAdvance()`,
 already `team_id`-only and reused verbatim once its own format check
@@ -4829,12 +4881,20 @@ value is cosmetic, just echoed back and displayed as a label) -- both are
 "duel-shaped": each of the game's exactly-2 players draws from -- and
 bottoms cards onto -- their *own* deck rather than a single shared one.
 `GameService::isDuelShapedFormat(string $format): bool` (`$format === 'duel'
-|| $format === 'draft'`) is the single helper both `createGame()` (the
-exactly-2-players check, `GameStateException` "A {format} game must have
-exactly 2 players") and `startGame()` (the per-player-deck-dealing branch)
-consult, so the two formats can never drift out of sync with each other.
-`BoardStateRepository::load()`'s own `$hasSeparateDecks` check is the same
-condition again, one level down, for exactly the same reason.
+|| $format === 'draft'`) is the exactly-2-players check `createGame()`
+consults (`GameStateException` "A {format} game must have exactly 2
+players") -- 'closed_team' drafting (issue #362) deliberately does NOT
+go through this helper, since its own player count is governed by
+`isTeamFormat()`'s separate "always exactly 4" rule instead, not this
+one. `startGame()`'s own per-player-deck-dealing branch, and
+`BoardStateRepository::load()`'s own `$hasSeparateDecks` check one level
+down, both use a WIDER condition instead --
+`isDuelShapedFormat($format) || in_array($deckType, ['quick_draft',
+'winston_draft', 'grid_draft'])` -- since separate-decks-or-not is a
+`deck_type` question as much as a `format` one once a drafted deck_type
+can be seated under 'closed_team' too (a drafted deck is genuinely
+different content per player, not the one shared/identical pool every
+OTHER deck_type those two team formats support gives everyone).
 
 - `BoardState` generalizes its single flat deck into `array<int, int[]>
   $decks` keyed by a "deck key": either `BoardState::SHARED_DECK_KEY` (the
