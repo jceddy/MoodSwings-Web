@@ -4464,8 +4464,8 @@ populate its own bot picker -- see "New game dialog" in
 `web-static/README.md`.
 
 **Scope.** `GameService::botsSupportedFor(string $format, string
-$deckType): bool` -- Traditional (`standard`) or Duel only, and only for
-a deck_type that needs no PER-PLAYER setup of its own: `structure`,
+$deckType): bool` -- every format except `draft`, and only for a
+deck_type that needs no PER-PLAYER setup of its own: `structure`,
 `power`, `jceddys_75`, `one_of_each`, and `custom`
 (`BOT_SUPPORTED_DECK_TYPES`), plus one special case: Duel with
 `custom_duel` (see "Practice bots in Duel with a custom decklist"
@@ -4480,18 +4480,12 @@ from the human creator's own `decklist_text`/`saved_decklist_id` before
 any seat -- bot or human -- is ever dealt from it; see
 `deckCardIdsFor()`'s `'custom'` branch) rather than a per-seat one, so a
 bot needs to do nothing whatsoever to "have" one -- exactly like
-`structure`/`power`/`jceddys_75`/`one_of_each`. Every OTHER deck_type
-stays excluded because it would need the bot to do something this
-feature doesn't implement -- make its own draft picks
-(`quick_draft`/`winston_draft`/`grid_draft`, which also implies
-`format: 'draft'`) or submit its own separate decklist
-(`custom_duel`'s per-seat submission, see above). Team formats
-(`team`/`closed_team`) are excluded for a different reason: a bot would
-additionally have to answer Open/Closed Team Play's own turn-order
-propose/confirm decisions (`POST /games/team-decision`) and, for Closed
-Team Play, its blind pregame card pass (`POST /games/initial-pass`) -- a
-materially bigger decision surface than "play a card, answer a pending
-decision" that this feature doesn't cover yet. `createGame()` rejects
+`structure`/`power`/`jceddys_75`/`one_of_each`. `draft` stays excluded
+because it would need a bot to make its own draft picks
+(`quick_draft`/`winston_draft`/`grid_draft`), which this feature doesn't
+implement. `custom_duel` can never combine with `team`/`closed_team` at
+all (it's Duel-only, checked elsewhere), so its own special case above
+needs no team-format branch of its own. `createGame()` rejects
 (`GameStateException`) any attempt to seat a bot outside this scope,
 checked once, up front, via `botUserIdAmong(array $userIds): ?int` (a
 single `is_bot` lookup against every id in `$userIds`, returning the
@@ -4499,6 +4493,63 @@ bot's own id rather than just a bool -- see "Practice bots in Duel with
 a custom decklist" below for why the id itself is needed) -- before any
 of the deck-type-specific validation/building below it even runs, so a
 doomed request never gets as far as e.g. parsing a decklist.
+
+**Team Play (issue #360).** Open/Closed Team Play were originally
+excluded because a bot would additionally have to answer those formats'
+own turn-order/draw-recipient propose/confirm decision (`POST
+/games/team-decision`) and, for Closed Team Play only, its blind
+pregame card pass (`POST /games/initial-pass`) -- neither of which
+`advanceAutomatedTurns()` (see "Driving a bot's turn" below) knew how
+to drive. Both are now handled the same "legal, not strategic" way as
+everything else here, via two new `GameService` helpers called from
+`advanceAutomatedTurns()`'s own frozen-round branch (a null
+`current_turn_game_player_id`, previously always just a hard stop):
+
+- `advanceBotTeamDecision(int $gameId, array $botGamePlayerIds): ?array`
+  -- looks up the game's own active `game_team_decisions` row (`phase`
+  `'propose'` or `'confirm'`) and acts as whichever candidate is a bot,
+  if either is: in `'propose'`, calls
+  `BotPlayerService::chooseTeamDecisionProposal(array
+  $candidateGamePlayerIds): int` (always `$candidateGamePlayerIds[0]` --
+  deliberately arbitrary and deterministic, regardless of which of the
+  two members is actually proposing or whether either is itself a bot)
+  and `proposeTeamDecision()`; in `'confirm'`, always approves (never
+  rejects) via `confirmTeamDecision()` if the seat that needs to confirm
+  (never the proposer -- `confirmTeamDecision()` itself rejects that) is
+  a bot. A human confirmer who rejects a bot's proposal just sees the
+  exact same one proposed again next time, since the bot's own policy
+  never varies. Returns `null` (nothing to do) if there's no active
+  decision, or the seat that needs to act next belongs to a real player
+  instead.
+- `advanceBotInitialCardPass(int $gameId, array $round, array
+  $botGamePlayerIds): ?array` -- Closed Team Play's own round 1 only
+  (checked via `$round['round_number']` before even checking the
+  game's own format, so every other caller skips the extra query for
+  free). Finds the first not-yet-submitted bot seat (via
+  `pendingInitialCardPass()`'s own `submitted_game_player_ids`) and
+  submits `BotPlayerService::chooseInitialCardPass(BoardState $state,
+  int $botGamePlayerId): array` -- the 2 LOWEST-value cards in the bot's
+  own opening hand, the same "give up the least" bias
+  `BotChoiceResolver` already applies elsewhere -- via
+  `submitInitialCardPass()`. Returns `null` if this isn't Closed Team
+  Play, round 1's own pass phase has already resolved, or every bot
+  seated has already submitted and only real players are left to wait
+  on.
+
+`advanceAutomatedTurns()` tries the card pass first, then the team
+decision, before finally giving up on a frozen round -- both are
+independent per-game-state checks (a closed_team game's own round 1 is
+never simultaneously mid card-pass AND mid team-decision), so the order
+between them doesn't matter for correctness, just which one gets
+checked (and its own extra query spent) first. Both bot-count-agnostic
+the same way Traditional's own bot support already is
+(`botGamePlayerIds()` is plural) -- up to all 3 non-creator seats may be
+bots at once, including both halves of the same team, in which case a
+single `advanceAutomatedTurns()` call drives that team's own propose
+AND confirm (or both members' own card passes) back to back, with no
+human ever needing to act. A bot may be the creator's own partner too,
+not just seated on the opposing team -- `partnerUserId`'s own validation
+(`createGame()`) never distinguished bot from human to begin with.
 
 **Picking a legal move: `MoodSwings\Bot\BotChoiceResolver`.** A
 server-side equivalent of `web-static/js/game.js`'s own `fieldOptions()`/
@@ -4613,7 +4664,8 @@ since it already holds that dependency):
 
 **Driving a bot's turn: `GameService::advanceAutomatedTurns(int
 $gameId): ?array`.** Called immediately after a human's own
-`playMood()`/`pass()`/`respondToDecision()`/`startGame()`/`resignGame()`
+`playMood()`/`pass()`/`respondToDecision()`/`startGame()`/`resignGame()`/
+`proposeTeamDecision()`/`confirmTeamDecision()`/`submitInitialCardPass()`
 call has already fully returned -- from the matching routes in
 `public/index.php`, right after each one -- so a solo human never has
 to manually advance a bot's turn themselves; if the human's own action
@@ -4655,9 +4707,10 @@ already, since it's an ordinary `game_players` row with no special
 casing anywhere in `serializeCard()`/`buildGameState()`'s own
 viewer-scoping logic. The one deliberate exception is symmetric with a
 real player's own: Open Team Play's `you.teammate_hand` reveals a bot
-teammate's hand to its human partner exactly like a real teammate's --
-moot in practice today, since Open Team Play is outside a bot's current
-scope (see "Scope" above).
+teammate's hand to its human partner exactly like a real teammate's
+would -- genuinely reachable now that Team Play is within a bot's scope
+(see "Scope"/"Team Play" above), letting a human see what their own bot
+partner is holding the same as any other teammate's.
 
 **Stats exclusion.** A bot game deliberately never bumps lifetime stats
 (issue #106) or card statistics (issue #315) -- see

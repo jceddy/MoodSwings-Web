@@ -247,4 +247,26 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(['given_card_id' => 8], $answer);
     }
+
+    // -- Team Play (issue #360) ------------------------------------------
+
+    public function testChooseTeamDecisionProposalAlwaysPicksTheFirstCandidate(): void
+    {
+        self::assertSame(5, $this->bot->chooseTeamDecisionProposal([5, 9]));
+        // Order alone decides it -- not which one is "the bot itself" or
+        // any other property of either id (see the method's own docblock:
+        // deliberately arbitrary and deterministic).
+        self::assertSame(9, $this->bot->chooseTeamDecisionProposal([9, 5]));
+    }
+
+    public function testChooseInitialCardPassPicksTheTwoLowestValueHandCards(): void
+    {
+        // Charity (value 1), Benevolence (value 2), Chivalry (value 3),
+        // Complacency (value 4) -- deliberately out of value order in the
+        // hand itself, to prove this sorts rather than just taking the
+        // first two dealt.
+        $state = $this->boardState(hands: [1 => [5, 4, 3, 2]]);
+
+        self::assertSame([3, 2], $this->bot->chooseInitialCardPass($state, 1));
+    }
 }

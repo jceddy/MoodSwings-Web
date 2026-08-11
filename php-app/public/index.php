@@ -1384,6 +1384,15 @@ if ($path === '/games/team-decision' && $method === 'POST') {
             'confirm' => $games->confirmTeamDecision($gameId, $gamePlayerId, (bool) ($body['approve'] ?? false)),
             default => throw new GameStateException('action must be "propose" or "confirm"'),
         };
+        // Practice bots (issue #360)/auto-pass on empty hand: confirming
+        // (or a bot's own teammate rejecting) this decision can unfreeze
+        // the round straight into a bot's turn, or into the OTHER half of
+        // this same team decision needing a bot's own propose/confirm --
+        // see the identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1400,6 +1409,15 @@ if ($path === '/games/initial-pass' && $method === 'POST') {
 
     try {
         $result = $games->submitInitialCardPass($gameId, $gamePlayerId, $cardIds);
+        // Practice bots (issue #360): a human's own pass here can be the
+        // last of the 4 needed to unfreeze round 1 straight into a bot's
+        // turn, or -- if any of the other 3 seats are also bots -- there
+        // may still be bot passes of their own left to drive first. See
+        // the identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

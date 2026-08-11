@@ -1,0 +1,15 @@
+-- No schema change: extends practice bots (issue #140) to Open/Closed
+-- Team Play (issue #360) -- GameService::botsSupportedFor() now allows
+-- 'team'/'closed_team' the same as every other non-'draft' format, up
+-- to all 3 non-creator seats (including both halves of one team, or as
+-- the creator's own partner). advanceAutomatedTurns() gained two new
+-- frozen-round helpers (advanceBotTeamDecision()/
+-- advanceBotInitialCardPass()) to drive Team Play's own turn-order/
+-- draw-recipient propose/confirm decision and Closed Team Play's blind
+-- pregame card pass; BotPlayerService gained the two matching policies
+-- (chooseTeamDecisionProposal()/chooseInitialCardPass()). POST
+-- /games/team-decision and POST /games/initial-pass now call
+-- advanceAutomatedTurns() the same as every other game-action route
+-- already did. See "Team Play" under "Practice bots" in
+-- php-app/README.md.
+UPDATE schema_version SET version = '1.18.0' WHERE id = 1;
