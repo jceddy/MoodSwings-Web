@@ -10,15 +10,17 @@ use MoodSwings\Rules\CardChoiceSchema;
 /**
  * Decides a practice bot's (issue #140) own action -- what to play (and
  * with what choices) or, if nothing's worth playing, that it should pass;
- * and, separately, how to answer a pending decision targeting it.
- * Deliberately "legal, not strategic" -- see BotChoiceResolver's own
- * docblock for the field-filling policy this builds on. GameService is
- * the only caller (see its own "Practice bots" section in
- * php-app/README.md for how this fits into the request lifecycle) --
- * legality itself (MoodPlayService::isPlayable()) is GameService's own
- * call to make, not this class's, since GameService already holds that
- * dependency; $playableCardIds below is expected to already be filtered
- * down to cards $botGamePlayerId could legally play right now.
+ * how to answer a pending decision targeting it; and, for Open/Closed
+ * Team Play (issue #360), its own turn-order/draw-recipient team-decision
+ * proposal and Closed Team Play's blind pregame card pass. Deliberately
+ * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
+ * field-filling policy this builds on. GameService is the only caller
+ * (see its own "Practice bots" section in php-app/README.md for how this
+ * fits into the request lifecycle) -- legality itself
+ * (MoodPlayService::isPlayable()) is GameService's own call to make, not
+ * this class's, since GameService already holds that dependency;
+ * $playableCardIds below is expected to already be filtered down to
+ * cards $botGamePlayerId could legally play right now.
  */
 final class BotPlayerService
 {
@@ -134,6 +136,43 @@ final class BotPlayerService
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
 
         return $value === null ? [] : [$field['key'] => $value];
+    }
+
+    /**
+     * Which of a team's own two candidates a bot proposes for Open/Closed
+     * Team Play's own turn-order/draw-recipient decision (issue #360; see
+     * "Open Team Play"/"Closed Team Play" team decisions in
+     * php-app/README.md) -- deliberately arbitrary and deterministic
+     * ("legal, not strategic", this class's own philosophy throughout):
+     * always the first of $candidateGamePlayerIds, regardless of which of
+     * the two members is proposing or whether either is itself a bot.
+     * There's nothing about "who goes first" or "who gets the extra draw"
+     * this bot ever weighs differently, so a human confirmer who rejects
+     * a bot's proposal just sees the exact same one proposed again.
+     *
+     * @param int[] $candidateGamePlayerIds always exactly the deciding
+     *     team's own two members
+     */
+    public function chooseTeamDecisionProposal(array $candidateGamePlayerIds): int
+    {
+        return $candidateGamePlayerIds[0];
+    }
+
+    /**
+     * Closed Team Play's own blind pregame card pass (issue #360; see
+     * "Closed Team Play" in php-app/README.md) -- the 2 LOWEST-value
+     * cards in the bot's own opening hand, the same "give up the least"
+     * bias BotChoiceResolver already applies to every other mandatory
+     * discard/cost-shaped choice (see its own docblock).
+     *
+     * @return int[] exactly 2 card ids
+     */
+    public function chooseInitialCardPass(BoardState $state, int $botGamePlayerId): array
+    {
+        $hand = $state->hand($botGamePlayerId);
+        usort($hand, fn (int $a, int $b) => $this->baseValue($state, $a) <=> $this->baseValue($state, $b));
+
+        return array_slice($hand, 0, 2);
     }
 
     private function baseValue(BoardState $state, int $cardId): int

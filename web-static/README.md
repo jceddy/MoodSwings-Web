@@ -783,14 +783,21 @@ too, proportional to the smaller card width.
     bot checkbox has to be hidden/unchecked before `updateTeamFields()`
     reads "which opponents are currently checked" to populate the
     partner dropdown, or a bot could flash into that list for one tick
-    when switching straight into a team format) hides the whole section
-    -- and force-unchecks any bot that was checked -- whenever the
-    current format/deck_type combination doesn't support one, mirroring
+    when switching into a format that doesn't support bots at all --
+    only `draft` today) hides the whole section -- and force-unchecks any
+    bot that was checked -- whenever the current format/deck_type
+    combination doesn't support one, mirroring
     `GameService::botsSupportedFor()` exactly (client-side `deckType`
     allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`/`custom`,
     plus the same `format === 'duel' && deckType === 'custom_duel'`
-    special case the server checks). See "Practice bots" in
-    `php-app/README.md` for the full feature.
+    special case the server checks). Open/Closed Team Play support a bot
+    the same as every other non-`draft` format (issue #360) -- up to all
+    3 opponent seats, and a checked bot is a valid candidate in the
+    partner dropdown too (`updateTeamFields()`'s own "populate from
+    whichever opponents are checked" already treats it identically to a
+    checked human friend), so a human can play WITH a bot teammate, not
+    just against one. See "Practice bots" in `php-app/README.md` for the
+    full feature.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in

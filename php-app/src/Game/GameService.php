@@ -592,21 +592,22 @@ final class GameService
             }
         }
 
-        // Practice bots (issue #140): Traditional/Duel with a deck_type
-        // that needs no per-player setup of its own (Structure/Power/
-        // jceddy's 75/One of Each/Custom Decklist -- the last of these is
-        // a single table-wide shared deck, not per-seat, so it needs no
-        // special-casing either, see BOT_SUPPORTED_DECK_TYPES's own
-        // docblock), or Duel with 'custom_duel' -- the one deck_type that
-        // DOES need per-player setup, but which this call itself supplies
-        // on the bot's behalf via $botDecklistText/$botSavedDecklistId
-        // below, rather than the bot ever needing to submit one itself.
-        // Checked up front, ahead of the deck-type-specific validation/
-        // building below, so a doomed request never gets as far as e.g.
-        // parsing a decklist.
+        // Practice bots (issue #140): Traditional/Duel/Team Play/Closed
+        // Team Play with a deck_type that needs no per-player setup of
+        // its own (Structure/Power/jceddy's 75/One of Each/Custom
+        // Decklist -- the last of these is a single table-wide shared
+        // deck, not per-seat, so it needs no special-casing either, see
+        // BOT_SUPPORTED_DECK_TYPES's own docblock), or Duel with
+        // 'custom_duel' -- the one deck_type that DOES need per-player
+        // setup, but which this call itself supplies on the bot's behalf
+        // via $botDecklistText/$botSavedDecklistId below, rather than the
+        // bot ever needing to submit one itself. See botsSupportedFor()'s
+        // own docblock for why 'draft' stays excluded. Checked up front,
+        // ahead of the deck-type-specific validation/building below, so a
+        // doomed request never gets as far as e.g. parsing a decklist.
         $botUserId = $this->botUserIdAmong($userIds);
         if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
         }
         if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
             throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
@@ -810,28 +811,42 @@ final class GameService
      * own $decklistText/$savedDecklistId before any seat -- bot or
      * human -- is dealt from it; see deckCardIdsFor()'s 'custom' branch),
      * so a bot needs to do nothing whatsoever to "have" one, same as
-     * 'structure'/'power'/'jceddys_75'/'one_of_each'.
+     * 'structure'/'power'/'jceddys_75'/'one_of_each'. Applies identically
+     * across every format botsSupportedFor() allows -- 'power' happens to
+     * be independently blocked for 'team'/'closed_team' anyway (too small
+     * for Team Play's own minimum deck size, checked separately, above),
+     * but that's unrelated to bot support specifically.
      */
     private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'];
 
     /**
      * Whether a practice bot (issue #140) can be seated in a game with
-     * this $format/$deckType combination -- Traditional/Duel only, both
-     * because Team Play needs a bot to also answer turn-order propose/
-     * confirm decisions (and, for Closed Team Play, a blind pregame card
-     * pass) and because the 'draft' format needs a bot to make its own
-     * draft picks -- neither of which BotPlayerService implements yet.
-     * Within Duel, 'custom_duel' is its own special case: unlike every
-     * deck_type in BOT_SUPPORTED_DECK_TYPES (including 'custom' -- see
-     * its own docblock for why that one needs no special-casing at all),
+     * this $format/$deckType combination -- every format except 'draft',
+     * which needs a bot to make its own draft picks (BotPlayerService
+     * doesn't implement that). Team Play (issue #360) needed
+     * advanceAutomatedTurns() to learn two new frozen-round states first
+     * -- a bot answering Open/Closed Team Play's own turn-order/draw-
+     * recipient propose/confirm decision (see advanceBotTeamDecision())
+     * and, for Closed Team Play only, its blind pregame card pass (see
+     * advanceBotInitialCardPass()) -- both now handled the same "legal,
+     * not strategic" way as everything else here; up to all 3 non-creator
+     * seats can be bots, same as Traditional, since neither of those two
+     * new decisions needed anything bot-count-specific (see
+     * botGamePlayerIds(), already plural). Within Duel, 'custom_duel' is
+     * its own special case: unlike every deck_type in
+     * BOT_SUPPORTED_DECK_TYPES (including 'custom' -- see its own
+     * docblock for why that one needs no special-casing at all),
      * 'custom_duel' needs PER-PLAYER setup (each duel player's own
      * decklist, built against $duelDeckRules) -- but rather than teach
-     * BotPlayerService a fifth thing to decide (the same way it doesn't
+     * BotPlayerService a sixth thing to decide (the same way it doesn't
      * decide draft picks), createGame() lets the human supply the bot's
      * own decklist directly at creation time (see its own
      * $botDecklistText/$botSavedDecklistId params, and
      * submitCustomDuelDeck()'s own $accessCheckUserId), so the bot itself
-     * never has to submit anything for this deck_type either.
+     * never has to submit anything for this deck_type either. 'team'/
+     * 'closed_team' can never combine with 'custom_duel' at all (it's
+     * Duel-only, checked elsewhere), so this special case doesn't need
+     * its own team-format branch.
      */
     private function botsSupportedFor(string $format, string $deckType): bool
     {
@@ -839,7 +854,7 @@ final class GameService
             return true;
         }
 
-        return in_array($format, ['standard', 'duel'], true) && in_array($deckType, self::BOT_SUPPORTED_DECK_TYPES, true);
+        return in_array($format, ['standard', 'duel', 'team', 'closed_team'], true) && in_array($deckType, self::BOT_SUPPORTED_DECK_TYPES, true);
     }
 
     /**
@@ -3358,7 +3373,29 @@ final class GameService
 
             $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
             if ($currentTurnGamePlayerId === null) {
-                break; // frozen round (e.g. a team format's own turn_order decision still open)
+                // Frozen round -- Team Play's own turn_order/draw_recipient
+                // decision (any format's round; see activeTeamDecision()) or,
+                // Closed Team Play only, round 1's blind pregame card pass
+                // (see pendingInitialCardPass()) haven't resolved yet. Each
+                // helper drives one bot step of its own kind if one's
+                // possible and returns its result, or null if nothing
+                // automated is left to do there (waiting on a real player,
+                // or that particular frozen state doesn't apply here at
+                // all) -- in which case the other is tried before finally
+                // giving up on this round.
+                $cardPassResult = $this->advanceBotInitialCardPass($gameId, $round, $botGamePlayerIds);
+                if ($cardPassResult !== null) {
+                    $lastResult = $cardPassResult;
+                    continue;
+                }
+
+                $teamDecisionResult = $this->advanceBotTeamDecision($gameId, $botGamePlayerIds);
+                if ($teamDecisionResult !== null) {
+                    $lastResult = $teamDecisionResult;
+                    continue;
+                }
+
+                break; // waiting on a real player either way
             }
 
             if (in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
@@ -3384,6 +3421,106 @@ final class GameService
         }
 
         return $lastResult;
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own helper for Closed Team Play's blind
+     * pregame card pass (issue #360; see submitInitialCardPass()) --
+     * round 1 only, so callers only need to try this while $round's own
+     * current_turn_game_player_id is still null AND round_number is 1
+     * (checked here rather than by every caller). Returns
+     * submitInitialCardPass()'s own result for the first not-yet-
+     * submitted bot seat found, or null if there's nothing for a bot to
+     * do here: this isn't Closed Team Play at all, round 1's own pass
+     * phase has already resolved (nothing pending), or every bot seated
+     * has already submitted and only real players are left to wait on.
+     *
+     * @param int[] $botGamePlayerIds
+     * @return array<string, mixed>|null
+     */
+    private function advanceBotInitialCardPass(int $gameId, array $round, array $botGamePlayerIds): ?array
+    {
+        if ($botGamePlayerIds === [] || (int) $round['round_number'] !== 1) {
+            return null;
+        }
+        if ($this->fetchGame($gameId)['format'] !== 'closed_team') {
+            return null;
+        }
+
+        $pending = $this->pendingInitialCardPass($gameId, null);
+        if ($pending === null) {
+            return null; // already unfrozen -- nothing left to pass
+        }
+
+        $notYetSubmitted = array_values(array_diff($botGamePlayerIds, $pending['submitted_game_player_ids']));
+        if ($notYetSubmitted === []) {
+            return null; // waiting on a real, not-yet-submitted player
+        }
+
+        $botGamePlayerId = $notYetSubmitted[0];
+        $cardIds = $this->bots->chooseInitialCardPass($this->boardStates->load($gameId), $botGamePlayerId);
+
+        return $this->submitInitialCardPass($gameId, $botGamePlayerId, $cardIds);
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own helper for Open/Closed Team Play's
+     * turn-order/draw-recipient decision (issue #360; see
+     * proposeTeamDecision()/confirmTeamDecision()) -- returns whichever
+     * of the two's own result if a bot needed to act, or null if there's
+     * no active team decision at all, or the seat that needs to act next
+     * (whichever candidate hasn't proposed yet, or the OTHER candidate
+     * once one has) belongs to a real player instead.
+     *
+     * @param int[] $botGamePlayerIds
+     * @return array<string, mixed>|null
+     */
+    private function advanceBotTeamDecision(int $gameId, array $botGamePlayerIds): ?array
+    {
+        if ($botGamePlayerIds === []) {
+            return null;
+        }
+
+        $decision = $this->activeTeamDecision($gameId);
+        if ($decision === null) {
+            return null;
+        }
+
+        $candidateIds = array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true));
+
+        if ($decision['phase'] === 'propose') {
+            // Either of the team's own two members may propose -- act as
+            // whichever candidate is a bot, if either is (their own
+            // proposed answer is the same regardless of which one acts,
+            // see chooseTeamDecisionProposal()).
+            $actingBotId = null;
+            foreach ($candidateIds as $candidateId) {
+                if (in_array($candidateId, $botGamePlayerIds, true)) {
+                    $actingBotId = $candidateId;
+                    break;
+                }
+            }
+            if ($actingBotId === null) {
+                return null; // waiting on a real player to propose
+            }
+
+            $proposedId = $this->bots->chooseTeamDecisionProposal($candidateIds);
+
+            return $this->proposeTeamDecision($gameId, $actingBotId, $proposedId);
+        }
+
+        // 'confirm' -- only the candidate who DIDN'T propose may confirm
+        // (confirmTeamDecision() itself rejects the proposer trying to).
+        // Always approves; see chooseTeamDecisionProposal()'s own
+        // docblock for why rejecting a bot's proposal never gets a human
+        // confirmer anything different next time.
+        $proposerId = (int) $decision['proposer_game_player_id'];
+        $confirmerId = $candidateIds[0] === $proposerId ? $candidateIds[1] : $candidateIds[0];
+        if (!in_array($confirmerId, $botGamePlayerIds, true)) {
+            return null; // waiting on a real player to confirm
+        }
+
+        return $this->confirmTeamDecision($gameId, $confirmerId, true);
     }
 
     /** @return int[] every game_players.id in $gameId whose seat is a practice bot (users.is_bot) */

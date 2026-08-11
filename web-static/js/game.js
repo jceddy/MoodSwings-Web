@@ -2095,22 +2095,30 @@
     }
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
-    // exactly: Traditional/Duel only, and only for a deck_type that needs
-    // no per-player setup of its own (no draft picks for a bot to make).
-    // 'custom' belongs in this list despite needing a decklist at all --
-    // it's a single table-wide shared deck (built once from the human
-    // creator's own paste/upload/saved-deck choice, same as this dialog
-    // already requires with or without a bot seated), not a per-seat one,
-    // so a bot needs nothing extra to "have" one. 'custom_duel' is its
-    // own separate special case (still not in this list), since it's a
-    // genuinely per-seat decklist -- #new-game-bot-decklist-fields below
-    // lets the creator supply the bot's own decklist directly for that
-    // one, rather than needing the bot to submit one itself.
+    // exactly: every format except 'draft' (no draft picks for a bot to
+    // make), and only for a deck_type that needs no per-player setup of
+    // its own. 'custom' belongs in this list despite needing a decklist
+    // at all -- it's a single table-wide shared deck (built once from the
+    // human creator's own paste/upload/saved-deck choice, same as this
+    // dialog already requires with or without a bot seated), not a
+    // per-seat one, so a bot needs nothing extra to "have" one.
+    // 'custom_duel' is its own separate special case (still not in this
+    // list), since it's a genuinely per-seat decklist --
+    // #new-game-bot-decklist-fields below lets the creator supply the
+    // bot's own decklist directly for that one, rather than needing the
+    // bot to submit one itself; it can never combine with 'team'/
+    // 'closed_team' anyway (Duel-only). Team Play (issue #360): up to all
+    // 3 opponent seats can be bots, same as every other supported format
+    // -- opponentSelectionMax()'s own cap and updateTeamFields()'s own
+    // "populate the partner dropdown from whichever opponents are
+    // checked" already treat a checked bot exactly like a checked human
+    // friend, so a bot can be seated as the creator's own partner too,
+    // not just on the opposing team.
     function botsSupportedFor(format, deckType) {
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        return (format === 'standard' || format === 'duel')
+        return format !== 'draft'
             && ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
     }
 
@@ -2190,9 +2198,14 @@
     // checkbox has to be hidden/unchecked (updateBotCheckboxAvailability())
     // BEFORE updateTeamFields() reads "which opponents are currently
     // checked" to populate the partner dropdown -- otherwise switching
-    // straight into a team format could offer a bot as a partner
-    // candidate for the one instant before its own checkbox gets
-    // unchecked.
+    // into a format that doesn't support bots at all (only 'draft' today,
+    // see botsSupportedFor()) while a bot was checked could leave it
+    // offered as a partner candidate for the one instant before its own
+    // checkbox gets unchecked. Team Play itself (issue #360) supports
+    // bots the same as every other non-draft format now, so this no
+    // longer applies switching INTO 'team'/'closed_team' specifically --
+    // a checked bot stays checked and genuinely is a valid partner
+    // candidate there.
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
