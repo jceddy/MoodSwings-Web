@@ -3295,10 +3295,24 @@ final class GameService
         return $result;
     }
 
-    /** @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int} */
-    public function pass(int $gameId, int $gamePlayerId): array
+    /**
+     * $automated distinguishes this call in the log (see describeEvent())
+     * from a player's own deliberate "Pass" button click -- true only for
+     * advanceAutomatedTurns()'s own two callers (a bot with nothing to
+     * play, or an opted-in player whose hand/discard pile has no legal
+     * play at all -- "Auto-pass on empty hand" below), never for the
+     * public POST /games/pass route a real click hits. A bug report
+     * caught live: without this, a player who genuinely never touched
+     * "Pass" (they'd opted into auto-pass, and simply had no legal play
+     * left after their last play) had no way to tell that apart from an
+     * actual accidental/forgotten click of their own in the log -- both
+     * rendered as identical "{name} passed" lines.
+     *
+     * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int}
+     */
+    public function pass(int $gameId, int $gamePlayerId, bool $automated = false): array
     {
-        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): array {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $automated): array {
             $round = $this->currentRound($gameId);
             $this->assertNoPendingDecision((int) $round['id']);
 
@@ -3306,7 +3320,7 @@ final class GameService
                 throw new GameStateException("It is not player {$gamePlayerId}'s turn");
             }
 
-            $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'turn_passed', null, []);
+            $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'turn_passed', null, $automated ? ['automated' => true] : []);
 
             return $this->advanceTurn($gameId, $round, $this->boardStates->load($gameId), $gamePlayerId);
         });
@@ -3472,7 +3486,7 @@ final class GameService
                 $action = $this->bots->chooseAction($state, $playableCardIds, $currentTurnGamePlayerId);
                 $lastResult = $action !== null
                     ? $this->playMood($gameId, $currentTurnGamePlayerId, $action['card_id'], $action['choices'])
-                    : $this->pass($gameId, $currentTurnGamePlayerId);
+                    : $this->pass($gameId, $currentTurnGamePlayerId, automated: true);
                 continue;
             }
 
@@ -3483,7 +3497,7 @@ final class GameService
                     fn (int $cardId) => $this->plays->isPlayable($state, $currentTurnGamePlayerId, $cardId),
                 ) !== [];
                 if (!$hasLegalPlay) {
-                    $lastResult = $this->pass($gameId, $currentTurnGamePlayerId);
+                    $lastResult = $this->pass($gameId, $currentTurnGamePlayerId, automated: true);
                     continue;
                 }
             }
@@ -9484,7 +9498,16 @@ final class GameService
         // second copy of the same card.
         $description = match (true) {
             $row['event_type'] === 'mood_played' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
-            $row['event_type'] === 'turn_passed' => "{$actor} passed",
+            // 'automated' (see pass()'s own docblock) covers both a bot's
+            // own pass (nothing playable) and an opted-in player's
+            // auto-pass (no legal play at all in hand/discard, see
+            // "Auto-pass on empty hand" below) -- both mean the same thing
+            // to a reader of this log ("nobody actually clicked Pass
+            // here"), so they share one phrasing rather than needing to
+            // explain which of the two mechanisms fired.
+            $row['event_type'] === 'turn_passed' => ($details['automated'] ?? false)
+                ? "{$actor} passed automatically (no legal play)"
+                : "{$actor} passed",
             $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
             $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
             $row['event_type'] === 'pending_decision_resolved' => "A response to {$cardName} was resolved",

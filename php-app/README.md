@@ -5030,6 +5030,25 @@ id list itself), since whether a given player currently has anything
 playable can change from one iteration to the next as earlier
 iterations play out.
 
+**Distinguished from a manual pass in the game log** -- a bug caught
+live: a player who opted into this (the default) had no way to tell, in
+their own game's log, whether a given "{name} passed" line was their
+own deliberate click or something the server did on their behalf while
+they weren't even looking, since both rendered identically. `pass(int
+$gameId, int $gamePlayerId, bool $automated = false)` gained the
+`$automated` param -- `true` only from `advanceAutomatedTurns()`'s own
+two internal callers (a bot with nothing to play, or an opted-in
+player's own auto-pass here), never from the public `POST /games/pass`
+route a real click hits (its own default stays `false`) -- persisted
+onto the `turn_passed` event's `details` (`{"automated": true}`, only
+ever present when true) the same way `skipTurnForResignedPlayer()`'s
+own `{"resigned": true}` already rides alongside it.
+`GameService::describeEvent()`'s `'turn_passed'` branch reads it back:
+"{name} passed automatically (no legal play)" instead of the plain
+"{name} passed" -- one shared phrasing for both a bot's own pass and an
+opted-in human's, since both mean the exact same thing to a reader of
+this log ("nobody actually clicked Pass here").
+
 ### Duel: separate per-player decks
 
 `format: 'duel'` and `format: 'draft'` (see "Draft format" below) are the

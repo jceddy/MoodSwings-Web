@@ -3618,6 +3618,38 @@ final class GameServiceIntegrationTest extends TestCase
      * recentEvents() itself uses -- both views can never drift out of
      * phrasing sync since they share that one rendering method.
      */
+    /**
+     * A deliberate, player-initiated pass() call (the public
+     * POST /games/pass route's own $automated default of false) must keep
+     * logging the plain "{name} passed" it always has -- only
+     * advanceAutomatedTurns()'s own two internal callers (a bot with
+     * nothing to play, or an opted-in player's own auto-pass) pass
+     * $automated: true. See AutoPassOnEmptyHandIntegrationTest::
+     * testLogsTheAutoPassDifferentlyFromAManualPass() and
+     * BotGameplayIntegrationTest::testLogsABotsOwnPassAsAutomatedToo() for
+     * the two automated cases.
+     */
+    public function testManualPassIsLoggedWithoutTheAutomatedFlag(): void
+    {
+        $u1 = $this->insertUser('manualpass1');
+        $u2 = $this->insertUser('manualpass2');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+        self::assertSame('turn_passed', $entry['event_type']);
+        self::assertArrayNotHasKey('automated', $entry['details']);
+        self::assertSame('manualpass1 passed', $entry['description']);
+    }
+
     public function testFullEventLogEntriesCarryRawFieldsAlongsideTheRenderedDescription(): void
     {
         $u1 = $this->insertUser('fulllograw1');

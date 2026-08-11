@@ -652,6 +652,32 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertSame($p1, (int) $round['current_turn_game_player_id']);
     }
 
+    /**
+     * Same distinction testLogsTheAutoPassDifferentlyFromAManualPass()
+     * (AutoPassOnEmptyHandIntegrationTest) checks for an opted-in human's
+     * own auto-pass -- a bot's pass is automated the exact same way, and
+     * shares the exact same log phrasing (see describeEvent()'s own
+     * 'turn_passed' branch).
+     */
+    public function testLogsABotsOwnPassAsAutomatedToo(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $botUserId = $this->insertBotUser('bot1');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 8, 'hand', $p1);
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+        self::assertSame('turn_passed', $entry['event_type']);
+        self::assertTrue($entry['details']['automated']);
+        self::assertSame('bot1 passed automatically (no legal play)', $entry['description']);
+    }
+
     public function testAdvanceBotTurnsStopsAtARealPlayersTurn(): void
     {
         $u1 = $this->insertUser('human1');
