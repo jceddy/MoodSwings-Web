@@ -2561,6 +2561,20 @@ too, proportional to the smaller card width.
     on -- the dialog it belonged to is already closed and already removed
     from `openDialogStack`, so there's nothing left to do.
 
+  - **Backdrop click**: clicking a `<dialog>`'s own backdrop closes it too
+    (`closeDialogOnBackdropClick()` in `app.js`, applied to every dialog in
+    the same `querySelectorAll('dialog')` loop that wires up the Back-button
+    `MutationObserver` above -- that observer picks this up the same as any
+    other close, no separate handling needed). `event.target === dialog`
+    alone can't tell a backdrop click apart from one that landed in the
+    dialog's own padding/border rather than on a child element -- every
+    dialog here has both -- so the click is instead checked against the
+    dialog's own `getBoundingClientRect()`, treating anything within that
+    box (including its padding) as "inside" regardless of what does or
+    doesn't cover it. Shared in `app.js` rather than `game.js` since
+    `app.js`'s own `#resources-dialog`, present in every page's footer
+    (not just the game page), needs it too.
+
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see
 [`../php-app/README.md`](../php-app/README.md) for the API itself.

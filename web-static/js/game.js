@@ -6607,6 +6607,12 @@
     });
     document.querySelectorAll('dialog').forEach((dialog) => {
         dialogHistoryObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] });
+        // Clicking a dialog's own backdrop closes it -- closeDialogOnBackdropClick()
+        // in app.js, shared with that file's own #resources-dialog. The
+        // MutationObserver above picks this up the same as any other close
+        // (see its own "closed some other way" comment, which already
+        // anticipated this).
+        closeDialogOnBackdropClick(dialog);
     });
 
     // Called by showBoard()/showSpectatorBoard()/showReplayBoard() --
