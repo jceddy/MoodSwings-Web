@@ -6294,10 +6294,11 @@
     // a blue card worth 0." Deliberately narrow (exactly one field, and
     // only these four "pick something" types) rather than flagging every
     // card with an optional field left blank -- a card with 2+ fields (e.g.
-    // Worry, Charity, Guilt) or a bare bool/value/mode field (Wrath,
-    // Repentance) still has real, ambiguous-to-classify partial effects
-    // even when nothing is selected, so those are left alone rather than
-    // guessed at.
+    // Worry, Charity, Guilt) or a bare bool/value/mode field (Repentance)
+    // still has real, ambiguous-to-classify partial effects even when
+    // nothing is selected, so those are left alone rather than guessed at.
+    // Wrath is the one deliberate, hand-picked exception -- see
+    // cardIsWrathWithoutItsBoxChecked() below.
     const TARGETLESS_CONFIRM_FIELD_TYPES = ['mood', 'player', 'hand_card', 'discard_card'];
 
     function cardHasNoTargetSelected(card, choices) {
@@ -6310,10 +6311,37 @@
             && !(field.key in choices);
     }
 
+    // Wrath's own single choice_field ("Put every other mood in play into
+    // the discard pile") is a bare bool, which cardHasNoTargetSelected()
+    // above deliberately leaves unguarded for every card shaped like it
+    // (see its own comment). Wrath gets its own narrow, hand-picked
+    // exception here instead: leaving its box unchecked does nothing
+    // whatsoever beyond entering play (WrathEffect returns immediately),
+    // the same unambiguous "missed click" case the generic mechanism
+    // already guards against for other field types. Rage (effect key
+    // 'rage') has the exact same shape/behavior -- its own docblock even
+    // says "Like Wrath" -- but isn't included here, since only Wrath's
+    // own case was asked for; extending to Rage (or generalizing this
+    // into TARGETLESS_CONFIRM_FIELD_TYPES/cardHasNoTargetSelected() by
+    // adding 'bool' there directly) would be a natural, low-risk
+    // follow-up if that's ever wanted too.
+    function cardIsWrathWithoutItsBoxChecked(card, choices) {
+        return card.effect_key === 'wrath' && !choices.discard_all_other_moods;
+    }
+
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
         if (cardHasNoTargetSelected(selectedCard, choices)
             && !window.confirm(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`)) {
+            return;
+        }
+        // Looked up by key, not choice_fields[0] -- a card with an
+        // available banked extra play (Joy/Generosity) can have a
+        // server-injected "which play to use" mode field ahead of Wrath's
+        // own in choice_fields, so position alone isn't reliable here.
+        const wrathBoxField = selectedCard.choice_fields.find((field) => field.key === 'discard_all_other_moods');
+        if (cardIsWrathWithoutItsBoxChecked(selectedCard, choices)
+            && !window.confirm(`You haven't checked "${wrathBoxField.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`)) {
             return;
         }
         const playButton = document.getElementById('play-card-button');

@@ -1407,9 +1407,17 @@ too, proportional to the smaller card width.
     nothing beyond entering play, Creativity's own field label spells
     this out directly: "otherwise it's just a blue card worth 0") --
     a card with 2+ fields (Worry, Charity, Guilt) or whose only optional
-    field is a bare `bool`/`value`/`mode` (Wrath, Repentance) still has a
+    field is a bare `bool`/`value`/`mode` (Repentance) still has a
     real, harder-to-classify partial effect even with nothing selected,
-    so those are left alone rather than guessed at. Cards with
+    so those are left alone rather than guessed at -- except Wrath
+    (`cardIsWrathWithoutItsBoxChecked()`), a narrow, hand-picked
+    exception: leaving its own single bare-`bool` field unchecked does
+    nothing whatsoever beyond entering play (`WrathEffect` returns
+    immediately), so it gets the identical `window.confirm()` treatment
+    ("You haven't checked &lt;field label&gt; -- &lt;name&gt;'s ability
+    won't do anything. Play it anyway?") on its own. Rage has the exact
+    same shape/behavior (its own docblock even says "Like Wrath") but
+    isn't included, since only Wrath's own case was asked for. Cards with
     no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
