@@ -1,0 +1,22 @@
+-- No schema change: fixes a real deadlock in Open/Closed Team Play with
+-- practice bots -- GameService::advanceAutomatedTurns() (which drives
+-- bots' own turn_order/draw_recipient propose/confirm) was only ever
+-- called after a human's own WRITE action elsewhere in the game
+-- (playMood()/pass()/respondToDecision()/proposeTeamDecision()/etc.).
+--
+-- But a team decision whose BOTH propose/confirm candidates happen to be
+-- bots freezes the round for every OTHER seated player too -- nothing
+-- left to play, pass, or respond to -- so there was no human write call
+-- left anywhere in the game to ever reach advanceAutomatedTurns() and
+-- drive those two bots' own answer. Caught live: Closed Team Play with
+-- bots stuck forever on "Waiting for <bot> or <bot> to choose who should
+-- draw the shared card."
+--
+-- GET /games/state (public/index.php) now also calls
+-- advanceAutomatedTurns() before reading state back out -- the one call
+-- guaranteed to keep happening regardless (the board's own poll timer),
+-- so simply having the board open is now enough to unstick an all-bot
+-- team decision, no human write action required. Cheap even when
+-- nothing's actually stuck (the method's own early-out is just two
+-- lookups). See "Driving a bot's turn" in php-app/README.md.
+UPDATE schema_version SET version = '1.20.2' WHERE id = 1;
