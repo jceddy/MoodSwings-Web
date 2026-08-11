@@ -908,12 +908,14 @@ too, proportional to the smaller card width.
     `php-app/README.md`), and -- since the Draft format supports only Quick
     Draft/Winston Draft/Grid Draft -- every option *except* those three
     whenever Draft is selected. Quick Draft/Winston Draft/Grid Draft
-    themselves are available whenever Draft *or Closed Team Play* is
-    selected (issue #362 -- each of the 4 players drafts and builds their
-    own deck completely independently there, exactly like a normal
-    individual draft), and hidden for every other format, including Open
-    Team Play -- its own picks would need to pool per team rather than
-    stay individual, which the deck-building step doesn't support yet. If
+    themselves are available whenever Draft, Closed Team Play, *or Open Team
+    Play* is selected (issue #362 -- each of the 4 players drafts and builds
+    their own deck completely independently either team format, exactly
+    like a normal individual draft; Open Team Play's teammates additionally
+    get to SEE each other's own drafted cards throughout the draft and
+    deck-building, matching this format's existing "open information"
+    premise -- see "Open Team Play" in `php-app/README.md`), and hidden for
+    every other format. If
     the previously-selected option becomes unavailable, the dropdown falls
     back to the first option that's still available in document order --
     Structure for most formats, but Quick Draft for Draft (the first of the
@@ -1203,7 +1205,12 @@ too, proportional to the smaller card width.
       mid-pick the same way `renderInitialCardPass()`'s own selection does.
       A `#quick-draft-kept-so-far` list shows every card you've kept in the
       draft so far (across all rounds, including whatever's already
-      resolved this one), read-only.
+      resolved this one), read-only. For Open Team Play (issue #362 stage
+      2), a `#quick-draft-team-drafted` block (`renderTeamDraftedCards()`,
+      shared with Winston Draft and deck-building below) additionally shows
+      `drafting.team_drafted_cards` -- your whole team's combined kept
+      cards so far, `null`/hidden for every other format including Closed
+      Team Play, which keeps every player's own draft private.
     - **Deck building** (shared `#draft-deck-building` block, sitting
       outside `#quick-draft-panel`/`#winston-draft-panel`/`#grid-draft-panel`
       since its shape is identical for all three -- `renderDraftDeckBuilding()`,
@@ -1213,7 +1220,14 @@ too, proportional to the smaller card width.
       (`submitDraftDeck()`, `POST /games/draft/deck`) serves both the
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
-      the UI either. Its title/status text is built from
+      the UI either. A `#draft-deck-team-drafted` block (issue #362 stage
+      2, same `renderTeamDraftedCards()` helper the drafting phase uses)
+      renders `deckBuilding.team_drafted_cards` -- your Open Team Play
+      teammate's own drafted cards, visible right through deck-building the
+      same way the drafting phase already was; `null`/hidden for every
+      other format. Each player still submits their own separate deck from
+      their own drafted pool either way -- this is purely visibility, not
+      shared deck construction. Its title/status text is built from
       `deckBuilding.min_deck_size`/`max_deck_size` (12/16 or 12/18 for
       Quick Draft depending on player count since issue #189 removed its
       flat 16-card ceiling, 12/however-many-you-drafted for Winston Draft
@@ -1312,7 +1326,9 @@ too, proportional to the smaller card width.
       this condition (`current_pile_number === 3 && remaining_deck_count <=
       1`, only when it's actually your turn) and shows a `window.confirm()`
       warning before submitting, so an accidental click doesn't cost a
-      drafter their pick without warning; for 3-4 players the underlying
+      drafter their pick without warning. A `#winston-draft-team-drafted`
+      block (same `renderTeamDraftedCards()` helper as Quick Draft above)
+      shows `drafting.team_drafted_cards` for Open Team Play. For 3-4 players the underlying
       turn order is
       seat rotation rather than a fixed 2-player toggle, but the UI itself
       needs no change for that -- it only ever cares whether it's currently
@@ -1377,7 +1393,15 @@ too, proportional to the smaller card width.
       to 3 for 3-4 players), each heading set to that player's own
       username (e.g. "alice's drafted so far") rather than a generic
       "Opponent" -- nothing there was ever hidden information to begin
-      with.
+      with. For Open Team Play (issue #362 stage 2), a
+      `#grid-draft-teams-drafted` block instead renders
+      `drafting.teams_drafted_so_far` (always exactly 2 entries,
+      `{team_id, is_your_team, member_usernames, drafted_so_far}`) --
+      the exact same already-open information, just regrouped by team
+      instead of listing all 4 players individually ("Your team's drafted
+      so far (alice & bob)" / "Opposing team's drafted so far (carol &
+      dave)"). `#grid-draft-other-players-drafted` is hidden whenever
+      `teams_drafted_so_far` is present, so the two never show at once.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

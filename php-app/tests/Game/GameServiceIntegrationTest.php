@@ -13247,24 +13247,29 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
-     * Open Team Play isn't included yet -- its own picks would need to
-     * pool per team rather than stay individual (see "Open Team Play" in
-     * php-app/README.md), which the deck-building step doesn't support.
+     * Open Team Play drafting (issue #362 stage 2) -- each of the 4
+     * players still drafts and builds their own deck independently, same
+     * as Closed Team Play above; only the read-side visibility differs
+     * (see the "Open Team Play drafting" test section further down).
      */
-    public function testCreateGameRejectsOpenTeamWithADraftDeckType(): void
+    public function testCreateGameAcceptsOpenTeamWithEachDraftDeckType(): void
     {
-        $userIds = $this->insertUsers('otd-' . uniqid() . '-', 4);
+        foreach (['quick_draft', 'winston_draft', 'grid_draft'] as $deckType) {
+            $userIds = $this->insertUsers('otd-' . uniqid() . '-', 4);
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: 'team',
+                deckType: $deckType,
+                partnerUserId: $userIds[1],
+                quickDraftPoolSource: $deckType === 'quick_draft' ? 'random_48' : null,
+                winstonDraftPoolSource: $deckType === 'winston_draft' ? 'random_48' : null,
+                gridDraftPoolSource: $deckType === 'grid_draft' ? 'random_48' : null,
+            );
 
-        $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('is only supported for the "draft" format, or Closed Team Play');
-        $this->games->createGame(
-            $userIds[0],
-            $userIds,
-            format: 'team',
-            deckType: 'quick_draft',
-            partnerUserId: $userIds[1],
-            quickDraftPoolSource: 'random_48',
-        );
+            self::assertIsInt($gameId, "team should accept {$deckType}");
+            self::assertSame('team', $this->fetchGame($gameId)['format']);
+        }
     }
 
     /**
@@ -13500,5 +13505,245 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
         self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
         self::assertNull($this->fetchDraftMatch($draftMatchId)['winner_user_id']);
+    }
+
+    // -- Open Team Play drafting (issue #362 stage 2) -----------------------
+
+    /**
+     * seatOrderForTeamGame() keeps the creator and their chosen partner
+     * adjacent at seats 0/1 (team_id 0); $userIds[2]/$userIds[3] land at
+     * seats 2/3 (team_id 1). Every Open Team Play drafting test below
+     * relies on this exact pairing.
+     *
+     * Quick Draft's own stage 1 pileOwner is always the drafter themselves
+     * (see submitQuickDraftPick()'s own docblock), so this keeps just the
+     * pack's own first QUICK_DRAFT_KEEP_PER_STAGE cards for $userIds[0]/
+     * $userIds[1] only -- team 1 ($userIds[2]/$userIds[3]) is deliberately
+     * left untouched so the "opposing team sees none of team 0's cards"
+     * assertion has something to actually prove.
+     */
+    private function submitTeamZeroQuickDraftStageOnePicks(int $gameId, array $userIds): void
+    {
+        foreach ([$userIds[0], $userIds[1]] as $userId) {
+            $pack = $this->games->getState($gameId, $userId)['quick_draft']['drafting']['pack'];
+            $this->games->submitQuickDraftPick($gameId, $userId, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
+        }
+    }
+
+    /**
+     * Open Team Play's own "open information" premise (php-app/README.md's
+     * "Open Team Play" section, already true for actual gameplay via
+     * `you.teammate_hand`) extended to Quick Draft's own picking phase:
+     * once each teammate has kept at least one stage's worth of cards,
+     * either one's own 'team_drafted_cards' combines BOTH of their kept
+     * cards -- never the opposing team's, which stays completely
+     * invisible to team 0 the same way it always has been.
+     */
+    public function testOpenTeamQuickDraftExposesTeamDraftedCardsThroughoutTheDraft(): void
+    {
+        $userIds = $this->insertUsers('otqd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $this->submitTeamZeroQuickDraftStageOnePicks($gameId, $userIds);
+
+        foreach ([$userIds[0], $userIds[1]] as $viewerUserId) {
+            $teamDrafted = $this->games->getState($gameId, $viewerUserId)['quick_draft']['drafting']['team_drafted_cards'];
+            self::assertNotNull($teamDrafted, "user {$viewerUserId} should see a 'team_drafted_cards' field in Open Team Play");
+            $expectedTeammateId = $viewerUserId === $userIds[0] ? $userIds[1] : $userIds[0];
+            self::assertSame($expectedTeammateId, $teamDrafted['teammate_user_id']);
+            self::assertCount(4, $teamDrafted['cards'], 'both teammates own 2-card stage-1 keeps should be combined');
+        }
+
+        // Team 1 hasn't picked anything yet, and never sees team 0's own
+        // cards regardless -- their own team_drafted_cards stays scoped to
+        // their own (empty so far) team.
+        $opponentTeamDrafted = $this->games->getState($gameId, $userIds[2])['quick_draft']['drafting']['team_drafted_cards'];
+        self::assertNotNull($opponentTeamDrafted);
+        self::assertSame($userIds[3], $opponentTeamDrafted['teammate_user_id']);
+        self::assertCount(0, $opponentTeamDrafted['cards']);
+    }
+
+    /**
+     * Closed Team Play, by contrast, keeps every player's own draft fully
+     * private -- Stage 1's own design, unchanged by stage 2 -- so it never
+     * populates 'team_drafted_cards' at all.
+     */
+    public function testClosedTeamQuickDraftNeverExposesTeamDraftedCards(): void
+    {
+        $userIds = $this->insertUsers('ctqdnone-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $state = $this->games->getState($gameId, $userIds[0]);
+        self::assertNull($state['quick_draft']['drafting']['team_drafted_cards']);
+    }
+
+    /**
+     * Winston Draft's own analog: unlike Quick Draft, draft_match_players'
+     * drafted_card_ids is already updated incrementally per pick
+     * (appendDraftedCardIds()), so 'team_drafted_cards' is read straight
+     * off it rather than walked from draft_pile_stage_picks.
+     */
+    public function testOpenTeamWinstonDraftExposesTeamDraftedCardsThroughoutTheDraft(): void
+    {
+        $userIds = $this->insertUsers('otwd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'winston_draft',
+            partnerUserId: $userIds[1],
+            winstonDraftPoolSource: 'random_48',
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Drive picks (always 'take' when possible) until BOTH of team 0's
+        // own members have drafted at least one card each, so their
+        // combined team_drafted_cards has something concrete to assert on.
+        for ($i = 0; $i < 50; $i++) {
+            $u0Drafted = json_decode((string) ($this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'] ?? '[]'), true) ?: [];
+            $u1Drafted = json_decode((string) ($this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'] ?? '[]'), true) ?: [];
+            if ($u0Drafted !== [] && $u1Drafted !== []) {
+                break;
+            }
+
+            $winstonState = $this->fetchWinstonState($draftMatchId);
+            $currentUserId = (int) $winstonState['current_player_user_id'];
+            $currentPileNumber = (int) $winstonState['current_pile_number'];
+            $currentPileSize = count(json_decode((string) $winstonState["pile_{$currentPileNumber}_card_ids"], true));
+            $this->games->submitWinstonDraftPick($gameId, $currentUserId, $currentPileSize >= 1 ? 'take' : 'pass');
+        }
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        self::assertNotSame([], $u0Drafted);
+        self::assertNotSame([], $u1Drafted);
+
+        $teamDrafted = $this->games->getState($gameId, $userIds[0])['winston_draft']['drafting']['team_drafted_cards'];
+        self::assertNotNull($teamDrafted);
+        self::assertSame($userIds[1], $teamDrafted['teammate_user_id']);
+        self::assertCount(count($u0Drafted) + count($u1Drafted), $teamDrafted['cards']);
+    }
+
+    /**
+     * Grid Draft is already open information end to end -- every player's
+     * own drafted_so_far was already visible to everyone before stage 2 --
+     * so the only change here is display grouping: 'teams_drafted_so_far'
+     * regroups that same information by team_id instead of listing all 4
+     * players individually.
+     */
+    public function testOpenTeamGridDraftGroupsDraftedCardsPerTeamInsteadOfPerPlayer(): void
+    {
+        $userIds = $this->insertUsers('otgd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'grid_draft',
+            partnerUserId: $userIds[1],
+            gridDraftPoolSource: 'random_48',
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $gridState = $this->fetchGridState($draftMatchId);
+        $currentUserId = (int) $gridState['current_turn_user_id'];
+        $grid = json_decode((string) $gridState['grid_card_ids'], true);
+        [$axis, $index] = $this->firstAvailableGridLine($grid);
+        $this->games->submitGridDraftPick($gameId, $currentUserId, $axis, $index);
+
+        $drafting = $this->games->getState($gameId, $userIds[0])['grid_draft']['drafting'];
+        self::assertNotNull($drafting['teams_drafted_so_far']);
+        self::assertCount(2, $drafting['teams_drafted_so_far']);
+
+        $teamIdByUserId = [];
+        $stmt = $this->pdo->prepare('SELECT user_id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        foreach ($stmt->fetchAll() as $row) {
+            $teamIdByUserId[(int) $row['user_id']] = (int) $row['team_id'];
+        }
+
+        $yourTeamEntries = array_values(array_filter($drafting['teams_drafted_so_far'], fn (array $t) => $t['is_your_team']));
+        self::assertCount(1, $yourTeamEntries, 'exactly one of the 2 team entries should be flagged as the viewer\'s own team');
+        self::assertSame($teamIdByUserId[$userIds[0]], $yourTeamEntries[0]['team_id']);
+        self::assertEqualsCanonicalizing(
+            [$this->pdo->query("SELECT username FROM users WHERE id = {$userIds[0]}")->fetchColumn(),
+                $this->pdo->query("SELECT username FROM users WHERE id = {$userIds[1]}")->fetchColumn()],
+            $yourTeamEntries[0]['member_usernames'],
+        );
+
+        // The round's very first pick always takes a whole, freshly-dealt
+        // line -- grid_size cards (4 for this 4-player match's own 4x4
+        // grid), all landing with whichever team the picking player is on.
+        $totalTeamsDraftedCount = array_sum(array_map(fn (array $t) => count($t['drafted_so_far']), $drafting['teams_drafted_so_far']));
+        self::assertSame(4, $totalTeamsDraftedCount);
+
+        // A non-team format never groups by team at all.
+        $draftGameId = $this->games->createGame(
+            $userIds[0],
+            [$userIds[0], $userIds[2]],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'random_48',
+        );
+        self::assertNull($this->games->getState($draftGameId, $userIds[0])['grid_draft']['drafting']['teams_drafted_so_far']);
+    }
+
+    /**
+     * Open Team Play's teammate visibility carries into deck-building too
+     * (not just the picking phase) -- 'team_drafted_cards' there combines
+     * both teammates' own full drafted pools, matching the drafting-phase
+     * field's own shape. Each teammate still submits their own separate
+     * deck though -- this is purely visibility, not shared construction.
+     */
+    public function testOpenTeamQuickDraftDeckBuildingExposesTeammatesDraftedCards(): void
+    {
+        $userIds = $this->insertUsers('otqddb-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building'];
+        self::assertNotNull($deckBuilding['team_drafted_cards']);
+        self::assertSame($userIds[1], $deckBuilding['team_drafted_cards']['teammate_user_id']);
+        self::assertCount(count($u0Drafted) + count($u1Drafted), $deckBuilding['team_drafted_cards']['cards']);
+
+        // Closed Team Play's own deck-building stays private, exactly as
+        // Stage 1 left it.
+        $closedUserIds = $this->insertUsers('ctqddbnone-' . uniqid() . '-', 4);
+        $closedGameId = $this->games->createGame(
+            $closedUserIds[0],
+            $closedUserIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $closedUserIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($closedGameId, $closedUserIds);
+        $closedDeckBuilding = $this->games->getState($closedGameId, $closedUserIds[0])['quick_draft']['deck_building'];
+        self::assertNull($closedDeckBuilding['team_drafted_cards']);
     }
 }

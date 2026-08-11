@@ -1603,9 +1603,9 @@
         switch (deckType) {
             case 'custom': return format !== 'duel';
             case 'custom_duel': return format === 'duel';
-            case 'quick_draft': return format === 'closed_team';
-            case 'winston_draft': return format === 'closed_team';
-            case 'grid_draft': return format === 'closed_team';
+            case 'quick_draft': return format === 'closed_team' || format === 'team';
+            case 'winston_draft': return format === 'closed_team' || format === 'team';
+            case 'grid_draft': return format === 'closed_team' || format === 'team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -4574,6 +4574,34 @@
     // "received" 2-stage sequence; pass_direction is only worth surfacing
     // once there's more than one other seat it could mean something
     // different for.
+    // Open Team Play's own "see your whole team's drafted cards" display
+    // (issue #362 stage 2) -- shared by Quick Draft/Winston Draft's own
+    // 'team_drafted_cards' ({teammate_user_id, teammate_username, cards},
+    // the combined kept/drafted cards of both teammates) and the
+    // deck-building step's identically-shaped field. null/undefined for
+    // every format other than Open Team Play, in which case the container
+    // is simply hidden. Never used by Grid Draft -- see
+    // renderTeamsDraftedSoFar() below for its own per-team grouping of
+    // already-fully-open information instead.
+    function renderTeamDraftedCards(container, teamDraftedCards) {
+        container.hidden = !teamDraftedCards;
+        if (!teamDraftedCards) {
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = '';
+        const heading = document.createElement('h4');
+        heading.textContent = "Your team's drafted cards so far (with " + (teamDraftedCards.teammate_username || 'your teammate') + ')';
+        container.appendChild(heading);
+        const list = document.createElement('ul');
+        teamDraftedCards.cards.forEach((card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            list.appendChild(li);
+        });
+        container.appendChild(list);
+    }
+
     function renderQuickDraftDrafting(drafting) {
         const stageLabel = drafting.total_stages > 2
             ? 'stage ' + drafting.stage + ' of ' + drafting.total_stages + ' (passing ' + drafting.pass_direction + ')'
@@ -4625,6 +4653,8 @@
             li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
             return li;
         });
+
+        renderTeamDraftedCards(document.getElementById('quick-draft-team-drafted'), drafting.team_drafted_cards);
     }
 
     document.getElementById('quick-draft-pick-submit-button').addEventListener('click', async () => {
@@ -4731,6 +4761,8 @@
             li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
             return li;
         });
+
+        renderTeamDraftedCards(document.getElementById('winston-draft-team-drafted'), drafting.team_drafted_cards);
     }
 
     async function submitWinstonDraftAction(action) {
@@ -4849,9 +4881,14 @@
         // Draft's own current_pile_cards hides the opponent's active pile.
         // other_players_drafted_so_far (issue #189) covers every OTHER
         // seated player (1 for a 2-player match, up to 3 for 3-4 players),
-        // each getting its own heading + list.
+        // each getting its own heading + list -- shown for every format
+        // EXCEPT Open Team Play, which shows the same already-open
+        // information grouped by team instead (teams_drafted_so_far,
+        // issue #362 stage 2, below).
         const otherPlayersContainer = document.getElementById('grid-draft-other-players-drafted');
+        const teamsContainer = document.getElementById('grid-draft-teams-drafted');
         otherPlayersContainer.innerHTML = '';
+        otherPlayersContainer.hidden = !!drafting.teams_drafted_so_far;
         (drafting.other_players_drafted_so_far || []).forEach((other) => {
             const heading = document.createElement('h4');
             heading.textContent = other.username + "'s drafted so far";
@@ -4864,6 +4901,23 @@
                 list.appendChild(li);
             });
             otherPlayersContainer.appendChild(list);
+        });
+
+        teamsContainer.hidden = !drafting.teams_drafted_so_far;
+        teamsContainer.innerHTML = '';
+        (drafting.teams_drafted_so_far || []).forEach((team) => {
+            const heading = document.createElement('h4');
+            heading.textContent = (team.is_your_team ? 'Your team' : 'Opposing team') + "'s drafted so far ("
+                + team.member_usernames.join(' & ') + ')';
+            teamsContainer.appendChild(heading);
+
+            const list = document.createElement('ul');
+            team.drafted_so_far.forEach((card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                list.appendChild(li);
+            });
+            teamsContainer.appendChild(list);
         });
     }
 
@@ -4939,6 +4993,7 @@
             ? deckBuilding.min_deck_size + ' cards'
             : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
         document.getElementById('draft-deck-building-title').textContent = 'Build your deck (' + sizeText + ')';
+        renderTeamDraftedCards(document.getElementById('draft-deck-team-drafted'), deckBuilding.team_drafted_cards);
         const picker = document.getElementById('draft-deck-picker');
         const submitButton = document.getElementById('draft-deck-submit-button');
         const saveButton = document.getElementById('draft-deck-save-button');
