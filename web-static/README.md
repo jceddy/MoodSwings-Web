@@ -1413,7 +1413,13 @@ too, proportional to the smaller card width.
       it actually is, the same convention Grid Draft's own status line
       already uses). `drafting.remaining_deck_count` and a
       `#winston-draft-drafted-so-far` read-only list (your own accumulated
-      picks -- never anyone else's) round out the panel, along with an
+      picks -- never anyone else's) round out the panel -- hidden
+      (`#winston-draft-drafted-so-far-heading` too) whenever
+      `team_drafted_cards` is showing instead, the same bug-fix
+      `#quick-draft-kept-so-far` got above (a live report caught this list
+      still duplicating itself for Open Team Winston Draft specifically,
+      after the Quick Draft fix had only ever touched
+      `renderQuickDraftDrafting()`) -- along with an
       `#winston-draft-other-players-info` container (issue #189 -- one line
       per OTHER seated player, replacing the original singular
       `#winston-draft-opponent-info` line) built from `drafting.other_players`
