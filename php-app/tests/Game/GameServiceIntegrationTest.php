@@ -13852,6 +13852,38 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * draftDeckBuildingStateFor()/submitDraftDeck() are shared verbatim by
+     * Quick Draft, Winston Draft, and Grid Draft -- the combined-team-pool
+     * behavior is exercised thoroughly for Quick Draft above
+     * (testOpenTeamQuickDraftDeckBuildingPoolIsTheWholeCombinedTeamPool()
+     * and its siblings); this just confirms Winston Draft gets the exact
+     * same combined pool through that one shared code path, not a
+     * separately-reimplemented one.
+     */
+    public function testOpenTeamWinstonDraftDeckBuildingPoolIsTheWholeCombinedTeamPool(): void
+    {
+        $userIds = $this->insertUsers('otwdpool-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'winston_draft',
+            partnerUserId: $userIds[1],
+            winstonDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerWinstonDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $combinedCount = count($u0Drafted) + count($u1Drafted);
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['winston_draft']['deck_building'];
+        self::assertCount($combinedCount, $deckBuilding['drafted_cards']);
+        self::assertSame($combinedCount, $deckBuilding['max_deck_size']);
+    }
+
+    /**
      * Grid Draft is already open information end to end -- every player's
      * own drafted_so_far was already visible to everyone before stage 2 --
      * so the only change here is display grouping: 'teams_drafted_so_far'
@@ -13958,5 +13990,190 @@ final class GameServiceIntegrationTest extends TestCase
         $this->driveMultiplayerQuickDraftToDeckBuilding($closedGameId, $closedUserIds);
         $closedDeckBuilding = $this->games->getState($closedGameId, $closedUserIds[0])['quick_draft']['deck_building'];
         self::assertNull($closedDeckBuilding['team_drafted_cards']);
+    }
+
+    /**
+     * A real request: Open Team Play teammates shouldn't just SEE each
+     * other's drafted cards during deck-building (the test above) -- they
+     * should be able to actually build their own deck from the team's
+     * whole combined pool, not just what they personally drafted. Before
+     * neither teammate has submitted anything yet, both should see the
+     * exact same combined pool (their own drafted_card_ids plus their
+     * teammate's) as their own pickable 'drafted_cards', with
+     * 'max_deck_size' matching its full size.
+     */
+    public function testOpenTeamQuickDraftDeckBuildingPoolIsTheWholeCombinedTeamPool(): void
+    {
+        $userIds = $this->insertUsers('otqdpool-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $combinedCount = count($u0Drafted) + count($u1Drafted);
+
+        $u0DeckBuilding = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building'];
+        self::assertCount($combinedCount, $u0DeckBuilding['drafted_cards']);
+        self::assertSame($combinedCount, $u0DeckBuilding['max_deck_size']);
+
+        // The teammate (u1) sees the exact same combined pool -- not just
+        // their own cards either.
+        $u1DeckBuilding = $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building'];
+        self::assertCount($combinedCount, $u1DeckBuilding['drafted_cards']);
+    }
+
+    /**
+     * The actual submission, not just what's shown as pickable: a card
+     * u0 never personally drafted (only their teammate u1 did) must be
+     * accepted in u0's own deck now.
+     */
+    public function testOpenTeamQuickDraftDeckCanIncludeTeammatesDraftedCards(): void
+    {
+        $userIds = $this->insertUsers('otqdinclude-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $teammatesOnlyCardId = null;
+        foreach ($u1Drafted as $cardId) {
+            if (!in_array($cardId, $u0Drafted, true)) {
+                $teammatesOnlyCardId = $cardId;
+                break;
+            }
+        }
+        self::assertNotNull($teammatesOnlyCardId, 'fixture sanity check -- u1 must have drafted at least one card u0 did not');
+
+        $deck = [...array_slice($u0Drafted, 0, 11), $teammatesOnlyCardId];
+        $this->games->submitDraftDeck($gameId, $userIds[0], $deck);
+
+        $deckCardIds = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building']['deck_card_ids'];
+        self::assertContains($teammatesOnlyCardId, $deckCardIds);
+    }
+
+    /**
+     * First-come-first-served (a real design choice, not an oversight):
+     * once a drafted card is sitting in one teammate's OWN submitted
+     * deck, the other teammate can't also put it in theirs -- even a card
+     * they personally drafted themselves. The only way to free it back up
+     * is for whichever teammate is currently using it to un-select it and
+     * resubmit.
+     */
+    public function testOpenTeamQuickDraftFirstComeFirstServedBlocksTheOtherTeammateFromTheSameCard(): void
+    {
+        $userIds = $this->insertUsers('otqdfcfs-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $contestedCardId = $u1Drafted[0]; // u1's own card -- u0 claims it first anyway
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $this->games->submitDraftDeck($gameId, $userIds[0], [...array_slice($u0Drafted, 0, 11), $contestedCardId]);
+
+        // u1 no longer sees it as pickable at all...
+        $u1DeckBuilding = $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building'];
+        self::assertNotContains($contestedCardId, array_column($u1DeckBuilding['drafted_cards'], 'card_id'));
+
+        // ...and submitting it anyway is rejected server-side too, not just hidden client-side.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("can only contain cards your team drafted (and that your teammate hasn't already used in their own deck)");
+        $this->games->submitDraftDeck($gameId, $userIds[1], [...array_slice($u1Drafted, 1, 11), $contestedCardId]);
+    }
+
+    /**
+     * The other half of first-come-first-served: un-claiming a card by
+     * resubmitting without it makes it available to the teammate again.
+     */
+    public function testOpenTeamQuickDraftReleasingAClaimedCardMakesItAvailableToTheTeammateAgain(): void
+    {
+        $userIds = $this->insertUsers('otqdrelease-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $contestedCardId = $u1Drafted[0];
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+
+        $this->games->submitDraftDeck($gameId, $userIds[0], [...array_slice($u0Drafted, 0, 11), $contestedCardId]);
+        // u0 changes their mind, resubmits without it.
+        $this->games->submitDraftDeck($gameId, $userIds[0], array_slice($u0Drafted, 0, 12));
+
+        $u1DeckBuilding = $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building'];
+        self::assertContains($contestedCardId, array_column($u1DeckBuilding['drafted_cards'], 'card_id'));
+        $this->games->submitDraftDeck($gameId, $userIds[1], [...array_slice($u1Drafted, 1, 11), $contestedCardId]);
+        self::assertContains($contestedCardId, $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building']['deck_card_ids']);
+    }
+
+    /**
+     * Closed Team Play must NOT get any of the above -- "information
+     * stays closed between teammates" (see "Closed Team Play" in
+     * php-app/README.md) means each player still builds only from their
+     * own personally-drafted pool, exactly as before this feature.
+     */
+    public function testClosedTeamQuickDraftDeckBuildingStaysPersonalPoolOnly(): void
+    {
+        $userIds = $this->insertUsers('ctqdpersonal-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building'];
+        self::assertCount(count($u0Drafted), $deckBuilding['drafted_cards']);
+
+        $teammatesOnlyCardId = null;
+        foreach ($u1Drafted as $cardId) {
+            if (!in_array($cardId, $u0Drafted, true)) {
+                $teammatesOnlyCardId = $cardId;
+                break;
+            }
+        }
+        self::assertNotNull($teammatesOnlyCardId, 'fixture sanity check');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('can only contain cards you drafted');
+        $this->games->submitDraftDeck($gameId, $userIds[0], [...array_slice($u0Drafted, 0, 11), $teammatesOnlyCardId]);
     }
 }

@@ -2841,9 +2841,36 @@ invisible as it always has been.
   untouched alongside it; the frontend simply prefers the team-grouped
   view once it's present (`game.js`'s `renderGridDraftDrafting()`).
 
-Each player still submits their own separate deck from their own drafted
-pool either way -- none of this pools picks into a single shared
-resource, only what's *visible* changes.
+**Deck-building -- a real shared team pool, not just visibility (a real
+request).** Unlike the picking phase above (visibility only, each player
+still drafts their own cards independently), deck-BUILDING for Open Team
+Play genuinely pools both teammates' drafted cards into one shared
+resource: each player can build their own deck from anything either
+teammate drafted, not only their own personal picks. `draftDeckBuildingStateFor()`'s
+own `'drafted_cards'` (the actual field the frontend's picker renders
+from -- previously always just the viewer's own personal pool) becomes
+the combined pool -- both teammates' `drafted_card_ids` -- MINUS
+whatever the teammate's own *currently-submitted* `deck_card_ids` has
+already claimed; `'max_deck_size'` is sized off that same pool. A
+specific drafted card can only ever sit in one teammate's deck at a
+time -- first-come-first-served: if the teammate already has it in their
+own submitted deck (including one they personally drafted themselves),
+it's simply unavailable here, shown neither pickable in the picker nor
+accepted by `submitDraftDeck()`; the only way to free it back up is for
+whichever teammate currently has it to un-select it and resubmit. This
+is computed fresh from `deck_card_ids` on every call rather than a
+separately persisted "claim" -- there's nothing to explicitly release,
+since a card simply stops being claimed the moment it's no longer in
+anyone's own submitted `deck_card_ids`.
+`submitDraftDeck()` enforces the exact identical pool server-side
+(reading the teammate's own current `drafted_card_ids`/`deck_card_ids`
+straight from `draft_match_players` the same way), so what a player was
+shown as pickable and what actually validates on submit can never
+disagree. Closed Team Play (and every non-team draft) is completely
+unaffected -- `openTeamPlayTeammateUserId()` returns `null` there, so
+both functions fall straight back to the original personal-pool-only
+behavior, matching this format's own "information stays closed between
+teammates" premise (see "Closed Team Play" below).
 
 ### Closed Team Play
 

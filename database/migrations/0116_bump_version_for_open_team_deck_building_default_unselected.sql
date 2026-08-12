@@ -1,0 +1,15 @@
+-- Open Team Play's own deck-building picker (migration 0114) draws from
+-- the whole TEAM's combined drafted pool, not just the viewer's own --
+-- but the first-game default selection ("select everything, trim down")
+-- still pre-selected the ENTIRE pool. Since only one teammate can ever
+-- have a given card in their own deck at a time, that meant submitting
+-- without changing anything would silently claim the whole pool for
+-- whichever teammate submitted first, leaving the other with nothing
+-- left to build a deck from at all. Now defaults to nothing selected for
+-- Open Team Play specifically, forcing each teammate to deliberately
+-- choose their own share; every other format (a real personal pool, no
+-- such conflict) keeps the original select-all default.
+--
+-- Pure frontend (game.js) -- no schema change. See "Deck building" in
+-- web-static/README.md.
+UPDATE schema_version SET version = '1.22.2' WHERE id = 1;

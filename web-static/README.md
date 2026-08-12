@@ -1262,19 +1262,41 @@ too, proportional to the smaller card width.
       (`submitDraftDeck()`, `POST /games/draft/deck`) serves both the
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
-      the UI either. A `#draft-deck-team-drafted` block (issue #362 stage
-      2, same `renderTeamDraftedCards()` helper the drafting phase uses)
-      renders `deckBuilding.team_drafted_cards` -- your Open Team Play
-      teammate's own drafted cards, visible right through deck-building the
-      same way the drafting phase already was; `null`/hidden for every
-      other format. Each player still submits their own separate deck from
-      their own drafted pool either way -- this is purely visibility, not
-      shared deck construction. Its title/status text is built from
-      `deckBuilding.min_deck_size`/`max_deck_size` (12/16 or 12/18 for
-      Quick Draft depending on player count since issue #189 removed its
-      flat 16-card ceiling, 12/however-many-you-drafted for Winston Draft
-      and Grid Draft alike), never hardcoded, so
-      one function serves all three formats' own bounds correctly. The
+      the UI either. For Open Team Play, the picker (`#draft-deck-picker`,
+      built from `deckBuilding.drafted_cards`) IS the team's whole
+      combined pool minus whatever the teammate's own current deck has
+      already claimed (see `GameService::draftDeckBuildingStateFor()`'s
+      own docblock) -- a real request: either teammate can genuinely
+      build their own deck from anything either of them drafted, not only
+      their own personal picks, first-come-first-served if both want the
+      same card. `#draft-deck-team-drafted` (the same
+      `renderTeamDraftedCards()` block the drafting phase uses to show
+      the full combined pool, informational only) is deliberately
+      rendered with `null` -- always hidden -- here specifically, even
+      though `deckBuilding.team_drafted_cards` itself is still populated
+      by the server: showing it here too would just be the exact same
+      cards the picker right below it already shows, a bug caught live
+      the moment the picker itself became the team pool. It stays shown
+      during drafting (`renderQuickDraftDrafting()`/
+      `renderWinstonDraftDrafting()`), where there's no such picker
+      duplicate. The status line reads "Choose N from your team's M
+      available drafted cards" instead of "your M drafted cards" whenever
+      `team_drafted_cards` is present; the title reads "Build your deck
+      (N+ cards)" rather than a literal "N-M" range for the same case --
+      another bug caught live: `max_deck_size` there is the whole team's
+      pool size, not a real ceiling on what any ONE player could take (the
+      teammate needs to leave enough of it for their own `min_deck_size`-card
+      deck too), so stating a hard range would misleadingly imply you
+      could take the entire team pool yourself. Every other format
+      (including Closed Team Play) keeps both the original
+      personal-pool-only picker and the literal "N-M" range, since there
+      `max_deck_size` really is a hard per-player ceiling.
+      `deckBuilding.min_deck_size`/`max_deck_size` themselves (12/16 or
+      12/18 for Quick Draft depending on player count since issue #189
+      removed its flat 16-card ceiling, 12/however-many-you-drafted for
+      Winston Draft and Grid Draft alike, now sized off the combined team
+      pool instead for Open Team Play) are never hardcoded, so one
+      function serves all three formats' own bounds correctly. The
       "waiting for a deck" status text reads `deckBuilding.other_players`
       (every other seated player's own username/submitted flag, issue
       #189) when present rather than the single `opponent_submitted`
@@ -1289,7 +1311,18 @@ too, proportional to the smaller card width.
       deck you last submitted, for the game that just ended — so
       sideboarding starts from your existing deck instead of forcing a full
       retrim from scratch before every game. Only the very first game of a
-      match (no previous deck yet) still defaults to every drafted card.
+      match (no previous deck yet) still defaults to every drafted card --
+      EXCEPT for Open Team Play (`deckBuilding.team_drafted_cards` non-null),
+      where it defaults to nothing selected instead (a bug caught live):
+      `drafted_cards` there is the whole TEAM's combined pool, not just
+      your own, and only one teammate can ever have a given card in their
+      own deck at a time (see `GameService::draftDeckBuildingStateFor()`'s
+      own docblock) -- pre-selecting all of it would silently claim the
+      ENTIRE pool the moment either teammate submitted without changing
+      anything, leaving the other with nothing left to build their own
+      deck from at all. Forcing each teammate to deliberately choose their
+      own share avoids that trap. Every other format (a real personal
+      pool, no such conflict) keeps the original select-all default.
       A `#draft-deck-reset-button` ("Reset to previous deck") sits next to
       Select all/Clear selection -- it re-seeds the selection from
       `deckBuilding.previous_deck_card_ids` on demand (via the same

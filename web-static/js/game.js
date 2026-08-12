@@ -5029,11 +5029,27 @@
 
     function renderDraftDeckBuilding(deckBuilding) {
         currentDeckBuilding = deckBuilding;
-        const sizeText = deckBuilding.min_deck_size === deckBuilding.max_deck_size
-            ? deckBuilding.min_deck_size + ' cards'
-            : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
+        // Open Team Play (deckBuilding.team_drafted_cards non-null): max_deck_size
+        // is the whole TEAM's combined pool, not a real ceiling on what
+        // any one player could take -- your teammate needs to leave
+        // enough of it for their own min_deck_size-card deck too, so
+        // stating it as a literal "12-32" range would misleadingly imply
+        // you could take all 32 yourself. "12+" says what's actually true
+        // (a floor, no meaningful individual ceiling) without claiming a
+        // number that was never really available to you alone.
+        const sizeText = deckBuilding.team_drafted_cards
+            ? deckBuilding.min_deck_size + '+ cards'
+            : deckBuilding.min_deck_size === deckBuilding.max_deck_size
+                ? deckBuilding.min_deck_size + ' cards'
+                : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
         document.getElementById('draft-deck-building-title').textContent = 'Build your deck (' + sizeText + ')';
-        renderTeamDraftedCards(document.getElementById('draft-deck-team-drafted'), deckBuilding.team_drafted_cards);
+        // The picker below (#draft-deck-picker) is ITSELF the team's
+        // combined pool for Open Team Play now (see the docblock further
+        // down) -- showing this separate informational block too would
+        // just be the same cards twice, so it's only ever rendered during
+        // the drafting phase (renderQuickDraftDrafting()/
+        // renderWinstonDraftDrafting()), never here.
+        renderTeamDraftedCards(document.getElementById('draft-deck-team-drafted'), null);
         const picker = document.getElementById('draft-deck-picker');
         const submitButton = document.getElementById('draft-deck-submit-button');
         const saveButton = document.getElementById('draft-deck-save-button');
@@ -5077,13 +5093,38 @@
         }
 
         if (!draftDeckSelectionInitialized) {
-            draftDeckSelection = deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids
-                ? cardIdsToDraftedCardIndices(deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids, deckBuilding.drafted_cards)
-                : new Set(deckBuilding.drafted_cards.map((card, index) => index));
+            if (deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids) {
+                draftDeckSelection = cardIdsToDraftedCardIndices(deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids, deckBuilding.drafted_cards);
+            } else if (deckBuilding.team_drafted_cards) {
+                // Open Team Play, first game of the match -- unlike every
+                // other format (where defaulting to "everything selected"
+                // just means the player trims down from their own full
+                // personal pool), drafted_cards here is the whole TEAM's
+                // combined pool (see draftDeckBuildingStateFor()'s own
+                // docblock): only one teammate can ever have a given card
+                // in their own deck at a time, so pre-selecting all of it
+                // would silently claim the WHOLE pool the instant either
+                // teammate submits without changing anything, leaving the
+                // other with nothing left to build their own deck from at
+                // all. Starts empty instead, so each teammate has to
+                // deliberately choose their own share.
+                draftDeckSelection = new Set();
+            } else {
+                draftDeckSelection = new Set(deckBuilding.drafted_cards.map((card, index) => index));
+            }
             draftDeckSelectionInitialized = true;
         }
 
-        statusEl.textContent = 'Choose ' + sizeText + ' from your ' + deckBuilding.drafted_cards.length + ' drafted cards for your deck. Tap a card to select/de-select it.';
+        // Open Team Play (deckBuilding.team_drafted_cards non-null): the
+        // picker below is already the team's whole combined pool minus
+        // whatever the teammate's own current deck has claimed (see
+        // GameService::draftDeckBuildingStateFor()'s own docblock) --
+        // "your drafted cards" would misleadingly suggest only your own
+        // personal picks are selectable here.
+        const poolLabel = deckBuilding.team_drafted_cards
+            ? "your team's " + deckBuilding.drafted_cards.length + ' available drafted cards'
+            : 'your ' + deckBuilding.drafted_cards.length + ' drafted cards';
+        statusEl.textContent = 'Choose ' + sizeText + ' from ' + poolLabel + ' for your deck. Tap a card to select/de-select it.';
         picker.innerHTML = '';
 
         deckBuilding.drafted_cards.forEach((card, index) => {
