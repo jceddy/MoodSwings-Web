@@ -6161,6 +6161,31 @@ final class GameService
     {
         $groups = $this->pendingAfterScoringGroups($state, $winningGamePlayerIds);
 
+        // Bashfulness's own 'afterScoring' tag ('condition' => 'if_won') is
+        // a ONE-TIME check scoped to the very round it was played in --
+        // "after playing this mood, after scoring THIS round, if you won
+        // the round..." -- not a recurring "while in play" ability like
+        // Recklessness's own 'always'-conditioned tag. pendingAfterScoringGroups()
+        // above only ever includes a self-tag in $groups once its own
+        // condition is actually met, so a losing round leaves the tag
+        // sitting on the card, uncleared -- and, left alone, it would then
+        // silently re-evaluate (and potentially fire) against whichever
+        // LATER round the owner eventually does win, exactly the bug
+        // caught live: "any subsequent winning of a round causes it to
+        // cycle to the bottom of the deck." A conditional tag gets exactly
+        // one evaluation, win or lose -- cleared here, unconditionally, for
+        // every mood still in play whose own condition didn't hold this
+        // round (an 'always' tag never reaches this loop, since its
+        // condition is always met, so this can't affect
+        // Recklessness/Gluttony/Insecurity's own guaranteed-next-round
+        // resolution below).
+        foreach ($state->moodsInPlay() as $mood) {
+            $afterScoring = $state->effectState($mood->cardId, 'afterScoring');
+            if ($afterScoring !== null && !$this->afterScoringSelfConditionMet($afterScoring, $mood->ownerId, $winningGamePlayerIds)) {
+                $state->clearEffectState($mood->cardId, 'afterScoring');
+            }
+        }
+
         foreach ($turnOrder as $playerId) {
             $playerGroups = $groups[$playerId] ?? [];
             if ($playerGroups === []) {
@@ -6246,12 +6271,9 @@ final class GameService
             $cardId = $mood->cardId;
 
             $afterScoring = $state->effectState($cardId, 'afterScoring');
-            if ($afterScoring !== null) {
-                $conditionMet = ($afterScoring['condition'] ?? 'always') === 'always' || in_array($mood->ownerId, $winningGamePlayerIds, true);
-                if ($conditionMet) {
-                    $byController[$mood->ownerId][$cardId]['cardId'] = $cardId;
-                    $byController[$mood->ownerId][$cardId]['self'] = true;
-                }
+            if ($afterScoring !== null && $this->afterScoringSelfConditionMet($afterScoring, $mood->ownerId, $winningGamePlayerIds)) {
+                $byController[$mood->ownerId][$cardId]['cardId'] = $cardId;
+                $byController[$mood->ownerId][$cardId]['self'] = true;
             }
 
             $returnsToOwner = $state->effectState($cardId, 'returnsToOwnerAfterScoring');
@@ -6278,6 +6300,24 @@ final class GameService
         }
 
         return $groups;
+    }
+
+    /**
+     * Whether a card's own 'afterScoring' self-tag actually fires this
+     * round -- an 'always' condition (Recklessness/Gluttony/Insecurity)
+     * always does, guaranteed to resolve (and clear itself, see
+     * applyAfterScoringHooks()) the very next time this runs regardless of
+     * outcome; an 'if_won' condition (Bashfulness) only does for whichever
+     * round(s) its owner is actually in $winningGamePlayerIds for. Shared
+     * between pendingAfterScoringGroups() (which of THIS check) and
+     * applyAfterScoringHooks()'s own cleanup pass (which clears a
+     * conditional tag that DIDN'T fire, so a losing round doesn't leave it
+     * sitting around to silently re-evaluate against some later round's
+     * winner instead) -- both need the exact same answer to stay in sync.
+     */
+    private function afterScoringSelfConditionMet(array $afterScoring, int $ownerId, array $winningGamePlayerIds): bool
+    {
+        return ($afterScoring['condition'] ?? 'always') === 'always' || in_array($ownerId, $winningGamePlayerIds, true);
     }
 
     /**

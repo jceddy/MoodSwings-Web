@@ -1,0 +1,19 @@
+-- Bashfulness's "after playing this mood ... if you win the round" trigger
+-- was being treated more like an unconditional "while in play" trigger:
+-- pendingAfterScoringGroups() only cleared a card's 'afterScoring' self-tag
+-- when its condition actually fired that round, so a round Bashfulness's
+-- owner LOST left the tag sitting on the card untouched -- causing it to
+-- silently re-evaluate (and potentially cycle the mood to the bottom of
+-- the deck) against some later round its owner happened to win, instead of
+-- only ever the round it was actually played in.
+--
+-- Fixed via a new shared helper, afterScoringSelfConditionMet(), and an
+-- unconditional cleanup pass at the top of GameService::applyAfterScoringHooks()
+-- that clears any conditional 'afterScoring' self-tag that did NOT fire
+-- this round, for every mood still in play. Recklessness/Gluttony/
+-- Insecurity's own 'always'-conditioned tags are unaffected, since their
+-- condition always holds. See "GameService::applyAfterScoringHooks()" in
+-- php-app/README.md.
+--
+-- Pure backend rules-engine fix -- no schema change.
+UPDATE schema_version SET version = '1.23.5' WHERE id = 1;
