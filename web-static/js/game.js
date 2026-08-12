@@ -5029,11 +5029,27 @@
 
     function renderDraftDeckBuilding(deckBuilding) {
         currentDeckBuilding = deckBuilding;
-        const sizeText = deckBuilding.min_deck_size === deckBuilding.max_deck_size
-            ? deckBuilding.min_deck_size + ' cards'
-            : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
+        // Open Team Play (deckBuilding.team_drafted_cards non-null): max_deck_size
+        // is the whole TEAM's combined pool, not a real ceiling on what
+        // any one player could take -- your teammate needs to leave
+        // enough of it for their own min_deck_size-card deck too, so
+        // stating it as a literal "12-32" range would misleadingly imply
+        // you could take all 32 yourself. "12+" says what's actually true
+        // (a floor, no meaningful individual ceiling) without claiming a
+        // number that was never really available to you alone.
+        const sizeText = deckBuilding.team_drafted_cards
+            ? deckBuilding.min_deck_size + '+ cards'
+            : deckBuilding.min_deck_size === deckBuilding.max_deck_size
+                ? deckBuilding.min_deck_size + ' cards'
+                : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
         document.getElementById('draft-deck-building-title').textContent = 'Build your deck (' + sizeText + ')';
-        renderTeamDraftedCards(document.getElementById('draft-deck-team-drafted'), deckBuilding.team_drafted_cards);
+        // The picker below (#draft-deck-picker) is ITSELF the team's
+        // combined pool for Open Team Play now (see the docblock further
+        // down) -- showing this separate informational block too would
+        // just be the same cards twice, so it's only ever rendered during
+        // the drafting phase (renderQuickDraftDrafting()/
+        // renderWinstonDraftDrafting()), never here.
+        renderTeamDraftedCards(document.getElementById('draft-deck-team-drafted'), null);
         const picker = document.getElementById('draft-deck-picker');
         const submitButton = document.getElementById('draft-deck-submit-button');
         const saveButton = document.getElementById('draft-deck-save-button');

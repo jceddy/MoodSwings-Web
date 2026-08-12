@@ -1,0 +1,21 @@
+-- Two small follow-ups to the Open Team Play shared-draft-pool feature
+-- (migration 0114):
+--
+-- 1. "Build your deck (12-32 cards)" misleadingly implied any one player
+--    could take the whole 32-card team pool -- max_deck_size there is
+--    the team's combined pool size, not a per-player ceiling (the
+--    teammate needs to leave enough of it for their own min_deck_size-
+--    card deck). Now reads "12+ cards" for Open Team Play specifically;
+--    every other format (a real personal ceiling) keeps the literal
+--    "N-M" range.
+-- 2. #draft-deck-team-drafted ("Your team's drafted cards so far") is no
+--    longer rendered during deck-building for Open Team Play -- the
+--    picker itself already IS the team's combined pool (as of 0114), so
+--    showing this separate block too was just the same cards twice. It
+--    stays shown during the drafting phase, where there's no such
+--    duplicate.
+--
+-- Pure frontend (game.js) -- no schema change. See "Open Team Play" in
+-- php-app/README.md and the "Deck building" bullet in
+-- web-static/README.md.
+UPDATE schema_version SET version = '1.22.1' WHERE id = 1;
