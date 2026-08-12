@@ -3351,6 +3351,7 @@
     const chatChannelSelect = document.getElementById('chat-channel-select');
     const chatErrorEl = document.getElementById('game-chat-error');
     const chatButton = document.getElementById('view-chat-button');
+    const chatSendButton = document.getElementById('game-chat-send-button');
     // The highest chat_messages[].id the player has already seen for the
     // current game (dialog open, or last closed while caught up) --
     // renderChat() below diffs against this to decide whether the unread
@@ -3476,7 +3477,7 @@
         const readOnly = isChatReadOnly();
         document.getElementById('game-chat-readonly-message').hidden = !readOnly;
         chatInput.disabled = readOnly;
-        chatForm.querySelector('button').disabled = readOnly;
+        chatSendButton.disabled = readOnly;
         chatQuickButtons.forEach((button) => { button.disabled = readOnly; });
         gameChatDialog.showModal();
         if (currentState) {
@@ -3491,25 +3492,51 @@
     // Shared by the free-text form below and the quick-chat buttons
     // (GL;HF/GG/emoji canned messages) further down -- both just send
     // some text on whichever channel is currently selected, differing
-    // only in where that text comes from.
+    // only in where that text comes from. Also the one shared guard
+    // against a duplicate send (issue: users reported seeing the same
+    // chat message twice, traced to a rapid double-click/double-Enter on
+    // Send firing two independent POST /games/chat requests -- there was
+    // nothing here stopping a second call from starting before the first
+    // one's own request had even returned). #game-chat-send-button's own
+    // `disabled` flag doubles as that guard: set to `true` synchronously,
+    // before the first `await`, so a second call arriving before this one
+    // resumes (from either entry point -- the form's submit handler or a
+    // quick-chat button) sees it already `true` and bails out immediately
+    // rather than firing its own request. Re-enabled in `finally` based on
+    // isChatReadOnly() (not unconditionally `false`), since the game
+    // itself could have ended while this request was in flight.
     async function sendChatText(messageText) {
-        chatErrorEl.hidden = true;
-        // chatChannelSelect.hidden collapses two different situations to
-        // the same "no choice to make" state: an ordinary non-team format
-        // (only 'table' exists) and the deck-building window (only 'team'
-        // exists, see renderChat()'s own chatChannelSelect.hidden
-        // computation above) -- isTeamDeckBuildingChatOpen() tells them
-        // apart so the right implicit channel is sent either way.
-        const channel = chatChannelSelect.hidden
-            ? (isTeamDeckBuildingChatOpen(currentState) ? 'team' : 'table')
-            : chatChannelSelect.value;
-        const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
-        if (!ok) {
-            chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
-            chatErrorEl.hidden = false;
-            return;
+        if (chatSendButton.disabled) {
+            return false;
         }
-        await refreshBoard();
+
+        chatErrorEl.hidden = true;
+        chatSendButton.disabled = true;
+        chatQuickButtons.forEach((button) => { button.disabled = true; });
+
+        try {
+            // chatChannelSelect.hidden collapses two different situations to
+            // the same "no choice to make" state: an ordinary non-team format
+            // (only 'table' exists) and the deck-building window (only 'team'
+            // exists, see renderChat()'s own chatChannelSelect.hidden
+            // computation above) -- isTeamDeckBuildingChatOpen() tells them
+            // apart so the right implicit channel is sent either way.
+            const channel = chatChannelSelect.hidden
+                ? (isTeamDeckBuildingChatOpen(currentState) ? 'team' : 'table')
+                : chatChannelSelect.value;
+            const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
+            if (!ok) {
+                chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
+                chatErrorEl.hidden = false;
+                return false;
+            }
+            await refreshBoard();
+            return true;
+        } finally {
+            const readOnly = isChatReadOnly();
+            chatSendButton.disabled = readOnly;
+            chatQuickButtons.forEach((button) => { button.disabled = readOnly; });
+        }
     }
 
     chatForm.addEventListener('submit', async (e) => {
@@ -3518,8 +3545,13 @@
         if (messageText === '') {
             return;
         }
-        await sendChatText(messageText);
-        chatInput.value = '';
+        // Only cleared on a confirmed send -- previously this ran
+        // unconditionally, so a failed send (e.g. the game ending
+        // mid-type) silently discarded the player's own typed text along
+        // with the error message.
+        if (await sendChatText(messageText)) {
+            chatInput.value = '';
+        }
     });
 
     // Quick chat (canned GL;HF/GG/emoji messages, one click to send on

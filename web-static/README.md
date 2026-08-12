@@ -2131,25 +2131,47 @@ too, proportional to the smaller card width.
     channel to send whenever the selector is hidden for either reason:
     `isTeamDeckBuildingChatOpen(currentState)` picks `'team'`, everything
     else (every non-`'team'`-format game) picks `'table'`. Sending
-    (`sendChatMessage()` -> `POST /games/chat`) clears the input and calls
-    `refreshBoard()` immediately on success, the same "an action triggers
-    its own refreshBoard()" convention Play/Pass/etc. already follow,
-    rather than waiting for the next 4-second poll tick to show the
-    player's own just-sent message. Both the free-text form and a row of
-    "quick chat" buttons below it (`#game-chat-quick-buttons`, between the
-    form and the Close button -- GL;HF, GG, and a handful of emoji, one
-    click each) funnel through the same `sendChatText(messageText)`
-    helper, which does everything the old inline submit handler used to
-    (hide any previous error, resolve the channel, `sendChatMessage()`,
-    `refreshBoard()` on success) -- a quick-chat button's own
-    `data-quick-chat-text` supplies the message instead of
-    `#game-chat-input`'s value, and (unlike the form's own submit
-    handler) never touches the text input afterward, since there's
-    nothing in it to clear. Each quick-chat button is disabled/enabled in
-    lockstep with the free-text input and Send button whenever the
-    dialog opens (`isChatReadOnly()`), so a completed/abandoned game's
-    read-only chat can't be worked around by clicking GG instead of
-    typing it.
+    (`sendChatMessage()` -> `POST /games/chat`) clears the input (on a
+    confirmed send only -- see below) and calls `refreshBoard()`
+    immediately on success, the same "an action triggers its own
+    refreshBoard()" convention Play/Pass/etc. already follow, rather than
+    waiting for the next 4-second poll tick to show the player's own
+    just-sent message. Both the free-text form and a row of "quick chat"
+    buttons below it (`#game-chat-quick-buttons`, between the form and the
+    Close button -- GL;HF, GG, and a handful of emoji, one click each)
+    funnel through the same `sendChatText(messageText)` helper, which does
+    everything the old inline submit handler used to (hide any previous
+    error, resolve the channel, `sendChatMessage()`, `refreshBoard()` on
+    success) -- a quick-chat button's own `data-quick-chat-text` supplies
+    the message instead of `#game-chat-input`'s value. Each quick-chat
+    button is disabled/enabled in lockstep with the free-text input and
+    Send button whenever the dialog opens (`isChatReadOnly()`), so a
+    completed/abandoned game's read-only chat can't be worked around by
+    clicking GG instead of typing it.
+
+    **Duplicate-message guard.** Users reported seeing the same chat
+    message sent twice -- traced to a rapid double-click on Send (or
+    double-Enter in the input, or a quick-chat button clicked while Send
+    was already mid-request) firing two independent `POST /games/chat`
+    requests before the first one's own response came back; nothing
+    stopped the second one from firing, so the server dutifully inserted
+    two separate rows (the read side was never the problem --
+    `renderList()` already does a full clear-and-rebuild from
+    `state.chat_messages` every render, and `GameChatRepository::messagesFor()`
+    is a plain non-`JOIN` `SELECT`, so neither could have produced a
+    duplicate on its own). `sendChatText()` now guards against this using
+    `#game-chat-send-button`'s own `disabled` flag as reentrant state: set
+    to `true` synchronously, before the `await sendChatMessage(...)` call,
+    so a second call arriving (from either entry point) before this one
+    resumes sees it already `true` and returns `false` immediately rather
+    than firing its own request -- reset in a `finally` block based on
+    `isChatReadOnly()` (not unconditionally re-enabled), since the game
+    could have ended while the request was in flight. The form's own
+    submit handler now only clears `#game-chat-input` when `sendChatText()`
+    actually returns `true`, fixing a second, smaller bug the same
+    refactor surfaced: a failed send (e.g. the game ending mid-type)
+    used to silently discard the player's own typed text right along with
+    the error message.
 
     **Open Team Play's deck-building chat.** Once deck-building started
     drawing from the whole team's shared drafted pool (see "Deck

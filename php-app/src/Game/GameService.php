@@ -4628,13 +4628,75 @@ final class GameService
     }
 
     /**
+     * Seats $overridePlayerId as $roundId's first player directly,
+     * skipping their team's own turn_order/leader decision entirely --
+     * used whenever BoardState::firstPlayerOverride() (Honor, or Awe's
+     * one-time version) has already picked a SPECIFIC player to go first.
+     * Asking that player's own team to decide anyway (candidates: their
+     * own two members, same as any other turn_order decision) would let
+     * the team pick the OTHER member instead, silently overriding
+     * Honor/Awe's own explicit choice -- the whole point of those cards
+     * naming a player rather than just a side.
+     *
+     * Mirrors applyTurnOrderDecision()'s/applyClosedTeamLeaderDecision()'s
+     * own "resolve the chosen player" mechanics exactly -- same
+     * computeFreshGrants()/updateRoundTurnState() calls, the same
+     * game_rounds column each already writes (first_game_player_id for
+     * 'closed_team', team_turn_1_game_player_id for 'team') -- just
+     * skipping the "wait for a decision" step. For 'team' (never
+     * 'closed_team', which has no second decision at all -- see
+     * applyClosedTeamLeaderDecision()'s own docblock), the OTHER team
+     * still gets its own ordinary turn_order decision afterward, exactly
+     * like applyTurnOrderDecision()'s own isFirstTurn branch -- Honor/Awe
+     * only ever pick who goes first, never who goes second.
+     *
+     * Logged with 'automated' => true (same flag shape pass()'s own
+     * auto-pass distinction uses) so describeEvent() can say "goes first"
+     * rather than the misleading "was chosen by their team" a real
+     * decision's own log entry uses.
+     */
+    private function seatFirstPlayerOverride(int $gameId, int $roundId, int $overridePlayerId, string $format): void
+    {
+        $state = $this->boardStates->load($gameId);
+
+        // Hurt Feelings never applies in either team format, so the base
+        // grant is always 1 -- same as applyTurnOrderDecision()'s/
+        // applyClosedTeamLeaderDecision()'s own identical comment.
+        $freshGrants = $this->computeFreshGrants($state, $overridePlayerId, 1);
+        $this->boardStates->save($gameId, $state);
+        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound());
+
+        $pdo = Connection::get();
+
+        if ($format === 'closed_team') {
+            $pdo->prepare('UPDATE game_rounds SET first_game_player_id = :chosen WHERE id = :round_id')
+                ->execute(['chosen' => $overridePlayerId, 'round_id' => $roundId]);
+            $this->logEvent($gameId, $roundId, $overridePlayerId, 'closed_team_leader_decided', null, ['game_player_id' => $overridePlayerId, 'automated' => true], $state);
+
+            return;
+        }
+
+        $pdo->prepare('UPDATE game_rounds SET team_turn_1_game_player_id = :chosen WHERE id = :round_id')
+            ->execute(['chosen' => $overridePlayerId, 'round_id' => $roundId]);
+        $this->logEvent($gameId, $roundId, $overridePlayerId, 'team_turn_order_decided', null, ['game_player_id' => $overridePlayerId, 'automated' => true], $state);
+
+        $teamIdByPlayer = $this->teamIdByGamePlayer($gameId);
+        $firstTeamId = $teamIdByPlayer[$overridePlayerId];
+        $secondTeamId = $firstTeamId === 0 ? 1 : 0;
+        $this->createTeamDecision($gameId, $roundId, $secondTeamId, 'turn_order', $this->teamMembers($gameId, $secondTeamId));
+    }
+
+    /**
      * The losing team's chosen recipient actually draws the shared card,
-     * then the next round (and its own turn_order decision, for whichever
-     * team just won) gets created -- deferred until here, rather than
-     * immediately when the previous round scored, so at most one
+     * then the next round gets created -- deferred until here, rather
+     * than immediately when the previous round scored, so at most one
      * game_team_decisions row is ever open across the whole game at a
      * time. Mirrors the tail end of finishScoringAndAdvance()'s own
-     * non-team "create the next round" logic.
+     * non-team "create the next round" logic. Normally that new round
+     * also gets its own turn_order/leader decision, for whichever team
+     * just won -- but if Honor's still in play, seatFirstPlayerOverride()
+     * seats its chosen player directly instead, skipping that decision
+     * entirely (see that method's own docblock).
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
@@ -4649,12 +4711,15 @@ final class GameService
         $state->drawCard($recipientGamePlayerId);
 
         $winningTeamId = (int) $round['winner_team_id'];
-        // Honor can still override who goes first, exactly as in every
-        // other format -- see BoardState::firstPlayerOverride() -- just
-        // resolved to a TEAM here (whichever team the override's own
-        // player belongs to) rather than a specific seat, since that team
-        // still gets its own turn_order choice for who actually takes the
-        // first turn.
+        // Honor (or Awe's own one-time version) can still override who
+        // goes first, exactly as in every other format -- see
+        // BoardState::firstPlayerOverride(). When set, $overridePlayerId
+        // is seated directly below (seatFirstPlayerOverride()), skipping
+        // their team's own turn_order/leader decision entirely -- asking
+        // the team anyway would let it pick the OTHER member instead,
+        // silently overriding Honor/Awe's own explicit player choice.
+        // $nextFirstTeamId is still needed either way, to know which
+        // team's decision to open when there's no override.
         $overridePlayerId = $state->firstPlayerOverride();
         $nextFirstTeamId = $overridePlayerId !== null
             ? $this->teamIdByGamePlayer($gameId)[$overridePlayerId]
@@ -4664,7 +4729,12 @@ final class GameService
 
         $this->logEvent($gameId, $roundId, $recipientGamePlayerId, 'team_draw_recipient_decided', null, ['game_player_id' => $recipientGamePlayerId], $state);
 
-        $nextFirstPlayerId = $this->teamMembers($gameId, $nextFirstTeamId)[0];
+        // Representative only when there's no override -- its TEAM is
+        // what matters until that team's own decision resolves (see
+        // startGame()'s own identical comment) -- but the exact player
+        // when there IS one, so seatFirstPlayerOverride() below doesn't
+        // need a follow-up UPDATE to correct it.
+        $nextFirstPlayerId = $overridePlayerId ?? $this->teamMembers($gameId, $nextFirstTeamId)[0];
         $insertRound = $pdo->prepare(
             "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
              VALUES (:game_id, :round_number, :first_player, NULL, 0, :pending_play_grants, 'in_progress')"
@@ -4672,12 +4742,16 @@ final class GameService
         $insertRound->execute([
             'game_id' => $gameId,
             'round_number' => (int) $round['round_number'] + 1,
-            'first_player' => $nextFirstPlayerId, // representative only -- its TEAM is what matters, see startGame()'s own comment
+            'first_player' => $nextFirstPlayerId,
             'pending_play_grants' => json_encode([]),
         ]);
         $newRoundId = (int) $pdo->lastInsertId();
 
-        $this->createTeamDecision($gameId, $newRoundId, $nextFirstTeamId, 'turn_order', $this->teamMembers($gameId, $nextFirstTeamId));
+        if ($overridePlayerId !== null) {
+            $this->seatFirstPlayerOverride($gameId, $newRoundId, $overridePlayerId, $this->fetchGame($gameId)['format']);
+        } else {
+            $this->createTeamDecision($gameId, $newRoundId, $nextFirstTeamId, 'turn_order', $this->teamMembers($gameId, $nextFirstTeamId));
+        }
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -6601,13 +6675,13 @@ final class GameService
         // started.
         $state->clearEndOfRoundSuppressions();
 
-        $isTeamFormat = self::isTeamFormat($this->fetchGame($gameId)['format']);
-        // Either team format's own turn_order decision still needs
-        // computeFreshGrants() to run once the chosen player is actually
-        // known -- see applyTurnOrderDecision()/applyClosedTeamLeaderDecision()
-        // -- so this skips it here rather than guessing for a player who
-        // isn't necessarily who Awe's own choice resolves to at the team
-        // level.
+        $format = $this->fetchGame($gameId)['format'];
+        $isTeamFormat = self::isTeamFormat($format);
+        // Only the non-team branch needs this upfront -- the team branch
+        // below seats $nextFirstPlayer directly via
+        // seatFirstPlayerOverride(), which computes its own fresh grants
+        // once that player is actually known, the same way
+        // applyTurnOrderDecision()/applyClosedTeamLeaderDecision() already do.
         $nextRoundGrants = $isTeamFormat ? [] : $this->computeFreshGrants($state, $nextFirstPlayer, 1);
 
         $pdo = Connection::get();
@@ -6627,11 +6701,15 @@ final class GameService
             ], $state);
 
             if ($isTeamFormat) {
-                // Awe's own player picked $nextFirstPlayer directly, but
-                // team format still needs that player's own TEAM to make
-                // its own live turn_order choice -- see "Open Team Play"
-                // in php-app/README.md -- rather than trusting Awe's pick
-                // as the literal next actor.
+                // Unlike applyDrawRecipientDecision()'s own OPTIONAL Honor
+                // override, $nextFirstPlayer here is ALWAYS an override --
+                // this function only ever runs because Awe set
+                // skipScoringThisRound/oneTimeFirstPlayerOverride (see this
+                // method's own docblock) -- so the team's own turn_order/
+                // leader decision is always skipped in favor of seating
+                // $nextFirstPlayer directly. See seatFirstPlayerOverride()'s
+                // own docblock for why asking the team anyway would
+                // undercut Awe's own explicit player choice.
                 $insertRound = $pdo->prepare(
                     "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
                      VALUES (:game_id, :round_number, :first_player, NULL, 0, :pending_play_grants, 'in_progress')"
@@ -6644,8 +6722,7 @@ final class GameService
                 ]);
                 $newRoundId = (int) $pdo->lastInsertId();
 
-                $nextFirstTeamId = $this->teamIdByGamePlayer($gameId)[$nextFirstPlayer];
-                $this->createTeamDecision($gameId, $newRoundId, $nextFirstTeamId, 'turn_order', $this->teamMembers($gameId, $nextFirstTeamId));
+                $this->seatFirstPlayerOverride($gameId, $newRoundId, $nextFirstPlayer, $format);
             } else {
                 $insertRound = $pdo->prepare(
                     "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, pending_play_grants, status)
@@ -9605,7 +9682,15 @@ final class GameService
             $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
             $row['event_type'] === 'pending_decision_resolved' => "A response to {$cardName} was resolved",
             $row['event_type'] === 'round_scored' => $this->describeRoundScored($details, $playerNames, $teamMembersByTeamId),
-            $row['event_type'] === 'team_turn_order_decided' => "{$actor} was chosen by their team to take this turn",
+            // 'automated' (seatFirstPlayerOverride(), same flag shape as
+            // 'turn_passed' above) covers Honor/Awe already having picked
+            // $actor specifically to go first -- their team's own
+            // turn_order decision was skipped entirely rather than merely
+            // answered quickly, so "chosen by their team" would misstate
+            // what actually happened.
+            $row['event_type'] === 'team_turn_order_decided' => ($details['automated'] ?? false)
+                ? "{$actor} goes first this round"
+                : "{$actor} was chosen by their team to take this turn",
             // A bug caught live: this case was simply never added when
             // Closed Team Play's own single-leader-per-round decision
             // (applyClosedTeamLeaderDecision(), issue #362) shipped, so it
@@ -9613,7 +9698,9 @@ final class GameService
             // below -- and since this event's own card_id is always null,
             // that rendered as the flatly misleading "{actor} played a
             // card" (no card ever named, because there wasn't one).
-            $row['event_type'] === 'closed_team_leader_decided' => "{$actor} was chosen by their team to go first this round",
+            $row['event_type'] === 'closed_team_leader_decided' => ($details['automated'] ?? false)
+                ? "{$actor} goes first this round"
+                : "{$actor} was chosen by their team to go first this round",
             $row['event_type'] === 'team_draw_recipient_decided' => "The losing team chose {$actor} to draw their shared card",
             $row['event_type'] === 'draft_match_first_player_decided' => "{$actor} will go first this game",
             // Issue #84's cleanup cron (expireStaleActiveGames()) --

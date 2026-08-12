@@ -2715,6 +2715,31 @@ its own separate code path (`skipScoringAndAdvance()`, bypassing
 `finishScoringAndAdvance()` entirely) that needed its own team-aware
 branch too, for the same reason.
 
+**Honor/Awe skip the winning team's own turn_order decision** --
+`BoardState::firstPlayerOverride()` (Honor's perpetual override, or
+Awe's one-time version) names a SPECIFIC player to go first, not just a
+side -- but the two round-transition paths above used to only use that
+player to pick which TEAM got the next `turn_order` decision
+(`applyDrawRecipientDecision()`) or which team's decision to open at all
+(`skipScoringAndAdvance()`), still letting that team choose either of its
+two members and potentially pick someone OTHER than the card's own named
+player -- silently overriding Honor/Awe's own explicit choice, the whole
+point of naming a player rather than just a side. `seatFirstPlayerOverride()`
+is the fix: whenever an override is active, the named player is seated
+directly (mirroring `applyTurnOrderDecision()`'s/`applyClosedTeamLeaderDecision()`'s
+own `computeFreshGrants()`/`updateRoundTurnState()` mechanics exactly),
+skipping their own team's decision entirely rather than merely answering
+it quickly. For `'team'` (never `'closed_team'`, which has only the one
+leader decision per round to begin with -- see
+`applyClosedTeamLeaderDecision()`'s own docblock), the OTHER team still
+gets its own ordinary `turn_order` decision afterward, since Honor/Awe
+only ever pick who goes first, never who goes second. Logged with
+`'automated' => true` (the same flag shape `pass()`'s own auto-pass
+distinction uses -- see "Auto-pass on empty hand" below) so
+`describeEvent()` can say "X goes first this round" rather than the
+misleading "X was chosen by their team..." a real decision's own log
+entry uses.
+
 **Card interactions** -- `BoardState::isTeammate(int $a, int $b): bool`
 (always `false` for every non-team game, and for a player compared
 against themselves) is the one new primitive the whole rules engine
@@ -4405,7 +4430,16 @@ send-rate-limiter beyond that length cap -- friends-only, seated-players-
 only access keeps the abuse surface low, and there's no existing
 precedent anywhere in this codebase for throttling a primary write (only
 for throttling notification *delivery*, see `NotificationService`'s own
-cooldown/queue). On success, fires a best-effort `notifyNewChatMessage()`
+cooldown/queue) -- and, deliberately, no dedup-by-content check either:
+`insert()` below is a plain single-row insert with no idempotency key, so
+two genuinely separate `POST /games/chat` calls always produce two
+distinct rows, on purpose (sending the same phrase twice is a legitimate
+thing to do). Protecting against an ACCIDENTAL duplicate -- a rapid
+double-click/double-Enter firing two requests before the first one's own
+response comes back -- is handled client-side instead, by disabling Send
+for the duration of the request (see "Duplicate-message guard" in
+`web-static/README.md`), not by anything here. On success, fires a
+best-effort `notifyNewChatMessage()`
 (issue #108's notification system) to every OTHER seat the message is
 actually visible to -- never the sender, never the opposing team for a
 `'team'`-channel message -- sharing `NotificationScope::forGame($gameId)`

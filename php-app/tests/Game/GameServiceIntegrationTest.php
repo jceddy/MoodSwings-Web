@@ -7429,6 +7429,135 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Honor's own player choice ("the chosen player goes first each round
+     * regardless of who won") has to be the LITERAL next actor for Open
+     * Team Play too, not just a hint about which TEAM decides --
+     * previously, applyDrawRecipientDecision() only used the override to
+     * pick which team got the next turn_order decision, still letting
+     * that team choose either of its two members and potentially pick
+     * someone OTHER than Honor's own named player. p1 names p2 (their own
+     * teammate, NOT team 0's forced representative) while team 1 wins the
+     * round outright -- so without Honor, team 1 would get round 2's own
+     * turn_order decision entirely; Honor's override has to win out over
+     * that natural rule. Team 1 (the OTHER team) still gets its own
+     * ordinary turn_order decision afterward -- Honor only ever names who
+     * goes first, never who goes second.
+     */
+    public function testHonorSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+            'apathyId' => $apathyId,
+        ] = $this->buildTeamFixture();
+
+        $this->games->proposeTeamDecision($gameId, $p2, $p1);
+        $this->games->confirmTeamDecision($gameId, $p1, true);
+
+        $honorId = $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+        $this->games->playMood($gameId, $p1, $honorId, ['target_player_id' => $p2]);
+
+        $this->games->proposeTeamDecision($gameId, $p3, $p3);
+        $this->games->confirmTeamDecision($gameId, $p4, true);
+        $this->games->playMood($gameId, $p3, $apathyId, []); // value 4
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+        // Team 0 (Honor's 3 + p2's pass 0) = 3; team 1 (Apathy's 4 + p4's
+        // pass 0) = 4 -- team 1 wins outright.
+        $round1 = $this->pdo->query("SELECT * FROM game_rounds WHERE game_id = {$gameId} AND round_number = 1")->fetch();
+        self::assertSame(1, (int) $round1['winner_team_id']);
+
+        // Team 0 -- the round's actual loser -- still gets an ordinary
+        // draw_recipient decision, unaffected by Honor.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(0, (int) $decision['team_id']);
+        self::assertSame('draw_recipient', $decision['decision_type']);
+        $this->games->proposeTeamDecision($gameId, $p1, $p2);
+        $result = $this->games->confirmTeamDecision($gameId, $p2, true);
+        self::assertFalse($result['round_scored']);
+
+        // Round 2: p2 (Honor's own choice) is seated directly -- no
+        // decision needed for team 0 at all.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['team_turn_1_game_player_id']);
+        self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+
+        // Team 1 -- NOT team 0 -- still gets its own ordinary turn_order
+        // decision, exactly as it would after any other round.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(1, (int) $decision['team_id']);
+        self::assertSame('turn_order', $decision['decision_type']);
+        self::assertEqualsCanonicalizing([$p3, $p4], array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true)));
+
+        // Logged as an automated seating, not a real team choice --
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('team_turn_order_decided', $entry['event_type']);
+        self::assertSame('team1p2 goes first this round', $entry['description']);
+    }
+
+    /**
+     * Awe's own one-time override is ALWAYS active whenever
+     * skipScoringAndAdvance() runs (it only ever runs because Awe set it
+     * -- see that method's own docblock), unlike Honor's optional one --
+     * so, unlike testHonorSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay()
+     * above, there's no "would the override even change anything" case to
+     * demonstrate; this just confirms the override team's own decision is
+     * skipped every time, while the other team still gets theirs.
+     */
+    public function testAweSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+        ] = $this->buildTeamFixture();
+
+        $this->games->proposeTeamDecision($gameId, $p2, $p1);
+        $this->games->confirmTeamDecision($gameId, $p1, true);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p4]);
+
+        $this->games->proposeTeamDecision($gameId, $p3, $p3);
+        $this->games->confirmTeamDecision($gameId, $p4, true);
+        $this->games->pass($gameId, $p3);
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+
+        // Round 2: p4 (Awe's own choice) is seated directly -- no
+        // decision needed for team 1 at all.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p4, (int) $round2['team_turn_1_game_player_id']);
+        self::assertSame($p4, (int) $round2['current_turn_game_player_id']);
+
+        // Team 0 -- NOT team 1 -- still gets its own ordinary turn_order
+        // decision.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(0, (int) $decision['team_id']);
+        self::assertSame('turn_order', $decision['decision_type']);
+        self::assertEqualsCanonicalizing([$p1, $p2], array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true)));
+
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('team_turn_order_decided', $entry['event_type']);
+        self::assertSame('team2p2 goes first this round', $entry['description']);
+    }
+
+    /**
      * Regression test: Chivalry/Triumph care about whoever PERSONALLY
      * took turn 1 this round, not which TEAM went first. game_rounds.
      * first_game_player_id, for a team game, only identifies a
@@ -7750,6 +7879,123 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame('closed_team_leader_decided', $entry['event_type']);
         self::assertNull($entry['card_id']);
         self::assertSame('closedteamleader3 was chosen by their team to go first this round', $entry['description']);
+    }
+
+    /**
+     * Closed Team Play's own counterpart to
+     * testHonorSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay()
+     * above -- simpler, since this format has only ONE live "who goes
+     * first" choice per round (the leader) rather than two forced turn
+     * placements, so there's no "other team still gets theirs" half:
+     * Honor's own chosen player is seated directly and NO leader decision
+     * opens at all. p1 names p4 -- team 1, the round's own natural LOSER
+     * -- while team 0 wins outright, so without Honor, team 0 (the
+     * winner) would get round 2's leader decision instead of p4 ever
+     * being seated.
+     */
+    public function testHonorSkipsTheClosedTeamLeaderDecisionEntirely(): void
+    {
+        $u1 = $this->insertUser('cthonor1');
+        $u2 = $this->insertUser('cthonor2');
+        $u3 = $this->insertUser('cthonor3');
+        $u4 = $this->insertUser('cthonor4');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 1);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 0);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $honorId = $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p3); // black, value 4
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Seat rotation is a plain clockwise walk (p1 -> p2 -> p3 -> p4).
+        $this->games->playMood($gameId, $p1, $honorId, ['target_player_id' => $p4]);
+        $this->games->pass($gameId, $p2);
+        $this->games->playMood($gameId, $p3, $apathyId, []);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+        // Team 0 (Honor's 3 + Apathy's 4) = 7; team 1 (0 + 0) = 0 -- team
+        // 0 wins outright.
+        $round1 = $this->pdo->query("SELECT * FROM game_rounds WHERE game_id = {$gameId} AND round_number = 1")->fetch();
+        self::assertSame(0, (int) $round1['winner_team_id']);
+
+        // Team 1 -- the round's actual loser -- still gets an ordinary
+        // draw_recipient decision, unaffected by Honor.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(1, (int) $decision['team_id']);
+        self::assertSame('draw_recipient', $decision['decision_type']);
+        $this->games->proposeTeamDecision($gameId, $p2, $p4);
+        $result = $this->games->confirmTeamDecision($gameId, $p4, true);
+        self::assertFalse($result['round_scored']);
+
+        // Round 2: p4 (Honor's own choice) is seated directly -- no
+        // leader decision opens at all, for either team.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p4, (int) $round2['first_game_player_id']);
+        self::assertSame($p4, (int) $round2['current_turn_game_player_id']);
+        self::assertFalse($this->fetchOpenTeamDecision($gameId));
+
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('closed_team_leader_decided', $entry['event_type']);
+        self::assertSame('cthonor4 goes first this round', $entry['description']);
+    }
+
+    /**
+     * Closed Team Play's own counterpart to
+     * testAweSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay() above
+     * -- Awe's own override is always active whenever
+     * skipScoringAndAdvance() runs at all, so this just confirms the
+     * leader decision is skipped entirely (no scoring, no draw_recipient
+     * decision, and no leader decision either).
+     */
+    public function testAweSkipsTheClosedTeamLeaderDecisionEntirely(): void
+    {
+        $u1 = $this->insertUser('ctawe1');
+        $u2 = $this->insertUser('ctawe2');
+        $u3 = $this->insertUser('ctawe3');
+        $u4 = $this->insertUser('ctawe4');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 1);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 0);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p4]);
+        $this->games->pass($gameId, $p2);
+        $this->games->pass($gameId, $p3);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p4, (int) $round2['first_game_player_id']);
+        self::assertSame($p4, (int) $round2['current_turn_game_player_id']);
+        self::assertFalse($this->fetchOpenTeamDecision($gameId), 'no leader decision opens at all -- neither team');
+
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('closed_team_leader_decided', $entry['event_type']);
+        self::assertSame('ctawe4 goes first this round', $entry['description']);
     }
 
     private function buildClosedTeamFixture(): array

@@ -1,0 +1,20 @@
+-- Honor ("the chosen player goes first each round regardless of who
+-- won") and Awe ("you choose which player goes first next round") both
+-- name a SPECIFIC player, not just a side -- but in Team Play/Closed
+-- Team Play, the round-transition code used to only use that override to
+-- pick which TEAM got the next turn_order/leader decision, still letting
+-- that team choose either of its two members and potentially pick
+-- someone OTHER than the card's own named player. GameService's new
+-- seatFirstPlayerOverride() now seats the named player directly whenever
+-- an override is active, skipping their own team's decision entirely --
+-- for Open Team Play, the OTHER team still gets its own ordinary
+-- turn_order decision afterward, since Honor/Awe only ever pick who goes
+-- first, never who goes second; Closed Team Play (only one leader
+-- decision per round) skips it outright, with no decision opening at
+-- all. Logged as an automated seating ("X goes first this round") rather
+-- than the "X was chosen by their team..." phrasing a real decision uses.
+--
+-- Pure backend (GameService.php) -- no schema change, no frontend
+-- change (the existing team-decision panel already hides itself
+-- whenever nothing's open). See "Open Team Play" in php-app/README.md.
+UPDATE schema_version SET version = '1.23.1' WHERE id = 1;
