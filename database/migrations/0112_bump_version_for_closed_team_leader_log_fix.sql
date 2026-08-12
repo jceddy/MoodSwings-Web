@@ -1,0 +1,11 @@
+-- A bug caught live: GameService::describeEvent() never got a case added
+-- for 'closed_team_leader_decided' (applyClosedTeamLeaderDecision(),
+-- issue #362's own Closed Team Play "who leads this round" decision) --
+-- it fell through to the generic "{actor} played {card}" default, and
+-- since this event's own card_id is always null, that rendered as the
+-- flatly misleading "{actor} played a card" (no card ever actually
+-- played). It now renders as "{actor} was chosen by their team to go
+-- first this round", matching Open Team Play's own
+-- 'team_turn_order_decided' phrasing. No schema change. See "Closed
+-- Team Play" in php-app/README.md.
+UPDATE schema_version SET version = '1.21.3' WHERE id = 1;

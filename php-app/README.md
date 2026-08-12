@@ -2879,7 +2879,15 @@ work correctly here with zero changes). It differs in five concrete ways:
    for this format) and unfreezes the round immediately, never opening a
    second decision. `confirmTeamDecision()` picks between the two handlers
    based on the game's own `format` whenever `decision_type` is
-   `'turn_order'`.
+   `'turn_order'`. Its own `'closed_team_leader_decided'` event is
+   rendered by `describeEvent()` as "{name} was chosen by their team to
+   go first this round" -- a bug caught live: this case was simply never
+   added when this whole mechanic shipped, so it fell through to the
+   generic `mood_played`-shaped default phrasing, and since this event's
+   own `card_id` is always `null`, that rendered as the flatly misleading
+   "{name} played a card" (no card ever actually played) -- which is
+   also what made the decision having happened at all easy to miss while
+   reading a game's own log.
 3. **Pregame card pass** -- this format's own mechanic with no Open Team
    Play analog: after everyone's dealt their 5-card starting hand, every
    player must pass exactly 2 cards to their teammate, face down, BEFORE

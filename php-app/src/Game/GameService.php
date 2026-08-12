@@ -9513,6 +9513,14 @@ final class GameService
             $row['event_type'] === 'pending_decision_resolved' => "A response to {$cardName} was resolved",
             $row['event_type'] === 'round_scored' => $this->describeRoundScored($details, $playerNames, $teamMembersByTeamId),
             $row['event_type'] === 'team_turn_order_decided' => "{$actor} was chosen by their team to take this turn",
+            // A bug caught live: this case was simply never added when
+            // Closed Team Play's own single-leader-per-round decision
+            // (applyClosedTeamLeaderDecision(), issue #362) shipped, so it
+            // fell through to the generic "{actor} played {card}" default
+            // below -- and since this event's own card_id is always null,
+            // that rendered as the flatly misleading "{actor} played a
+            // card" (no card ever named, because there wasn't one).
+            $row['event_type'] === 'closed_team_leader_decided' => "{$actor} was chosen by their team to go first this round",
             $row['event_type'] === 'team_draw_recipient_decided' => "The losing team chose {$actor} to draw their shared card",
             $row['event_type'] === 'draft_match_first_player_decided' => "{$actor} will go first this game",
             // Issue #84's cleanup cron (expireStaleActiveGames()) --
