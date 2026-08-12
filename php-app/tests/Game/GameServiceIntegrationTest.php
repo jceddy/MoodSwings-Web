@@ -14176,4 +14176,184 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectExceptionMessage('can only contain cards you drafted');
         $this->games->submitDraftDeck($gameId, $userIds[0], [...array_slice($u0Drafted, 0, 11), $teammatesOnlyCardId]);
     }
+
+    /**
+     * postChatMessage()'s own deck-building exception
+     * (isOpenTeamDeckBuildingChat()): once Open Team Play's draft match
+     * reaches 'deck_building', teammates can coordinate over the 'team'
+     * channel even though games.status is still 'waiting' (real gameplay
+     * hasn't started -- see driveMultiplayerQuickDraftToDeckBuilding()'s
+     * own final assertion). Visible to both teammates, same as any other
+     * 'team'-channel message.
+     */
+    public function testOpenTeamQuickDraftDeckBuildingAllowsTeamChannelChat(): void
+    {
+        $userIds = $this->insertUsers('otqdchat-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->games->postChatMessage($gameId, $p0, 'team', "Let's split the drafted pool evenly.");
+
+        $teammateMessages = $this->games->getState($gameId, $userIds[1])['chat_messages'];
+        self::assertCount(1, $teammateMessages);
+        self::assertSame("Let's split the drafted pool evenly.", $teammateMessages[0]['message_text']);
+        self::assertSame('team', $teammateMessages[0]['channel']);
+
+        // Not visible to the opposing team.
+        self::assertCount(0, $this->games->getState($gameId, $userIds[2])['chat_messages']);
+    }
+
+    /**
+     * The deck-building exception is deliberately narrower than the
+     * general "in_progress" rule it replaces -- only the 'team' channel,
+     * never 'table' (see isOpenTeamDeckBuildingChat()'s own docblock for
+     * why: the opposing team may still be mid-draft/deck-building
+     * themselves).
+     */
+    public function testOpenTeamQuickDraftDeckBuildingStillBlocksTableChannelChat(): void
+    {
+        $userIds = $this->insertUsers('otqdchattbl-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'table', 'Good luck to the other team too!');
+    }
+
+    /**
+     * The exception only kicks in once the match has actually reached
+     * 'deck_building' -- mid-'drafting', a stray message would arrive to
+     * a teammate who's still mid-pack and not yet looking at chat (see
+     * isOpenTeamDeckBuildingChat()'s own docblock).
+     */
+    public function testOpenTeamQuickDraftStillBlocksChatDuringTheDraftingPhaseItself(): void
+    {
+        $userIds = $this->insertUsers('otqdchatdrafting-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        self::assertSame('drafting', $this->games->getState($gameId, $userIds[0])['quick_draft']['status']);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'team', 'Too early to chat about deck building.');
+    }
+
+    /**
+     * Closed Team Play must NOT get this exception either -- "information
+     * stays closed between teammates" applies to chat the same as it does
+     * to the deck-building pool itself (see
+     * testClosedTeamQuickDraftDeckBuildingStaysPersonalPoolOnly() above).
+     * postChatMessage()'s own $game['format'] === 'team' check inside
+     * isOpenTeamDeckBuildingChat() already excludes 'closed_team', so this
+     * falls all the way back to the original "in progress" message rather
+     * than "no team channel" -- the 'team' channel itself is still valid
+     * for this format in principle, just not reachable yet.
+     */
+    public function testClosedTeamQuickDraftDeckBuildingStillBlocksChat(): void
+    {
+        $userIds = $this->insertUsers('ctqdchat-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'team', 'Closed Team Play should never reach this.');
+    }
+
+    /**
+     * A non-team draft (format 'draft') has no teammate to coordinate
+     * with at all -- the deck-building exception must never kick in for
+     * it, on either channel.
+     */
+    public function testSoloQuickDraftDeckBuildingStillBlocksChat(): void
+    {
+        $userIds = $this->insertUsers('soloqdchat-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveQuickDraftToDeckBuilding($gameId, $userIds[0], $userIds[1]);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'table', 'No teammate here to chat with.');
+    }
+
+    /**
+     * Once the actual game starts (both teammates -- and every other
+     * seated player -- have submitted a deck), the ordinary "in_progress"
+     * rule takes back over: the 'table' channel opens up too, and
+     * whatever was said during deck-building is still there.
+     */
+    public function testOpenTeamQuickDraftChatCarriesOverOnceTheGameStarts(): void
+    {
+        $userIds = $this->insertUsers('otqdchatstart-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->games->postChatMessage($gameId, $p0, 'team', 'Deck-building chat.');
+
+        foreach ($userIds as $userId) {
+            $drafted = json_decode(
+                (string) $this->fetchDraftMatchPlayer((int) $this->fetchGame($gameId)['draft_match_id'], $userId)['drafted_card_ids'],
+                true
+            );
+            $this->games->submitDraftDeck($gameId, $userId, array_slice($drafted, 0, 12));
+        }
+        $this->games->startGame($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+
+        $this->games->postChatMessage($gameId, $p0, 'table', 'In-progress chat.');
+
+        $messages = $this->games->getState($gameId, $userIds[1])['chat_messages'];
+        self::assertCount(2, $messages);
+        self::assertSame('Deck-building chat.', $messages[0]['message_text']);
+        self::assertSame('In-progress chat.', $messages[1]['message_text']);
+    }
 }

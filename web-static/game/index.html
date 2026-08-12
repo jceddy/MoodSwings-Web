@@ -333,7 +333,6 @@
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
                 <button id="view-notes-button" type="button" hidden>Notes</button>
-                <button id="view-chat-button" type="button" hidden>Chat</button>
                 <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
@@ -347,6 +346,14 @@
                  be showing. See renderBoard()'s own resignButton.hidden
                  computation in game.js for the full visibility rule. -->
             <button id="resign-button" type="button" hidden>Resign game</button>
+
+            <!-- Also outside #in-progress-area, same rationale as
+                 #resign-button above: Open Team Play's deck-building phase
+                 (still 'waiting', not yet in_progress) gets its own team
+                 chat exception -- see GameService::postChatMessage()'s
+                 own isOpenTeamDeckBuildingChat() and renderBoard()'s
+                 chatButton.hidden computation in game.js. -->
+            <button id="view-chat-button" type="button" hidden>Chat</button>
         </section>
     </main>
 

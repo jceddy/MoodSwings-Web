@@ -5202,7 +5202,7 @@ final class GameService
     public function postChatMessage(int $gameId, int $senderGamePlayerId, string $channel, string $messageText): void
     {
         $game = $this->fetchGame($gameId);
-        if ($game['status'] !== 'in_progress') {
+        if ($game['status'] !== 'in_progress' && !$this->isOpenTeamDeckBuildingChat($game, $channel)) {
             throw new GameStateException('Chat messages can only be sent while the game is in progress.');
         }
 
@@ -5232,6 +5232,37 @@ final class GameService
 
         $this->chat->insert($gameId, $senderGamePlayerId, $channel, $senderTeamId, $messageText);
         $this->notifyChatMessageRecipients($gameId, $senderGamePlayerId, $channel, $senderTeamId, $messageText);
+    }
+
+    /**
+     * postChatMessage()'s one exception to "only while in_progress" above:
+     * Open Team Play's own deck-building window. A draft match's games row
+     * sits at status 'waiting' for its entire drafting/deck-building phase
+     * (real gameplay hasn't started -- see draftDeckBuildingStateFor()'s
+     * own docblock), so the general rule would otherwise block chat at
+     * exactly the moment two teammates most need to coordinate which cards
+     * to build around, now that deck-building draws from their whole
+     * shared pool rather than each player's own personal one (issue #362
+     * stage 2). Deliberately narrower than the general rule:
+     * only the 'team' channel, never 'table' -- the opposing team may
+     * still be mid-draft/deck-building themselves, with nothing useful to
+     * say to a table that doesn't exist as a "table" yet; only format
+     * 'team', never 'closed_team', matching postChatMessage()'s own
+     * $game['format'] === 'team' check above (Closed Team Play's whole
+     * premise is that information -- including out-of-band chat -- stays
+     * closed between teammates); and only once the match has actually
+     * reached 'deck_building', not mid-'drafting', where a stray message
+     * would arrive to a teammate who's still mid-pack and not yet looking
+     * at chat.
+     */
+    private function isOpenTeamDeckBuildingChat(array $game, string $channel): bool
+    {
+        if ($channel !== 'team' || $game['format'] !== 'team' || $game['status'] !== 'waiting' || $game['draft_match_id'] === null) {
+            return false;
+        }
+
+        $match = $this->fetchDraftMatch((int) $game['draft_match_id']);
+        return $match['status'] === 'deck_building';
     }
 
     private function notifyChatMessageRecipients(int $gameId, int $senderGamePlayerId, string $channel, ?int $senderTeamId, string $messageText): void
@@ -8620,6 +8651,35 @@ final class GameService
             }
         }
 
+        // In-game chat (issue #109) -- seated players only, same as
+        // game_notes above (a spectator, $viewerGamePlayerId === null,
+        // gets none, never even 'table'-channel messages -- unlike
+        // recent_events/game_events, which a spectator CAN already see
+        // via GET /games/log's own canSpectateGame() gate). $viewerTeamId
+        // (null for every non-team format, or a team-format seat somehow
+        // missing one) is read straight off $players, already built above
+        // -- no extra query needed. Computed here, before the 'waiting'
+        // early return just below, rather than down with deck_count/
+        // recent_events -- Open Team Play's deck-building chat exception
+        // (isOpenTeamDeckBuildingChat()) is only actually usable while
+        // still 'waiting', so this needs to run in that branch too, not
+        // just for in_progress/completed. Harmless for every other
+        // 'waiting' game (nothing could have been inserted yet -- that's
+        // the only branch of postChatMessage() that can write chat before
+        // in_progress at all).
+        if ($viewerGamePlayerId !== null) {
+            $viewerTeamId = null;
+            foreach ($players as $player) {
+                if ($player['game_player_id'] === $viewerGamePlayerId) {
+                    $viewerTeamId = $player['team_id'];
+                    break;
+                }
+            }
+            $response['chat_messages'] = $this->chatMessagesFor($gameId, $viewerTeamId);
+        } else {
+            $response['chat_messages'] = [];
+        }
+
         if ($game['status'] !== 'in_progress' && $game['status'] !== 'completed') {
             return $response;
         }
@@ -8880,27 +8940,6 @@ final class GameService
         // is what a spectator reads instead.
         $response['deck_count'] = $viewerGamePlayerId !== null ? count($state->deck($viewerGamePlayerId)) : 0;
         $response['recent_events'] = $this->recentEvents($gameId, $players);
-
-        // In-game chat (issue #109) -- seated players only, same as
-        // game_notes above (a spectator, $viewerGamePlayerId === null,
-        // gets none, never even 'table'-channel messages -- unlike
-        // recent_events/game_events, which a spectator CAN already see
-        // via GET /games/log's own canSpectateGame() gate). $viewerTeamId
-        // (null for every non-team format, or a team-format seat somehow
-        // missing one) is read straight off $players, already built above
-        // -- no extra query needed.
-        if ($viewerGamePlayerId !== null) {
-            $viewerTeamId = null;
-            foreach ($players as $player) {
-                if ($player['game_player_id'] === $viewerGamePlayerId) {
-                    $viewerTeamId = $player['team_id'];
-                    break;
-                }
-            }
-            $response['chat_messages'] = $this->chatMessagesFor($gameId, $viewerTeamId);
-        } else {
-            $response['chat_messages'] = [];
-        }
 
         return $response;
     }
