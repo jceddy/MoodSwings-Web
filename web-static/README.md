@@ -1160,7 +1160,13 @@ too, proportional to the smaller card width.
     their cards" status instead (built from
     `state.initial_card_pass.submitted_game_player_ids`, which players
     have or haven't submitted yet -- never which 2 cards anyone chose).
-    See "Closed Team Play" in `php-app/README.md`.
+    See "Closed Team Play" in `php-app/README.md`. Styled by the same
+    shared bordered-box rule (`style.css`) `#choices-panel`/
+    `#pending-decision-panel`/`#team-decision-panel` already use --
+    originally left out of that selector list, which meant no
+    border/padding and no `margin: 1rem 0` below it, so its own "Pass
+    cards" button sat flush against the ordinary "Pass" turn button
+    directly underneath it (a bug caught live).
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
     whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`

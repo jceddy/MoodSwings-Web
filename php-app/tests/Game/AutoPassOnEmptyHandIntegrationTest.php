@@ -192,6 +192,34 @@ final class AutoPassOnEmptyHandIntegrationTest extends TestCase
     }
 
     /**
+     * A bug caught live: a player who never actually clicked "Pass" (they
+     * were auto-passed here, having no legal play at all) had no way to
+     * tell that apart, in the game's own log, from an ordinary deliberate
+     * pass -- both rendered as identical "{name} passed" lines. See
+     * GameService::pass()'s own $automated param and describeEvent()'s
+     * 'turn_passed' branch.
+     */
+    public function testLogsTheAutoPassDifferentlyFromAManualPass(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $u2 = $this->insertUser('human2');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        // Same fixture shape as testAutoPassesForAnOptedInPlayerWithAnEmptyHand()
+        // above -- p1's hand is empty, opted in by default.
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+        self::assertSame('turn_passed', $entry['event_type']);
+        self::assertTrue($entry['details']['automated']);
+        self::assertSame('human1 passed automatically (no legal play)', $entry['description']);
+    }
+
+    /**
      * The real bug this regression covers: an opted-in player's HAND can
      * be empty while they still have a completely legal play available,
      * sourced from the discard pile instead (Angst/Harmony/Grief/

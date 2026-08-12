@@ -3618,6 +3618,38 @@ final class GameServiceIntegrationTest extends TestCase
      * recentEvents() itself uses -- both views can never drift out of
      * phrasing sync since they share that one rendering method.
      */
+    /**
+     * A deliberate, player-initiated pass() call (the public
+     * POST /games/pass route's own $automated default of false) must keep
+     * logging the plain "{name} passed" it always has -- only
+     * advanceAutomatedTurns()'s own two internal callers (a bot with
+     * nothing to play, or an opted-in player's own auto-pass) pass
+     * $automated: true. See AutoPassOnEmptyHandIntegrationTest::
+     * testLogsTheAutoPassDifferentlyFromAManualPass() and
+     * BotGameplayIntegrationTest::testLogsABotsOwnPassAsAutomatedToo() for
+     * the two automated cases.
+     */
+    public function testManualPassIsLoggedWithoutTheAutomatedFlag(): void
+    {
+        $u1 = $this->insertUser('manualpass1');
+        $u2 = $this->insertUser('manualpass2');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+        self::assertSame('turn_passed', $entry['event_type']);
+        self::assertArrayNotHasKey('automated', $entry['details']);
+        self::assertSame('manualpass1 passed', $entry['description']);
+    }
+
     public function testFullEventLogEntriesCarryRawFieldsAlongsideTheRenderedDescription(): void
     {
         $u1 = $this->insertUser('fulllograw1');
@@ -7091,6 +7123,14 @@ final class GameServiceIntegrationTest extends TestCase
         return $stmt->fetch();
     }
 
+    private function fetchTeamDecisionById(int $decisionId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_team_decisions WHERE id = :id');
+        $stmt->execute(['id' => $decisionId]);
+
+        return $stmt->fetch();
+    }
+
     /**
      * Team 0 = p1/p2 (seats 0/1), Team 1 = p3/p4 (seats 2/3) -- adjacent
      * seating per "Open Team Play" in php-app/README.md. Round 1 starts
@@ -7670,6 +7710,48 @@ final class GameServiceIntegrationTest extends TestCase
      *
      * @return array{gameId:int, roundId:int, p1:int, p2:int, p3:int, p4:int}
      */
+    /**
+     * A bug caught live: describeEvent() never got a case added for
+     * 'closed_team_leader_decided' (applyClosedTeamLeaderDecision(),
+     * issue #362) -- it fell through to the generic "{actor} played
+     * {card}" default, and since this event's own card_id is always
+     * null, that rendered as the flatly misleading "{actor} played a
+     * card" (no card ever actually played).
+     */
+    public function testClosedTeamLeaderDecisionIsLoggedAsBeingChosenNotAsAPlay(): void
+    {
+        $u1 = $this->insertUser('closedteamleader1');
+        $u2 = $this->insertUser('closedteamleader2');
+        $u3 = $this->insertUser('closedteamleader3');
+        $u4 = $this->insertUser('closedteamleader4');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $this->insertTeamGamePlayer($gameId, $u2, 1, 1);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 0);
+        $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $roundId = $this->insertTeamGameRound($gameId, 2, $p1);
+        $decisionId = $this->insertTeamDecision($gameId, $roundId, 0, 'turn_order', [$p1, $p3]);
+
+        $this->games->proposeTeamDecision($gameId, $p1, $p3);
+        $this->games->confirmTeamDecision($gameId, $p3, true);
+
+        self::assertNotNull($this->fetchTeamDecisionById($decisionId)['resolved_at']);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['first_game_player_id']);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id']);
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+        self::assertSame('closed_team_leader_decided', $entry['event_type']);
+        self::assertNull($entry['card_id']);
+        self::assertSame('closedteamleader3 was chosen by their team to go first this round', $entry['description']);
+    }
+
     private function buildClosedTeamFixture(): array
     {
         $u1 = $this->insertUser('closedteam1');

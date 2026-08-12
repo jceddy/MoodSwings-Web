@@ -2879,7 +2879,15 @@ work correctly here with zero changes). It differs in five concrete ways:
    for this format) and unfreezes the round immediately, never opening a
    second decision. `confirmTeamDecision()` picks between the two handlers
    based on the game's own `format` whenever `decision_type` is
-   `'turn_order'`.
+   `'turn_order'`. Its own `'closed_team_leader_decided'` event is
+   rendered by `describeEvent()` as "{name} was chosen by their team to
+   go first this round" -- a bug caught live: this case was simply never
+   added when this whole mechanic shipped, so it fell through to the
+   generic `mood_played`-shaped default phrasing, and since this event's
+   own `card_id` is always `null`, that rendered as the flatly misleading
+   "{name} played a card" (no card ever actually played) -- which is
+   also what made the decision having happened at all easy to miss while
+   reading a game's own log.
 3. **Pregame card pass** -- this format's own mechanic with no Open Team
    Play analog: after everyone's dealt their 5-card starting hand, every
    player must pass exactly 2 cards to their teammate, face down, BEFORE
@@ -5029,6 +5037,25 @@ happens fresh each loop iteration (never cached alongside the opted-in
 id list itself), since whether a given player currently has anything
 playable can change from one iteration to the next as earlier
 iterations play out.
+
+**Distinguished from a manual pass in the game log** -- a bug caught
+live: a player who opted into this (the default) had no way to tell, in
+their own game's log, whether a given "{name} passed" line was their
+own deliberate click or something the server did on their behalf while
+they weren't even looking, since both rendered identically. `pass(int
+$gameId, int $gamePlayerId, bool $automated = false)` gained the
+`$automated` param -- `true` only from `advanceAutomatedTurns()`'s own
+two internal callers (a bot with nothing to play, or an opted-in
+player's own auto-pass here), never from the public `POST /games/pass`
+route a real click hits (its own default stays `false`) -- persisted
+onto the `turn_passed` event's `details` (`{"automated": true}`, only
+ever present when true) the same way `skipTurnForResignedPlayer()`'s
+own `{"resigned": true}` already rides alongside it.
+`GameService::describeEvent()`'s `'turn_passed'` branch reads it back:
+"{name} passed automatically (no legal play)" instead of the plain
+"{name} passed" -- one shared phrasing for both a bot's own pass and an
+opted-in human's, since both mean the exact same thing to a reader of
+this log ("nobody actually clicked Pass here").
 
 ### Duel: separate per-player decks
 
