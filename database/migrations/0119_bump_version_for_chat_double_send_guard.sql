@@ -1,0 +1,22 @@
+-- Fixes users seeing the same chat message sent twice: a rapid
+-- double-click on Send (or double-Enter, or a quick-chat button clicked
+-- while Send was already mid-request) fired two independent
+-- POST /games/chat requests before the first one's own response came
+-- back, and nothing stopped the second one, so the server dutifully
+-- inserted two separate rows. sendChatText() now guards against this
+-- using #game-chat-send-button's own `disabled` flag as reentrant state,
+-- set synchronously before the request goes out. Also fixes a smaller
+-- bug the same refactor surfaced: a failed send used to clear the
+-- player's own typed text anyway, right along with the error message --
+-- the input is now only cleared on a confirmed successful send.
+--
+-- Audited the receiving end too (issue report's other half): no bug
+-- found there -- renderList() already does a full clear-and-rebuild
+-- from state.chat_messages every render, and
+-- GameChatRepository::messagesFor() is a plain non-JOIN SELECT, so
+-- neither could have produced a duplicate on its own; the two rows were
+-- always genuinely separate INSERTs.
+--
+-- Pure frontend (game.js) -- no schema change. See "Duplicate-message
+-- guard" in web-static/README.md.
+UPDATE schema_version SET version = '1.23.2' WHERE id = 1;

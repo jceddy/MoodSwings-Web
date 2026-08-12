@@ -4430,7 +4430,16 @@ send-rate-limiter beyond that length cap -- friends-only, seated-players-
 only access keeps the abuse surface low, and there's no existing
 precedent anywhere in this codebase for throttling a primary write (only
 for throttling notification *delivery*, see `NotificationService`'s own
-cooldown/queue). On success, fires a best-effort `notifyNewChatMessage()`
+cooldown/queue) -- and, deliberately, no dedup-by-content check either:
+`insert()` below is a plain single-row insert with no idempotency key, so
+two genuinely separate `POST /games/chat` calls always produce two
+distinct rows, on purpose (sending the same phrase twice is a legitimate
+thing to do). Protecting against an ACCIDENTAL duplicate -- a rapid
+double-click/double-Enter firing two requests before the first one's own
+response comes back -- is handled client-side instead, by disabling Send
+for the duration of the request (see "Duplicate-message guard" in
+`web-static/README.md`), not by anything here. On success, fires a
+best-effort `notifyNewChatMessage()`
 (issue #108's notification system) to every OTHER seat the message is
 actually visible to -- never the sender, never the opposing team for a
 `'team'`-channel message -- sharing `NotificationScope::forGame($gameId)`
