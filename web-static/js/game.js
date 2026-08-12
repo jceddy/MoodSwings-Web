@@ -4988,11 +4988,24 @@
         document.getElementById('grid-draft-remaining-deck-count').textContent =
             drafting.remaining_deck_count + ' card' + (drafting.remaining_deck_count === 1 ? '' : 's') + ' left in the pool.';
 
-        renderList(document.getElementById('grid-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
-            return li;
-        });
+        // Open Team Play (drafting.teams_drafted_so_far non-null) shows
+        // "Your team's drafted so far"/"Opposing team's drafted so far"
+        // instead (below) -- your own drafted cards are already part of
+        // the "Your team" entry there, so this plain "Drafted so far"
+        // would just be showing a subset of the same cards a second time
+        // right above it. Mirrors Quick Draft's/Winston Draft's own
+        // identical fix (showKeptSoFar/showDraftedSoFar) for the same bug,
+        // caught live for Grid Draft specifically.
+        const showDraftedSoFar = !drafting.teams_drafted_so_far;
+        document.getElementById('grid-draft-drafted-so-far-heading').hidden = !showDraftedSoFar;
+        document.getElementById('grid-draft-drafted-so-far').hidden = !showDraftedSoFar;
+        if (showDraftedSoFar) {
+            renderList(document.getElementById('grid-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
 
         // Unlike Quick Draft/Winston Draft, Grid Draft is open information
         // end to end -- every card any player has ever drafted was already
@@ -5031,7 +5044,16 @@
                 + team.member_usernames.join(' & ') + ')';
             teamsContainer.appendChild(heading);
 
+            // .team-drafted-cards-list (style.css) is what gives this a
+            // horizontal, wrapping row of thumbnails instead of one huge
+            // vertical column -- same reused class renderTeamDraftedCards()
+            // already applies for Quick/Winston Draft's own team lists (a
+            // bare <ul> with no class/id matches none of style.css's own
+            // flex-wrap card-list rules, which is exactly what made this
+            // render as a single-column list, caught live for Grid Draft's
+            // own "Your team's"/"Opposing team's drafted so far" here).
             const list = document.createElement('ul');
+            list.className = 'team-drafted-cards-list';
             team.drafted_so_far.forEach((card) => {
                 const li = document.createElement('li');
                 li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
