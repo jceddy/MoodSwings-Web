@@ -5093,9 +5093,25 @@
         }
 
         if (!draftDeckSelectionInitialized) {
-            draftDeckSelection = deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids
-                ? cardIdsToDraftedCardIndices(deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids, deckBuilding.drafted_cards)
-                : new Set(deckBuilding.drafted_cards.map((card, index) => index));
+            if (deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids) {
+                draftDeckSelection = cardIdsToDraftedCardIndices(deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids, deckBuilding.drafted_cards);
+            } else if (deckBuilding.team_drafted_cards) {
+                // Open Team Play, first game of the match -- unlike every
+                // other format (where defaulting to "everything selected"
+                // just means the player trims down from their own full
+                // personal pool), drafted_cards here is the whole TEAM's
+                // combined pool (see draftDeckBuildingStateFor()'s own
+                // docblock): only one teammate can ever have a given card
+                // in their own deck at a time, so pre-selecting all of it
+                // would silently claim the WHOLE pool the instant either
+                // teammate submits without changing anything, leaving the
+                // other with nothing left to build their own deck from at
+                // all. Starts empty instead, so each teammate has to
+                // deliberately choose their own share.
+                draftDeckSelection = new Set();
+            } else {
+                draftDeckSelection = new Set(deckBuilding.drafted_cards.map((card, index) => index));
+            }
             draftDeckSelectionInitialized = true;
         }
 

@@ -1311,7 +1311,18 @@ too, proportional to the smaller card width.
       deck you last submitted, for the game that just ended — so
       sideboarding starts from your existing deck instead of forcing a full
       retrim from scratch before every game. Only the very first game of a
-      match (no previous deck yet) still defaults to every drafted card.
+      match (no previous deck yet) still defaults to every drafted card --
+      EXCEPT for Open Team Play (`deckBuilding.team_drafted_cards` non-null),
+      where it defaults to nothing selected instead (a bug caught live):
+      `drafted_cards` there is the whole TEAM's combined pool, not just
+      your own, and only one teammate can ever have a given card in their
+      own deck at a time (see `GameService::draftDeckBuildingStateFor()`'s
+      own docblock) -- pre-selecting all of it would silently claim the
+      ENTIRE pool the moment either teammate submitted without changing
+      anything, leaving the other with nothing left to build their own
+      deck from at all. Forcing each teammate to deliberately choose their
+      own share avoids that trap. Every other format (a real personal
+      pool, no such conflict) keeps the original select-all default.
       A `#draft-deck-reset-button` ("Reset to previous deck") sits next to
       Select all/Clear selection -- it re-seeds the selection from
       `deckBuilding.previous_deck_card_ids` on demand (via the same
