@@ -1,0 +1,14 @@
+-- A player who opted into "auto-pass on empty hand" (the default) had no
+-- way to tell, in their own game's log, whether a "{name} passed" line
+-- was their own deliberate click or the server auto-passing on their
+-- behalf (no legal play at all) -- both rendered identically, which
+-- caused real live confusion ("I did not press Pass"). GameService::
+-- pass() gained an $automated param (true only from
+-- advanceAutomatedTurns()'s own two internal callers: a bot with nothing
+-- to play, or an opted-in player's own auto-pass; never from the public
+-- POST /games/pass route), persisted onto the turn_passed event's own
+-- details, and describeEvent() now renders those as "{name} passed
+-- automatically (no legal play)" instead of the plain "{name} passed".
+-- No schema change -- game_events.details is already a free-form JSON
+-- column. See "Auto-pass on empty hand" in php-app/README.md.
+UPDATE schema_version SET version = '1.21.2' WHERE id = 1;

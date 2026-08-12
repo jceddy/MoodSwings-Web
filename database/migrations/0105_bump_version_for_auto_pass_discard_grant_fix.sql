@@ -1,0 +1,28 @@
+-- No schema change: fixes a real bug in "Auto-pass on empty hand" --
+-- GameService::advanceAutomatedTurns() used to auto-pass an opted-in
+-- player the instant their HAND was empty, on the assumption that an
+-- empty hand always means "nothing legal to do" -- false for a handful
+-- of cards. Angst/Harmony/Grief/Melancholy can each leave a completely
+-- legal play sourced from the DISCARD pile instead (see
+-- BoardState::grantAllows()'s own 'source' => 'discard' check), so an
+-- opted-in player could still have a real, outstanding play when this
+-- silently passed it away.
+--
+-- Caught live: playing Angst while Duplicity was in play, discarding the
+-- Duplicity itself as Angst's own cost, correctly still got offered
+-- Duplicity's repeat (its own eligibility is judged at the moment the
+-- mood is played, per an official ruling already covered by this
+-- codebase's Chaos-reassignment handling -- see
+-- MoodPlayService::continueAfterPlayingChain()'s own docblock), but
+-- declining that repeat then immediately auto-passed the turn instead of
+-- offering the FIRST Angst resolution's own discard-sourced play, which
+-- should still have been available.
+--
+-- GameService::candidatePlayCardIds() (hand plus the whole shared
+-- discard pile) filtered through MoodPlayService::isPlayable() is the
+-- real "does this player have anything legal to do" check now -- the
+-- same fix also applies to the practice-bot branch of the same loop,
+-- which had the identical gap (a bot with an empty hand and an
+-- outstanding discard-sourced grant would likewise never have played
+-- from discard). See "Auto-pass on empty hand" in php-app/README.md.
+UPDATE schema_version SET version = '1.20.1' WHERE id = 1;

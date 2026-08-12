@@ -2645,6 +2645,52 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A real bug, caught live: Duplicity never offered to repeat Anger's
+     * own effect, because the old design stored the repeat-eligible-
+     * sources snapshot on the just-played card's own BoardState
+     * effectState -- destroyed the instant Anger discarded itself (a
+     * fully legal choice, its own base value is 0). Exercises the REAL
+     * round trip this needed fixing at: playMood() writes the pending
+     * batch (game_pending_decision_batches.duplicity_eligible_sources,
+     * migration 0107) in one call, respondToDecision() reads it back in
+     * a separate one, same as GameService's own two public entry points a
+     * real client actually calls across two separate HTTP requests.
+     */
+    public function testRespondToDecisionOffersAndResolvesDuplicitysRepeatOfAngerAfterAngerDiscardedItself(): void
+    {
+        $u1 = $this->insertUser('angerdup1');
+        $u2 = $this->insertUser('angerdup2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $angerId = $this->insertGameCard($gameId, 80, 'hand', $p1); // Anger, value 0
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $angerId, ['target_mood_ids' => [$angerId]]);
+        self::assertTrue($playResult['pending_decision'] ?? false, "Duplicity's own repeat offer should be pending even though Anger just discarded itself");
+
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('duplicity_repeat_offer', $pending['decision_type']);
+
+        $respondResult = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => true, 'choices' => ['target_mood_ids' => []]],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertSame([$angerId], $state->discardPile()); // Anger's own repeat had nothing left to target -- no-op, not an error
+    }
+
+    /**
      * Hurt Feelings' own second base play must be described as
      * attributable to Hurt Feelings, not render as an indistinguishable
      * second "Your normal turn" -- see
@@ -3572,6 +3618,38 @@ final class GameServiceIntegrationTest extends TestCase
      * recentEvents() itself uses -- both views can never drift out of
      * phrasing sync since they share that one rendering method.
      */
+    /**
+     * A deliberate, player-initiated pass() call (the public
+     * POST /games/pass route's own $automated default of false) must keep
+     * logging the plain "{name} passed" it always has -- only
+     * advanceAutomatedTurns()'s own two internal callers (a bot with
+     * nothing to play, or an opted-in player's own auto-pass) pass
+     * $automated: true. See AutoPassOnEmptyHandIntegrationTest::
+     * testLogsTheAutoPassDifferentlyFromAManualPass() and
+     * BotGameplayIntegrationTest::testLogsABotsOwnPassAsAutomatedToo() for
+     * the two automated cases.
+     */
+    public function testManualPassIsLoggedWithoutTheAutomatedFlag(): void
+    {
+        $u1 = $this->insertUser('manualpass1');
+        $u2 = $this->insertUser('manualpass2');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+        self::assertSame('turn_passed', $entry['event_type']);
+        self::assertArrayNotHasKey('automated', $entry['details']);
+        self::assertSame('manualpass1 passed', $entry['description']);
+    }
+
     public function testFullEventLogEntriesCarryRawFieldsAlongsideTheRenderedDescription(): void
     {
         $u1 = $this->insertUser('fulllograw1');
@@ -4627,6 +4705,75 @@ final class GameServiceIntegrationTest extends TestCase
         $roundScored = $events[0]['description'];
         self::assertStringContainsString('Bashfulness moved from play to the deck', $roundScored);
         self::assertStringNotContainsString('Courage', $roundScored);
+    }
+
+    /**
+     * Regression test (a live bug report): Bashfulness's own "after playing
+     * this mood, after scoring THIS round, if you won the round..." is a
+     * ONE-TIME check scoped to the round it was played in -- not a
+     * recurring "while in play" ability like Recklessness's own
+     * "while in play, after scoring, ..." text. Losing the round it was
+     * played in used to leave its own 'afterScoring' tag sitting
+     * unresolved on the card, so it would incorrectly fire on some LATER
+     * round the owner happened to win instead, cycling to the bottom of
+     * the deck long after the fact.
+     *
+     * Round 1: p1 plays Bashfulness (value 6); p2 (going first in turn
+     * order) plays Disregard (also value 6, its own "drops to 3 with 2+
+     * blue/black moods" condition never triggers here -- only 1 blue mood,
+     * Bashfulness itself, is ever in play). A tied score goes to whoever's
+     * turn was earliest (RoundScorer::winner()), so p2 wins despite the
+     * tie -- Bashfulness's own condition ("if you won") is NOT met.
+     *
+     * Round 2: p1 wins outright with a fresh vanilla card while p2 (out of
+     * cards) passes. Bashfulness must still be exactly where round 1 left
+     * it -- still in play, never moved -- even though its owner (p1) did
+     * win this round.
+     */
+    public function testBashfulnessDoesNotFireOnALaterRoundItWasNotPlayedIn(): void
+    {
+        $u1 = $this->insertUser('bashlater1');
+        $u2 = $this->insertUser('bashlater2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $bashfulnessId = $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
+        $disregardId = $this->insertGameCard($gameId, 113, 'hand', $p2); // Disregard, value 6 (condition never triggers with only 2 moods in play)
+        $p1Round2Id = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency, value 4 -- p1's round 2 winner
+        $this->insertGameCard($gameId, 3, 'deck', null, 0); // p1's loser-of-round-1 draw
+        $this->insertGameCard($gameId, 7, 'deck', null, 1); // filler
+        // Round 1 starts with p2 going first, so a tied score breaks in
+        // their favor -- Bashfulness's owner (p1) must NOT win this round.
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->games->playMood($gameId, $p2, $disregardId, []);
+        $result = $this->games->playMood($gameId, $p1, $bashfulnessId, []);
+        self::assertTrue($result['round_scored']);
+
+        $registry = DefaultEffectRegistry::build();
+        $repository = new BoardStateRepository($registry);
+        $state = $repository->load($gameId);
+        self::assertTrue($state->isInPlay($bashfulnessId), 'Bashfulness should still be in play after losing the round it was played in');
+
+        // Round 2: p2 (round 1's winner) goes first, has nothing left to
+        // play, and passes; p1 wins outright with a fresh card.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->playMood($gameId, $p1, $p1Round2Id, []);
+        self::assertTrue($result['round_scored']);
+
+        $state = $repository->load($gameId);
+        self::assertTrue($state->isInPlay($bashfulnessId), 'Bashfulness must NOT fire on a later round it was not played in, even one its owner wins');
+        self::assertNotContains($bashfulnessId, $state->deck());
     }
 
     /**
@@ -6992,6 +7139,33 @@ final class GameServiceIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
+    /**
+     * Already-'scored', with NO next round created yet -- the real state a
+     * losing team's own 'draw_recipient' decision opens in (see
+     * GameService::finishTeamScoringAndAdvance()), unlike
+     * insertTeamGameRound() above (always 'in_progress', which is correct
+     * for 'turn_order' but not this). See resignGame()'s own
+     * latestRound()-fallback docblock for the bug this reproduces: a
+     * still-'in_progress'-only currentRound() lookup used to make BOTH
+     * advanceAutomatedTurns() and resignGame() wrongly treat this real,
+     * resolvable state as "nothing left to do here".
+     */
+    private function insertScoredTeamRound(int $gameId, int $roundNumber, int $firstGamePlayerId, int $winnerTeamId): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status, winner_team_id, scored_at)
+             VALUES (:game_id, :round_number, :first_player, NULL, 0, 'scored', :winner_team_id, NOW())"
+        );
+        $stmt->execute([
+            'game_id' => $gameId,
+            'round_number' => $roundNumber,
+            'first_player' => $firstGamePlayerId,
+            'winner_team_id' => $winnerTeamId,
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
     /** @param int[] $candidateGamePlayerIds */
     private function insertTeamDecision(int $gameId, int $roundId, int $teamId, string $decisionType, array $candidateGamePlayerIds): int
     {
@@ -7014,6 +7188,14 @@ final class GameServiceIntegrationTest extends TestCase
     {
         $stmt = $this->pdo->prepare('SELECT * FROM game_team_decisions WHERE game_id = :game_id AND resolved_at IS NULL LIMIT 1');
         $stmt->execute(['game_id' => $gameId]);
+
+        return $stmt->fetch();
+    }
+
+    private function fetchTeamDecisionById(int $decisionId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM game_team_decisions WHERE id = :id');
+        $stmt->execute(['id' => $decisionId]);
 
         return $stmt->fetch();
     }
@@ -7316,6 +7498,135 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Honor's own player choice ("the chosen player goes first each round
+     * regardless of who won") has to be the LITERAL next actor for Open
+     * Team Play too, not just a hint about which TEAM decides --
+     * previously, applyDrawRecipientDecision() only used the override to
+     * pick which team got the next turn_order decision, still letting
+     * that team choose either of its two members and potentially pick
+     * someone OTHER than Honor's own named player. p1 names p2 (their own
+     * teammate, NOT team 0's forced representative) while team 1 wins the
+     * round outright -- so without Honor, team 1 would get round 2's own
+     * turn_order decision entirely; Honor's override has to win out over
+     * that natural rule. Team 1 (the OTHER team) still gets its own
+     * ordinary turn_order decision afterward -- Honor only ever names who
+     * goes first, never who goes second.
+     */
+    public function testHonorSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+            'apathyId' => $apathyId,
+        ] = $this->buildTeamFixture();
+
+        $this->games->proposeTeamDecision($gameId, $p2, $p1);
+        $this->games->confirmTeamDecision($gameId, $p1, true);
+
+        $honorId = $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+        $this->games->playMood($gameId, $p1, $honorId, ['target_player_id' => $p2]);
+
+        $this->games->proposeTeamDecision($gameId, $p3, $p3);
+        $this->games->confirmTeamDecision($gameId, $p4, true);
+        $this->games->playMood($gameId, $p3, $apathyId, []); // value 4
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+        // Team 0 (Honor's 3 + p2's pass 0) = 3; team 1 (Apathy's 4 + p4's
+        // pass 0) = 4 -- team 1 wins outright.
+        $round1 = $this->pdo->query("SELECT * FROM game_rounds WHERE game_id = {$gameId} AND round_number = 1")->fetch();
+        self::assertSame(1, (int) $round1['winner_team_id']);
+
+        // Team 0 -- the round's actual loser -- still gets an ordinary
+        // draw_recipient decision, unaffected by Honor.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(0, (int) $decision['team_id']);
+        self::assertSame('draw_recipient', $decision['decision_type']);
+        $this->games->proposeTeamDecision($gameId, $p1, $p2);
+        $result = $this->games->confirmTeamDecision($gameId, $p2, true);
+        self::assertFalse($result['round_scored']);
+
+        // Round 2: p2 (Honor's own choice) is seated directly -- no
+        // decision needed for team 0 at all.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['team_turn_1_game_player_id']);
+        self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+
+        // Team 1 -- NOT team 0 -- still gets its own ordinary turn_order
+        // decision, exactly as it would after any other round.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(1, (int) $decision['team_id']);
+        self::assertSame('turn_order', $decision['decision_type']);
+        self::assertEqualsCanonicalizing([$p3, $p4], array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true)));
+
+        // Logged as an automated seating, not a real team choice --
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('team_turn_order_decided', $entry['event_type']);
+        self::assertSame('team1p2 goes first this round', $entry['description']);
+    }
+
+    /**
+     * Awe's own one-time override is ALWAYS active whenever
+     * skipScoringAndAdvance() runs (it only ever runs because Awe set it
+     * -- see that method's own docblock), unlike Honor's optional one --
+     * so, unlike testHonorSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay()
+     * above, there's no "would the override even change anything" case to
+     * demonstrate; this just confirms the override team's own decision is
+     * skipped every time, while the other team still gets theirs.
+     */
+    public function testAweSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay(): void
+    {
+        [
+            'gameId' => $gameId,
+            'p1' => $p1,
+            'p2' => $p2,
+            'p3' => $p3,
+            'p4' => $p4,
+        ] = $this->buildTeamFixture();
+
+        $this->games->proposeTeamDecision($gameId, $p2, $p1);
+        $this->games->confirmTeamDecision($gameId, $p1, true);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p4]);
+
+        $this->games->proposeTeamDecision($gameId, $p3, $p3);
+        $this->games->confirmTeamDecision($gameId, $p4, true);
+        $this->games->pass($gameId, $p3);
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+
+        // Round 2: p4 (Awe's own choice) is seated directly -- no
+        // decision needed for team 1 at all.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p4, (int) $round2['team_turn_1_game_player_id']);
+        self::assertSame($p4, (int) $round2['current_turn_game_player_id']);
+
+        // Team 0 -- NOT team 1 -- still gets its own ordinary turn_order
+        // decision.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(0, (int) $decision['team_id']);
+        self::assertSame('turn_order', $decision['decision_type']);
+        self::assertEqualsCanonicalizing([$p1, $p2], array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true)));
+
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('team_turn_order_decided', $entry['event_type']);
+        self::assertSame('team2p2 goes first this round', $entry['description']);
+    }
+
+    /**
      * Regression test: Chivalry/Triumph care about whoever PERSONALLY
      * took turn 1 this round, not which TEAM went first. game_rounds.
      * first_game_player_id, for a team game, only identifies a
@@ -7597,6 +7908,165 @@ final class GameServiceIntegrationTest extends TestCase
      *
      * @return array{gameId:int, roundId:int, p1:int, p2:int, p3:int, p4:int}
      */
+    /**
+     * A bug caught live: describeEvent() never got a case added for
+     * 'closed_team_leader_decided' (applyClosedTeamLeaderDecision(),
+     * issue #362) -- it fell through to the generic "{actor} played
+     * {card}" default, and since this event's own card_id is always
+     * null, that rendered as the flatly misleading "{actor} played a
+     * card" (no card ever actually played).
+     */
+    public function testClosedTeamLeaderDecisionIsLoggedAsBeingChosenNotAsAPlay(): void
+    {
+        $u1 = $this->insertUser('closedteamleader1');
+        $u2 = $this->insertUser('closedteamleader2');
+        $u3 = $this->insertUser('closedteamleader3');
+        $u4 = $this->insertUser('closedteamleader4');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $this->insertTeamGamePlayer($gameId, $u2, 1, 1);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 0);
+        $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $roundId = $this->insertTeamGameRound($gameId, 2, $p1);
+        $decisionId = $this->insertTeamDecision($gameId, $roundId, 0, 'turn_order', [$p1, $p3]);
+
+        $this->games->proposeTeamDecision($gameId, $p1, $p3);
+        $this->games->confirmTeamDecision($gameId, $p3, true);
+
+        self::assertNotNull($this->fetchTeamDecisionById($decisionId)['resolved_at']);
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p3, (int) $round['first_game_player_id']);
+        self::assertSame($p3, (int) $round['current_turn_game_player_id']);
+
+        $entry = $this->games->fullEventLog($gameId)[0];
+        self::assertSame('closed_team_leader_decided', $entry['event_type']);
+        self::assertNull($entry['card_id']);
+        self::assertSame('closedteamleader3 was chosen by their team to go first this round', $entry['description']);
+    }
+
+    /**
+     * Closed Team Play's own counterpart to
+     * testHonorSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay()
+     * above -- simpler, since this format has only ONE live "who goes
+     * first" choice per round (the leader) rather than two forced turn
+     * placements, so there's no "other team still gets theirs" half:
+     * Honor's own chosen player is seated directly and NO leader decision
+     * opens at all. p1 names p4 -- team 1, the round's own natural LOSER
+     * -- while team 0 wins outright, so without Honor, team 0 (the
+     * winner) would get round 2's leader decision instead of p4 ever
+     * being seated.
+     */
+    public function testHonorSkipsTheClosedTeamLeaderDecisionEntirely(): void
+    {
+        $u1 = $this->insertUser('cthonor1');
+        $u2 = $this->insertUser('cthonor2');
+        $u3 = $this->insertUser('cthonor3');
+        $u4 = $this->insertUser('cthonor4');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 1);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 0);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $honorId = $this->insertGameCard($gameId, 15, 'hand', $p1); // Honor, value 3
+        $apathyId = $this->insertGameCard($gameId, 55, 'hand', $p3); // black, value 4
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Seat rotation is a plain clockwise walk (p1 -> p2 -> p3 -> p4).
+        $this->games->playMood($gameId, $p1, $honorId, ['target_player_id' => $p4]);
+        $this->games->pass($gameId, $p2);
+        $this->games->playMood($gameId, $p3, $apathyId, []);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+        // Team 0 (Honor's 3 + Apathy's 4) = 7; team 1 (0 + 0) = 0 -- team
+        // 0 wins outright.
+        $round1 = $this->pdo->query("SELECT * FROM game_rounds WHERE game_id = {$gameId} AND round_number = 1")->fetch();
+        self::assertSame(0, (int) $round1['winner_team_id']);
+
+        // Team 1 -- the round's actual loser -- still gets an ordinary
+        // draw_recipient decision, unaffected by Honor.
+        $decision = $this->fetchOpenTeamDecision($gameId);
+        self::assertSame(1, (int) $decision['team_id']);
+        self::assertSame('draw_recipient', $decision['decision_type']);
+        $this->games->proposeTeamDecision($gameId, $p2, $p4);
+        $result = $this->games->confirmTeamDecision($gameId, $p4, true);
+        self::assertFalse($result['round_scored']);
+
+        // Round 2: p4 (Honor's own choice) is seated directly -- no
+        // leader decision opens at all, for either team.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p4, (int) $round2['first_game_player_id']);
+        self::assertSame($p4, (int) $round2['current_turn_game_player_id']);
+        self::assertFalse($this->fetchOpenTeamDecision($gameId));
+
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('closed_team_leader_decided', $entry['event_type']);
+        self::assertSame('cthonor4 goes first this round', $entry['description']);
+    }
+
+    /**
+     * Closed Team Play's own counterpart to
+     * testAweSkipsTheOverrideTeamsTurnOrderDecisionForOpenTeamPlay() above
+     * -- Awe's own override is always active whenever
+     * skipScoringAndAdvance() runs at all, so this just confirms the
+     * leader decision is skipped entirely (no scoring, no draw_recipient
+     * decision, and no leader decision either).
+     */
+    public function testAweSkipsTheClosedTeamLeaderDecisionEntirely(): void
+    {
+        $u1 = $this->insertUser('ctawe1');
+        $u2 = $this->insertUser('ctawe2');
+        $u3 = $this->insertUser('ctawe3');
+        $u4 = $this->insertUser('ctawe4');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 2)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $p2 = $this->insertTeamGamePlayer($gameId, $u2, 1, 1);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 0);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p4]);
+        $this->games->pass($gameId, $p2);
+        $this->games->pass($gameId, $p3);
+        $result = $this->games->pass($gameId, $p4);
+
+        self::assertTrue($result['round_scored']);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p4, (int) $round2['first_game_player_id']);
+        self::assertSame($p4, (int) $round2['current_turn_game_player_id']);
+        self::assertFalse($this->fetchOpenTeamDecision($gameId), 'no leader decision opens at all -- neither team');
+
+        // fullEventLog() is oldest-first, so this is the LAST entry.
+        $log = $this->games->fullEventLog($gameId);
+        $entry = end($log);
+        self::assertSame('closed_team_leader_decided', $entry['event_type']);
+        self::assertSame('ctawe4 goes first this round', $entry['description']);
+    }
+
     private function buildClosedTeamFixture(): array
     {
         $u1 = $this->insertUser('closedteam1');
@@ -11095,6 +11565,64 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame($p3, (int) $game['winner_game_player_id']);
     }
 
+    /**
+     * A bug caught live: a losing team's own 'draw_recipient' decision
+     * (see finishTeamScoringAndAdvance()) opens the instant its round's
+     * status flips to 'scored' -- the NEXT round doesn't get created until
+     * that decision resolves (applyDrawRecipientDecision()), so there's a
+     * real window where the game has NO round with status 'in_progress'
+     * at all. resignGame() used to call currentRound() (status =
+     * 'in_progress' only) unconditionally and let a genuine
+     * GameStateException escape uncaught, so resigning during exactly
+     * this window silently failed (a 409 the frontend gave no visible
+     * feedback for) instead of ending the game -- especially bad when, as
+     * reported live, both draw_recipient candidates were bots and the
+     * game was otherwise deadlocked with no other way out.
+     */
+    public function testResignDuringAnOpenDrawRecipientDecisionStillCompletesTheGame(): void
+    {
+        $u1 = $this->insertUser('team1p1');
+        $u2 = $this->insertUser('team1p2');
+        $u3 = $this->insertUser('team2p1');
+        $u4 = $this->insertUser('team2p2');
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('closed_team', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+        $p1 = $this->insertTeamGamePlayer($gameId, $u1, 0, 0);
+        $this->insertTeamGamePlayer($gameId, $u2, 1, 0);
+        $p3 = $this->insertTeamGamePlayer($gameId, $u3, 2, 1);
+        $p4 = $this->insertTeamGamePlayer($gameId, $u4, 3, 1);
+
+        // Team 0 already won round 1; team 1 has an open, unresolved
+        // draw_recipient decision, and round 1 is already 'scored' -- no
+        // round 2 exists yet.
+        $roundId = $this->insertScoredTeamRound($gameId, 1, $p1, winnerTeamId: 0);
+        $decisionId = $this->insertTeamDecision($gameId, $roundId, 1, 'draw_recipient', [$p3, $p4]);
+
+        $result = $this->games->resignGame($gameId, $p1);
+
+        self::assertTrue($result['game_completed']);
+        $game = $this->fetchGame($gameId);
+        self::assertSame('completed', $game['status']);
+        self::assertSame(1, (int) $game['winner_team_id']);
+
+        // The already-'scored' round 1 stays 'scored' -- it genuinely
+        // completed normally, so it must NOT be overwritten to
+        // 'abandoned' just because there was nothing in_progress left to
+        // abandon at resignation time.
+        $round1 = $this->pdo->query("SELECT status FROM game_rounds WHERE game_id = {$gameId} AND round_number = 1")->fetch();
+        self::assertSame('scored', $round1['status']);
+
+        // The still-open draw_recipient decision is closed out too, so a
+        // later GET /games/state on this now-completed game never shows a
+        // stale "Waiting for ... to choose" panel.
+        $decisionStmt = $this->pdo->prepare('SELECT resolved_at FROM game_team_decisions WHERE id = :id');
+        $decisionStmt->execute(['id' => $decisionId]);
+        self::assertNotNull($decisionStmt->fetch()['resolved_at']);
+    }
+
     public function testResigningOnYourOwnTurnSkipsToTheNextActivePlayerInStandardFormat(): void
     {
         ['gameId' => $gameId, 'p1' => $p1, 'p2' => $p2, 'p3' => $p3, 'apathyId' => $apathyId] = $this->buildThreePlayerFixture();
@@ -13143,5 +13671,1004 @@ final class GameServiceIntegrationTest extends TestCase
         $decisionField = $this->games->getState($gameId, $u2)['round']['pending_decision']['field'];
         self::assertSame('given_card_id', $decisionField['key']);
         self::assertArrayNotHasKey('default', $decisionField);
+    }
+
+    // -- Closed Team Play drafting (issue #362) ----------------------------
+
+    private function gamePlayerIdForUser(int $gameId, int $userId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT id FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+        $stmt->execute(['game_id' => $gameId, 'user_id' => $userId]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Every seated player's own pregame blind card pass -- their first 2
+     * hand cards, an arbitrary but always-legal choice (see
+     * BotPlayerService::chooseInitialCardPass() for the identical "doesn't
+     * matter which 2, just needs to be legal" reasoning). Submits in
+     * $userIds order; the last submission is whichever team completes
+     * last, so this exercises both teams' own independent-pace transfer
+     * (see submitInitialCardPass()'s own docblock) on every call.
+     *
+     * @param int[] $userIds
+     */
+    private function submitAllInitialCardPasses(int $gameId, array $userIds): void
+    {
+        foreach ($userIds as $userId) {
+            $gamePlayerId = $this->gamePlayerIdForUser($gameId, $userId);
+            $hand = array_map(intval(...), $this->pdo
+                ->query("SELECT id FROM game_cards WHERE owner_game_player_id = {$gamePlayerId} AND zone = 'hand'")
+                ->fetchAll(PDO::FETCH_COLUMN));
+            $this->games->submitInitialCardPass($gameId, $gamePlayerId, array_slice($hand, 0, 2));
+        }
+    }
+
+    /**
+     * Closed Team Play's round 1 needs no team_turn_1/2/propose/confirm
+     * machinery at all (see "Closed Team Play" in php-app/README.md) --
+     * once the pregame pass unfreezes it, it's an ordinary
+     * rotate($seatOrder, $firstPlayer) turn order, so everyone passing in
+     * turn starting from current_turn_game_player_id (exactly like
+     * completeMultiplayerQuickDraftGameByPassing() drives a plain 4-player
+     * draft's own round 1) reaches a scored 0-0 round, tie-broken to
+     * whichever TEAM went first (determineRoundWinner()'s own team
+     * branch) -- NOT necessarily first_game_player_id itself, which is
+     * only a representative seat for deciding that team, not the round's
+     * own winner_game_player_id: on an intra-team tie (guaranteed here,
+     * every score is 0) that field is instead whichever of the two
+     * teammates has the lower seat_order, which may be the OTHER member.
+     *
+     * @return array{winnerUserId: int, winnerTeamId: int}
+     */
+    private function completeClosedTeamDraftRoundByPassing(int $gameId): array
+    {
+        $round = $this->fetchRound($gameId);
+        $firstGamePlayerId = (int) $round['first_game_player_id'];
+        $expectedWinnerTeamId = (int) $this->pdo
+            ->query("SELECT team_id FROM game_players WHERE id = {$firstGamePlayerId}")
+            ->fetchColumn();
+
+        $result = null;
+        for ($i = 0; $i < 4; $i++) {
+            $round = $this->fetchRound($gameId);
+            $currentTurnGamePlayerId = (int) $round['current_turn_game_player_id'];
+            $result = $this->games->pass($gameId, $currentTurnGamePlayerId);
+            if ($result['game_completed']) {
+                break;
+            }
+        }
+        self::assertNotNull($result);
+        self::assertTrue($result['game_completed'], 'every seated player passing should complete the round/game');
+
+        $winnerGamePlayerId = (int) $result['winner_game_player_id'];
+        $userIdStmt = $this->pdo->prepare('SELECT user_id FROM game_players WHERE id = :id');
+        $userIdStmt->execute(['id' => $winnerGamePlayerId]);
+        $teamIdStmt = $this->pdo->prepare('SELECT team_id FROM game_players WHERE id = :id');
+        $teamIdStmt->execute(['id' => $winnerGamePlayerId]);
+        $winnerTeamId = (int) $teamIdStmt->fetchColumn();
+
+        self::assertSame($expectedWinnerTeamId, $winnerTeamId, "the team that went first (game_player {$firstGamePlayerId}'s own) should win a 0-0 tie");
+
+        return ['winnerUserId' => (int) $userIdStmt->fetchColumn(), 'winnerTeamId' => $winnerTeamId];
+    }
+
+    public function testCreateGameAcceptsClosedTeamWithEachDraftDeckType(): void
+    {
+        foreach (['quick_draft', 'winston_draft', 'grid_draft'] as $deckType) {
+            $userIds = $this->insertUsers('ctd-' . uniqid() . '-', 4);
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: 'closed_team',
+                deckType: $deckType,
+                partnerUserId: $userIds[1],
+                quickDraftPoolSource: $deckType === 'quick_draft' ? 'random_48' : null,
+                winstonDraftPoolSource: $deckType === 'winston_draft' ? 'random_48' : null,
+                gridDraftPoolSource: $deckType === 'grid_draft' ? 'random_48' : null,
+            );
+
+            self::assertIsInt($gameId, "closed_team should accept {$deckType}");
+            self::assertSame('closed_team', $this->fetchGame($gameId)['format']);
+        }
+    }
+
+    /**
+     * Open Team Play drafting (issue #362 stage 2) -- each of the 4
+     * players still drafts and builds their own deck independently, same
+     * as Closed Team Play above; only the read-side visibility differs
+     * (see the "Open Team Play drafting" test section further down).
+     */
+    public function testCreateGameAcceptsOpenTeamWithEachDraftDeckType(): void
+    {
+        foreach (['quick_draft', 'winston_draft', 'grid_draft'] as $deckType) {
+            $userIds = $this->insertUsers('otd-' . uniqid() . '-', 4);
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: 'team',
+                deckType: $deckType,
+                partnerUserId: $userIds[1],
+                quickDraftPoolSource: $deckType === 'quick_draft' ? 'random_48' : null,
+                winstonDraftPoolSource: $deckType === 'winston_draft' ? 'random_48' : null,
+                gridDraftPoolSource: $deckType === 'grid_draft' ? 'random_48' : null,
+            );
+
+            self::assertIsInt($gameId, "team should accept {$deckType}");
+            self::assertSame('team', $this->fetchGame($gameId)['format']);
+        }
+    }
+
+    /**
+     * End to end: draft -> deck-build -> start -> play a Closed Team Play
+     * Quick Draft game to completion, exercising both fixes issue #362
+     * needed -- BoardStateRepository::load()'s own $hasSeparateDecks check
+     * (each player's starting hand must come from THEIR OWN drafted pool,
+     * not a shared one) and finishTeamScoringAndAdvance() now calling
+     * advanceDraftMatch() (the draft match must actually reach
+     * 'completed', which it silently never did before this issue).
+     */
+    public function testClosedTeamQuickDraftFullMatchToCompletion(): void
+    {
+        $userIds = $this->insertUsers('ctqd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            winsNeeded: 1,
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $draftedCardIdsByUser = [];
+        foreach ($userIds as $userId) {
+            $draftedCardIds = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            $draftedCardIdsByUser[$userId] = $draftedCardIds;
+            $this->games->submitDraftDeck($gameId, $userId, $draftedCardIds);
+        }
+
+        $this->games->startGame($gameId);
+
+        // Each player's own starting hand is drawn from THEIR OWN drafted
+        // pool -- if BoardStateRepository still treated this as a shared
+        // pool (the bug this issue fixed), a hand could legally contain
+        // catalog cards no one drafted in that specific combination, or
+        // the same instance could be dealt into two different hands.
+        foreach ($userIds as $userId) {
+            $gamePlayerId = $this->gamePlayerIdForUser($gameId, $userId);
+            $handCatalogIds = array_map(intval(...), $this->pdo
+                ->query("SELECT card_id FROM game_cards WHERE game_id = {$gameId} AND owner_game_player_id = {$gamePlayerId} AND zone = 'hand'")
+                ->fetchAll(PDO::FETCH_COLUMN));
+            self::assertSame(
+                [],
+                array_diff($handCatalogIds, $draftedCardIdsByUser[$userId]),
+                "user {$userId}'s own starting hand should only contain cards THEY drafted"
+            );
+        }
+
+        $this->submitAllInitialCardPasses($gameId, $userIds);
+        ['winnerTeamId' => $winnerTeamId] = $this->completeClosedTeamDraftRoundByPassing($gameId);
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame($winnerTeamId, (int) $this->fetchGame($gameId)['winner_team_id']);
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+        self::assertSame('completed', $match['status'], 'finishTeamScoringAndAdvance() must advance the draft match too');
+        self::assertNotNull($match['winner_user_id']);
+    }
+
+    public function testClosedTeamWinstonDraftFullMatchToCompletion(): void
+    {
+        $userIds = $this->insertUsers('ctwd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            winsNeeded: 1,
+            deckType: 'winston_draft',
+            partnerUserId: $userIds[1],
+            winstonDraftPoolSource: 'random_48',
+        );
+
+        $this->driveMultiplayerWinstonDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $draftedCardIds = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            $this->games->submitDraftDeck($gameId, $userId, $draftedCardIds);
+        }
+
+        $this->games->startGame($gameId);
+        $this->submitAllInitialCardPasses($gameId, $userIds);
+        $this->completeClosedTeamDraftRoundByPassing($gameId);
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+    }
+
+    public function testClosedTeamGridDraftFullMatchToCompletion(): void
+    {
+        $userIds = $this->insertUsers('ctgd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            winsNeeded: 1,
+            deckType: 'grid_draft',
+            partnerUserId: $userIds[1],
+            gridDraftPoolSource: 'random_48',
+        );
+
+        $this->driveMultiplayerGridDraftToDeckBuilding($gameId, $userIds);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $draftedCardIds = json_decode($this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            $this->games->submitDraftDeck($gameId, $userId, $draftedCardIds);
+        }
+
+        $this->games->startGame($gameId);
+        $this->submitAllInitialCardPasses($gameId, $userIds);
+        $this->completeClosedTeamDraftRoundByPassing($gameId);
+
+        self::assertSame('completed', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+    }
+
+    /**
+     * A dropped seat leaves the OTHER team's own 2v2 broken regardless of
+     * how many players remain in total -- unlike an individual draft
+     * (where 2+ survivors just continue as a smaller match), any
+     * resignation during a Closed Team Play draft's own picking phase
+     * abandons the whole match outright.
+     */
+    public function testResignDuringClosedTeamDraftingAbandonsTheWholeMatch(): void
+    {
+        $userIds = $this->insertUsers('ctres-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $resigningGamePlayerId = $this->gamePlayerIdForUser($gameId, $userIds[2]);
+
+        $result = $this->games->resignGame($gameId, $resigningGamePlayerId);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+        self::assertNull($this->fetchDraftMatch($draftMatchId)['winner_user_id']);
+    }
+
+    /**
+     * Same "always abandon outright" rule as the drafting-phase test
+     * above, but during deck_building -- where an INDIVIDUAL draft's own
+     * identical resignation instead lets 2+ survivors continue as their
+     * own smaller match (see resignFromDraftMatch()'s own docblock).
+     */
+    public function testResignDuringClosedTeamDeckBuildingAbandonsTheWholeMatch(): void
+    {
+        $userIds = $this->insertUsers('ctresdb-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+        $resigningGamePlayerId = $this->gamePlayerIdForUser($gameId, $userIds[2]);
+
+        $result = $this->games->resignGame($gameId, $resigningGamePlayerId);
+
+        self::assertTrue($result['game_completed']);
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+        self::assertNull($this->fetchDraftMatch($draftMatchId)['winner_user_id']);
+        // The 3 players who DIDN'T resign are untouched -- this is an
+        // outright abandonment, not a "drop just the resigning seat"
+        // continuation.
+        foreach ([$userIds[0], $userIds[1], $userIds[3]] as $survivingUserId) {
+            $gamePlayerId = $this->gamePlayerIdForUser($gameId, $survivingUserId);
+            $stmt = $this->pdo->prepare('SELECT resigned_at FROM game_players WHERE id = :id');
+            $stmt->execute(['id' => $gamePlayerId]);
+            self::assertNull($stmt->fetchColumn());
+        }
+    }
+
+    /**
+     * finalizeWinstonDraft()'s own drop-a-short-player path (a player
+     * left short of WINSTON_MIN_DECK_SIZE once the shared deck runs out)
+     * must abandon a Closed Team Play match outright too, for the exact
+     * same "any dropped seat breaks the other team's 2v2" reason the two
+     * resignation tests above cover -- rather than letting the other 3
+     * continue as their own 3-player match, which is what happens for a
+     * plain individual Winston Draft in this same situation.
+     */
+    public function testWinstonDraftShortPlayerAbandonsAClosedTeamMatchInstead(): void
+    {
+        $userIds = $this->insertUsers('ctwdshort-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'winston_draft',
+            partnerUserId: $userIds[1],
+            winstonDraftPoolSource: 'random_48',
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Force every player's own drafted total below WINSTON_MIN_DECK_SIZE
+        // (12) directly, then trigger finalizeWinstonDraft() the same way
+        // draining the shared deck naturally would -- deterministic and
+        // far cheaper than actually drafting down to a short pool.
+        foreach ($userIds as $userId) {
+            $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+                ->execute(['ids' => json_encode(range(1, 5)), 'match_id' => $draftMatchId, 'user_id' => $userId]);
+        }
+        $this->pdo->prepare("UPDATE draft_winston_state SET remaining_deck_card_ids = '[]', pile_1_card_ids = '[]', pile_2_card_ids = '[]', pile_3_card_ids = '[]' WHERE draft_match_id = :id")
+            ->execute(['id' => $draftMatchId]);
+
+        $currentUserId = (int) $this->fetchWinstonState($draftMatchId)['current_player_user_id'];
+        $this->games->submitWinstonDraftPick($gameId, $currentUserId, 'pass');
+
+        self::assertSame('abandoned', $this->fetchGame($gameId)['status']);
+        self::assertSame('completed', $this->fetchDraftMatch($draftMatchId)['status']);
+        self::assertNull($this->fetchDraftMatch($draftMatchId)['winner_user_id']);
+    }
+
+    // -- Open Team Play drafting (issue #362 stage 2) -----------------------
+
+    /**
+     * seatOrderForTeamGame() keeps the creator and their chosen partner
+     * adjacent at seats 0/1 (team_id 0); $userIds[2]/$userIds[3] land at
+     * seats 2/3 (team_id 1). Every Open Team Play drafting test below
+     * relies on this exact pairing.
+     *
+     * Quick Draft's own stage 1 pileOwner is always the drafter themselves
+     * (see submitQuickDraftPick()'s own docblock), so this keeps just the
+     * pack's own first QUICK_DRAFT_KEEP_PER_STAGE cards for $userIds[0]/
+     * $userIds[1] only -- team 1 ($userIds[2]/$userIds[3]) is deliberately
+     * left untouched so the "opposing team sees none of team 0's cards"
+     * assertion has something to actually prove.
+     */
+    private function submitTeamZeroQuickDraftStageOnePicks(int $gameId, array $userIds): void
+    {
+        foreach ([$userIds[0], $userIds[1]] as $userId) {
+            $pack = $this->games->getState($gameId, $userId)['quick_draft']['drafting']['pack'];
+            $this->games->submitQuickDraftPick($gameId, $userId, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
+        }
+    }
+
+    /**
+     * Open Team Play's own "open information" premise (php-app/README.md's
+     * "Open Team Play" section, already true for actual gameplay via
+     * `you.teammate_hand`) extended to Quick Draft's own picking phase:
+     * once each teammate has kept at least one stage's worth of cards,
+     * either one's own 'team_drafted_cards' combines BOTH of their kept
+     * cards -- never the opposing team's, which stays completely
+     * invisible to team 0 the same way it always has been.
+     */
+    public function testOpenTeamQuickDraftExposesTeamDraftedCardsThroughoutTheDraft(): void
+    {
+        $userIds = $this->insertUsers('otqd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $this->submitTeamZeroQuickDraftStageOnePicks($gameId, $userIds);
+
+        foreach ([$userIds[0], $userIds[1]] as $viewerUserId) {
+            $teamDrafted = $this->games->getState($gameId, $viewerUserId)['quick_draft']['drafting']['team_drafted_cards'];
+            self::assertNotNull($teamDrafted, "user {$viewerUserId} should see a 'team_drafted_cards' field in Open Team Play");
+            $expectedTeammateId = $viewerUserId === $userIds[0] ? $userIds[1] : $userIds[0];
+            self::assertSame($expectedTeammateId, $teamDrafted['teammate_user_id']);
+            self::assertCount(4, $teamDrafted['cards'], 'both teammates own 2-card stage-1 keeps should be combined');
+        }
+
+        // Team 1 hasn't picked anything yet, and never sees team 0's own
+        // cards regardless -- their own team_drafted_cards stays scoped to
+        // their own (empty so far) team.
+        $opponentTeamDrafted = $this->games->getState($gameId, $userIds[2])['quick_draft']['drafting']['team_drafted_cards'];
+        self::assertNotNull($opponentTeamDrafted);
+        self::assertSame($userIds[3], $opponentTeamDrafted['teammate_user_id']);
+        self::assertCount(0, $opponentTeamDrafted['cards']);
+    }
+
+    /**
+     * Closed Team Play, by contrast, keeps every player's own draft fully
+     * private -- Stage 1's own design, unchanged by stage 2 -- so it never
+     * populates 'team_drafted_cards' at all.
+     */
+    public function testClosedTeamQuickDraftNeverExposesTeamDraftedCards(): void
+    {
+        $userIds = $this->insertUsers('ctqdnone-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $state = $this->games->getState($gameId, $userIds[0]);
+        self::assertNull($state['quick_draft']['drafting']['team_drafted_cards']);
+    }
+
+    /**
+     * Winston Draft's own analog: unlike Quick Draft, draft_match_players'
+     * drafted_card_ids is already updated incrementally per pick
+     * (appendDraftedCardIds()), so 'team_drafted_cards' is read straight
+     * off it rather than walked from draft_pile_stage_picks.
+     */
+    public function testOpenTeamWinstonDraftExposesTeamDraftedCardsThroughoutTheDraft(): void
+    {
+        $userIds = $this->insertUsers('otwd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'winston_draft',
+            partnerUserId: $userIds[1],
+            winstonDraftPoolSource: 'random_48',
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Drive picks (always 'take' when possible) until BOTH of team 0's
+        // own members have drafted at least one card each, so their
+        // combined team_drafted_cards has something concrete to assert on.
+        for ($i = 0; $i < 50; $i++) {
+            $u0Drafted = json_decode((string) ($this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'] ?? '[]'), true) ?: [];
+            $u1Drafted = json_decode((string) ($this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'] ?? '[]'), true) ?: [];
+            if ($u0Drafted !== [] && $u1Drafted !== []) {
+                break;
+            }
+
+            $winstonState = $this->fetchWinstonState($draftMatchId);
+            $currentUserId = (int) $winstonState['current_player_user_id'];
+            $currentPileNumber = (int) $winstonState['current_pile_number'];
+            $currentPileSize = count(json_decode((string) $winstonState["pile_{$currentPileNumber}_card_ids"], true));
+            $this->games->submitWinstonDraftPick($gameId, $currentUserId, $currentPileSize >= 1 ? 'take' : 'pass');
+        }
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        self::assertNotSame([], $u0Drafted);
+        self::assertNotSame([], $u1Drafted);
+
+        $teamDrafted = $this->games->getState($gameId, $userIds[0])['winston_draft']['drafting']['team_drafted_cards'];
+        self::assertNotNull($teamDrafted);
+        self::assertSame($userIds[1], $teamDrafted['teammate_user_id']);
+        self::assertCount(count($u0Drafted) + count($u1Drafted), $teamDrafted['cards']);
+    }
+
+    /**
+     * draftDeckBuildingStateFor()/submitDraftDeck() are shared verbatim by
+     * Quick Draft, Winston Draft, and Grid Draft -- the combined-team-pool
+     * behavior is exercised thoroughly for Quick Draft above
+     * (testOpenTeamQuickDraftDeckBuildingPoolIsTheWholeCombinedTeamPool()
+     * and its siblings); this just confirms Winston Draft gets the exact
+     * same combined pool through that one shared code path, not a
+     * separately-reimplemented one.
+     */
+    public function testOpenTeamWinstonDraftDeckBuildingPoolIsTheWholeCombinedTeamPool(): void
+    {
+        $userIds = $this->insertUsers('otwdpool-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'winston_draft',
+            partnerUserId: $userIds[1],
+            winstonDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerWinstonDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $combinedCount = count($u0Drafted) + count($u1Drafted);
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['winston_draft']['deck_building'];
+        self::assertCount($combinedCount, $deckBuilding['drafted_cards']);
+        self::assertSame($combinedCount, $deckBuilding['max_deck_size']);
+    }
+
+    /**
+     * Grid Draft is already open information end to end -- every player's
+     * own drafted_so_far was already visible to everyone before stage 2 --
+     * so the only change here is display grouping: 'teams_drafted_so_far'
+     * regroups that same information by team_id instead of listing all 4
+     * players individually.
+     */
+    public function testOpenTeamGridDraftGroupsDraftedCardsPerTeamInsteadOfPerPlayer(): void
+    {
+        $userIds = $this->insertUsers('otgd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'grid_draft',
+            partnerUserId: $userIds[1],
+            gridDraftPoolSource: 'random_48',
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $gridState = $this->fetchGridState($draftMatchId);
+        $currentUserId = (int) $gridState['current_turn_user_id'];
+        $grid = json_decode((string) $gridState['grid_card_ids'], true);
+        [$axis, $index] = $this->firstAvailableGridLine($grid);
+        $this->games->submitGridDraftPick($gameId, $currentUserId, $axis, $index);
+
+        $drafting = $this->games->getState($gameId, $userIds[0])['grid_draft']['drafting'];
+        self::assertNotNull($drafting['teams_drafted_so_far']);
+        self::assertCount(2, $drafting['teams_drafted_so_far']);
+
+        $teamIdByUserId = [];
+        $stmt = $this->pdo->prepare('SELECT user_id, team_id FROM game_players WHERE game_id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+        foreach ($stmt->fetchAll() as $row) {
+            $teamIdByUserId[(int) $row['user_id']] = (int) $row['team_id'];
+        }
+
+        $yourTeamEntries = array_values(array_filter($drafting['teams_drafted_so_far'], fn (array $t) => $t['is_your_team']));
+        self::assertCount(1, $yourTeamEntries, 'exactly one of the 2 team entries should be flagged as the viewer\'s own team');
+        self::assertSame($teamIdByUserId[$userIds[0]], $yourTeamEntries[0]['team_id']);
+        self::assertEqualsCanonicalizing(
+            [$this->pdo->query("SELECT username FROM users WHERE id = {$userIds[0]}")->fetchColumn(),
+                $this->pdo->query("SELECT username FROM users WHERE id = {$userIds[1]}")->fetchColumn()],
+            $yourTeamEntries[0]['member_usernames'],
+        );
+
+        // The round's very first pick always takes a whole, freshly-dealt
+        // line -- grid_size cards (4 for this 4-player match's own 4x4
+        // grid), all landing with whichever team the picking player is on.
+        $totalTeamsDraftedCount = array_sum(array_map(fn (array $t) => count($t['drafted_so_far']), $drafting['teams_drafted_so_far']));
+        self::assertSame(4, $totalTeamsDraftedCount);
+
+        // A non-team format never groups by team at all.
+        $draftGameId = $this->games->createGame(
+            $userIds[0],
+            [$userIds[0], $userIds[2]],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'random_48',
+        );
+        self::assertNull($this->games->getState($draftGameId, $userIds[0])['grid_draft']['drafting']['teams_drafted_so_far']);
+    }
+
+    /**
+     * Open Team Play's teammate visibility carries into deck-building too
+     * (not just the picking phase) -- 'team_drafted_cards' there combines
+     * both teammates' own full drafted pools, matching the drafting-phase
+     * field's own shape. Each teammate still submits their own separate
+     * deck though -- this is purely visibility, not shared construction.
+     */
+    public function testOpenTeamQuickDraftDeckBuildingExposesTeammatesDraftedCards(): void
+    {
+        $userIds = $this->insertUsers('otqddb-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building'];
+        self::assertNotNull($deckBuilding['team_drafted_cards']);
+        self::assertSame($userIds[1], $deckBuilding['team_drafted_cards']['teammate_user_id']);
+        self::assertCount(count($u0Drafted) + count($u1Drafted), $deckBuilding['team_drafted_cards']['cards']);
+
+        // Closed Team Play's own deck-building stays private, exactly as
+        // Stage 1 left it.
+        $closedUserIds = $this->insertUsers('ctqddbnone-' . uniqid() . '-', 4);
+        $closedGameId = $this->games->createGame(
+            $closedUserIds[0],
+            $closedUserIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $closedUserIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($closedGameId, $closedUserIds);
+        $closedDeckBuilding = $this->games->getState($closedGameId, $closedUserIds[0])['quick_draft']['deck_building'];
+        self::assertNull($closedDeckBuilding['team_drafted_cards']);
+    }
+
+    /**
+     * A real request: Open Team Play teammates shouldn't just SEE each
+     * other's drafted cards during deck-building (the test above) -- they
+     * should be able to actually build their own deck from the team's
+     * whole combined pool, not just what they personally drafted. Before
+     * neither teammate has submitted anything yet, both should see the
+     * exact same combined pool (their own drafted_card_ids plus their
+     * teammate's) as their own pickable 'drafted_cards', with
+     * 'max_deck_size' matching its full size.
+     */
+    public function testOpenTeamQuickDraftDeckBuildingPoolIsTheWholeCombinedTeamPool(): void
+    {
+        $userIds = $this->insertUsers('otqdpool-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $combinedCount = count($u0Drafted) + count($u1Drafted);
+
+        $u0DeckBuilding = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building'];
+        self::assertCount($combinedCount, $u0DeckBuilding['drafted_cards']);
+        self::assertSame($combinedCount, $u0DeckBuilding['max_deck_size']);
+
+        // The teammate (u1) sees the exact same combined pool -- not just
+        // their own cards either.
+        $u1DeckBuilding = $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building'];
+        self::assertCount($combinedCount, $u1DeckBuilding['drafted_cards']);
+    }
+
+    /**
+     * The actual submission, not just what's shown as pickable: a card
+     * u0 never personally drafted (only their teammate u1 did) must be
+     * accepted in u0's own deck now.
+     */
+    public function testOpenTeamQuickDraftDeckCanIncludeTeammatesDraftedCards(): void
+    {
+        $userIds = $this->insertUsers('otqdinclude-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $teammatesOnlyCardId = null;
+        foreach ($u1Drafted as $cardId) {
+            if (!in_array($cardId, $u0Drafted, true)) {
+                $teammatesOnlyCardId = $cardId;
+                break;
+            }
+        }
+        self::assertNotNull($teammatesOnlyCardId, 'fixture sanity check -- u1 must have drafted at least one card u0 did not');
+
+        $deck = [...array_slice($u0Drafted, 0, 11), $teammatesOnlyCardId];
+        $this->games->submitDraftDeck($gameId, $userIds[0], $deck);
+
+        $deckCardIds = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building']['deck_card_ids'];
+        self::assertContains($teammatesOnlyCardId, $deckCardIds);
+    }
+
+    /**
+     * First-come-first-served (a real design choice, not an oversight):
+     * once a drafted card is sitting in one teammate's OWN submitted
+     * deck, the other teammate can't also put it in theirs -- even a card
+     * they personally drafted themselves. The only way to free it back up
+     * is for whichever teammate is currently using it to un-select it and
+     * resubmit.
+     */
+    public function testOpenTeamQuickDraftFirstComeFirstServedBlocksTheOtherTeammateFromTheSameCard(): void
+    {
+        $userIds = $this->insertUsers('otqdfcfs-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $contestedCardId = $u1Drafted[0]; // u1's own card -- u0 claims it first anyway
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $this->games->submitDraftDeck($gameId, $userIds[0], [...array_slice($u0Drafted, 0, 11), $contestedCardId]);
+
+        // u1 no longer sees it as pickable at all...
+        $u1DeckBuilding = $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building'];
+        self::assertNotContains($contestedCardId, array_column($u1DeckBuilding['drafted_cards'], 'card_id'));
+
+        // ...and submitting it anyway is rejected server-side too, not just hidden client-side.
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("can only contain cards your team drafted (and that your teammate hasn't already used in their own deck)");
+        $this->games->submitDraftDeck($gameId, $userIds[1], [...array_slice($u1Drafted, 1, 11), $contestedCardId]);
+    }
+
+    /**
+     * The other half of first-come-first-served: un-claiming a card by
+     * resubmitting without it makes it available to the teammate again.
+     */
+    public function testOpenTeamQuickDraftReleasingAClaimedCardMakesItAvailableToTheTeammateAgain(): void
+    {
+        $userIds = $this->insertUsers('otqdrelease-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+        $contestedCardId = $u1Drafted[0];
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+
+        $this->games->submitDraftDeck($gameId, $userIds[0], [...array_slice($u0Drafted, 0, 11), $contestedCardId]);
+        // u0 changes their mind, resubmits without it.
+        $this->games->submitDraftDeck($gameId, $userIds[0], array_slice($u0Drafted, 0, 12));
+
+        $u1DeckBuilding = $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building'];
+        self::assertContains($contestedCardId, array_column($u1DeckBuilding['drafted_cards'], 'card_id'));
+        $this->games->submitDraftDeck($gameId, $userIds[1], [...array_slice($u1Drafted, 1, 11), $contestedCardId]);
+        self::assertContains($contestedCardId, $this->games->getState($gameId, $userIds[1])['quick_draft']['deck_building']['deck_card_ids']);
+    }
+
+    /**
+     * Closed Team Play must NOT get any of the above -- "information
+     * stays closed between teammates" (see "Closed Team Play" in
+     * php-app/README.md) means each player still builds only from their
+     * own personally-drafted pool, exactly as before this feature.
+     */
+    public function testClosedTeamQuickDraftDeckBuildingStaysPersonalPoolOnly(): void
+    {
+        $userIds = $this->insertUsers('ctqdpersonal-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $u0Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[0])['drafted_card_ids'], true);
+        $u1Drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userIds[1])['drafted_card_ids'], true);
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['quick_draft']['deck_building'];
+        self::assertCount(count($u0Drafted), $deckBuilding['drafted_cards']);
+
+        $teammatesOnlyCardId = null;
+        foreach ($u1Drafted as $cardId) {
+            if (!in_array($cardId, $u0Drafted, true)) {
+                $teammatesOnlyCardId = $cardId;
+                break;
+            }
+        }
+        self::assertNotNull($teammatesOnlyCardId, 'fixture sanity check');
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('can only contain cards you drafted');
+        $this->games->submitDraftDeck($gameId, $userIds[0], [...array_slice($u0Drafted, 0, 11), $teammatesOnlyCardId]);
+    }
+
+    /**
+     * postChatMessage()'s own deck-building exception
+     * (isOpenTeamDeckBuildingChat()): once Open Team Play's draft match
+     * reaches 'deck_building', teammates can coordinate over the 'team'
+     * channel even though games.status is still 'waiting' (real gameplay
+     * hasn't started -- see driveMultiplayerQuickDraftToDeckBuilding()'s
+     * own final assertion). Visible to both teammates, same as any other
+     * 'team'-channel message.
+     */
+    public function testOpenTeamQuickDraftDeckBuildingAllowsTeamChannelChat(): void
+    {
+        $userIds = $this->insertUsers('otqdchat-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->games->postChatMessage($gameId, $p0, 'team', "Let's split the drafted pool evenly.");
+
+        $teammateMessages = $this->games->getState($gameId, $userIds[1])['chat_messages'];
+        self::assertCount(1, $teammateMessages);
+        self::assertSame("Let's split the drafted pool evenly.", $teammateMessages[0]['message_text']);
+        self::assertSame('team', $teammateMessages[0]['channel']);
+
+        // Not visible to the opposing team.
+        self::assertCount(0, $this->games->getState($gameId, $userIds[2])['chat_messages']);
+    }
+
+    /**
+     * The deck-building exception is deliberately narrower than the
+     * general "in_progress" rule it replaces -- only the 'team' channel,
+     * never 'table' (see isOpenTeamDeckBuildingChat()'s own docblock for
+     * why: the opposing team may still be mid-draft/deck-building
+     * themselves).
+     */
+    public function testOpenTeamQuickDraftDeckBuildingStillBlocksTableChannelChat(): void
+    {
+        $userIds = $this->insertUsers('otqdchattbl-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'table', 'Good luck to the other team too!');
+    }
+
+    /**
+     * The exception only kicks in once the match has actually reached
+     * 'deck_building' -- mid-'drafting', a stray message would arrive to
+     * a teammate who's still mid-pack and not yet looking at chat (see
+     * isOpenTeamDeckBuildingChat()'s own docblock).
+     */
+    public function testOpenTeamQuickDraftStillBlocksChatDuringTheDraftingPhaseItself(): void
+    {
+        $userIds = $this->insertUsers('otqdchatdrafting-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        self::assertSame('drafting', $this->games->getState($gameId, $userIds[0])['quick_draft']['status']);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'team', 'Too early to chat about deck building.');
+    }
+
+    /**
+     * Closed Team Play must NOT get this exception either -- "information
+     * stays closed between teammates" applies to chat the same as it does
+     * to the deck-building pool itself (see
+     * testClosedTeamQuickDraftDeckBuildingStaysPersonalPoolOnly() above).
+     * postChatMessage()'s own $game['format'] === 'team' check inside
+     * isOpenTeamDeckBuildingChat() already excludes 'closed_team', so this
+     * falls all the way back to the original "in progress" message rather
+     * than "no team channel" -- the 'team' channel itself is still valid
+     * for this format in principle, just not reachable yet.
+     */
+    public function testClosedTeamQuickDraftDeckBuildingStillBlocksChat(): void
+    {
+        $userIds = $this->insertUsers('ctqdchat-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'closed_team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'team', 'Closed Team Play should never reach this.');
+    }
+
+    /**
+     * A non-team draft (format 'draft') has no teammate to coordinate
+     * with at all -- the deck-building exception must never kick in for
+     * it, on either channel.
+     */
+    public function testSoloQuickDraftDeckBuildingStillBlocksChat(): void
+    {
+        $userIds = $this->insertUsers('soloqdchat-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveQuickDraftToDeckBuilding($gameId, $userIds[0], $userIds[1]);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('while the game is in progress');
+        $this->games->postChatMessage($gameId, $p0, 'table', 'No teammate here to chat with.');
+    }
+
+    /**
+     * Once the actual game starts (both teammates -- and every other
+     * seated player -- have submitted a deck), the ordinary "in_progress"
+     * rule takes back over: the 'table' channel opens up too, and
+     * whatever was said during deck-building is still there.
+     */
+    public function testOpenTeamQuickDraftChatCarriesOverOnceTheGameStarts(): void
+    {
+        $userIds = $this->insertUsers('otqdchatstart-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'quick_draft',
+            partnerUserId: $userIds[1],
+            quickDraftPoolSource: 'random_48',
+        );
+        $this->driveMultiplayerQuickDraftToDeckBuilding($gameId, $userIds);
+
+        $p0 = $this->gamePlayerIdForUser($gameId, $userIds[0]);
+        $this->games->postChatMessage($gameId, $p0, 'team', 'Deck-building chat.');
+
+        foreach ($userIds as $userId) {
+            $drafted = json_decode(
+                (string) $this->fetchDraftMatchPlayer((int) $this->fetchGame($gameId)['draft_match_id'], $userId)['drafted_card_ids'],
+                true
+            );
+            $this->games->submitDraftDeck($gameId, $userId, array_slice($drafted, 0, 12));
+        }
+        $this->games->startGame($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+
+        $this->games->postChatMessage($gameId, $p0, 'table', 'In-progress chat.');
+
+        $messages = $this->games->getState($gameId, $userIds[1])['chat_messages'];
+        self::assertCount(2, $messages);
+        self::assertSame('Deck-building chat.', $messages[0]['message_text']);
+        self::assertSame('In-progress chat.', $messages[1]['message_text']);
     }
 }

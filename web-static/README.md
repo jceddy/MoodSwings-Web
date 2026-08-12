@@ -783,14 +783,21 @@ too, proportional to the smaller card width.
     bot checkbox has to be hidden/unchecked before `updateTeamFields()`
     reads "which opponents are currently checked" to populate the
     partner dropdown, or a bot could flash into that list for one tick
-    when switching straight into a team format) hides the whole section
-    -- and force-unchecks any bot that was checked -- whenever the
-    current format/deck_type combination doesn't support one, mirroring
+    when switching into a format that doesn't support bots at all --
+    only `draft` today) hides the whole section -- and force-unchecks any
+    bot that was checked -- whenever the current format/deck_type
+    combination doesn't support one, mirroring
     `GameService::botsSupportedFor()` exactly (client-side `deckType`
     allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`/`custom`,
     plus the same `format === 'duel' && deckType === 'custom_duel'`
-    special case the server checks). See "Practice bots" in
-    `php-app/README.md` for the full feature.
+    special case the server checks). Open/Closed Team Play support a bot
+    the same as every other non-`draft` format (issue #360) -- up to all
+    3 opponent seats, and a checked bot is a valid candidate in the
+    partner dropdown too (`updateTeamFields()`'s own "populate from
+    whichever opponents are checked" already treats it identically to a
+    checked human friend), so a human can play WITH a bot teammate, not
+    just against one. See "Practice bots" in `php-app/README.md` for the
+    full feature.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in
@@ -900,8 +907,15 @@ too, proportional to the smaller card width.
     formats share -- see "Open Team Play"/"Closed Team Play" in
     `php-app/README.md`), and -- since the Draft format supports only Quick
     Draft/Winston Draft/Grid Draft -- every option *except* those three
-    whenever Draft is selected, and Quick Draft/Winston Draft/Grid Draft
-    themselves whenever Draft *isn't* selected. If
+    whenever Draft is selected. Quick Draft/Winston Draft/Grid Draft
+    themselves are available whenever Draft, Closed Team Play, *or Open Team
+    Play* is selected (issue #362 -- each of the 4 players drafts and builds
+    their own deck completely independently either team format, exactly
+    like a normal individual draft; Open Team Play's teammates additionally
+    get to SEE each other's own drafted cards throughout the draft and
+    deck-building, matching this format's existing "open information"
+    premise -- see "Open Team Play" in `php-app/README.md`), and hidden for
+    every other format. If
     the previously-selected option becomes unavailable, the dropdown falls
     back to the first option that's still available in document order --
     Structure for most formats, but Quick Draft for Draft (the first of the
@@ -1021,6 +1035,30 @@ too, proportional to the smaller card width.
     views is ever visible at once) — so a game another player just
     created (or one you created yourself from a second tab) shows up on
     its own, without needing a hard reload.
+  - **Loading overlay** (`#loading-overlay` in `game/index.html`,
+    `showLoadingOverlay()`/`hideLoadingOverlay()` in `game.js`): a fixed,
+    full-viewport spinner + "Loading…" shown for the span of a fresh
+    view's own FIRST data fetch -- `showLobby()` (`GET /games`),
+    `showBoard()`/`showSpectatorBoard()` (`GET /games/state`/
+    `GET /games/spectate/state`), and `showReplayBoard()`
+    (`GET /games/log` then the first `GET /games/replay/state`) each wrap
+    their own initial fetch in `showLoadingOverlay()`/`hideLoadingOverlay()`
+    (the latter via `.finally()`, so it hides whether that fetch succeeds
+    or fails, leaving `boardError`/an empty list to explain what happened
+    either way). Deliberately NOT shown for the routine 4-second poll
+    tick or for an in-game action (play/pass/resign/respond to a
+    decision, proposing/confirming a team decision, etc.) -- those
+    already have their own feedback (the board simply re-rendering, or
+    `boardError` on failure), and re-showing a full-screen overlay on
+    every single one would be more distracting than useful. A sibling of
+    `#game-main` in the DOM (not nested inside it) so it can be toggled
+    independently of whichever view -- lobby or board -- happens to be
+    underneath it; `#loading-overlay[hidden] { display: none; }` in
+    `style.css` is required alongside its own `display: flex` (an author
+    rule always wins over the browser's own default
+    `[hidden] { display: none }` UA-stylesheet rule regardless of
+    selector specificity -- the exact same fix `.in-play-zone[hidden]`
+    already needed, see that rule's own comment).
   - **Board**: players, whose turn it is, in-play moods, the discard pile,
     deck count, and your hand (via `GET /games/state`). For a
     `custom_duel` game still `waiting` to start, `renderDuelDeckSubmission()`
@@ -1122,7 +1160,13 @@ too, proportional to the smaller card width.
     their cards" status instead (built from
     `state.initial_card_pass.submitted_game_player_ids`, which players
     have or haven't submitted yet -- never which 2 cards anyone chose).
-    See "Closed Team Play" in `php-app/README.md`.
+    See "Closed Team Play" in `php-app/README.md`. Styled by the same
+    shared bordered-box rule (`style.css`) `#choices-panel`/
+    `#pending-decision-panel`/`#team-decision-panel` already use --
+    originally left out of that selector list, which meant no
+    border/padding and no `margin: 1rem 0` below it, so its own "Pass
+    cards" button sat flush against the ordinary "Pass" turn button
+    directly underneath it (a bug caught live).
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
     whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
@@ -1191,7 +1235,24 @@ too, proportional to the smaller card width.
       mid-pick the same way `renderInitialCardPass()`'s own selection does.
       A `#quick-draft-kept-so-far` list shows every card you've kept in the
       draft so far (across all rounds, including whatever's already
-      resolved this one), read-only.
+      resolved this one), read-only. For Open Team Play (issue #362 stage
+      2), a `#quick-draft-team-drafted` block (`renderTeamDraftedCards()`,
+      shared with Winston Draft and deck-building below) additionally shows
+      `drafting.team_drafted_cards` -- your whole team's combined kept
+      cards so far, `null`/hidden for every other format including Closed
+      Team Play, which keeps every player's own draft private. `#quick-draft-kept-so-far`
+      (and its own "Kept so far" heading, `#quick-draft-kept-so-far-heading`)
+      is itself hidden whenever `team_drafted_cards` is showing -- a bug
+      caught live: your own kept cards are already part of that combined
+      team list, so showing the plain solo list right above it was just
+      the same handful of cards twice. `renderTeamDraftedCards()`'s own
+      `<ul>` gets a `.team-drafted-cards-list` class (`style.css`) so it
+      lays out as a wrapping horizontal row of thumbnails like every other
+      card list in the app, instead of the single vertical column a bare,
+      class-less `<ul>` fell back to before (another bug caught live from
+      the exact same report) -- this fixes Winston Draft's and
+      deck-building's own team-drafted display the same way, since all
+      three share this one rendering function.
     - **Deck building** (shared `#draft-deck-building` block, sitting
       outside `#quick-draft-panel`/`#winston-draft-panel`/`#grid-draft-panel`
       since its shape is identical for all three -- `renderDraftDeckBuilding()`,
@@ -1201,12 +1262,41 @@ too, proportional to the smaller card width.
       (`submitDraftDeck()`, `POST /games/draft/deck`) serves both the
       very first trim and every later sideboard between the
       match's games; there's no "first trim" vs. "sideboard" distinction in
-      the UI either. Its title/status text is built from
-      `deckBuilding.min_deck_size`/`max_deck_size` (12/16 or 12/18 for
-      Quick Draft depending on player count since issue #189 removed its
-      flat 16-card ceiling, 12/however-many-you-drafted for Winston Draft
-      and Grid Draft alike), never hardcoded, so
-      one function serves all three formats' own bounds correctly. The
+      the UI either. For Open Team Play, the picker (`#draft-deck-picker`,
+      built from `deckBuilding.drafted_cards`) IS the team's whole
+      combined pool minus whatever the teammate's own current deck has
+      already claimed (see `GameService::draftDeckBuildingStateFor()`'s
+      own docblock) -- a real request: either teammate can genuinely
+      build their own deck from anything either of them drafted, not only
+      their own personal picks, first-come-first-served if both want the
+      same card. `#draft-deck-team-drafted` (the same
+      `renderTeamDraftedCards()` block the drafting phase uses to show
+      the full combined pool, informational only) is deliberately
+      rendered with `null` -- always hidden -- here specifically, even
+      though `deckBuilding.team_drafted_cards` itself is still populated
+      by the server: showing it here too would just be the exact same
+      cards the picker right below it already shows, a bug caught live
+      the moment the picker itself became the team pool. It stays shown
+      during drafting (`renderQuickDraftDrafting()`/
+      `renderWinstonDraftDrafting()`), where there's no such picker
+      duplicate. The status line reads "Choose N from your team's M
+      available drafted cards" instead of "your M drafted cards" whenever
+      `team_drafted_cards` is present; the title reads "Build your deck
+      (N+ cards)" rather than a literal "N-M" range for the same case --
+      another bug caught live: `max_deck_size` there is the whole team's
+      pool size, not a real ceiling on what any ONE player could take (the
+      teammate needs to leave enough of it for their own `min_deck_size`-card
+      deck too), so stating a hard range would misleadingly imply you
+      could take the entire team pool yourself. Every other format
+      (including Closed Team Play) keeps both the original
+      personal-pool-only picker and the literal "N-M" range, since there
+      `max_deck_size` really is a hard per-player ceiling.
+      `deckBuilding.min_deck_size`/`max_deck_size` themselves (12/16 or
+      12/18 for Quick Draft depending on player count since issue #189
+      removed its flat 16-card ceiling, 12/however-many-you-drafted for
+      Winston Draft and Grid Draft alike, now sized off the combined team
+      pool instead for Open Team Play) are never hardcoded, so one
+      function serves all three formats' own bounds correctly. The
       "waiting for a deck" status text reads `deckBuilding.other_players`
       (every other seated player's own username/submitted flag, issue
       #189) when present rather than the single `opponent_submitted`
@@ -1221,7 +1311,18 @@ too, proportional to the smaller card width.
       deck you last submitted, for the game that just ended — so
       sideboarding starts from your existing deck instead of forcing a full
       retrim from scratch before every game. Only the very first game of a
-      match (no previous deck yet) still defaults to every drafted card.
+      match (no previous deck yet) still defaults to every drafted card --
+      EXCEPT for Open Team Play (`deckBuilding.team_drafted_cards` non-null),
+      where it defaults to nothing selected instead (a bug caught live):
+      `drafted_cards` there is the whole TEAM's combined pool, not just
+      your own, and only one teammate can ever have a given card in their
+      own deck at a time (see `GameService::draftDeckBuildingStateFor()`'s
+      own docblock) -- pre-selecting all of it would silently claim the
+      ENTIRE pool the moment either teammate submitted without changing
+      anything, leaving the other with nothing left to build their own
+      deck from at all. Forcing each teammate to deliberately choose their
+      own share avoids that trap. Every other format (a real personal
+      pool, no such conflict) keeps the original select-all default.
       A `#draft-deck-reset-button` ("Reset to previous deck") sits next to
       Select all/Clear selection -- it re-seeds the selection from
       `deckBuilding.previous_deck_card_ids` on demand (via the same
@@ -1300,7 +1401,9 @@ too, proportional to the smaller card width.
       this condition (`current_pile_number === 3 && remaining_deck_count <=
       1`, only when it's actually your turn) and shows a `window.confirm()`
       warning before submitting, so an accidental click doesn't cost a
-      drafter their pick without warning; for 3-4 players the underlying
+      drafter their pick without warning. A `#winston-draft-team-drafted`
+      block (same `renderTeamDraftedCards()` helper as Quick Draft above)
+      shows `drafting.team_drafted_cards` for Open Team Play. For 3-4 players the underlying
       turn order is
       seat rotation rather than a fixed 2-player toggle, but the UI itself
       needs no change for that -- it only ever cares whether it's currently
@@ -1310,7 +1413,13 @@ too, proportional to the smaller card width.
       it actually is, the same convention Grid Draft's own status line
       already uses). `drafting.remaining_deck_count` and a
       `#winston-draft-drafted-so-far` read-only list (your own accumulated
-      picks -- never anyone else's) round out the panel, along with an
+      picks -- never anyone else's) round out the panel -- hidden
+      (`#winston-draft-drafted-so-far-heading` too) whenever
+      `team_drafted_cards` is showing instead, the same bug-fix
+      `#quick-draft-kept-so-far` got above (a live report caught this list
+      still duplicating itself for Open Team Winston Draft specifically,
+      after the Quick Draft fix had only ever touched
+      `renderQuickDraftDrafting()`) -- along with an
       `#winston-draft-other-players-info` container (issue #189 -- one line
       per OTHER seated player, replacing the original singular
       `#winston-draft-opponent-info` line) built from `drafting.other_players`
@@ -1365,7 +1474,30 @@ too, proportional to the smaller card width.
       to 3 for 3-4 players), each heading set to that player's own
       username (e.g. "alice's drafted so far") rather than a generic
       "Opponent" -- nothing there was ever hidden information to begin
-      with.
+      with. For Open Team Play (issue #362 stage 2), a
+      `#grid-draft-teams-drafted` block instead renders
+      `drafting.teams_drafted_so_far` (always exactly 2 entries,
+      `{team_id, is_your_team, member_usernames, drafted_so_far}`) --
+      the exact same already-open information, just regrouped by team
+      instead of listing all 4 players individually ("Your team's drafted
+      so far (alice & bob)" / "Opposing team's drafted so far (carol &
+      dave)"). `#grid-draft-other-players-drafted` is hidden whenever
+      `teams_drafted_so_far` is present, so the two never show at once.
+      Two bugs caught live here, both already fixed for Quick Draft's/
+      Winston Draft's own equivalents but never propagated to Grid
+      Draft's: (1) `#grid-draft-drafted-so-far` (and its own
+      `#grid-draft-drafted-so-far-heading`, which needed an `id` added to
+      be targetable at all) is now likewise hidden whenever
+      `teams_drafted_so_far` is present -- your own picks are already
+      part of the "Your team" entry there, so the plain personal list was
+      just showing a subset of the same cards a second time; (2) each
+      `teams_drafted_so_far` entry's own `<ul>` gets the reused
+      `.team-drafted-cards-list` class (`renderTeamDraftedCards()`'s own
+      helper class, `style.css`) for the same horizontal wrapping-row
+      layout Quick/Winston Draft's team lists already get -- previously a
+      bare, class-less `<ul>` (matching none of `style.css`'s own
+      flex-wrap card-list rules), so "Your team's"/"Opposing team's
+      drafted so far" both rendered as one huge vertical column instead.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
@@ -1407,9 +1539,17 @@ too, proportional to the smaller card width.
     nothing beyond entering play, Creativity's own field label spells
     this out directly: "otherwise it's just a blue card worth 0") --
     a card with 2+ fields (Worry, Charity, Guilt) or whose only optional
-    field is a bare `bool`/`value`/`mode` (Wrath, Repentance) still has a
+    field is a bare `bool`/`value`/`mode` (Repentance) still has a
     real, harder-to-classify partial effect even with nothing selected,
-    so those are left alone rather than guessed at. Cards with
+    so those are left alone rather than guessed at -- except Wrath and
+    Rage (`cardHasAnUncheckedConfirmBox()`, keyed by effect key via
+    `UNCHECKED_BOX_CONFIRM_FIELD_KEYS`), a narrow, hand-picked exception:
+    leaving either one's own single bare-`bool` field unchecked does
+    nothing whatsoever beyond entering play (`WrathEffect` and
+    `RageEffect` both return immediately -- `RageEffect`'s own docblock
+    even says "Like Wrath"), so each gets the identical `window.confirm()`
+    treatment ("You haven't checked &lt;field label&gt; -- &lt;name&gt;'s
+    ability won't do anything. Play it anyway?") on its own. Cards with
     no ability worth asking about (roughly half the 127-card
     pool) show that panel with no extra fields, everything else adds only
     the fields that specific card needs (a target player, a mood in play, a
@@ -2006,28 +2146,76 @@ too, proportional to the smaller card width.
     `Team`) is only shown for `format: 'team'` games -- deliberately NOT
     `closed_team` too (see "In-game chat" in `../php-app/README.md` for
     why: Closed Team Play's whole premise is that information stays
-    closed between teammates, so it gets no private channel); every
-    other format only ever has the `'table'` channel, so sending always
-    uses `'table'` when the selector itself is hidden. Sending
-    (`sendChatMessage()` -> `POST /games/chat`) clears the input and calls
-    `refreshBoard()` immediately on success, the same "an action triggers
-    its own refreshBoard()" convention Play/Pass/etc. already follow,
-    rather than waiting for the next 4-second poll tick to show the
-    player's own just-sent message. Both the free-text form and a row of
-    "quick chat" buttons below it (`#game-chat-quick-buttons`, between the
-    form and the Close button -- GL;HF, GG, and a handful of emoji, one
-    click each) funnel through the same `sendChatText(messageText)`
-    helper, which does everything the old inline submit handler used to
-    (hide any previous error, resolve the channel, `sendChatMessage()`,
-    `refreshBoard()` on success) -- a quick-chat button's own
-    `data-quick-chat-text` supplies the message instead of
-    `#game-chat-input`'s value, and (unlike the form's own submit
-    handler) never touches the text input afterward, since there's
-    nothing in it to clear. Each quick-chat button is disabled/enabled in
-    lockstep with the free-text input and Send button whenever the
-    dialog opens (`isChatReadOnly()`), so a completed/abandoned game's
-    read-only chat can't be worked around by clicking GG instead of
-    typing it.
+    closed between teammates, so it gets no private channel) -- and also
+    hidden during the deck-building chat window described below, where
+    only `'team'` is ever valid. `sendChatText()` resolves which implicit
+    channel to send whenever the selector is hidden for either reason:
+    `isTeamDeckBuildingChatOpen(currentState)` picks `'team'`, everything
+    else (every non-`'team'`-format game) picks `'table'`. Sending
+    (`sendChatMessage()` -> `POST /games/chat`) clears the input (on a
+    confirmed send only -- see below) and calls `refreshBoard()`
+    immediately on success, the same "an action triggers its own
+    refreshBoard()" convention Play/Pass/etc. already follow, rather than
+    waiting for the next 4-second poll tick to show the player's own
+    just-sent message. Both the free-text form and a row of "quick chat"
+    buttons below it (`#game-chat-quick-buttons`, between the form and the
+    Close button -- GL;HF, GG, and a handful of emoji, one click each)
+    funnel through the same `sendChatText(messageText)` helper, which does
+    everything the old inline submit handler used to (hide any previous
+    error, resolve the channel, `sendChatMessage()`, `refreshBoard()` on
+    success) -- a quick-chat button's own `data-quick-chat-text` supplies
+    the message instead of `#game-chat-input`'s value. Each quick-chat
+    button is disabled/enabled in lockstep with the free-text input and
+    Send button whenever the dialog opens (`isChatReadOnly()`), so a
+    completed/abandoned game's read-only chat can't be worked around by
+    clicking GG instead of typing it.
+
+    **Duplicate-message guard.** Users reported seeing the same chat
+    message sent twice -- traced to a rapid double-click on Send (or
+    double-Enter in the input, or a quick-chat button clicked while Send
+    was already mid-request) firing two independent `POST /games/chat`
+    requests before the first one's own response came back; nothing
+    stopped the second one from firing, so the server dutifully inserted
+    two separate rows (the read side was never the problem --
+    `renderList()` already does a full clear-and-rebuild from
+    `state.chat_messages` every render, and `GameChatRepository::messagesFor()`
+    is a plain non-`JOIN` `SELECT`, so neither could have produced a
+    duplicate on its own). `sendChatText()` now guards against this using
+    `#game-chat-send-button`'s own `disabled` flag as reentrant state: set
+    to `true` synchronously, before the `await sendChatMessage(...)` call,
+    so a second call arriving (from either entry point) before this one
+    resumes sees it already `true` and returns `false` immediately rather
+    than firing its own request -- reset in a `finally` block based on
+    `isChatReadOnly()` (not unconditionally re-enabled), since the game
+    could have ended while the request was in flight. The form's own
+    submit handler now only clears `#game-chat-input` when `sendChatText()`
+    actually returns `true`, fixing a second, smaller bug the same
+    refactor surfaced: a failed send (e.g. the game ending mid-type)
+    used to silently discard the player's own typed text right along with
+    the error message.
+
+    **Open Team Play's deck-building chat.** Once deck-building started
+    drawing from the whole team's shared drafted pool (see "Deck
+    building" above), teammates needed a way to actually coordinate --
+    but `#view-chat-button`/`renderChat()` used to be computed only in the
+    `in_progress` branch of `renderBoard()`, past the `'waiting'` branch's
+    own early `return`, so the button never even appeared during
+    drafting/deck-building. Both are now computed unconditionally, right
+    alongside `#resign-button`'s own identical fix for issue #144 (same
+    rationale: `#view-chat-button` lives outside `#in-progress-area`
+    precisely so it stays reachable there), gated by
+    `isTeamDeckBuildingChatOpen(state)` -- `true` only for `format:
+    'team'`, `game.status === 'waiting'`, and the relevant draft
+    sub-state's own `status === 'deck_building'` (checked against
+    `state.quick_draft`/`state.winston_draft`/`state.grid_draft`,
+    whichever `state.game.deck_type` selects) -- which mirrors
+    `GameService::isOpenTeamDeckBuildingChat()` exactly, so the frontend
+    never offers something the backend would then reject. `isChatReadOnly()`
+    checks the same condition, so opening the dialog during this window
+    shows an editable form rather than the read-only message a genuinely
+    `'waiting'`-for-other-reasons game would still get. Still hidden
+    entirely for `closed_team`/non-team drafts and during the drafting
+    sub-phase itself, matching the backend's own narrower exception.
 
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside
@@ -2228,7 +2416,14 @@ too, proportional to the smaller card width.
     can resolve *after* that action's own fresher render and silently
     overwrite it with stale data (e.g. showing this indicator again after
     the game started with an opponent going first, until the page was
-    reloaded).
+    reloaded). The Pass button itself disables the instant it's clicked
+    (mirrors the Play button's own identical "Playing..." guard above --
+    same slow-response-shouldn't-read-as-a-missed-click reasoning), and on
+    a server-side rejection re-enables it so the click can be retried; on
+    success it's left disabled for `refreshBoard()`'s own re-render to
+    settle -- `renderBoard()` recomputes `pass-button.disabled` from
+    `canAct` on every poll regardless, so there's nothing to explicitly
+    re-enable there once the turn has actually changed hands.
   - A "Resign game" button (`#resign-button`) sits right after Pass --
     unlike Pass, it isn't turn-gated (you can resign any time it's
     `in_progress`, not just on your own turn), so it's only ever hidden
@@ -2545,6 +2740,20 @@ too, proportional to the smaller card width.
     handler, so that self-triggered event is swallowed instead of acted
     on -- the dialog it belonged to is already closed and already removed
     from `openDialogStack`, so there's nothing left to do.
+
+  - **Backdrop click**: clicking a `<dialog>`'s own backdrop closes it too
+    (`closeDialogOnBackdropClick()` in `app.js`, applied to every dialog in
+    the same `querySelectorAll('dialog')` loop that wires up the Back-button
+    `MutationObserver` above -- that observer picks this up the same as any
+    other close, no separate handling needed). `event.target === dialog`
+    alone can't tell a backdrop click apart from one that landed in the
+    dialog's own padding/border rather than on a child element -- every
+    dialog here has both -- so the click is instead checked against the
+    dialog's own `getBoundingClientRect()`, treating anything within that
+    box (including its padding) as "inside" regardless of what does or
+    doesn't cover it. Shared in `app.js` rather than `game.js` since
+    `app.js`'s own `#resources-dialog`, present in every page's footer
+    (not just the game page), needs it too.
 
 All of the above talk to the PHP API at `/app/*` via `js/app.js`'s helpers,
 using the same-origin `session_token` cookie for auth — see

@@ -1,0 +1,11 @@
+-- Open Team Winston Draft was still showing both "Drafted so far"
+-- (personal) and "Your team's drafted cards so far" (combined) during
+-- drafting -- the earlier Quick Draft fix for this exact redundancy
+-- (issue: your own kept cards are already part of the team-wide list)
+-- only ever touched renderQuickDraftDrafting(), never
+-- renderWinstonDraftDrafting(). Now hidden there too, the same way, once
+-- drafting.team_drafted_cards is present.
+--
+-- Pure frontend (game.js/index.html) -- no schema change. See "Winston
+-- Draft's own drafting phase" in web-static/README.md.
+UPDATE schema_version SET version = '1.23.3' WHERE id = 1;

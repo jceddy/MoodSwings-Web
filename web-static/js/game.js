@@ -1021,6 +1021,25 @@
     const pendingDecisionPanel = document.getElementById('pending-decision-panel');
     const cardDetailDialog = document.getElementById('card-detail-dialog');
 
+    // Loading overlay (see #loading-overlay's own comment in
+    // game/index.html) -- shown for the span of a fresh view's own
+    // initial data fetch (showLobby()/showBoard()/showSpectatorBoard()/
+    // showReplayBoard(), each wrapping their own first refresh call in
+    // showLoadingOverlay()/hideLoadingOverlay() via .finally(), so it
+    // hides whether that fetch succeeds or fails), never for a routine
+    // poll or an in-game action -- those already have their own feedback
+    // (the board simply re-rendering, or boardError) and showing this on
+    // every 4-second tick would be distracting rather than useful.
+    const loadingOverlay = document.getElementById('loading-overlay');
+
+    function showLoadingOverlay() {
+        loadingOverlay.hidden = false;
+    }
+
+    function hideLoadingOverlay() {
+        loadingOverlay.hidden = true;
+    }
+
     let currentGameId = null;
     let currentState = null;
     let pollTimer = null;
@@ -1111,7 +1130,8 @@
         boardView.hidden = true;
         lobbyView.hidden = false;
         showCurrentGamesSection();
-        refreshLobby();
+        showLoadingOverlay();
+        refreshLobby().finally(hideLoadingOverlay);
         // Picks up a game created by another player (or this same player,
         // from a second tab) without needing a hard reload -- the same
         // 4-second cadence showBoard()'s own poll uses, and mutually
@@ -1143,7 +1163,8 @@
         quickDraftPickSelection = new Set();
         quickDraftPickSelectionKey = null;
         quickDraftDeckSelectionInitialized = false;
-        refreshBoard();
+        showLoadingOverlay();
+        refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
             clearInterval(pollTimer);
         }
@@ -1170,7 +1191,8 @@
         lobbyView.hidden = true;
         boardView.hidden = false;
         boardMessage.hidden = true;
-        refreshBoard();
+        showLoadingOverlay();
+        refreshBoard().finally(hideLoadingOverlay);
         if (pollTimer) {
             clearInterval(pollTimer);
         }
@@ -1207,7 +1229,8 @@
         // unlike a spectator arriving at an already-finished game (see
         // loadReplayEventsAndShow()'s own defaultToLastStep, used instead
         // wherever spectating hands off into replay controls below).
-        await loadReplayEventsAndShow();
+        showLoadingOverlay();
+        await loadReplayEventsAndShow().finally(hideLoadingOverlay);
     }
 
     // Shared by showReplayBoard() above and spectator mode watching a
@@ -1584,11 +1607,18 @@
     // since it overrides every other rule below. Otherwise: 'custom'
     // decklists aren't supported for duel games, 'custom_duel' (each
     // player supplying their own decklist against rules the creator
-    // defines) only makes sense FOR a duel, and
-    // 'quick_draft'/'winston_draft'/'grid_draft' only make sense for
-    // 'draft'. Either team format similarly rules out 'power' -- its 15
-    // cards fall short of the 45-card minimum both team formats share
-    // (see php-app/README.md).
+    // defines) only makes sense FOR a duel, and 'quick_draft'/
+    // 'winston_draft'/'grid_draft' only make sense for 'draft' or
+    // 'closed_team' (issue #362 -- each of the 4 players drafts and
+    // builds their own deck completely independently there, exactly like
+    // a normal individual draft; 'team' isn't included yet -- its own
+    // picks pool per team rather than staying individual, which the
+    // deck-building step doesn't support yet). Either team format
+    // similarly rules out 'power' -- its 15 cards fall short of the
+    // 45-card minimum both team formats share for every OTHER deck_type
+    // (see php-app/README.md); a drafted deck never hits that minimum in
+    // the first place, so the three draft deck types are deliberately
+    // exempt from this same rule below.
     function isDeckTypeAvailableForFormat(deckType, format) {
         if (format === 'draft') {
             return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft';
@@ -1596,9 +1626,9 @@
         switch (deckType) {
             case 'custom': return format !== 'duel';
             case 'custom_duel': return format === 'duel';
-            case 'quick_draft': return false;
-            case 'winston_draft': return false;
-            case 'grid_draft': return false;
+            case 'quick_draft': return format === 'closed_team' || format === 'team';
+            case 'winston_draft': return format === 'closed_team' || format === 'team';
+            case 'grid_draft': return format === 'closed_team' || format === 'team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2095,22 +2125,30 @@
     }
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
-    // exactly: Traditional/Duel only, and only for a deck_type that needs
-    // no per-player setup of its own (no draft picks for a bot to make).
-    // 'custom' belongs in this list despite needing a decklist at all --
-    // it's a single table-wide shared deck (built once from the human
-    // creator's own paste/upload/saved-deck choice, same as this dialog
-    // already requires with or without a bot seated), not a per-seat one,
-    // so a bot needs nothing extra to "have" one. 'custom_duel' is its
-    // own separate special case (still not in this list), since it's a
-    // genuinely per-seat decklist -- #new-game-bot-decklist-fields below
-    // lets the creator supply the bot's own decklist directly for that
-    // one, rather than needing the bot to submit one itself.
+    // exactly: every format except 'draft' (no draft picks for a bot to
+    // make), and only for a deck_type that needs no per-player setup of
+    // its own. 'custom' belongs in this list despite needing a decklist
+    // at all -- it's a single table-wide shared deck (built once from the
+    // human creator's own paste/upload/saved-deck choice, same as this
+    // dialog already requires with or without a bot seated), not a
+    // per-seat one, so a bot needs nothing extra to "have" one.
+    // 'custom_duel' is its own separate special case (still not in this
+    // list), since it's a genuinely per-seat decklist --
+    // #new-game-bot-decklist-fields below lets the creator supply the
+    // bot's own decklist directly for that one, rather than needing the
+    // bot to submit one itself; it can never combine with 'team'/
+    // 'closed_team' anyway (Duel-only). Team Play (issue #360): up to all
+    // 3 opponent seats can be bots, same as every other supported format
+    // -- opponentSelectionMax()'s own cap and updateTeamFields()'s own
+    // "populate the partner dropdown from whichever opponents are
+    // checked" already treat a checked bot exactly like a checked human
+    // friend, so a bot can be seated as the creator's own partner too,
+    // not just on the opposing team.
     function botsSupportedFor(format, deckType) {
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        return (format === 'standard' || format === 'duel')
+        return format !== 'draft'
             && ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
     }
 
@@ -2190,9 +2228,14 @@
     // checkbox has to be hidden/unchecked (updateBotCheckboxAvailability())
     // BEFORE updateTeamFields() reads "which opponents are currently
     // checked" to populate the partner dropdown -- otherwise switching
-    // straight into a team format could offer a bot as a partner
-    // candidate for the one instant before its own checkbox gets
-    // unchecked.
+    // into a format that doesn't support bots at all (only 'draft' today,
+    // see botsSupportedFor()) while a bot was checked could leave it
+    // offered as a partner candidate for the one instant before its own
+    // checkbox gets unchecked. Team Play itself (issue #360) supports
+    // bots the same as every other non-draft format now, so this no
+    // longer applies switching INTO 'team'/'closed_team' specifically --
+    // a checked bot stays checked and genuinely is a valid partner
+    // candidate there.
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
@@ -3308,6 +3351,7 @@
     const chatChannelSelect = document.getElementById('chat-channel-select');
     const chatErrorEl = document.getElementById('game-chat-error');
     const chatButton = document.getElementById('view-chat-button');
+    const chatSendButton = document.getElementById('game-chat-send-button');
     // The highest chat_messages[].id the player has already seen for the
     // current game (dialog open, or last closed while caught up) --
     // renderChat() below diffs against this to decide whether the unread
@@ -3341,8 +3385,24 @@
         }
     }
 
+    // Open Team Play's deck-building exception to "chat only while
+    // in_progress" -- mirrors GameService::isOpenTeamDeckBuildingChat()
+    // exactly (format 'team', still 'waiting', and the draft match has
+    // reached 'deck_building', not just 'drafting') so the button/dialog
+    // never offer something the server would then reject.
+    function isTeamDeckBuildingChatOpen(state) {
+        if (!state || state.game.status !== 'waiting' || state.game.format !== 'team') {
+            return false;
+        }
+        const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
+            : state.game.deck_type === 'winston_draft' ? state.winston_draft
+                : state.game.deck_type === 'grid_draft' ? state.grid_draft
+                    : null;
+        return Boolean(draftState) && draftState.status === 'deck_building';
+    }
+
     function isChatReadOnly() {
-        return !currentState || currentState.game.status !== 'in_progress';
+        return !currentState || !(currentState.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(currentState));
     }
 
     function chatMessageListItem(message) {
@@ -3375,8 +3435,14 @@
         // Play's whole premise is that information stays closed between
         // teammates (see postChatMessage()'s own docblock in
         // GameService.php), so it gets no private channel to undercut
-        // that with.
-        chatChannelSelect.hidden = state.game.format !== 'team';
+        // that with. Also hidden during the deck-building chat window
+        // itself -- isOpenTeamDeckBuildingChat() only ever accepts 'team'
+        // there (the opposing team may still be mid-draft/deck-building,
+        // with no "table" to speak to yet), so offering a choice would
+        // just let the 'table' option fail server-side; sendChatText()
+        // below sends 'team' directly whenever this is hidden for that
+        // reason.
+        chatChannelSelect.hidden = state.game.format !== 'team' || isTeamDeckBuildingChatOpen(state);
 
         if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
             renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);
@@ -3411,7 +3477,7 @@
         const readOnly = isChatReadOnly();
         document.getElementById('game-chat-readonly-message').hidden = !readOnly;
         chatInput.disabled = readOnly;
-        chatForm.querySelector('button').disabled = readOnly;
+        chatSendButton.disabled = readOnly;
         chatQuickButtons.forEach((button) => { button.disabled = readOnly; });
         gameChatDialog.showModal();
         if (currentState) {
@@ -3426,17 +3492,51 @@
     // Shared by the free-text form below and the quick-chat buttons
     // (GL;HF/GG/emoji canned messages) further down -- both just send
     // some text on whichever channel is currently selected, differing
-    // only in where that text comes from.
+    // only in where that text comes from. Also the one shared guard
+    // against a duplicate send (issue: users reported seeing the same
+    // chat message twice, traced to a rapid double-click/double-Enter on
+    // Send firing two independent POST /games/chat requests -- there was
+    // nothing here stopping a second call from starting before the first
+    // one's own request had even returned). #game-chat-send-button's own
+    // `disabled` flag doubles as that guard: set to `true` synchronously,
+    // before the first `await`, so a second call arriving before this one
+    // resumes (from either entry point -- the form's submit handler or a
+    // quick-chat button) sees it already `true` and bails out immediately
+    // rather than firing its own request. Re-enabled in `finally` based on
+    // isChatReadOnly() (not unconditionally `false`), since the game
+    // itself could have ended while this request was in flight.
     async function sendChatText(messageText) {
-        chatErrorEl.hidden = true;
-        const channel = chatChannelSelect.hidden ? 'table' : chatChannelSelect.value;
-        const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
-        if (!ok) {
-            chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
-            chatErrorEl.hidden = false;
-            return;
+        if (chatSendButton.disabled) {
+            return false;
         }
-        await refreshBoard();
+
+        chatErrorEl.hidden = true;
+        chatSendButton.disabled = true;
+        chatQuickButtons.forEach((button) => { button.disabled = true; });
+
+        try {
+            // chatChannelSelect.hidden collapses two different situations to
+            // the same "no choice to make" state: an ordinary non-team format
+            // (only 'table' exists) and the deck-building window (only 'team'
+            // exists, see renderChat()'s own chatChannelSelect.hidden
+            // computation above) -- isTeamDeckBuildingChatOpen() tells them
+            // apart so the right implicit channel is sent either way.
+            const channel = chatChannelSelect.hidden
+                ? (isTeamDeckBuildingChatOpen(currentState) ? 'team' : 'table')
+                : chatChannelSelect.value;
+            const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
+            if (!ok) {
+                chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
+                chatErrorEl.hidden = false;
+                return false;
+            }
+            await refreshBoard();
+            return true;
+        } finally {
+            const readOnly = isChatReadOnly();
+            chatSendButton.disabled = readOnly;
+            chatQuickButtons.forEach((button) => { button.disabled = readOnly; });
+        }
     }
 
     chatForm.addEventListener('submit', async (e) => {
@@ -3445,8 +3545,13 @@
         if (messageText === '') {
             return;
         }
-        await sendChatText(messageText);
-        chatInput.value = '';
+        // Only cleared on a confirmed send -- previously this ran
+        // unconditionally, so a failed send (e.g. the game ending
+        // mid-type) silently discarded the player's own typed text along
+        // with the error message.
+        if (await sendChatText(messageText)) {
+            chatInput.value = '';
+        }
     });
 
     // Quick chat (canned GL;HF/GG/emoji messages, one click to send on
@@ -3714,6 +3819,21 @@
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
             || Boolean(you && you.resigned);
         resignButton.disabled = false;
+
+        // In-game chat (issue #109) -- same seated-players-only gating as
+        // Notes (see the isReadOnlyView() check further down for that
+        // one), computed here rather than down with it since #view-chat-
+        // button, like #resign-button just above, lives outside
+        // #in-progress-area precisely so it stays reachable during the
+        // 'waiting' branch's own early return below -- Open Team Play's
+        // deck-building window (isTeamDeckBuildingChatOpen()) is the one
+        // case chat is actually usable while still 'waiting'. renderChat()
+        // itself is likewise called unconditionally here rather than only
+        // in the in_progress branch, so an open chat dialog keeps
+        // receiving new messages through a 'waiting' poll too.
+        document.getElementById('view-chat-button').hidden = isReadOnlyView()
+            || !(state.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(state));
+        renderChat(state);
 
         renderDraftMatchScoreline(state);
 
@@ -4111,14 +4231,6 @@
         // spectator/replay viewer (state.you is just a synthesized stub
         // with no game_player_id there -- see isReadOnlyView()'s docblock).
         document.getElementById('view-notes-button').hidden = isReadOnlyView();
-
-        // In-game chat (issue #109) -- same seated-players-only gating as
-        // Notes above (no spectator/replay access -- see
-        // GameService::buildGameState()'s own docblock for why this
-        // diverges from the more permissive game_events/recent-events
-        // gating just below).
-        document.getElementById('view-chat-button').hidden = isReadOnlyView();
-        renderChat(state);
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
@@ -4554,6 +4666,41 @@
     // "received" 2-stage sequence; pass_direction is only worth surfacing
     // once there's more than one other seat it could mean something
     // different for.
+    // Open Team Play's own "see your whole team's drafted cards" display
+    // (issue #362 stage 2) -- shared by Quick Draft/Winston Draft's own
+    // 'team_drafted_cards' ({teammate_user_id, teammate_username, cards},
+    // the combined kept/drafted cards of both teammates) and the
+    // deck-building step's identically-shaped field. null/undefined for
+    // every format other than Open Team Play, in which case the container
+    // is simply hidden. Never used by Grid Draft -- see
+    // renderTeamsDraftedSoFar() below for its own per-team grouping of
+    // already-fully-open information instead.
+    function renderTeamDraftedCards(container, teamDraftedCards) {
+        container.hidden = !teamDraftedCards;
+        if (!teamDraftedCards) {
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = '';
+        const heading = document.createElement('h4');
+        heading.textContent = "Your team's drafted cards so far (with " + (teamDraftedCards.teammate_username || 'your teammate') + ')';
+        container.appendChild(heading);
+        // .team-drafted-cards-list (style.css) is what gives this a
+        // horizontal, wrapping row of thumbnails instead of one huge
+        // vertical column -- a bare <ul> with no class/id matches none of
+        // style.css's own flex-wrap card-list rules, which is exactly what
+        // made this render as a single-column list before (a bug caught
+        // live).
+        const list = document.createElement('ul');
+        list.className = 'team-drafted-cards-list';
+        teamDraftedCards.cards.forEach((card) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+            list.appendChild(li);
+        });
+        container.appendChild(list);
+    }
+
     function renderQuickDraftDrafting(drafting) {
         const stageLabel = drafting.total_stages > 2
             ? 'stage ' + drafting.stage + ' of ' + drafting.total_stages + ' (passing ' + drafting.pass_direction + ')'
@@ -4600,11 +4747,23 @@
         submitButton.hidden = !pickable;
         submitButton.disabled = quickDraftPickSelection.size !== QUICK_DRAFT_KEEP_PER_STAGE;
 
-        renderList(document.getElementById('quick-draft-kept-so-far'), { hidden: true }, drafting.kept_so_far, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
-            return li;
-        });
+        // Open Team Play (drafting.team_drafted_cards non-null) shows
+        // "Your team's drafted cards so far" instead (below) -- your own
+        // kept cards are already part of that team-wide list, so this
+        // plain "Kept so far" would just be showing a subset of the same
+        // cards a second time right above it.
+        const showKeptSoFar = !drafting.team_drafted_cards;
+        document.getElementById('quick-draft-kept-so-far-heading').hidden = !showKeptSoFar;
+        document.getElementById('quick-draft-kept-so-far').hidden = !showKeptSoFar;
+        if (showKeptSoFar) {
+            renderList(document.getElementById('quick-draft-kept-so-far'), { hidden: true }, drafting.kept_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
+
+        renderTeamDraftedCards(document.getElementById('quick-draft-team-drafted'), drafting.team_drafted_cards);
     }
 
     document.getElementById('quick-draft-pick-submit-button').addEventListener('click', async () => {
@@ -4706,11 +4865,24 @@
         passButton.hidden = !drafting.is_your_turn;
         passButton.textContent = drafting.current_pile_number === 3 ? 'Pass (draw from deck)' : 'Pass';
 
-        renderList(document.getElementById('winston-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
-            return li;
-        });
+        // Open Team Play (drafting.team_drafted_cards non-null) shows
+        // "Your team's drafted cards so far" instead (below) -- your own
+        // drafted cards are already part of that team-wide list, so this
+        // plain "Drafted so far" would just be showing a subset of the
+        // same cards a second time right above it. Mirrors Quick Draft's
+        // own identical showKeptSoFar fix in renderQuickDraftDrafting().
+        const showDraftedSoFar = !drafting.team_drafted_cards;
+        document.getElementById('winston-draft-drafted-so-far-heading').hidden = !showDraftedSoFar;
+        document.getElementById('winston-draft-drafted-so-far').hidden = !showDraftedSoFar;
+        if (showDraftedSoFar) {
+            renderList(document.getElementById('winston-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
+
+        renderTeamDraftedCards(document.getElementById('winston-draft-team-drafted'), drafting.team_drafted_cards);
     }
 
     async function submitWinstonDraftAction(action) {
@@ -4816,11 +4988,24 @@
         document.getElementById('grid-draft-remaining-deck-count').textContent =
             drafting.remaining_deck_count + ' card' + (drafting.remaining_deck_count === 1 ? '' : 's') + ' left in the pool.';
 
-        renderList(document.getElementById('grid-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
-            return li;
-        });
+        // Open Team Play (drafting.teams_drafted_so_far non-null) shows
+        // "Your team's drafted so far"/"Opposing team's drafted so far"
+        // instead (below) -- your own drafted cards are already part of
+        // the "Your team" entry there, so this plain "Drafted so far"
+        // would just be showing a subset of the same cards a second time
+        // right above it. Mirrors Quick Draft's/Winston Draft's own
+        // identical fix (showKeptSoFar/showDraftedSoFar) for the same bug,
+        // caught live for Grid Draft specifically.
+        const showDraftedSoFar = !drafting.teams_drafted_so_far;
+        document.getElementById('grid-draft-drafted-so-far-heading').hidden = !showDraftedSoFar;
+        document.getElementById('grid-draft-drafted-so-far').hidden = !showDraftedSoFar;
+        if (showDraftedSoFar) {
+            renderList(document.getElementById('grid-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
 
         // Unlike Quick Draft/Winston Draft, Grid Draft is open information
         // end to end -- every card any player has ever drafted was already
@@ -4829,9 +5014,14 @@
         // Draft's own current_pile_cards hides the opponent's active pile.
         // other_players_drafted_so_far (issue #189) covers every OTHER
         // seated player (1 for a 2-player match, up to 3 for 3-4 players),
-        // each getting its own heading + list.
+        // each getting its own heading + list -- shown for every format
+        // EXCEPT Open Team Play, which shows the same already-open
+        // information grouped by team instead (teams_drafted_so_far,
+        // issue #362 stage 2, below).
         const otherPlayersContainer = document.getElementById('grid-draft-other-players-drafted');
+        const teamsContainer = document.getElementById('grid-draft-teams-drafted');
         otherPlayersContainer.innerHTML = '';
+        otherPlayersContainer.hidden = !!drafting.teams_drafted_so_far;
         (drafting.other_players_drafted_so_far || []).forEach((other) => {
             const heading = document.createElement('h4');
             heading.textContent = other.username + "'s drafted so far";
@@ -4844,6 +5034,32 @@
                 list.appendChild(li);
             });
             otherPlayersContainer.appendChild(list);
+        });
+
+        teamsContainer.hidden = !drafting.teams_drafted_so_far;
+        teamsContainer.innerHTML = '';
+        (drafting.teams_drafted_so_far || []).forEach((team) => {
+            const heading = document.createElement('h4');
+            heading.textContent = (team.is_your_team ? 'Your team' : 'Opposing team') + "'s drafted so far ("
+                + team.member_usernames.join(' & ') + ')';
+            teamsContainer.appendChild(heading);
+
+            // .team-drafted-cards-list (style.css) is what gives this a
+            // horizontal, wrapping row of thumbnails instead of one huge
+            // vertical column -- same reused class renderTeamDraftedCards()
+            // already applies for Quick/Winston Draft's own team lists (a
+            // bare <ul> with no class/id matches none of style.css's own
+            // flex-wrap card-list rules, which is exactly what made this
+            // render as a single-column list, caught live for Grid Draft's
+            // own "Your team's"/"Opposing team's drafted so far" here).
+            const list = document.createElement('ul');
+            list.className = 'team-drafted-cards-list';
+            team.drafted_so_far.forEach((card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                list.appendChild(li);
+            });
+            teamsContainer.appendChild(list);
         });
     }
 
@@ -4915,10 +5131,27 @@
 
     function renderDraftDeckBuilding(deckBuilding) {
         currentDeckBuilding = deckBuilding;
-        const sizeText = deckBuilding.min_deck_size === deckBuilding.max_deck_size
-            ? deckBuilding.min_deck_size + ' cards'
-            : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
+        // Open Team Play (deckBuilding.team_drafted_cards non-null): max_deck_size
+        // is the whole TEAM's combined pool, not a real ceiling on what
+        // any one player could take -- your teammate needs to leave
+        // enough of it for their own min_deck_size-card deck too, so
+        // stating it as a literal "12-32" range would misleadingly imply
+        // you could take all 32 yourself. "12+" says what's actually true
+        // (a floor, no meaningful individual ceiling) without claiming a
+        // number that was never really available to you alone.
+        const sizeText = deckBuilding.team_drafted_cards
+            ? deckBuilding.min_deck_size + '+ cards'
+            : deckBuilding.min_deck_size === deckBuilding.max_deck_size
+                ? deckBuilding.min_deck_size + ' cards'
+                : deckBuilding.min_deck_size + '-' + deckBuilding.max_deck_size + ' cards';
         document.getElementById('draft-deck-building-title').textContent = 'Build your deck (' + sizeText + ')';
+        // The picker below (#draft-deck-picker) is ITSELF the team's
+        // combined pool for Open Team Play now (see the docblock further
+        // down) -- showing this separate informational block too would
+        // just be the same cards twice, so it's only ever rendered during
+        // the drafting phase (renderQuickDraftDrafting()/
+        // renderWinstonDraftDrafting()), never here.
+        renderTeamDraftedCards(document.getElementById('draft-deck-team-drafted'), null);
         const picker = document.getElementById('draft-deck-picker');
         const submitButton = document.getElementById('draft-deck-submit-button');
         const saveButton = document.getElementById('draft-deck-save-button');
@@ -4962,13 +5195,38 @@
         }
 
         if (!draftDeckSelectionInitialized) {
-            draftDeckSelection = deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids
-                ? cardIdsToDraftedCardIndices(deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids, deckBuilding.drafted_cards)
-                : new Set(deckBuilding.drafted_cards.map((card, index) => index));
+            if (deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids) {
+                draftDeckSelection = cardIdsToDraftedCardIndices(deckBuilding.deck_card_ids || deckBuilding.previous_deck_card_ids, deckBuilding.drafted_cards);
+            } else if (deckBuilding.team_drafted_cards) {
+                // Open Team Play, first game of the match -- unlike every
+                // other format (where defaulting to "everything selected"
+                // just means the player trims down from their own full
+                // personal pool), drafted_cards here is the whole TEAM's
+                // combined pool (see draftDeckBuildingStateFor()'s own
+                // docblock): only one teammate can ever have a given card
+                // in their own deck at a time, so pre-selecting all of it
+                // would silently claim the WHOLE pool the instant either
+                // teammate submits without changing anything, leaving the
+                // other with nothing left to build their own deck from at
+                // all. Starts empty instead, so each teammate has to
+                // deliberately choose their own share.
+                draftDeckSelection = new Set();
+            } else {
+                draftDeckSelection = new Set(deckBuilding.drafted_cards.map((card, index) => index));
+            }
             draftDeckSelectionInitialized = true;
         }
 
-        statusEl.textContent = 'Choose ' + sizeText + ' from your ' + deckBuilding.drafted_cards.length + ' drafted cards for your deck. Tap a card to select/de-select it.';
+        // Open Team Play (deckBuilding.team_drafted_cards non-null): the
+        // picker below is already the team's whole combined pool minus
+        // whatever the teammate's own current deck has claimed (see
+        // GameService::draftDeckBuildingStateFor()'s own docblock) --
+        // "your drafted cards" would misleadingly suggest only your own
+        // personal picks are selectable here.
+        const poolLabel = deckBuilding.team_drafted_cards
+            ? "your team's " + deckBuilding.drafted_cards.length + ' available drafted cards'
+            : 'your ' + deckBuilding.drafted_cards.length + ' drafted cards';
+        statusEl.textContent = 'Choose ' + sizeText + ' from ' + poolLabel + ' for your deck. Tap a card to select/de-select it.';
         picker.innerHTML = '';
 
         deckBuilding.drafted_cards.forEach((card, index) => {
@@ -5223,10 +5481,20 @@
     document.getElementById('pass-button').addEventListener('click', async () => {
         boardError.hidden = true;
         boardMessage.hidden = true;
+        const passButton = document.getElementById('pass-button');
+        // Disabled immediately (not after the request settles), the same
+        // "slow response can't read as a missed click" guard the play
+        // button's own click handler already has -- a slow connection
+        // shouldn't let this fire twice. renderBoard()'s own
+        // `pass-button.disabled = !canAct` recomputes it correctly once
+        // refreshBoard() below re-renders on success; on failure that
+        // never runs, so it's re-enabled explicitly here instead.
+        passButton.disabled = true;
         const { ok, body } = await passTurn(currentGameId);
         if (!ok) {
             boardError.textContent = body.message || 'Could not pass.';
             boardError.hidden = false;
+            passButton.disabled = false;
             return;
         }
         // Passing is always valid even with a hand card's choices panel
@@ -6294,10 +6562,11 @@
     // a blue card worth 0." Deliberately narrow (exactly one field, and
     // only these four "pick something" types) rather than flagging every
     // card with an optional field left blank -- a card with 2+ fields (e.g.
-    // Worry, Charity, Guilt) or a bare bool/value/mode field (Wrath,
-    // Repentance) still has real, ambiguous-to-classify partial effects
-    // even when nothing is selected, so those are left alone rather than
-    // guessed at.
+    // Worry, Charity, Guilt) or a bare bool/value/mode field (Repentance)
+    // still has real, ambiguous-to-classify partial effects even when
+    // nothing is selected, so those are left alone rather than guessed at.
+    // Wrath and Rage are the deliberate, hand-picked exceptions -- see
+    // UNCHECKED_BOX_CONFIRM_FIELD_KEYS below.
     const TARGETLESS_CONFIRM_FIELD_TYPES = ['mood', 'player', 'hand_card', 'discard_card'];
 
     function cardHasNoTargetSelected(card, choices) {
@@ -6310,11 +6579,47 @@
             && !(field.key in choices);
     }
 
+    // Wrath's ("Put every other mood in play into the discard pile") and
+    // Rage's ("Put every mood valued 3 or less into the discard pile")
+    // own single choice_field is a bare bool, which cardHasNoTargetSelected()
+    // above deliberately leaves unguarded for every card shaped like it
+    // (see its own comment) -- a bool/value/mode field's "nothing
+    // selected" state is ambiguous to classify in general (e.g.
+    // Repentance's own optional value). These two are the narrow,
+    // hand-picked exception: leaving either box unchecked does nothing
+    // whatsoever beyond entering play (WrathEffect/RageEffect both just
+    // return immediately -- RageEffect's own docblock even says "Like
+    // Wrath"), the same unambiguous "missed click" case the generic
+    // mechanism already guards against for other field types. Keyed by
+    // effect key -> that card's own single field key, so both share one
+    // check/message instead of two near-identical copies.
+    const UNCHECKED_BOX_CONFIRM_FIELD_KEYS = {
+        wrath: 'discard_all_other_moods',
+        rage: 'discard_qualifying_moods',
+    };
+
+    function cardHasAnUncheckedConfirmBox(card, choices) {
+        const fieldKey = UNCHECKED_BOX_CONFIRM_FIELD_KEYS[card.effect_key];
+        return fieldKey !== undefined && !choices[fieldKey];
+    }
+
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
         if (cardHasNoTargetSelected(selectedCard, choices)
             && !window.confirm(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`)) {
             return;
+        }
+        if (cardHasAnUncheckedConfirmBox(selectedCard, choices)) {
+            // Looked up by key, not choice_fields[0] -- a card with an
+            // available banked extra play (Joy/Generosity) can have a
+            // server-injected "which play to use" mode field ahead of
+            // this one in choice_fields, so position alone isn't
+            // reliable here.
+            const fieldKey = UNCHECKED_BOX_CONFIRM_FIELD_KEYS[selectedCard.effect_key];
+            const field = selectedCard.choice_fields.find((f) => f.key === fieldKey);
+            if (!window.confirm(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`)) {
+                return;
+            }
         }
         const playButton = document.getElementById('play-card-button');
         // Disabled + relabeled immediately (not after the request settles)
@@ -6560,6 +6865,12 @@
     });
     document.querySelectorAll('dialog').forEach((dialog) => {
         dialogHistoryObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] });
+        // Clicking a dialog's own backdrop closes it -- closeDialogOnBackdropClick()
+        // in app.js, shared with that file's own #resources-dialog. The
+        // MutationObserver above picks this up the same as any other close
+        // (see its own "closed some other way" comment, which already
+        // anticipated this).
+        closeDialogOnBackdropClick(dialog);
     });
 
     // Called by showBoard()/showSpectatorBoard()/showReplayBoard() --

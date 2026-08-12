@@ -1,0 +1,14 @@
+-- Open Team Play's deck-building phase now gets its own team chat: two
+-- teammates can coordinate over the 'team' channel (never 'table') while
+-- their draft match is at 'deck_building', even though games.status is
+-- still 'waiting' (real gameplay hasn't started -- see
+-- GameService::isOpenTeamDeckBuildingChat()). Blocked during the
+-- drafting sub-phase itself, and for closed_team/non-team drafts, same
+-- as before. Also fixes GameService::buildGameState() to actually
+-- compute 'chat_messages' before its own 'waiting'-status early return,
+-- rather than only after it -- previously dead code for any still-
+-- drafting/deck-building game.
+--
+-- Pure backend + frontend (game.js/index.html) -- no schema change. See
+-- "In-game chat" in php-app/README.md and web-static/README.md.
+UPDATE schema_version SET version = '1.23.0' WHERE id = 1;

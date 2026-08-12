@@ -1,0 +1,24 @@
+-- No schema change: extends drafting (issue #362 stage 2) to Open Team Play --
+-- createGame() now also accepts a quick_draft/winston_draft/grid_draft
+-- deck_type under format 'team', the same way it already does under
+-- 'closed_team' since stage 1 -- each of the 4 players still drafts and
+-- builds their own deck completely independently either way.
+--
+-- What's new for Open Team Play specifically is visibility, not
+-- mechanics: this format's existing "open information" premise (a
+-- teammate already sees the other's hand during actual gameplay, see
+-- "Open Team Play" in php-app/README.md) now extends into the draft
+-- itself. quickDraftDraftingStateFor()/winstonDraftDraftingStateFor()/
+-- draftDeckBuildingStateFor() add a 'team_drafted_cards' field (your
+-- team's combined drafted/kept cards, computed from game_players.team_id
+-- via the new openTeamPlayTeammateUserId() helper) -- null for every
+-- other format, including Closed Team Play, which stays fully private per
+-- player exactly as stage 1 left it. Grid Draft was already open
+-- information end to end, so its own gridDraftDraftingStateFor() instead
+-- adds 'teams_drafted_so_far', simply regrouping that same already-open
+-- information by team_id instead of listing all 4 players individually.
+--
+-- Each player still submits their own separate deck from their own
+-- drafted pool either way -- none of this pools picks into a single
+-- shared resource, only what's visible changes.
+UPDATE schema_version SET version = '1.20.0' WHERE id = 1;

@@ -26,6 +26,20 @@
     <link rel="stylesheet" href="../css/style.css">
 </head>
 <body class="game-page">
+    <!-- Loading overlay: shown while the initial lobby/board load (a
+         fresh view -- switching into the lobby, opening a game, spectating,
+         or watching a replay) is in flight, so that moment doesn't look
+         like a blank/broken page while the first GET /games/state (or
+         equivalent) request is still in the air. Deliberately NOT shown
+         for every routine 4-second poll or in-game action (play/pass/etc)
+         -- see showLoadingOverlay()/hideLoadingOverlay() in game.js. A
+         sibling of #game-main, not nested inside it, so it can be toggled
+         independently of whichever view is currently shown/hidden
+         underneath it. -->
+    <div id="loading-overlay" role="status" aria-live="polite" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <p>Loading&hellip;</p>
+    </div>
     <main id="game-main" hidden>
         <h1>MoodSwings-Web</h1>
         <p>Welcome, <span id="username"></span>.</p>
@@ -140,8 +154,9 @@
                     <p id="quick-draft-drafting-status"></p>
                     <div id="quick-draft-pack"></div>
                     <button id="quick-draft-pick-submit-button" type="button" hidden disabled>Keep selected cards</button>
-                    <h4>Kept so far</h4>
+                    <h4 id="quick-draft-kept-so-far-heading">Kept so far</h4>
                     <ul id="quick-draft-kept-so-far"></ul>
+                    <div id="quick-draft-team-drafted" hidden></div>
                 </div>
             </div>
 
@@ -154,8 +169,9 @@
                     <div id="winston-draft-other-players-info"></div>
                     <button id="winston-draft-take-button" type="button" hidden>Take pile</button>
                     <button id="winston-draft-pass-button" type="button" hidden>Pass</button>
-                    <h4>Drafted so far</h4>
+                    <h4 id="winston-draft-drafted-so-far-heading">Drafted so far</h4>
                     <ul id="winston-draft-drafted-so-far"></ul>
+                    <div id="winston-draft-team-drafted" hidden></div>
                 </div>
             </div>
 
@@ -166,15 +182,17 @@
                     <div id="grid-draft-grid"></div>
                     <div id="grid-draft-picks"></div>
                     <p id="grid-draft-remaining-deck-count"></p>
-                    <h4>Drafted so far</h4>
+                    <h4 id="grid-draft-drafted-so-far-heading">Drafted so far</h4>
                     <ul id="grid-draft-drafted-so-far"></ul>
                     <div id="grid-draft-other-players-drafted"></div>
+                    <div id="grid-draft-teams-drafted" hidden></div>
                 </div>
             </div>
 
             <div id="draft-deck-building" hidden>
                 <h3 id="draft-deck-building-title"></h3>
                 <p id="draft-deck-building-status"></p>
+                <div id="draft-deck-team-drafted" hidden></div>
                 <div id="draft-deck-picker"></div>
                 <div id="draft-deck-selection-actions">
                     <button id="draft-deck-select-all-button" type="button">Select all</button>
@@ -315,7 +333,6 @@
                 <h3>Recent plays</h3>
                 <button id="view-log-button" type="button">View log</button>
                 <button id="view-notes-button" type="button" hidden>Notes</button>
-                <button id="view-chat-button" type="button" hidden>Chat</button>
                 <button id="view-shared-deck-button" type="button" hidden>View decklist</button>
                 <ul id="recent-events-list"></ul>
                 <p id="recent-events-empty" hidden>Nothing has happened yet.</p>
@@ -329,6 +346,14 @@
                  be showing. See renderBoard()'s own resignButton.hidden
                  computation in game.js for the full visibility rule. -->
             <button id="resign-button" type="button" hidden>Resign game</button>
+
+            <!-- Also outside #in-progress-area, same rationale as
+                 #resign-button above: Open Team Play's deck-building phase
+                 (still 'waiting', not yet in_progress) gets its own team
+                 chat exception -- see GameService::postChatMessage()'s
+                 own isOpenTeamDeckBuildingChat() and renderBoard()'s
+                 chatButton.hidden computation in game.js. -->
+            <button id="view-chat-button" type="button" hidden>Chat</button>
         </section>
     </main>
 

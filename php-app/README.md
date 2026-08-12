@@ -60,7 +60,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
 | GET    | `/games/bots`   | —                                                                 | Requires auth. The full practice-bot roster (issue #140) -- `{"bots": [{"user_id", "username"}]}`, every `users.is_bot` row (migration `0090`), same for every caller. See "Practice bots" below. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?, "bot_decklist_text"?, "bot_saved_decklist_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `bot_decklist_text`/`bot_saved_decklist_id` supply a practice bot's own decklist for `deck_type: 'custom_duel'` (the bot's creator picks it, since the bot can never submit one itself the normal way) -- exactly one is required whenever `opponent_user_ids` includes a bot for that `format`/`deck_type` combination, and both are ignored otherwise; see "Practice bots in Duel with a custom decklist" below. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`, `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), a bot is seated in a `custom_duel` game with neither `bot_decklist_text` nor `bot_saved_decklist_id` given, the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size, or -- for the bot's own decklist -- the same validation `POST /games/decklist` applies), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id`/`bot_saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?, "bot_decklist_text"?, "bot_saved_decklist_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `bot_decklist_text`/`bot_saved_decklist_id` supply a practice bot's own decklist for `deck_type: 'custom_duel'` (the bot's creator picks it, since the bot can never submit one itself the normal way) -- exactly one is required whenever `opponent_user_ids` includes a bot for that `format`/`deck_type` combination, and both are ignored otherwise; see "Practice bots in Duel with a custom decklist" below. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`/`'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), a bot is seated in a `custom_duel` game with neither `bot_decklist_text` nor `bot_saved_decklist_id` given, the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size, or -- for the bot's own decklist -- the same validation `POST /games/decklist` applies), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id`/`bot_saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"?, "saved_decklist_id"?}`           | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, either as pasted/uploaded text or by referencing one of their own or a friend's shared saved decklists (see "Saved decklists" below), validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it. Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | GET    | `/cards/catalog` | —                                                                | Requires auth. Every printed card, hydrated the same way `/decklists/view` hydrates a saved decklist's cards (now including `rarity`, which no other card-view route needed until this one). Not scoped to a game/decklist -- the catalog itself is public knowledge, same reasoning as `/games/log`. Returns `{"cards": [...]}`. Powers the deck builder's (issue #93) own catalog-browsing panel -- see "Deck builder" below. |
 | GET    | `/decklists`    | —                                                                 | Requires auth. Returns `{"own": [...], "friends": [{"friend_id", "friend_username", "decklists": [...]}]}` -- summaries only (`id`/`name`/`card_count`/`sideboard_card_count`/`visibility`/`created_at`/`updated_at`, never card contents). `friends` only lists friends who have 1+ decks shared with you. See "Saved decklists" below. |
@@ -806,21 +806,34 @@ one from the Creativity's repeat of it.
 
 That count is snapshotted by `MoodPlayService::resolveAfterPlayingChain()`
 *before* the current invocation's own `afterPlaying()`/`resolveDecisions()`
-gets to mutate anything (`BoardState::setDuplicityEligibleSources()`/
-`duplicityEligibleSources()`, piggybacking on the played card's own
-`effectState` bag so it automatically survives an opponent-decision pause
-the same way any other `effectState` does, but deliberately bypassing
-`recordEffectStateChange()` so this pure bookkeeping value never leaks
-into the event log's `effect_state_changes`) — not recomputed live from
-current board state once that invocation's effect has already run. This
-matters for a card like Chaos, which reassigns every in-play mood's owner
-(including Duplicity itself) as its OWN after-playing effect: per an
-official ruling, Duplicity's opportunity to repeat is judged at the
-moment the mood is played, not after that mood's own effect resolves, so
-Chaos's own shuffle handing Duplicity control to (or taking it away from)
-the very player who just played it must never change whether a repeat
-gets offered for *that* play — it doesn't matter whether they still
-control Duplicity by the time they're actually asked. The pending
+gets to mutate anything — not recomputed live from current board state
+once that invocation's effect has already run. This matters for a card
+like Chaos, which reassigns every in-play mood's owner (including
+Duplicity itself) as its OWN after-playing effect: per an official
+ruling, Duplicity's opportunity to repeat is judged at the moment the
+mood is played, not after that mood's own effect resolves, so Chaos's
+own shuffle handing Duplicity control to (or taking it away from) the
+very player who just played it must never change whether a repeat gets
+offered for *that* play — it doesn't matter whether they still control
+Duplicity by the time they're actually asked.
+
+Carried as a plain `PlayResult` field (`$duplicityEligibleSources`) from
+the moment it's snapshotted all the way to
+`continueAfterPlayingChain()`'s own read of it, threaded through
+`resolvePendingDecisions()` too for an invocation that pauses on the
+way. `GameService` persists it as a new
+`game_pending_decision_batches.duplicity_eligible_sources` column
+(migration `0107`) whenever a `PlayResult::pending()` gets written, and
+reads it back the same way it already reads `invocation_choices`/
+`invocation_seq` before calling `resolvePendingDecisions()` again. This
+replaced an earlier design that piggybacked the count directly on the
+played card's own `BoardState` `effectState` bag (keyed by its own
+`$cardId`) — a real bug, caught live: `effectState` lives on the card's
+own transient in-play entry, so a card whose own effect discards or
+bottom-decks *itself* (Anger, Hate, and Malice when it happens to share
+a color with one of its own `resolveDecisions()` targets) wiped out the
+snapshot the instant it left play, so Duplicity was never offered a
+repeat of any of those three at all. The pending
 decision's `field` is a `type: 'nested'` shape — a `repeat` boolean plus a
 `choices` sub-field wrapping the played card's own `afterPlayingFields()`
 (`stage: 'cost'` fields filtered out, since a repeat only re-invokes
@@ -1646,28 +1659,33 @@ one of these:
   programmer error, not a user-facing one), since there's no single "the"
   deck for a `custom_duel` game the way there is for every other type;
   `startGame()` reads each player's own submitted deck directly instead.
-- `quick_draft` -- for `format: 'draft'` games only (see "Draft format"
-  below): both players draft their own 16-card pool live from a shared
-  card pool, then play a best-of-three match built from it (see "Quick
-  Draft" below) -- like `custom_duel`,
-  `deckCardIdsFor()` explicitly refuses to build this one (a
-  `\LogicException`), since each player's own deck lives on
+- `quick_draft` -- for `format: 'draft'` games (see "Draft format"
+  below), or `'closed_team'` (issue #362 -- each of the 4 players drafts
+  and builds their own deck completely independently, exactly like a
+  normal individual draft; see "Closed Team Play" below): both/every
+  player drafts their own 16-card pool live from a shared card pool, then
+  plays a best-of-three match built from it (2-player only -- a 3-4
+  player match, including every Closed Team Play draft, is always
+  best-of-one instead, see `draftGamesToWin()`) (see "Quick Draft"
+  below) -- like
+  `custom_duel`, `deckCardIdsFor()` explicitly refuses to build this one
+  (a `\LogicException`), since each player's own deck lives on
   `draft_match_players.deck_card_ids`, not anywhere this method's `$game`
   argument alone can resolve; `startGame()` reads it directly via
   `requireDraftDecksSubmitted()` instead.
-- `winston_draft` -- also `format: 'draft'` only: an alternating,
-  single-active-player pile draft (see "Winston Draft" below) rather than
-  Quick Draft's simultaneous pack-passing, but the same story otherwise --
-  `deckCardIdsFor()` refuses to build this one too, since each player's
-  own deck lives on `draft_match_players.deck_card_ids` just as it does for
-  `quick_draft`; `startGame()` reads it via the same
-  `requireDraftDecksSubmitted()`.
-- `grid_draft` -- also `format: 'draft'` only: 2-4 players (issue #189)
-  each draft from a shared pool (54/72/96 cards for 2/3/4 players) by
-  taking a whole row or column of a grid (3x3 for 2-3 players, 4x4 for
-  exactly 4), dealt fresh over 6 rounds (4 for exactly 4 players, so each
-  player picks first in exactly 1 round) (see "Grid Draft" below) -- same
-  story again as `quick_draft`/
+- `winston_draft` -- same `format: 'draft'`/`'closed_team'` support as
+  `quick_draft` above: an alternating, single-active-player pile draft
+  (see "Winston Draft" below) rather than Quick Draft's simultaneous
+  pack-passing, but the same story otherwise -- `deckCardIdsFor()`
+  refuses to build this one too, since each player's own deck lives on
+  `draft_match_players.deck_card_ids` just as it does for `quick_draft`;
+  `startGame()` reads it via the same `requireDraftDecksSubmitted()`.
+- `grid_draft` -- same `format: 'draft'`/`'closed_team'` support again:
+  2-4 players (issue #189) each draft from a shared pool (54/72/96 cards
+  for 2/3/4 players) by taking a whole row or column of a grid (3x3 for
+  2-3 players, 4x4 for exactly 4), dealt fresh over 6 rounds (4 for
+  exactly 4 players, so each player picks first in exactly 1 round) (see
+  "Grid Draft" below) -- same story again as `quick_draft`/
   `winston_draft`: `deckCardIdsFor()` refuses to build this one too, and
   `startGame()` reads it via the same `requireDraftDecksSubmitted()`.
 - `one_of_each` -- the full 133-card pool, one copy of every printed card,
@@ -1855,13 +1873,19 @@ drafting process rather than an already-built pool/decklist, as opposed to
 `quick_draft` (below) was the first such deck_type; `winston_draft` and
 `grid_draft` (also below) followed, reusing as much of its own
 infrastructure as possible -- `createGame()` rejects a `'draft'` game with
-any other deck_type, and rejects `deck_type: 'quick_draft'`/`'winston_draft'`/
-`'grid_draft'` under any format other than `'draft'`. `quick_draft` started
-out as a `duel` deck_type during issue #88's own development, then was
-split into its own format once a second draft-style deck type was planned --
-none of which are expected to ever make sense under `'duel'` itself, whose
-own deck_type roster (`structure`/`power`/`jceddys_75`/`custom_duel`/
-`one_of_each`) is expected to stay exactly what it is.
+any other deck_type. `quick_draft`/`winston_draft`/`grid_draft` themselves
+are rejected under any format other than `'draft'` OR `'closed_team'`
+(issue #362 -- see "Closed Team Play" above) -- the latter is
+"duel-shaped" only in the separate-per-player-decks sense
+(`BoardStateRepository::load()`'s own `$hasSeparateDecks` check treats a
+drafted `deck_type` this way regardless of format), not in `format`
+itself, which stays `'closed_team'` throughout drafting, deck-building,
+and play. `quick_draft` started out as a `duel` deck_type during issue
+#88's own development, then was split into its own format once a second
+draft-style deck type was planned -- none of which are expected to ever
+make sense under `'duel'` itself, whose own deck_type roster
+(`structure`/`power`/`jceddys_75`/`custom_duel`/`one_of_each`) is
+expected to stay exactly what it is.
 
 ### Saved decklists
 
@@ -2691,6 +2715,31 @@ its own separate code path (`skipScoringAndAdvance()`, bypassing
 `finishScoringAndAdvance()` entirely) that needed its own team-aware
 branch too, for the same reason.
 
+**Honor/Awe skip the winning team's own turn_order decision** --
+`BoardState::firstPlayerOverride()` (Honor's perpetual override, or
+Awe's one-time version) names a SPECIFIC player to go first, not just a
+side -- but the two round-transition paths above used to only use that
+player to pick which TEAM got the next `turn_order` decision
+(`applyDrawRecipientDecision()`) or which team's decision to open at all
+(`skipScoringAndAdvance()`), still letting that team choose either of its
+two members and potentially pick someone OTHER than the card's own named
+player -- silently overriding Honor/Awe's own explicit choice, the whole
+point of naming a player rather than just a side. `seatFirstPlayerOverride()`
+is the fix: whenever an override is active, the named player is seated
+directly (mirroring `applyTurnOrderDecision()`'s/`applyClosedTeamLeaderDecision()`'s
+own `computeFreshGrants()`/`updateRoundTurnState()` mechanics exactly),
+skipping their own team's decision entirely rather than merely answering
+it quickly. For `'team'` (never `'closed_team'`, which has only the one
+leader decision per round to begin with -- see
+`applyClosedTeamLeaderDecision()`'s own docblock), the OTHER team still
+gets its own ordinary `turn_order` decision afterward, since Honor/Awe
+only ever pick who goes first, never who goes second. Logged with
+`'automated' => true` (the same flag shape `pass()`'s own auto-pass
+distinction uses -- see "Auto-pass on empty hand" below) so
+`describeEvent()` can say "X goes first this round" rather than the
+misleading "X was chosen by their team..." a real decision's own log
+entry uses.
+
 **Card interactions** -- `BoardState::isTeammate(int $a, int $b): bool`
 (always `false` for every non-team game, and for a player compared
 against themselves) is the one new primitive the whole rules engine
@@ -2777,6 +2826,77 @@ actually took turn 1. `getState()`'s `round` now also exposes
 the same value Chivalry/Triumph already keyed off of, so it also already
 accounts for an Honor override) and the frontend badge uses that instead.
 
+**Drafting -- teammate visibility (issue #362 stage 2)** -- Open Team
+Play may draft (`quick_draft`/`winston_draft`/`grid_draft`, see
+"Drafting (issue #362)" under "Closed Team Play" below for the shared
+mechanics both team formats use); each player still drafts and builds
+their own deck completely independently, exactly like Closed Team Play.
+What differs is visibility: this format's own "open information" premise
+(teammates already see each other's hand during actual gameplay, above)
+extends into the draft match itself, so a teammate can see the OTHER
+teammate's own drafted/kept cards throughout both the picking phase and
+deck-building -- never the opposing team's, which stays exactly as
+invisible as it always has been.
+
+- **Quick Draft/Winston Draft** (`quickDraftDraftingStateFor()`/
+  `winstonDraftDraftingStateFor()`, and `draftDeckBuildingStateFor()` for
+  the deck-building step) add a `team_drafted_cards` field
+  (`{teammate_user_id, teammate_username, cards}`, the combined kept/
+  drafted cards of both teammates) -- `null` for every other format,
+  including Closed Team Play, which keeps every player's own draft fully
+  private the way Stage 1 left it.
+  `openTeamPlayTeammateUserId()`/`openTeamPlayTeamIdByUserId()` (reading
+  `game_players.team_id`, assigned at `createGame()` time long before the
+  draft match itself has any notion of teams) resolve who that teammate
+  actually is. Quick Draft's own `drafted_card_ids` column stays empty
+  until the whole draft finishes (`finalizeQuickDraft()`), so its own
+  teammate cards are computed the same `quickDraftKeptSoFarThroughRound()`
+  walk of `draft_pile_stage_picks` used for the viewer's own `kept_so_far`,
+  rather than read off `draft_match_players` the way Winston/Grid Draft's
+  own incrementally-updated `drafted_card_ids`
+  (`appendDraftedCardIds()`) allows.
+- **Grid Draft** (`gridDraftDraftingStateFor()`) is already open
+  information end to end -- every player's own `drafted_so_far` was
+  already visible to everyone, in every format, before this stage. The
+  only change here is display grouping: `teams_drafted_so_far` (present
+  only for `'team'`) regroups that same already-open information by
+  `team_id` instead of listing all 4 players individually --
+  `[{team_id, is_your_team, member_usernames, drafted_so_far}, ...]`,
+  always exactly 2 entries. `other_players_drafted_so_far` is left
+  untouched alongside it; the frontend simply prefers the team-grouped
+  view once it's present (`game.js`'s `renderGridDraftDrafting()`).
+
+**Deck-building -- a real shared team pool, not just visibility (a real
+request).** Unlike the picking phase above (visibility only, each player
+still drafts their own cards independently), deck-BUILDING for Open Team
+Play genuinely pools both teammates' drafted cards into one shared
+resource: each player can build their own deck from anything either
+teammate drafted, not only their own personal picks. `draftDeckBuildingStateFor()`'s
+own `'drafted_cards'` (the actual field the frontend's picker renders
+from -- previously always just the viewer's own personal pool) becomes
+the combined pool -- both teammates' `drafted_card_ids` -- MINUS
+whatever the teammate's own *currently-submitted* `deck_card_ids` has
+already claimed; `'max_deck_size'` is sized off that same pool. A
+specific drafted card can only ever sit in one teammate's deck at a
+time -- first-come-first-served: if the teammate already has it in their
+own submitted deck (including one they personally drafted themselves),
+it's simply unavailable here, shown neither pickable in the picker nor
+accepted by `submitDraftDeck()`; the only way to free it back up is for
+whichever teammate currently has it to un-select it and resubmit. This
+is computed fresh from `deck_card_ids` on every call rather than a
+separately persisted "claim" -- there's nothing to explicitly release,
+since a card simply stops being claimed the moment it's no longer in
+anyone's own submitted `deck_card_ids`.
+`submitDraftDeck()` enforces the exact identical pool server-side
+(reading the teammate's own current `drafted_card_ids`/`deck_card_ids`
+straight from `draft_match_players` the same way), so what a player was
+shown as pickable and what actually validates on submit can never
+disagree. Closed Team Play (and every non-team draft) is completely
+unaffected -- `openTeamPlayTeammateUserId()` returns `null` there, so
+both functions fall straight back to the original personal-pool-only
+behavior, matching this format's own "information stays closed between
+teammates" premise (see "Closed Team Play" below).
+
 ### Closed Team Play
 
 `format: 'closed_team'` (issue #87) is Open Team Play's sibling variant --
@@ -2785,7 +2905,7 @@ the same 4-player 2v2 structure, sharing most of its schema
 table) and every card-effect exclusion (`BoardState::isTeammate()` is
 format-agnostic -- it only ever compares `team_id`, never seat adjacency,
 so all 9 teammate-excluding cards and the Chivalry/Triumph fix already
-work correctly here with zero changes). It differs in four concrete ways:
+work correctly here with zero changes). It differs in five concrete ways:
 
 1. **Seating** -- partners sit ACROSS the table (`seatOrderForClosedTeamGame()`:
    creator seat 0, one opponent seat 1, the chosen partner seat 2, the
@@ -2811,7 +2931,15 @@ work correctly here with zero changes). It differs in four concrete ways:
    for this format) and unfreezes the round immediately, never opening a
    second decision. `confirmTeamDecision()` picks between the two handlers
    based on the game's own `format` whenever `decision_type` is
-   `'turn_order'`.
+   `'turn_order'`. Its own `'closed_team_leader_decided'` event is
+   rendered by `describeEvent()` as "{name} was chosen by their team to
+   go first this round" -- a bug caught live: this case was simply never
+   added when this whole mechanic shipped, so it fell through to the
+   generic `mood_played`-shaped default phrasing, and since this event's
+   own `card_id` is always `null`, that rendered as the flatly misleading
+   "{name} played a card" (no card ever actually played) -- which is
+   also what made the decision having happened at all easy to miss while
+   reading a game's own log.
 3. **Pregame card pass** -- this format's own mechanic with no Open Team
    Play analog: after everyone's dealt their 5-card starting hand, every
    player must pass exactly 2 cards to their teammate, face down, BEFORE
@@ -2835,6 +2963,44 @@ work correctly here with zero changes). It differs in four concrete ways:
    partner is without exposing their hand). The `teammate-hand-section`
    in `web-static/game/index.html` simply never gets data to render for
    `closed_team`, so no extra guard was needed there.
+5. **Drafting (issue #362)** -- `createGame()` accepts a
+   `quick_draft`/`winston_draft`/`grid_draft` deck_type for EITHER team
+   format. Each of the 4 seated players drafts and builds their own deck
+   completely independently, exactly like a normal individual draft -- the
+   team format only ever applies AFTERWARD (seating/scoring), the same
+   way it already keeps a pre-built deck_type's own decks private between
+   teammates today. This needed two small fixes rather than new
+   machinery: `createGame()`'s own format<->deck_type validation
+   (previously `'draft'`-only for the three draft deck types) now also
+   allows `'closed_team'`/`'team'`, and `BoardStateRepository::load()`'s
+   `$hasSeparateDecks` check (previously purely `format`-based --
+   `'duel'`/`'draft'` only) now ALSO treats a drafted `deck_type` as
+   separate-decks regardless of format, since unlike every other
+   `deck_type` these two team formats support, a drafted deck is
+   genuinely different content per player, not one shared/identical pool
+   everyone draws from together (`startGame()`'s own dealing branch got
+   the identical fix). `MIN_TEAM_DECK_SIZE` (45 cards) is never checked
+   against a draft deck_type at all -- it only ever rejects the fixed
+   `'power'` deck_type by name, so a drafted deck's much smaller size
+   (12-16 cards, `WINSTON_MIN_DECK_SIZE` etc.) was never in tension with
+   it. A resignation during either phase of a Closed Team Play draft
+   always abandons the whole match outright (`resignFromDraftMatch()`'s
+   own team-format branch), rather than letting 2+ survivors continue as
+   a smaller match the way an individual draft's identical resignation
+   already does (or the way Winston Draft's own drop-a-short-player
+   finalization does, `finalizeWinstonDraft()`'s own team-format branch)
+   -- a dropped seat leaves the OTHER team's own 2v2 broken no matter how
+   many players remain in total, matching `resignGame()`'s own "team
+   games always complete outright, never continue shorthanded" rule for
+   an already-`in_progress` game. `finishTeamScoringAndAdvance()`'s own
+   game-completion branch now also calls `advanceDraftMatch()` (the
+   non-team completion path already did) -- always resolving the whole
+   match on that one call, since a team draft match is always
+   best-of-one (`draftGamesToWin()` returns 1 once more than 2 players
+   share a match, and a team match is always exactly 4). Open Team Play's
+   own additional teammate-visibility on top of all this (stage 2, still
+   fully independent per-player drafting/deck-building underneath) is
+   covered in "Open Team Play" below.
 
 Everything else -- team-aggregated scoring (`finishTeamScoringAndAdvance()`,
 already `team_id`-only and reused verbatim once its own format check
@@ -3143,6 +3309,15 @@ the same way so they can never be picked as either, no matter how their
 own board state happens to score. Resigning while a decision is pending
 is disallowed (mirrors `playMood()`/`pass()`'s own
 `assertNoPendingDecision()` gate) -- resolve the decision first.
+
+An immediate-completion (team-format) resignation doesn't actually
+require `currentRound()` to find an `'in_progress'` round at all --
+Team Play's own `draw_recipient` window (a losing round already
+`'scored'`, with no successor round created yet) is a real state where
+none exists, and resigning there used to throw uncaught instead of
+completing the game (a bug caught live; see "`resignGame()` had the
+exact same bug" in "Practice bots" below for the full story and the
+`latestRound()` fallback that fixes it).
 
 For the "continue without them" `standard` 3-4 player path specifically
 (the immediate-completion paths above just end the game outright, so
@@ -4205,10 +4380,12 @@ mechanism. Gated the same way `game_notes` is -- `requireGamePlayer()`
 only, no `canSpectateGame()` fallback -- so a spectator (watching via
 share code) can never read or send chat, unlike `game_events`/`GET
 /games/log`'s own more permissive spectator-visible gating. `getState()`
-always returns `chat_messages` once the game is `in_progress`/`completed`
-(`[]` if nothing's been sent yet); `getSpectatorState()` always returns
-`[]` regardless, since `buildGameState()`'s single shared builder only
-ever populates it when there's a real seated viewer.
+always returns `chat_messages` for a real seated viewer regardless of
+`games.status` (`[]` if nothing's eligible to have been sent yet -- see
+"Open Team Play's deck-building chat" below for the one `'waiting'`-status
+case anything actually CAN have been sent); `getSpectatorState()` always
+returns `[]` regardless, since `buildGameState()`'s single shared builder
+only ever populates it when there's a real seated viewer.
 
 Open Team Play (`format: 'team'` only -- deliberately NOT Closed Team
 Play, see below) additionally gets a private teammate-only channel
@@ -4243,23 +4420,60 @@ needed for the (overwhelmingly common) non-team case.
 string $channel, string $messageText): void` is the only write path:
 `GameStateException` unless the game is `in_progress` (matching
 `saveNote()`'s own "while playing" gate -- a completed/abandoned game has
-no one left mid-conversation to send to), `InvalidArgumentException` if
-`$messageText` is empty after trimming or over `MAX_CHAT_MESSAGE_LENGTH`
-(500 characters -- much shorter than the notepad's 20,000, since a chat
-message is meant to be read live by another player rather than held as a
-private scratchpad). No additional send-rate-limiter beyond that length
-cap -- friends-only, seated-players-only access keeps the abuse surface
-low, and there's no existing precedent anywhere in this codebase for
-throttling a primary write (only for throttling notification *delivery*,
-see `NotificationService`'s own cooldown/queue). On success, fires a
-best-effort `notifyNewChatMessage()` (issue #108's notification system) to
-every OTHER seat the message is actually visible to -- never the sender,
-never the opposing team for a `'team'`-channel message -- sharing
-`NotificationScope::forGame($gameId)` with `notifyYourTurn()`/
-`notifyGameFinished()` rather than its own cooldown scope, the same way
-those two already share one bucket per game instead of one each.
-`notify_chat_message` (migration `0079`, default on) is its own
-notification preference, independent of the other three.
+no one left mid-conversation to send to) -- with one exception, see
+"Open Team Play's deck-building chat" below -- `InvalidArgumentException`
+if `$messageText` is empty after trimming or over
+`MAX_CHAT_MESSAGE_LENGTH` (500 characters -- much shorter than the
+notepad's 20,000, since a chat message is meant to be read live by
+another player rather than held as a private scratchpad). No additional
+send-rate-limiter beyond that length cap -- friends-only, seated-players-
+only access keeps the abuse surface low, and there's no existing
+precedent anywhere in this codebase for throttling a primary write (only
+for throttling notification *delivery*, see `NotificationService`'s own
+cooldown/queue) -- and, deliberately, no dedup-by-content check either:
+`insert()` below is a plain single-row insert with no idempotency key, so
+two genuinely separate `POST /games/chat` calls always produce two
+distinct rows, on purpose (sending the same phrase twice is a legitimate
+thing to do). Protecting against an ACCIDENTAL duplicate -- a rapid
+double-click/double-Enter firing two requests before the first one's own
+response comes back -- is handled client-side instead, by disabling Send
+for the duration of the request (see "Duplicate-message guard" in
+`web-static/README.md`), not by anything here. On success, fires a
+best-effort `notifyNewChatMessage()`
+(issue #108's notification system) to every OTHER seat the message is
+actually visible to -- never the sender, never the opposing team for a
+`'team'`-channel message -- sharing `NotificationScope::forGame($gameId)`
+with `notifyYourTurn()`/`notifyGameFinished()` rather than its own
+cooldown scope, the same way those two already share one bucket per game
+instead of one each. `notify_chat_message` (migration `0079`, default on)
+is its own notification preference, independent of the other three.
+
+**Open Team Play's deck-building chat**: once deck-building itself started
+drawing from the whole team's shared drafted pool rather than each
+player's own personal one (issue #362 stage 2), teammates needed a way to
+actually coordinate who's building around what -- but `games.status` sits
+at `'waiting'` for a draft match's entire drafting/deck-building phase,
+so the general "only while `in_progress`" rule above would otherwise block
+chat at exactly that moment. `GameService::isOpenTeamDeckBuildingChat()`
+is `postChatMessage()`'s one exception: it lets the `'team'` channel
+through (never `'table'` -- the opposing team may still be mid-draft/
+deck-building themselves, with no real "table" to speak to yet) for
+format `'team'` (never `'closed_team'`, matching the existing
+`$game['format'] === 'team'` check above) once the draft match has
+actually reached `'deck_building'` (not mid-`'drafting'`, where a stray
+message would arrive to a teammate who's still mid-pack). The read side
+needed a matching change: `buildGameState()`'s own `chat_messages`
+computation used to sit after its `'waiting'`-status early return, so it
+never ran at all for a still-drafting/deck-building game -- it's now
+computed just before that early return instead, so a `'waiting'` game's
+`chat_messages` is populated (`[]` if nothing's eligible to have been
+sent) the same as an `in_progress`/`completed` one. `web-static/js/
+game.js`'s own `isTeamDeckBuildingChatOpen(state)` mirrors this exactly
+on the frontend, both for `#view-chat-button`'s visibility (moved outside
+`#in-progress-area`, same reachability trick `#resign-button` already
+uses for issue #144) and for hiding `#chat-channel-select` during this
+window specifically -- only `'team'` is ever valid here, so offering a
+choice would just let `'table'` fail server-side.
 
 `GameService::exportGameData()`'s own `game_chat_messages` section applies
 the identical `'table'`-or-own-`team_id` filter `messagesFor()` uses
@@ -4464,8 +4678,8 @@ populate its own bot picker -- see "New game dialog" in
 `web-static/README.md`.
 
 **Scope.** `GameService::botsSupportedFor(string $format, string
-$deckType): bool` -- Traditional (`standard`) or Duel only, and only for
-a deck_type that needs no PER-PLAYER setup of its own: `structure`,
+$deckType): bool` -- every format except `draft`, and only for a
+deck_type that needs no PER-PLAYER setup of its own: `structure`,
 `power`, `jceddys_75`, `one_of_each`, and `custom`
 (`BOT_SUPPORTED_DECK_TYPES`), plus one special case: Duel with
 `custom_duel` (see "Practice bots in Duel with a custom decklist"
@@ -4480,18 +4694,12 @@ from the human creator's own `decklist_text`/`saved_decklist_id` before
 any seat -- bot or human -- is ever dealt from it; see
 `deckCardIdsFor()`'s `'custom'` branch) rather than a per-seat one, so a
 bot needs to do nothing whatsoever to "have" one -- exactly like
-`structure`/`power`/`jceddys_75`/`one_of_each`. Every OTHER deck_type
-stays excluded because it would need the bot to do something this
-feature doesn't implement -- make its own draft picks
-(`quick_draft`/`winston_draft`/`grid_draft`, which also implies
-`format: 'draft'`) or submit its own separate decklist
-(`custom_duel`'s per-seat submission, see above). Team formats
-(`team`/`closed_team`) are excluded for a different reason: a bot would
-additionally have to answer Open/Closed Team Play's own turn-order
-propose/confirm decisions (`POST /games/team-decision`) and, for Closed
-Team Play, its blind pregame card pass (`POST /games/initial-pass`) -- a
-materially bigger decision surface than "play a card, answer a pending
-decision" that this feature doesn't cover yet. `createGame()` rejects
+`structure`/`power`/`jceddys_75`/`one_of_each`. `draft` stays excluded
+because it would need a bot to make its own draft picks
+(`quick_draft`/`winston_draft`/`grid_draft`), which this feature doesn't
+implement. `custom_duel` can never combine with `team`/`closed_team` at
+all (it's Duel-only, checked elsewhere), so its own special case above
+needs no team-format branch of its own. `createGame()` rejects
 (`GameStateException`) any attempt to seat a bot outside this scope,
 checked once, up front, via `botUserIdAmong(array $userIds): ?int` (a
 single `is_bot` lookup against every id in `$userIds`, returning the
@@ -4499,6 +4707,63 @@ bot's own id rather than just a bool -- see "Practice bots in Duel with
 a custom decklist" below for why the id itself is needed) -- before any
 of the deck-type-specific validation/building below it even runs, so a
 doomed request never gets as far as e.g. parsing a decklist.
+
+**Team Play (issue #360).** Open/Closed Team Play were originally
+excluded because a bot would additionally have to answer those formats'
+own turn-order/draw-recipient propose/confirm decision (`POST
+/games/team-decision`) and, for Closed Team Play only, its blind
+pregame card pass (`POST /games/initial-pass`) -- neither of which
+`advanceAutomatedTurns()` (see "Driving a bot's turn" below) knew how
+to drive. Both are now handled the same "legal, not strategic" way as
+everything else here, via two new `GameService` helpers called from
+`advanceAutomatedTurns()`'s own frozen-round branch (a null
+`current_turn_game_player_id`, previously always just a hard stop):
+
+- `advanceBotTeamDecision(int $gameId, array $botGamePlayerIds): ?array`
+  -- looks up the game's own active `game_team_decisions` row (`phase`
+  `'propose'` or `'confirm'`) and acts as whichever candidate is a bot,
+  if either is: in `'propose'`, calls
+  `BotPlayerService::chooseTeamDecisionProposal(array
+  $candidateGamePlayerIds): int` (always `$candidateGamePlayerIds[0]` --
+  deliberately arbitrary and deterministic, regardless of which of the
+  two members is actually proposing or whether either is itself a bot)
+  and `proposeTeamDecision()`; in `'confirm'`, always approves (never
+  rejects) via `confirmTeamDecision()` if the seat that needs to confirm
+  (never the proposer -- `confirmTeamDecision()` itself rejects that) is
+  a bot. A human confirmer who rejects a bot's proposal just sees the
+  exact same one proposed again next time, since the bot's own policy
+  never varies. Returns `null` (nothing to do) if there's no active
+  decision, or the seat that needs to act next belongs to a real player
+  instead.
+- `advanceBotInitialCardPass(int $gameId, array $round, array
+  $botGamePlayerIds): ?array` -- Closed Team Play's own round 1 only
+  (checked via `$round['round_number']` before even checking the
+  game's own format, so every other caller skips the extra query for
+  free). Finds the first not-yet-submitted bot seat (via
+  `pendingInitialCardPass()`'s own `submitted_game_player_ids`) and
+  submits `BotPlayerService::chooseInitialCardPass(BoardState $state,
+  int $botGamePlayerId): array` -- the 2 LOWEST-value cards in the bot's
+  own opening hand, the same "give up the least" bias
+  `BotChoiceResolver` already applies elsewhere -- via
+  `submitInitialCardPass()`. Returns `null` if this isn't Closed Team
+  Play, round 1's own pass phase has already resolved, or every bot
+  seated has already submitted and only real players are left to wait
+  on.
+
+`advanceAutomatedTurns()` tries the card pass first, then the team
+decision, before finally giving up on a frozen round -- both are
+independent per-game-state checks (a closed_team game's own round 1 is
+never simultaneously mid card-pass AND mid team-decision), so the order
+between them doesn't matter for correctness, just which one gets
+checked (and its own extra query spent) first. Both bot-count-agnostic
+the same way Traditional's own bot support already is
+(`botGamePlayerIds()` is plural) -- up to all 3 non-creator seats may be
+bots at once, including both halves of the same team, in which case a
+single `advanceAutomatedTurns()` call drives that team's own propose
+AND confirm (or both members' own card passes) back to back, with no
+human ever needing to act. A bot may be the creator's own partner too,
+not just seated on the opposing team -- `partnerUserId`'s own validation
+(`createGame()`) never distinguished bot from human to begin with.
 
 **Picking a legal move: `MoodSwings\Bot\BotChoiceResolver`.** A
 server-side equivalent of `web-static/js/game.js`'s own `fieldOptions()`/
@@ -4579,9 +4844,28 @@ since it already holds that dependency):
   filled in. If the highest-value card's own required fields can't all
   be legally filled (rare -- would mean `isPlayable()` said yes but some
   required field still came up empty, e.g. Regret's exact-2-own-moods
-  cost with nothing at all in play), the next-highest is tried instead,
-  all the way down to `null` (pass) if truly nothing works -- a card is
-  never left half-chosen.
+  cost with nothing at all in play) or `isWorthPlaying()` vetoes it
+  outright (currently just Fury -- see below), the next-highest is
+  tried instead, all the way down to `null` (pass) if truly nothing
+  works -- a card is never left half-chosen.
+  `isWorthPlaying(BoardState $state, string $effectKey, int
+  $botGamePlayerId): bool` is a small, separate, per-effect-key veto
+  list layered on top of this ordering -- unlike `BotChoiceResolver`'s
+  own field-shape-driven policy above (which only ever decides HOW to
+  fill a `choice_field`), this looks at the whole-board CONSEQUENCE of
+  an effect that has no `choice_field` of its own for the acting player
+  to fill at all, so there's no field-level hook to veto it through.
+  Fury ("each player chooses one of their highest value moods and puts
+  it into the discard pile" -- every player, including whoever plays
+  it, via `RequiresOpponentDecision`, so `CardChoiceSchema` has no entry
+  for it at all) is the one card on this list today: only worth playing
+  if at least one OPPONENT's own highest-value mood is worth MORE than
+  the bot's own highest-value mood (a player with no moods in play
+  counts as `-1`, matching `FuryEffect`'s own sentinel) -- otherwise
+  it's a pure loss, trading the bot's own best mood for something equal
+  or worse. Everything not on this list defaults to "always worth
+  playing," the unconditional "yes" every effect already got before
+  this method existed.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's
@@ -4594,7 +4878,8 @@ since it already holds that dependency):
 
 **Driving a bot's turn: `GameService::advanceAutomatedTurns(int
 $gameId): ?array`.** Called immediately after a human's own
-`playMood()`/`pass()`/`respondToDecision()`/`startGame()`/`resignGame()`
+`playMood()`/`pass()`/`respondToDecision()`/`startGame()`/`resignGame()`/
+`proposeTeamDecision()`/`confirmTeamDecision()`/`submitInitialCardPass()`
 call has already fully returned -- from the matching routes in
 `public/index.php`, right after each one -- so a solo human never has
 to manually advance a bot's turn themselves; if the human's own action
@@ -4630,15 +4915,90 @@ fixed at creation time) is the one query needed to tell "is this
 game_player_id a bot" apart from a real seat; `autoPassEmptyHandGamePlayerIds()`
 is its exact counterpart for "Auto-pass on empty hand" below.
 
+**`GET /games/state` also drives it -- a real deadlock, caught live.**
+Every write route above is a HUMAN's own action, but a Closed/Open Team
+Play round can freeze waiting on a team decision (`turn_order`/
+`draw_recipient`) whose BOTH propose/confirm candidates happen to be
+bots (`advanceBotTeamDecision()`) -- and while that decision is open,
+every OTHER seated player is frozen too (nothing to play, nothing to
+pass, nothing to respond to), so there's no human write call left
+anywhere in the game to ever reach `advanceAutomatedTurns()` and drive
+those two bots' own propose/confirm. Without this, an all-bot team's
+own decision deadlocks the game forever, visible as a team-decision
+panel permanently reading "Waiting for `<bot>` or `<bot>` to..." no
+matter how long anyone waits. `GET /games/state`'s own route calls
+`advanceAutomatedTurns($gameId)` before reading state back out, purely
+because it's the one call guaranteed to keep happening regardless (the
+board's own poll timer) -- cheap even when nothing's actually stuck,
+since the method's own early-out (no bots seated and no opted-in
+empty-handed player) is just two lookups. `GET /games/spectate/state`
+deliberately does NOT get the same treatment -- a spectator watching
+isn't a seated player's own action, and every *seated* game already
+gets this via its own `GET /games/state` poll regardless of whether
+anyone's spectating it too.
+
+**The `draw_recipient` half of that fix didn't actually work -- caught
+live, again, after shipping the fix above.** `advanceAutomatedTurns()`
+used to call `currentRound($gameId)` (a round with `status =
+'in_progress'`, specifically) FIRST, at the very top of its loop, before
+ever trying `advanceBotTeamDecision()` at all -- catching the resulting
+`GameStateException` as "game completed/abandoned, nothing left to
+drive" if none existed. That's the right read for a genuinely finished
+game, but wrong here: a losing team's own `draw_recipient` decision (see
+"Open Team Play"/"Closed Team Play" below) opens the INSTANT its round's
+own status flips to `'scored'` (`finishTeamScoringAndAdvance()`), and the
+NEXT round doesn't get created until that decision itself resolves
+(`applyDrawRecipientDecision()`) -- so there's a real window where the
+game has NO round with status `'in_progress'` at all. `advanceBotTeamDecision()`
+itself needs no round (`activeTeamDecision()` queries `game_team_decisions`
+by `game_id` alone), so the loop was giving up on a fully resolvable
+all-bot decision purely because of *when* it happened to check. The fix:
+try `advanceBotTeamDecision()` unconditionally at the top of every loop
+iteration, before `currentRound()` is ever called -- it's always a safe
+no-op (`activeTeamDecision()` returns `null`) whenever no team decision
+is actually open, which is guaranteed true anyway while a round's own
+turns are still being played. The pre-existing test coverage for this
+(`testAdvanceBotTurnsResolvesATeamDecisionBetweenTwoBotTeammates`) never
+caught it because its own fixture (`insertFrozenTeamRound()`) always
+inserted the frozen round as `'in_progress'` -- correct for `turn_order`
+(which opens on a round already in progress), but not `draw_recipient`,
+and every earlier live-Playwright verification made the exact same
+fixture mistake. `testAdvanceBotTurnsResolvesADrawRecipientDecisionBetweenTwoBotTeammatesAfterTheirRoundHasAlreadyScored`
+(`BotGameplayIntegrationTest`) reproduces the real `'scored'`-round
+timing via a new `insertScoredTeamRound()` helper instead.
+
+**`resignGame()` had the exact same bug.** It also called
+`currentRound($gameId)` unconditionally (to find the round to mark
+`'abandoned'`), and let the resulting `GameStateException` escape
+uncaught -- so resigning from a team-format game during exactly this
+`draw_recipient` window (e.g. to escape the deadlock above, before it
+was fixed) silently failed: the frontend's confirm dialog closed
+normally, but the request itself 409'd with no visible feedback, and the
+game kept sitting in the lobby as "In Progress". Fixed with a
+`latestRound()` fallback (round rows for this game regardless of status,
+same query `buildGameState()` itself already uses) for team-format
+resignations specifically -- `completeGameByResignation()` only ever
+needs `$round['id']` to mark it abandoned, and does so through an
+`AND status = 'in_progress'` guard on that UPDATE so an already-`'scored'`
+round's real history is never overwritten into a misleading `'abandoned'`
+one. It also now closes out any still-open `game_team_decisions` row for
+the game, so a later `GET /games/state` on the now-`'completed'` game
+never shows a stale "Waiting for ... to choose" panel (`state.team_decision`
+is driven purely by `activeTeamDecision()`'s "any unresolved row for this
+game" query, with no game-status check of its own).
+`testResignDuringAnOpenDrawRecipientDecisionStillCompletesTheGame`
+(`GameServiceIntegrationTest`) covers it.
+
 **Hand visibility.** Needs no new rule at all -- a bot's hand is exactly
 as hidden from every other seated player as any other player's is
 already, since it's an ordinary `game_players` row with no special
 casing anywhere in `serializeCard()`/`buildGameState()`'s own
 viewer-scoping logic. The one deliberate exception is symmetric with a
 real player's own: Open Team Play's `you.teammate_hand` reveals a bot
-teammate's hand to its human partner exactly like a real teammate's --
-moot in practice today, since Open Team Play is outside a bot's current
-scope (see "Scope" above).
+teammate's hand to its human partner exactly like a real teammate's
+would -- genuinely reachable now that Team Play is within a bot's scope
+(see "Scope"/"Team Play" above), letting a human see what their own bot
+partner is holding the same as any other teammate's.
 
 **Stats exclusion.** A bot game deliberately never bumps lifetime stats
 (issue #106) or card statistics (issue #315) -- see
@@ -4708,16 +5068,14 @@ still pending) until the human does. See "New game dialog" in
 
 A personal preference (`users.auto_pass_on_empty_hand`, migration
 `0096`, defaults to `1`/on -- unlike default selections mode's own
-default-off, this is a pure convenience with no real behavior change to
-opt into: an empty hand always meant "pass" anyway, since playing a
-card always requires one from hand and there's no other legal action a
-turn offers). Surfaced in the Settings dialog's own "Game defaults"
-section (`web-static/game/index.html`'s `#settings-dialog`, alongside
-default selections mode's own checkbox -- see "New game dialog"/
-"Settings dialog" in `web-static/README.md`) and written via `POST
-/user/auto-pass-on-empty-hand-preference` (see the API table above),
-the same write-only, no-separate-GET pattern `share_presence`/default
-selections mode already established.
+default-off, this is meant as a pure convenience with no real behavior
+change to opt into). Surfaced in the Settings dialog's own "Game
+defaults" section (`web-static/game/index.html`'s `#settings-dialog`,
+alongside default selections mode's own checkbox -- see "New game
+dialog"/"Settings dialog" in `web-static/README.md`) and written via
+`POST /user/auto-pass-on-empty-hand-preference` (see the API table
+above), the same write-only, no-separate-GET pattern `share_presence`/
+default selections mode already established.
 
 Rather than a client-side auto-click (which would need the browser tab
 open and JS running, and wouldn't help a player who's stepped away),
@@ -4727,27 +5085,68 @@ bots (#140) already use, extended with one more per-iteration check:
 alongside "is the current turn holder a bot" (drive its own
 play/pass), a fresh check for "is the current turn holder an opted-in
 player (`autoPassEmptyHandGamePlayerIds()`, `users.auto_pass_on_empty_hand
-= 1`) whose hand is currently empty" -- if so, `pass()` is called on
-their behalf and the loop continues, exactly like a bot's own pass
+= 1`) with NO LEGAL PLAY available at all" -- if so, `pass()` is called
+on their behalf and the loop continues, exactly like a bot's own pass
 would. Unifying both checks into the SAME loop (rather than two
 separate passes) is what lets a bot's turn and an opted-in human's
-empty-hand turn freely interleave within one call -- bot, then an
-empty-handed opted-in human, then another bot, and so on -- since a
-second, independent pass over the game could easily miss a later
-opportunity the first one just created. Renamed from the
+auto-passed turn freely interleave within one call -- bot, then an
+opted-in human with nothing to play, then another bot, and so on --
+since a second, independent pass over the game could easily miss a
+later opportunity the first one just created. Renamed from the
 bots-only `advanceBotTurns()`/`MAX_BOT_ACTIONS_PER_REQUEST` this method
 and constant used to be, now that they cover both mechanisms.
+
+**"No legal play" is not the same as "empty hand"** -- a real bug,
+caught live: this feature originally passed whenever
+`hand($playerId) === []`, on the assumption that an empty hand always
+means "pass" anyway, since playing a card always requires one from
+hand. That's false for a handful of cards -- Angst/Harmony/Grief/
+Melancholy can each grant (or, for Melancholy, permanently allow) a
+play sourced from the DISCARD pile instead (`BoardState::grantAllows()`'s
+own `'source' => 'discard'` check) -- so an opted-in player could still
+have a completely legal play available with an empty hand, and the old
+check silently passed it away regardless (worst case: right after
+choosing to decline a Duplicity repeat of Angst's own effect, the very
+grant that discard-sourced play came from). `candidatePlayCardIds()`
+(hand plus the whole shared discard pile) filtered through
+`MoodPlayService::isPlayable()` is the real check now -- the same one
+the bot branch just above it already used (which had the identical gap
+for a bot, now fixed the same way): `isPlayable()`'s own
+`hasUsablePlayGrant()` call still does the actual legality filtering
+(only a card an active grant genuinely covers, given its hand-vs-discard
+zone, ever comes back playable), so padding the candidate list with
+every discard-pile card is always safe -- one nothing currently grants
+just never passes the filter, regardless of which list it came from.
 
 Only ever applies to a fresh TURN (the play-or-pass decision), never to
 answering a pending decision -- every pending-decision field that could
 target a player at all already requires a non-empty hand/discard pile
 to even be created in the first place (e.g. Suspicion's own
 hand-emptiness check before offering its discard decision), so there's
-no "auto-pass out of a decision" case to cover. A forced-empty-hand
-check happens fresh each loop iteration (never cached alongside the
-opted-in id list itself), since whether a given player's hand is
-*currently* empty can change from one iteration to the next as earlier
+no "auto-pass out of a decision" case to cover. The legal-play check
+happens fresh each loop iteration (never cached alongside the opted-in
+id list itself), since whether a given player currently has anything
+playable can change from one iteration to the next as earlier
 iterations play out.
+
+**Distinguished from a manual pass in the game log** -- a bug caught
+live: a player who opted into this (the default) had no way to tell, in
+their own game's log, whether a given "{name} passed" line was their
+own deliberate click or something the server did on their behalf while
+they weren't even looking, since both rendered identically. `pass(int
+$gameId, int $gamePlayerId, bool $automated = false)` gained the
+`$automated` param -- `true` only from `advanceAutomatedTurns()`'s own
+two internal callers (a bot with nothing to play, or an opted-in
+player's own auto-pass here), never from the public `POST /games/pass`
+route a real click hits (its own default stays `false`) -- persisted
+onto the `turn_passed` event's `details` (`{"automated": true}`, only
+ever present when true) the same way `skipTurnForResignedPlayer()`'s
+own `{"resigned": true}` already rides alongside it.
+`GameService::describeEvent()`'s `'turn_passed'` branch reads it back:
+"{name} passed automatically (no legal play)" instead of the plain
+"{name} passed" -- one shared phrasing for both a bot's own pass and an
+opted-in human's, since both mean the exact same thing to a reader of
+this log ("nobody actually clicked Pass here").
 
 ### Duel: separate per-player decks
 
@@ -4757,12 +5156,20 @@ value is cosmetic, just echoed back and displayed as a label) -- both are
 "duel-shaped": each of the game's exactly-2 players draws from -- and
 bottoms cards onto -- their *own* deck rather than a single shared one.
 `GameService::isDuelShapedFormat(string $format): bool` (`$format === 'duel'
-|| $format === 'draft'`) is the single helper both `createGame()` (the
-exactly-2-players check, `GameStateException` "A {format} game must have
-exactly 2 players") and `startGame()` (the per-player-deck-dealing branch)
-consult, so the two formats can never drift out of sync with each other.
-`BoardStateRepository::load()`'s own `$hasSeparateDecks` check is the same
-condition again, one level down, for exactly the same reason.
+|| $format === 'draft'`) is the exactly-2-players check `createGame()`
+consults (`GameStateException` "A {format} game must have exactly 2
+players") -- 'closed_team' drafting (issue #362) deliberately does NOT
+go through this helper, since its own player count is governed by
+`isTeamFormat()`'s separate "always exactly 4" rule instead, not this
+one. `startGame()`'s own per-player-deck-dealing branch, and
+`BoardStateRepository::load()`'s own `$hasSeparateDecks` check one level
+down, both use a WIDER condition instead --
+`isDuelShapedFormat($format) || in_array($deckType, ['quick_draft',
+'winston_draft', 'grid_draft'])` -- since separate-decks-or-not is a
+`deck_type` question as much as a `format` one once a drafted deck_type
+can be seated under 'closed_team' too (a drafted deck is genuinely
+different content per player, not the one shared/identical pool every
+OTHER deck_type those two team formats support gives everyone).
 
 - `BoardState` generalizes its single flat deck into `array<int, int[]>
   $decks` keyed by a "deck key": either `BoardState::SHARED_DECK_KEY` (the
@@ -4885,6 +5292,30 @@ is now checked immediately before `giveInPlayToPlayer()` in the
 `returnsToOwnerAfterScoring` branch, so a foreign return correctly no-ops
 once the card's own effect has already taken it out of play, implementing
 the "if it's still in play" qualifier printed on both cards.
+
+A card's own `afterScoring` self-tag carries a `condition` -- `'always'`
+for Recklessness/Gluttony/Insecurity (their printed effect is unconditional
+"while in play", so it's guaranteed to resolve, and clear itself, the very
+next time `applyAfterScoringHooks()` runs) or `'if_won'` for Bashfulness
+(whose printed effect only triggers "after winning a round with this mood
+in play", not on every subsequent round it happens to still be in play).
+`pendingAfterScoringGroups()` only includes a self-tag in the groups it
+returns for a round where its condition actually held -- but a naive
+implementation that *only* cleared the tag when it fired left a losing
+round's Bashfulness tag sitting on the card untouched, so it would
+silently re-evaluate (and could fire) against whichever *later* round its
+owner eventually won, well after the round it was actually played in. The
+fix, `afterScoringSelfConditionMet()`, is now shared between that check
+and a new unconditional cleanup pass at the top of
+`applyAfterScoringHooks()`: every mood still in play with a pending
+`afterScoring` self-tag whose condition did NOT hold this round has that
+tag cleared immediately, regardless of whether it ends up in this round's
+groups. `'always'`-conditioned tags are untouched by this pass (their
+condition always holds, so there's nothing for it to clear), so
+Recklessness/Gluttony/Insecurity keep resolving exactly as before; only a
+conditional tag that didn't fire is affected, guaranteeing it gets exactly
+one evaluation -- the round it was played in -- and never lingers to be
+checked again.
 
 A follow-up ruling from the same rules committee spelled out the FULL
 general framework the paragraph above only covers half of: "after scoring"

@@ -1,0 +1,35 @@
+-- Fixes two real bugs, both caught live on the exact same reported
+-- scenario ("Waiting for BotBen or BotCleo to choose who should draw the
+-- shared card", and "Resign game" silently doing nothing on that same
+-- stuck board), both traced to the same root cause: a losing team's own
+-- draw_recipient decision (see GameService::finishTeamScoringAndAdvance())
+-- opens the INSTANT its round's own status flips to 'scored', with no
+-- successor round created until the decision itself resolves
+-- (applyDrawRecipientDecision()) -- so there's a real window where the
+-- game has NO round with status 'in_progress' at all.
+--
+-- 1. GameService::advanceAutomatedTurns() used to call currentRound()
+--    (status = 'in_progress' only) FIRST, before ever trying to resolve
+--    any team decision, so it threw and gave up immediately during
+--    exactly this window -- deadlocking the game forever whenever both
+--    draw_recipient candidates were bots (migration 0106's own fix for
+--    the "all-bot team decision" deadlock was real but incomplete: its
+--    own test fixture, and this one's own live-Playwright verification,
+--    both happened to insert the frozen round as already 'in_progress',
+--    which is correct for turn_order but not draw_recipient, masking
+--    this). Fixed by trying advanceBotTeamDecision() unconditionally at
+--    the top of the loop, before currentRound() is ever called.
+-- 2. GameService::resignGame() had the exact same currentRound()
+--    dependency (to find the round to mark 'abandoned') and let the
+--    resulting exception escape uncaught, so resigning during this same
+--    window silently 409'd instead of ending the game. Fixed with a
+--    latestRound() fallback for team-format resignations, guarded so an
+--    already-'scored' round's real history is never overwritten into a
+--    misleading 'abandoned' one, and now also closes out any still-open
+--    team decision so a later GET /games/state on the completed game
+--    never shows a stale "Waiting for ... to choose" panel.
+--
+-- See "Practice bots"/"Resigning" in php-app/README.md. No schema change
+-- -- this migration exists purely to bump schema_version so
+-- MaintenanceGate's version check passes once this code deploys.
+UPDATE schema_version SET version = '1.20.4' WHERE id = 1;

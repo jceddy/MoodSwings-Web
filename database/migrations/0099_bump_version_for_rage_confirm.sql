@@ -1,0 +1,12 @@
+-- No schema change: extends the existing "'Are you sure?' on a
+-- targetless play" confirmation dialog (see web-static/README.md),
+-- already covering Wrath, to also cover Rage -- leaving its own
+-- single bare-bool checkbox ("Put every mood valued 3 or less into
+-- the discard pile") unchecked means the play does nothing whatsoever
+-- beyond entering play (RageEffect returns immediately, same as
+-- WrathEffect), the same unambiguous "missed click" case the existing
+-- mechanism already guards against for other field types and already
+-- guards against for Wrath specifically. Client-side only
+-- (web-static/js/game.js's UNCHECKED_BOX_CONFIRM_FIELD_KEYS map, now
+-- keyed by both wrath and rage effect keys).
+UPDATE schema_version SET version = '1.16.0' WHERE id = 1;

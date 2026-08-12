@@ -244,6 +244,55 @@ dialog#resources-dialog #resources-close-button {
     }
 }
 
+/* Loading overlay (see #loading-overlay's own comment in game/index.html)
+   -- fixed/inset:0 so it sits above whichever view (lobby or board) is
+   currently underneath it regardless of scroll position, with no
+   z-index needed since every other overlay-like element in this app
+   (dialog#*) is a native <dialog>, which already promotes itself to the
+   browser's own top layer -- a plain fixed div with no dialog siblings
+   open at the same time (the loading overlay only ever shows during an
+   initial view load, never alongside one of those) naturally paints
+   above the normal document flow already. */
+#loading-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    background-color: var(--color-bg);
+    color: var(--color-text-secondary);
+}
+
+/* An author rule always wins over the browser's own default
+   `[hidden] { display: none }` UA-stylesheet rule regardless of selector
+   specificity (see .in-play-zone[hidden] above for the same fix) -- without
+   this, #loading-overlay's own `display: flex` above would keep it visible
+   (just emptied of any real content) even while `hidden`. */
+#loading-overlay[hidden] {
+    display: none;
+}
+
+#loading-overlay .spinner {
+    width: 2rem;
+    height: 2rem;
+    border: 0.25rem solid var(--color-border);
+    border-top-color: var(--color-info);
+    border-radius: 50%;
+    animation: spinner-rotate 0.8s linear infinite;
+}
+
+@keyframes spinner-rotate {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #loading-overlay .spinner {
+        animation: none;
+    }
+}
+
 dialog#friends-dialog,
 dialog#decks-dialog,
 dialog#deck-view-dialog,
@@ -512,7 +561,8 @@ body.game-page {
 #shared-deck-cards,
 .deck-builder-card-grid,
 .spectator-final-hand ul,
-.draft-pool-cards {
+.draft-pool-cards,
+.team-drafted-cards-list {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -526,7 +576,8 @@ body.game-page {
 #grid-draft-drafted-so-far li,
 #grid-draft-other-players-drafted ul li,
 .in-play-zone__list li,
-.spectator-final-hand ul li {
+.spectator-final-hand ul li,
+.team-drafted-cards-list li {
     list-style: none;
 }
 
@@ -1560,7 +1611,8 @@ dialog#deck-builder-dialog[open] {
 
 #choices-panel,
 #pending-decision-panel,
-#team-decision-panel {
+#team-decision-panel,
+#initial-card-pass-panel {
     border: 1px solid var(--color-border);
     border-radius: 0.5rem;
     padding: 1rem;

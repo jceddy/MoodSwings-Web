@@ -133,6 +133,104 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    /**
+     * Fury (id 91, value 4) costs the bot its own highest-value mood too
+     * -- only worth playing when at least one opponent's own
+     * highest-value mood is worth more than the bot's own. Here the
+     * opponent's Discipline (id 9, value 6) beats the bot's own Dignity
+     * (id 8, value 3), so Fury is worth it.
+     */
+    public function testChooseActionPlaysFuryWhenAnOpponentsHighestMoodExceedsItsOwn(): void
+    {
+        $state = $this->boardState(hands: [1 => [91, 8], 2 => [9]]);
+        $state->moveHandToInPlay(1, 8);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [91], 1);
+
+        self::assertSame(91, $action['card_id']);
+    }
+
+    /**
+     * The mirror case: no opponent's own highest-value mood exceeds the
+     * bot's own (Charity, id 3, value 1, isn't more than the bot's own
+     * Dignity, id 8, value 3) -- Fury is the only playable card, so
+     * chooseAction() should pass rather than play a pure loss.
+     */
+    public function testChooseActionSkipsFuryAndPassesWhenNoOpponentExceedsItsOwnHighestMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [91, 8], 2 => [3]]);
+        $state->moveHandToInPlay(1, 8);
+        $state->moveHandToInPlay(2, 3);
+
+        self::assertNull($this->bot->chooseAction($state, [91], 1));
+    }
+
+    /**
+     * When Fury is vetoed but a different, unconditionally-worth-playing
+     * card is also playable, chooseAction() falls through to it instead
+     * of passing outright -- same "try the next-highest" fallback
+     * testChooseActionSkipsACardItCannotLegallyFillAndTriesTheNextOne()
+     * already covers for an unfillable required field.
+     */
+    public function testChooseActionFallsThroughToTheNextCardWhenFuryIsVetoed(): void
+    {
+        $state = $this->boardState(hands: [1 => [91, 8, 3], 2 => [3]]); // Fury (4), Dignity (3), Charity (1)
+        $state->moveHandToInPlay(1, 8);
+        $state->moveHandToInPlay(2, 3);
+
+        $action = $this->bot->chooseAction($state, [91, 3], 1);
+
+        self::assertSame(3, $action['card_id']); // Charity -- Fury (higher value) was vetoed
+    }
+
+    /**
+     * Only ONE of several opponents needs to qualify -- the other
+     * opponent's own low mood doesn't disqualify Fury.
+     */
+    public function testChooseActionPlaysFuryWhenOnlyOneOfSeveralOpponentsExceedsItsOwnHighestMood(): void
+    {
+        $state = $this->boardState(hands: [1 => [91, 8], 2 => [3], 3 => [9]]);
+        $state->moveHandToInPlay(1, 8); // bot: Dignity, value 3
+        $state->moveHandToInPlay(2, 3); // opponent 2: Charity, value 1 -- doesn't qualify
+        $state->moveHandToInPlay(3, 9); // opponent 3: Discipline, value 6 -- qualifies
+
+        $action = $this->bot->chooseAction($state, [91], 1);
+
+        self::assertSame(91, $action['card_id']);
+    }
+
+    /**
+     * A player with no moods in play at all has an effective highest
+     * value of -1 (see FuryEffect's own identical sentinel) -- an
+     * opponent with literally any mood in play (even Fear, id 38, value
+     * 0) still exceeds that, so Fury is worth it even though the bot
+     * itself has nothing in play to lose from the general "highest
+     * value" comparison alone.
+     */
+    public function testChooseActionPlaysFuryWhenTheBotHasNoMoodsInPlayAndAnOpponentHasAny(): void
+    {
+        $state = $this->boardState(hands: [1 => [91], 2 => [38]]);
+        $state->moveHandToInPlay(2, 38);
+
+        $action = $this->bot->chooseAction($state, [91], 1);
+
+        self::assertSame(91, $action['card_id']);
+    }
+
+    /**
+     * Neither the bot nor its opponent has any mood in play -- both
+     * effective highest values are -1, and -1 is not GREATER than -1,
+     * so Fury still isn't worth it (there'd be nothing for either side
+     * to actually lose).
+     */
+    public function testChooseActionSkipsFuryWhenNeitherTheBotNorAnyOpponentHasAMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [91]]);
+
+        self::assertNull($this->bot->chooseAction($state, [91], 1));
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();
@@ -148,5 +246,27 @@ final class BotPlayerServiceTest extends TestCase
         $answer = $this->bot->chooseDecisionAnswer($state, ['key' => 'given_card_id', 'type' => 'hand_card', 'required' => true], 2);
 
         self::assertSame(['given_card_id' => 8], $answer);
+    }
+
+    // -- Team Play (issue #360) ------------------------------------------
+
+    public function testChooseTeamDecisionProposalAlwaysPicksTheFirstCandidate(): void
+    {
+        self::assertSame(5, $this->bot->chooseTeamDecisionProposal([5, 9]));
+        // Order alone decides it -- not which one is "the bot itself" or
+        // any other property of either id (see the method's own docblock:
+        // deliberately arbitrary and deterministic).
+        self::assertSame(9, $this->bot->chooseTeamDecisionProposal([9, 5]));
+    }
+
+    public function testChooseInitialCardPassPicksTheTwoLowestValueHandCards(): void
+    {
+        // Charity (value 1), Benevolence (value 2), Chivalry (value 3),
+        // Complacency (value 4) -- deliberately out of value order in the
+        // hand itself, to prove this sorts rather than just taking the
+        // first two dealt.
+        $state = $this->boardState(hands: [1 => [5, 4, 3, 2]]);
+
+        self::assertSame([3, 2], $this->bot->chooseInitialCardPass($state, 1));
     }
 }

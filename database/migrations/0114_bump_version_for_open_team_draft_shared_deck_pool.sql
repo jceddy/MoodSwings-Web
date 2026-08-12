@@ -1,0 +1,18 @@
+-- Open Team Play draft (Quick Draft/Winston Draft/Grid Draft): deck
+-- building now draws from the TEAM's whole combined drafted pool, not
+-- just what each player personally drafted -- a real request. A
+-- specific drafted card can only ever sit in one teammate's own deck at
+-- a time (first-come-first-served): GameService::draftDeckBuildingStateFor()'s
+-- own 'drafted_cards' (the actual picker pool) and submitDraftDeck()'s
+-- own validation both now compute the same pool -- both teammates'
+-- drafted_card_ids, minus whatever the teammate's own CURRENT
+-- deck_card_ids has already claimed. Un-selecting a card from one
+-- teammate's own deck and resubmitting frees it back up for the other.
+-- Closed Team Play (and every non-team draft) is unaffected -- each
+-- player still builds only from their own personal pool, matching this
+-- format's own "information stays closed between teammates" premise.
+--
+-- No schema change -- this reuses the existing drafted_card_ids/
+-- deck_card_ids columns on draft_match_players entirely differently, not
+-- a new column. See "Open Team Play" in php-app/README.md.
+UPDATE schema_version SET version = '1.22.0' WHERE id = 1;

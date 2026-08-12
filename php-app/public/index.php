@@ -1001,6 +1001,21 @@ if ($path === '/games/state' && $method === 'GET') {
     $gameId = (int) ($_GET['game_id'] ?? 0);
 
     requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+    // Practice bots (issue #140)/auto-pass on empty hand: every other
+    // trigger for GameService::advanceAutomatedTurns() is a human's own
+    // WRITE call elsewhere in this game (see that method's own docblock)
+    // -- but a frozen round awaiting an ALL-BOT team's own turn_order/
+    // draw_recipient decision (both propose/confirm candidates bots) has
+    // no such call anywhere: every other seated player is frozen too, so
+    // there's nothing left for any human to do that would otherwise ever
+    // reach this loop, and the game would simply deadlock forever without
+    // this. This ordinary polling GET is the one call guaranteed to keep
+    // happening regardless, so it doubles as that missing trigger --
+    // cheap to call here even when nothing's actually stuck (two early-out
+    // queries, see botGamePlayerIds()/autoPassEmptyHandGamePlayerIds()),
+    // and its own result is simply discarded in favor of the fresh
+    // getState() read below either way.
+    $games->advanceAutomatedTurns($gameId);
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
@@ -1384,6 +1399,15 @@ if ($path === '/games/team-decision' && $method === 'POST') {
             'confirm' => $games->confirmTeamDecision($gameId, $gamePlayerId, (bool) ($body['approve'] ?? false)),
             default => throw new GameStateException('action must be "propose" or "confirm"'),
         };
+        // Practice bots (issue #360)/auto-pass on empty hand: confirming
+        // (or a bot's own teammate rejecting) this decision can unfreeze
+        // the round straight into a bot's turn, or into the OTHER half of
+        // this same team decision needing a bot's own propose/confirm --
+        // see the identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1400,6 +1424,15 @@ if ($path === '/games/initial-pass' && $method === 'POST') {
 
     try {
         $result = $games->submitInitialCardPass($gameId, $gamePlayerId, $cardIds);
+        // Practice bots (issue #360): a human's own pass here can be the
+        // last of the 4 needed to unfreeze round 1 straight into a bot's
+        // turn, or -- if any of the other 3 seats are also bots -- there
+        // may still be bot passes of their own left to drive first. See
+        // the identical comment on POST /games/play above.
+        $autoResult = $games->advanceAutomatedTurns($gameId);
+        if ($autoResult !== null) {
+            $result = $autoResult;
+        }
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
