@@ -1,0 +1,18 @@
+-- Two bugs caught live in Open Team Quick Draft's "Your team's drafted
+-- cards so far" display (renderTeamDraftedCards() in web-static/js/game.js,
+-- shared with Winston Draft and deck-building):
+--
+-- 1. The plain "Kept so far" list (your own cards only) was left visible
+--    right alongside it -- redundant, since your own kept cards are
+--    already part of the combined team list. Now hidden whenever the
+--    team-drafted display is showing.
+-- 2. Its own <ul> had no class/id, so none of style.css's flex-wrap
+--    card-list rules applied to it -- it rendered as one huge vertical
+--    column instead of a wrapping horizontal row like every other card
+--    list in the app. Fixed via a new shared .team-drafted-cards-list
+--    class, which also fixes Winston Draft's and deck-building's own
+--    team-drafted display the same way.
+--
+-- Pure frontend (game/index.html, style.css, game.js) -- no schema
+-- change. See "Quick Draft" in web-static/README.md.
+UPDATE schema_version SET version = '1.21.4' WHERE id = 1;

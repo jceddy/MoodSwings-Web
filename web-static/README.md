@@ -1240,7 +1240,19 @@ too, proportional to the smaller card width.
       shared with Winston Draft and deck-building below) additionally shows
       `drafting.team_drafted_cards` -- your whole team's combined kept
       cards so far, `null`/hidden for every other format including Closed
-      Team Play, which keeps every player's own draft private.
+      Team Play, which keeps every player's own draft private. `#quick-draft-kept-so-far`
+      (and its own "Kept so far" heading, `#quick-draft-kept-so-far-heading`)
+      is itself hidden whenever `team_drafted_cards` is showing -- a bug
+      caught live: your own kept cards are already part of that combined
+      team list, so showing the plain solo list right above it was just
+      the same handful of cards twice. `renderTeamDraftedCards()`'s own
+      `<ul>` gets a `.team-drafted-cards-list` class (`style.css`) so it
+      lays out as a wrapping horizontal row of thumbnails like every other
+      card list in the app, instead of the single vertical column a bare,
+      class-less `<ul>` fell back to before (another bug caught live from
+      the exact same report) -- this fixes Winston Draft's and
+      deck-building's own team-drafted display the same way, since all
+      three share this one rendering function.
     - **Deck building** (shared `#draft-deck-building` block, sitting
       outside `#quick-draft-panel`/`#winston-draft-panel`/`#grid-draft-panel`
       since its shape is identical for all three -- `renderDraftDeckBuilding()`,

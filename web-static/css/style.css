@@ -561,7 +561,8 @@ body.game-page {
 #shared-deck-cards,
 .deck-builder-card-grid,
 .spectator-final-hand ul,
-.draft-pool-cards {
+.draft-pool-cards,
+.team-drafted-cards-list {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
@@ -575,7 +576,8 @@ body.game-page {
 #grid-draft-drafted-so-far li,
 #grid-draft-other-players-drafted ul li,
 .in-play-zone__list li,
-.spectator-final-hand ul li {
+.spectator-final-hand ul li,
+.team-drafted-cards-list li {
     list-style: none;
 }
 
