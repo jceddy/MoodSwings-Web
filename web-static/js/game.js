@@ -4616,7 +4616,14 @@
         const heading = document.createElement('h4');
         heading.textContent = "Your team's drafted cards so far (with " + (teamDraftedCards.teammate_username || 'your teammate') + ')';
         container.appendChild(heading);
+        // .team-drafted-cards-list (style.css) is what gives this a
+        // horizontal, wrapping row of thumbnails instead of one huge
+        // vertical column -- a bare <ul> with no class/id matches none of
+        // style.css's own flex-wrap card-list rules, which is exactly what
+        // made this render as a single-column list before (a bug caught
+        // live).
         const list = document.createElement('ul');
+        list.className = 'team-drafted-cards-list';
         teamDraftedCards.cards.forEach((card) => {
             const li = document.createElement('li');
             li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
@@ -4671,11 +4678,21 @@
         submitButton.hidden = !pickable;
         submitButton.disabled = quickDraftPickSelection.size !== QUICK_DRAFT_KEEP_PER_STAGE;
 
-        renderList(document.getElementById('quick-draft-kept-so-far'), { hidden: true }, drafting.kept_so_far, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
-            return li;
-        });
+        // Open Team Play (drafting.team_drafted_cards non-null) shows
+        // "Your team's drafted cards so far" instead (below) -- your own
+        // kept cards are already part of that team-wide list, so this
+        // plain "Kept so far" would just be showing a subset of the same
+        // cards a second time right above it.
+        const showKeptSoFar = !drafting.team_drafted_cards;
+        document.getElementById('quick-draft-kept-so-far-heading').hidden = !showKeptSoFar;
+        document.getElementById('quick-draft-kept-so-far').hidden = !showKeptSoFar;
+        if (showKeptSoFar) {
+            renderList(document.getElementById('quick-draft-kept-so-far'), { hidden: true }, drafting.kept_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
 
         renderTeamDraftedCards(document.getElementById('quick-draft-team-drafted'), drafting.team_drafted_cards);
     }
