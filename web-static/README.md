@@ -2125,9 +2125,12 @@ too, proportional to the smaller card width.
     `Team`) is only shown for `format: 'team'` games -- deliberately NOT
     `closed_team` too (see "In-game chat" in `../php-app/README.md` for
     why: Closed Team Play's whole premise is that information stays
-    closed between teammates, so it gets no private channel); every
-    other format only ever has the `'table'` channel, so sending always
-    uses `'table'` when the selector itself is hidden. Sending
+    closed between teammates, so it gets no private channel) -- and also
+    hidden during the deck-building chat window described below, where
+    only `'team'` is ever valid. `sendChatText()` resolves which implicit
+    channel to send whenever the selector is hidden for either reason:
+    `isTeamDeckBuildingChatOpen(currentState)` picks `'team'`, everything
+    else (every non-`'team'`-format game) picks `'table'`. Sending
     (`sendChatMessage()` -> `POST /games/chat`) clears the input and calls
     `refreshBoard()` immediately on success, the same "an action triggers
     its own refreshBoard()" convention Play/Pass/etc. already follow,
@@ -2147,6 +2150,29 @@ too, proportional to the smaller card width.
     dialog opens (`isChatReadOnly()`), so a completed/abandoned game's
     read-only chat can't be worked around by clicking GG instead of
     typing it.
+
+    **Open Team Play's deck-building chat.** Once deck-building started
+    drawing from the whole team's shared drafted pool (see "Deck
+    building" above), teammates needed a way to actually coordinate --
+    but `#view-chat-button`/`renderChat()` used to be computed only in the
+    `in_progress` branch of `renderBoard()`, past the `'waiting'` branch's
+    own early `return`, so the button never even appeared during
+    drafting/deck-building. Both are now computed unconditionally, right
+    alongside `#resign-button`'s own identical fix for issue #144 (same
+    rationale: `#view-chat-button` lives outside `#in-progress-area`
+    precisely so it stays reachable there), gated by
+    `isTeamDeckBuildingChatOpen(state)` -- `true` only for `format:
+    'team'`, `game.status === 'waiting'`, and the relevant draft
+    sub-state's own `status === 'deck_building'` (checked against
+    `state.quick_draft`/`state.winston_draft`/`state.grid_draft`,
+    whichever `state.game.deck_type` selects) -- which mirrors
+    `GameService::isOpenTeamDeckBuildingChat()` exactly, so the frontend
+    never offers something the backend would then reject. `isChatReadOnly()`
+    checks the same condition, so opening the dialog during this window
+    shows an editable form rather than the read-only message a genuinely
+    `'waiting'`-for-other-reasons game would still get. Still hidden
+    entirely for `closed_team`/non-team drafts and during the drafting
+    sub-phase itself, matching the backend's own narrower exception.
 
     `#pending-decision-banner` and `#scoring-preview` are two more elements
     with this exact same failure shape, caught later: both live outside

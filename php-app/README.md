@@ -4355,10 +4355,12 @@ mechanism. Gated the same way `game_notes` is -- `requireGamePlayer()`
 only, no `canSpectateGame()` fallback -- so a spectator (watching via
 share code) can never read or send chat, unlike `game_events`/`GET
 /games/log`'s own more permissive spectator-visible gating. `getState()`
-always returns `chat_messages` once the game is `in_progress`/`completed`
-(`[]` if nothing's been sent yet); `getSpectatorState()` always returns
-`[]` regardless, since `buildGameState()`'s single shared builder only
-ever populates it when there's a real seated viewer.
+always returns `chat_messages` for a real seated viewer regardless of
+`games.status` (`[]` if nothing's eligible to have been sent yet -- see
+"Open Team Play's deck-building chat" below for the one `'waiting'`-status
+case anything actually CAN have been sent); `getSpectatorState()` always
+returns `[]` regardless, since `buildGameState()`'s single shared builder
+only ever populates it when there's a real seated viewer.
 
 Open Team Play (`format: 'team'` only -- deliberately NOT Closed Team
 Play, see below) additionally gets a private teammate-only channel
@@ -4393,23 +4395,51 @@ needed for the (overwhelmingly common) non-team case.
 string $channel, string $messageText): void` is the only write path:
 `GameStateException` unless the game is `in_progress` (matching
 `saveNote()`'s own "while playing" gate -- a completed/abandoned game has
-no one left mid-conversation to send to), `InvalidArgumentException` if
-`$messageText` is empty after trimming or over `MAX_CHAT_MESSAGE_LENGTH`
-(500 characters -- much shorter than the notepad's 20,000, since a chat
-message is meant to be read live by another player rather than held as a
-private scratchpad). No additional send-rate-limiter beyond that length
-cap -- friends-only, seated-players-only access keeps the abuse surface
-low, and there's no existing precedent anywhere in this codebase for
-throttling a primary write (only for throttling notification *delivery*,
-see `NotificationService`'s own cooldown/queue). On success, fires a
-best-effort `notifyNewChatMessage()` (issue #108's notification system) to
-every OTHER seat the message is actually visible to -- never the sender,
-never the opposing team for a `'team'`-channel message -- sharing
-`NotificationScope::forGame($gameId)` with `notifyYourTurn()`/
-`notifyGameFinished()` rather than its own cooldown scope, the same way
-those two already share one bucket per game instead of one each.
-`notify_chat_message` (migration `0079`, default on) is its own
-notification preference, independent of the other three.
+no one left mid-conversation to send to) -- with one exception, see
+"Open Team Play's deck-building chat" below -- `InvalidArgumentException`
+if `$messageText` is empty after trimming or over
+`MAX_CHAT_MESSAGE_LENGTH` (500 characters -- much shorter than the
+notepad's 20,000, since a chat message is meant to be read live by
+another player rather than held as a private scratchpad). No additional
+send-rate-limiter beyond that length cap -- friends-only, seated-players-
+only access keeps the abuse surface low, and there's no existing
+precedent anywhere in this codebase for throttling a primary write (only
+for throttling notification *delivery*, see `NotificationService`'s own
+cooldown/queue). On success, fires a best-effort `notifyNewChatMessage()`
+(issue #108's notification system) to every OTHER seat the message is
+actually visible to -- never the sender, never the opposing team for a
+`'team'`-channel message -- sharing `NotificationScope::forGame($gameId)`
+with `notifyYourTurn()`/`notifyGameFinished()` rather than its own
+cooldown scope, the same way those two already share one bucket per game
+instead of one each. `notify_chat_message` (migration `0079`, default on)
+is its own notification preference, independent of the other three.
+
+**Open Team Play's deck-building chat**: once deck-building itself started
+drawing from the whole team's shared drafted pool rather than each
+player's own personal one (issue #362 stage 2), teammates needed a way to
+actually coordinate who's building around what -- but `games.status` sits
+at `'waiting'` for a draft match's entire drafting/deck-building phase,
+so the general "only while `in_progress`" rule above would otherwise block
+chat at exactly that moment. `GameService::isOpenTeamDeckBuildingChat()`
+is `postChatMessage()`'s one exception: it lets the `'team'` channel
+through (never `'table'` -- the opposing team may still be mid-draft/
+deck-building themselves, with no real "table" to speak to yet) for
+format `'team'` (never `'closed_team'`, matching the existing
+`$game['format'] === 'team'` check above) once the draft match has
+actually reached `'deck_building'` (not mid-`'drafting'`, where a stray
+message would arrive to a teammate who's still mid-pack). The read side
+needed a matching change: `buildGameState()`'s own `chat_messages`
+computation used to sit after its `'waiting'`-status early return, so it
+never ran at all for a still-drafting/deck-building game -- it's now
+computed just before that early return instead, so a `'waiting'` game's
+`chat_messages` is populated (`[]` if nothing's eligible to have been
+sent) the same as an `in_progress`/`completed` one. `web-static/js/
+game.js`'s own `isTeamDeckBuildingChatOpen(state)` mirrors this exactly
+on the frontend, both for `#view-chat-button`'s visibility (moved outside
+`#in-progress-area`, same reachability trick `#resign-button` already
+uses for issue #144) and for hiding `#chat-channel-select` during this
+window specifically -- only `'team'` is ever valid here, so offering a
+choice would just let `'table'` fail server-side.
 
 `GameService::exportGameData()`'s own `game_chat_messages` section applies
 the identical `'table'`-or-own-`team_id` filter `messagesFor()` uses

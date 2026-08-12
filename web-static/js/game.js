@@ -3384,8 +3384,24 @@
         }
     }
 
+    // Open Team Play's deck-building exception to "chat only while
+    // in_progress" -- mirrors GameService::isOpenTeamDeckBuildingChat()
+    // exactly (format 'team', still 'waiting', and the draft match has
+    // reached 'deck_building', not just 'drafting') so the button/dialog
+    // never offer something the server would then reject.
+    function isTeamDeckBuildingChatOpen(state) {
+        if (!state || state.game.status !== 'waiting' || state.game.format !== 'team') {
+            return false;
+        }
+        const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
+            : state.game.deck_type === 'winston_draft' ? state.winston_draft
+                : state.game.deck_type === 'grid_draft' ? state.grid_draft
+                    : null;
+        return Boolean(draftState) && draftState.status === 'deck_building';
+    }
+
     function isChatReadOnly() {
-        return !currentState || currentState.game.status !== 'in_progress';
+        return !currentState || !(currentState.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(currentState));
     }
 
     function chatMessageListItem(message) {
@@ -3418,8 +3434,14 @@
         // Play's whole premise is that information stays closed between
         // teammates (see postChatMessage()'s own docblock in
         // GameService.php), so it gets no private channel to undercut
-        // that with.
-        chatChannelSelect.hidden = state.game.format !== 'team';
+        // that with. Also hidden during the deck-building chat window
+        // itself -- isOpenTeamDeckBuildingChat() only ever accepts 'team'
+        // there (the opposing team may still be mid-draft/deck-building,
+        // with no "table" to speak to yet), so offering a choice would
+        // just let the 'table' option fail server-side; sendChatText()
+        // below sends 'team' directly whenever this is hidden for that
+        // reason.
+        chatChannelSelect.hidden = state.game.format !== 'team' || isTeamDeckBuildingChatOpen(state);
 
         if (gameChatDialog.open && gameChatDialog.dataset.gameId === String(gameId)) {
             renderList(chatMessagesList, chatEmptyEl, messages, chatMessageListItem);
@@ -3472,7 +3494,15 @@
     // only in where that text comes from.
     async function sendChatText(messageText) {
         chatErrorEl.hidden = true;
-        const channel = chatChannelSelect.hidden ? 'table' : chatChannelSelect.value;
+        // chatChannelSelect.hidden collapses two different situations to
+        // the same "no choice to make" state: an ordinary non-team format
+        // (only 'table' exists) and the deck-building window (only 'team'
+        // exists, see renderChat()'s own chatChannelSelect.hidden
+        // computation above) -- isTeamDeckBuildingChatOpen() tells them
+        // apart so the right implicit channel is sent either way.
+        const channel = chatChannelSelect.hidden
+            ? (isTeamDeckBuildingChatOpen(currentState) ? 'team' : 'table')
+            : chatChannelSelect.value;
         const { ok, body } = await sendChatMessage(currentGameId, messageText, channel);
         if (!ok) {
             chatErrorEl.textContent = (body && body.message) || 'Could not send that message.';
@@ -3757,6 +3787,21 @@
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
             || Boolean(you && you.resigned);
         resignButton.disabled = false;
+
+        // In-game chat (issue #109) -- same seated-players-only gating as
+        // Notes (see the isReadOnlyView() check further down for that
+        // one), computed here rather than down with it since #view-chat-
+        // button, like #resign-button just above, lives outside
+        // #in-progress-area precisely so it stays reachable during the
+        // 'waiting' branch's own early return below -- Open Team Play's
+        // deck-building window (isTeamDeckBuildingChatOpen()) is the one
+        // case chat is actually usable while still 'waiting'. renderChat()
+        // itself is likewise called unconditionally here rather than only
+        // in the in_progress branch, so an open chat dialog keeps
+        // receiving new messages through a 'waiting' poll too.
+        document.getElementById('view-chat-button').hidden = isReadOnlyView()
+            || !(state.game.status === 'in_progress' || isTeamDeckBuildingChatOpen(state));
+        renderChat(state);
 
         renderDraftMatchScoreline(state);
 
@@ -4154,14 +4199,6 @@
         // spectator/replay viewer (state.you is just a synthesized stub
         // with no game_player_id there -- see isReadOnlyView()'s docblock).
         document.getElementById('view-notes-button').hidden = isReadOnlyView();
-
-        // In-game chat (issue #109) -- same seated-players-only gating as
-        // Notes above (no spectator/replay access -- see
-        // GameService::buildGameState()'s own docblock for why this
-        // diverges from the more permissive game_events/recent-events
-        // gating just below).
-        document.getElementById('view-chat-button').hidden = isReadOnlyView();
-        renderChat(state);
 
         // round.play_grants describes whoever's turn it currently is, not
         // the viewer specifically -- showing it while it's someone else's
