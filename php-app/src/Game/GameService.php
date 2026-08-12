@@ -544,6 +544,17 @@ final class GameService
      *        friend's shared one), not the bot's, since a bot has no
      *        decklists or friendships of its own; see
      *        submitCustomDuelDeck()'s own $accessCheckUserId param.
+     * @param bool $randomTeams only meaningful when $format is 'team' or
+     *        'closed_team' -- when true, $partnerUserId is ignored (it
+     *        need not even be passed) and the creator's partner is instead
+     *        picked uniformly at random from $userIds (excluding
+     *        $createdByUserId) before seating, the same way
+     *        Closed Team Play's own round-1 leader is already picked via
+     *        array_rand() (see startGame()). A one-shot input to seating,
+     *        not persisted anywhere of its own -- once seated, a randomly
+     *        chosen partner is indistinguishable from a manually chosen
+     *        one, both being nothing more than the resulting team_id on
+     *        each game_players row.
      */
     public function createGame(
         int $createdByUserId,
@@ -564,6 +575,7 @@ final class GameService
         bool $defaultSelectionsMode = false,
         ?string $botDecklistText = null,
         ?int $botSavedDecklistId = null,
+        bool $randomTeams = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -584,7 +596,10 @@ final class GameService
             if (count($userIds) !== self::TEAM_PLAYER_COUNT) {
                 throw new GameStateException('A team game must have exactly ' . self::TEAM_PLAYER_COUNT . ' players');
             }
-            if ($partnerUserId === null || $partnerUserId === $createdByUserId || !in_array($partnerUserId, $userIds, true)) {
+            if ($randomTeams) {
+                $possiblePartners = array_values(array_filter($userIds, static fn (int $id): bool => $id !== $createdByUserId));
+                $partnerUserId = $possiblePartners[array_rand($possiblePartners)];
+            } elseif ($partnerUserId === null || $partnerUserId === $createdByUserId || !in_array($partnerUserId, $userIds, true)) {
                 throw new GameStateException('A team game requires choosing one of your opponents as your partner');
             }
             if ($deckType === 'power') {
