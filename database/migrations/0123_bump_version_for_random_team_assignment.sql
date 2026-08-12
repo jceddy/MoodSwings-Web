@@ -1,0 +1,13 @@
+-- Adds a "random_teams" option to Open Team Play/Closed Team Play game
+-- creation: an alternative to explicitly choosing partner_user_id -- when
+-- true, GameService::createGame() picks the creator's partner itself,
+-- uniformly at random from the 3 checked opponents (array_rand(), the
+-- same primitive startGame() already uses for Closed Team Play's own
+-- round-1 leader), before seating exactly as it always has. See "Open
+-- Team Play" in php-app/README.md.
+--
+-- Purely a new createGame()/New Game dialog input, not a persisted game
+-- property of its own -- once seated, a randomly-picked partner is
+-- indistinguishable from a manually-chosen one, both being nothing more
+-- than the resulting team_id on each game_players row. No schema change.
+UPDATE schema_version SET version = '1.24.0' WHERE id = 1;

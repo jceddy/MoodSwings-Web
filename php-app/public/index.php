@@ -916,6 +916,10 @@ if ($path === '/games' && $method === 'POST') {
     // opponent does. See createGame()'s own docblock.
     $botDecklistText = isset($body['bot_decklist_text']) ? (string) $body['bot_decklist_text'] : null;
     $botSavedDecklistId = isset($body['bot_saved_decklist_id']) ? (int) $body['bot_saved_decklist_id'] : null;
+    // Only meaningful for format 'team'/'closed_team' -- randomly assigns
+    // the creator's partner instead of requiring partner_user_id. See
+    // createGame()'s own docblock.
+    $randomTeams = (bool) ($body['random_teams'] ?? false);
 
     try {
         $gameId = $games->createGame(
@@ -937,6 +941,7 @@ if ($path === '/games' && $method === 'POST') {
             $defaultSelectionsMode,
             $botDecklistText,
             $botSavedDecklistId,
+            $randomTeams,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {

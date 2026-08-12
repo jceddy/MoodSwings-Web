@@ -2626,7 +2626,14 @@ Winston Draft's own open-ended range -- and, for 3-4 players, the same
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next
 to their partner (`GameService::TEAM_PLAYER_COUNT`). The creator picks
-their 3 opponents as usual, plus one `partner_user_id` from among them;
+their 3 opponents as usual, plus either one `partner_user_id` from among
+them or `random_teams: true` to have `createGame()` pick one itself,
+uniformly at random from the 3 opponents (`array_rand()`, same primitive
+`startGame()` already uses for Closed Team Play's own round-1 leader) --
+whichever way the partner is settled on, it flows into the exact same
+`$partnerUserId` used below, so a randomly-picked partner is
+indistinguishable from a manually-chosen one from that point on: nothing
+about it is persisted beyond the resulting `team_id` seating itself.
 `seatOrderForTeamGame()` reorders the seating to
 `[creator, partner, ...the other two]` so seat order alone determines
 pairing, and `game_players.team_id` (`0`/`1`, provisioned back in
@@ -2910,7 +2917,10 @@ work correctly here with zero changes). It differs in five concrete ways:
 1. **Seating** -- partners sit ACROSS the table (`seatOrderForClosedTeamGame()`:
    creator seat 0, one opponent seat 1, the chosen partner seat 2, the
    last opponent seat 3, `team_id = seat_order % 2`) rather than Open Team
-   Play's adjacent seats 0/1 vs. 2/3. This is the one piece that makes
+   Play's adjacent seats 0/1 vs. 2/3. "The chosen partner" is settled on
+   exactly the same way as Open Team Play's own -- either `partner_user_id`
+   or `random_teams: true` (see "Open Team Play" above) -- `createGame()`
+   doesn't otherwise distinguish the two formats until seating itself. This is the one piece that makes
    everything else so much simpler: a plain clockwise seat rotation
    already alternates between teams on its own, so this format needs NONE
    of Open Team Play's `team_turn_1/2_game_player_id` machinery or

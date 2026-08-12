@@ -850,11 +850,20 @@ too, proportional to the smaller card width.
     but keeping the previous selection if that friend is still checked,
     alongside a description paragraph (`TEAM_FIELDS_DESCRIPTIONS`) that
     swaps between the two formats' own wording (adjacent seating/open
-    hands vs. across-the-table seating/private hands). Submitting
-    requires exactly 3 opponents checked for either format (a client-side
-    check ahead of the server's own 4-players-total rejection) and sends
-    the selected partner as `partner_user_id`. See "Open Team Play"/
-    "Closed Team Play" in `php-app/README.md` for the formats themselves. The
+    hands vs. across-the-table seating/private hands). Above the partner
+    `<select>`, an "Assign my partner randomly" checkbox
+    (`#new-game-random-teams`) is its own alternative: checking it hides
+    `#new-game-partner-label` (also handled by `updateTeamFields()`, on the
+    same `change` event) rather than disabling it, since its value is
+    simply never read at submit time once random assignment is chosen --
+    `createGame()`/`GameService::createGame()` pick a partner uniformly at
+    random from the 3 checked opponents instead. Submitting requires
+    exactly 3 opponents checked for either format (a client-side check
+    ahead of the server's own 4-players-total rejection) and sends either
+    the selected partner as `partner_user_id` or, if the random checkbox is
+    checked, `random_teams: true` with no `partner_user_id` at all. See
+    "Open Team Play"/"Closed Team Play" in `php-app/README.md` for the
+    formats themselves. The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
     Draft, Winston Draft, Grid Draft, One of Each Card, in that order,
