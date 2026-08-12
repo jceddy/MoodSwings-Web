@@ -1483,6 +1483,21 @@ too, proportional to the smaller card width.
       so far (alice & bob)" / "Opposing team's drafted so far (carol &
       dave)"). `#grid-draft-other-players-drafted` is hidden whenever
       `teams_drafted_so_far` is present, so the two never show at once.
+      Two bugs caught live here, both already fixed for Quick Draft's/
+      Winston Draft's own equivalents but never propagated to Grid
+      Draft's: (1) `#grid-draft-drafted-so-far` (and its own
+      `#grid-draft-drafted-so-far-heading`, which needed an `id` added to
+      be targetable at all) is now likewise hidden whenever
+      `teams_drafted_so_far` is present -- your own picks are already
+      part of the "Your team" entry there, so the plain personal list was
+      just showing a subset of the same cards a second time; (2) each
+      `teams_drafted_so_far` entry's own `<ul>` gets the reused
+      `.team-drafted-cards-list` class (`renderTeamDraftedCards()`'s own
+      helper class, `style.css`) for the same horizontal wrapping-row
+      layout Quick/Winston Draft's team lists already get -- previously a
+      bare, class-less `<ul>` (matching none of `style.css`'s own
+      flex-wrap card-list rules), so "Your team's"/"Opposing team's
+      drafted so far" both rendered as one huge vertical column instead.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain

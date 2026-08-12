@@ -5293,6 +5293,30 @@ is now checked immediately before `giveInPlayToPlayer()` in the
 once the card's own effect has already taken it out of play, implementing
 the "if it's still in play" qualifier printed on both cards.
 
+A card's own `afterScoring` self-tag carries a `condition` -- `'always'`
+for Recklessness/Gluttony/Insecurity (their printed effect is unconditional
+"while in play", so it's guaranteed to resolve, and clear itself, the very
+next time `applyAfterScoringHooks()` runs) or `'if_won'` for Bashfulness
+(whose printed effect only triggers "after winning a round with this mood
+in play", not on every subsequent round it happens to still be in play).
+`pendingAfterScoringGroups()` only includes a self-tag in the groups it
+returns for a round where its condition actually held -- but a naive
+implementation that *only* cleared the tag when it fired left a losing
+round's Bashfulness tag sitting on the card untouched, so it would
+silently re-evaluate (and could fire) against whichever *later* round its
+owner eventually won, well after the round it was actually played in. The
+fix, `afterScoringSelfConditionMet()`, is now shared between that check
+and a new unconditional cleanup pass at the top of
+`applyAfterScoringHooks()`: every mood still in play with a pending
+`afterScoring` self-tag whose condition did NOT hold this round has that
+tag cleared immediately, regardless of whether it ends up in this round's
+groups. `'always'`-conditioned tags are untouched by this pass (their
+condition always holds, so there's nothing for it to clear), so
+Recklessness/Gluttony/Insecurity keep resolving exactly as before; only a
+conditional tag that didn't fire is affected, guaranteeing it gets exactly
+one evaluation -- the round it was played in -- and never lingers to be
+checked again.
+
 A follow-up ruling from the same rules committee spelled out the FULL
 general framework the paragraph above only covers half of: "after scoring"
 effects resolve player by player, in the order they went this round, and

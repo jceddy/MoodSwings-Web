@@ -1,0 +1,20 @@
+-- Open Team Grid Draft's own two bugs, both already fixed for Quick
+-- Draft's/Winston Draft's equivalents but never propagated to Grid
+-- Draft's:
+--
+-- 1. "Drafted so far" (personal) was still shown alongside "Your team's
+--    drafted so far"/"Opposing team's drafted so far" -- your own picks
+--    are already part of the "Your team" entry, so the personal list was
+--    just showing a subset of the same cards a second time. Now hidden
+--    (with its own #grid-draft-drafted-so-far-heading, which needed an
+--    id added) whenever teams_drafted_so_far is present.
+--
+-- 2. "Your team's"/"Opposing team's drafted so far" each rendered as one
+--    huge vertical column instead of a wrapping horizontal row -- their
+--    own <ul> never got the .team-drafted-cards-list class
+--    renderTeamDraftedCards() already applies for Quick/Winston Draft's
+--    team lists. Now applied here too.
+--
+-- Pure frontend (game.js/index.html) -- no schema change. See "Grid
+-- Draft's own drafting phase" in web-static/README.md.
+UPDATE schema_version SET version = '1.23.4' WHERE id = 1;

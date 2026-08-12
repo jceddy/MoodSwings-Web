@@ -4708,6 +4708,75 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Regression test (a live bug report): Bashfulness's own "after playing
+     * this mood, after scoring THIS round, if you won the round..." is a
+     * ONE-TIME check scoped to the round it was played in -- not a
+     * recurring "while in play" ability like Recklessness's own
+     * "while in play, after scoring, ..." text. Losing the round it was
+     * played in used to leave its own 'afterScoring' tag sitting
+     * unresolved on the card, so it would incorrectly fire on some LATER
+     * round the owner happened to win instead, cycling to the bottom of
+     * the deck long after the fact.
+     *
+     * Round 1: p1 plays Bashfulness (value 6); p2 (going first in turn
+     * order) plays Disregard (also value 6, its own "drops to 3 with 2+
+     * blue/black moods" condition never triggers here -- only 1 blue mood,
+     * Bashfulness itself, is ever in play). A tied score goes to whoever's
+     * turn was earliest (RoundScorer::winner()), so p2 wins despite the
+     * tie -- Bashfulness's own condition ("if you won") is NOT met.
+     *
+     * Round 2: p1 wins outright with a fresh vanilla card while p2 (out of
+     * cards) passes. Bashfulness must still be exactly where round 1 left
+     * it -- still in play, never moved -- even though its owner (p1) did
+     * win this round.
+     */
+    public function testBashfulnessDoesNotFireOnALaterRoundItWasNotPlayedIn(): void
+    {
+        $u1 = $this->insertUser('bashlater1');
+        $u2 = $this->insertUser('bashlater2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $bashfulnessId = $this->insertGameCard($gameId, 30, 'hand', $p1); // Bashfulness, value 6
+        $disregardId = $this->insertGameCard($gameId, 113, 'hand', $p2); // Disregard, value 6 (condition never triggers with only 2 moods in play)
+        $p1Round2Id = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency, value 4 -- p1's round 2 winner
+        $this->insertGameCard($gameId, 3, 'deck', null, 0); // p1's loser-of-round-1 draw
+        $this->insertGameCard($gameId, 7, 'deck', null, 1); // filler
+        // Round 1 starts with p2 going first, so a tied score breaks in
+        // their favor -- Bashfulness's owner (p1) must NOT win this round.
+        $this->insertGameRound($gameId, 1, $p2, $p2, 1);
+
+        $this->games->playMood($gameId, $p2, $disregardId, []);
+        $result = $this->games->playMood($gameId, $p1, $bashfulnessId, []);
+        self::assertTrue($result['round_scored']);
+
+        $registry = DefaultEffectRegistry::build();
+        $repository = new BoardStateRepository($registry);
+        $state = $repository->load($gameId);
+        self::assertTrue($state->isInPlay($bashfulnessId), 'Bashfulness should still be in play after losing the round it was played in');
+
+        // Round 2: p2 (round 1's winner) goes first, has nothing left to
+        // play, and passes; p1 wins outright with a fresh card.
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['current_turn_game_player_id']);
+        $this->games->pass($gameId, $p2);
+        $result = $this->games->playMood($gameId, $p1, $p1Round2Id, []);
+        self::assertTrue($result['round_scored']);
+
+        $state = $repository->load($gameId);
+        self::assertTrue($state->isInPlay($bashfulnessId), 'Bashfulness must NOT fire on a later round it was not played in, even one its owner wins');
+        self::assertNotContains($bashfulnessId, $state->deck());
+    }
+
+    /**
      * Corruption's "the winner of the current round wins two rounds
      * instead of one" has to actually move game_rounds.wins_awarded, and
      * totalWinsFor() has to pick that up when checking for game
