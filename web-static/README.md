@@ -1267,13 +1267,25 @@ too, proportional to the smaller card width.
       renders `deckBuilding.team_drafted_cards` -- your Open Team Play
       teammate's own drafted cards, visible right through deck-building the
       same way the drafting phase already was; `null`/hidden for every
-      other format. Each player still submits their own separate deck from
-      their own drafted pool either way -- this is purely visibility, not
-      shared deck construction. Its title/status text is built from
+      other format. This block is purely informational (the FULL combined
+      pool, regardless of who's currently using what) -- the actual
+      picker (`#draft-deck-picker`, built from `deckBuilding.drafted_cards`)
+      is a real request: for Open Team Play, `drafted_cards` IS the
+      combined team pool minus whatever the teammate's own current deck
+      has already claimed (see `GameService::draftDeckBuildingStateFor()`'s
+      own docblock), so either teammate can genuinely build their own deck
+      from anything either of them drafted, not only their own personal
+      picks -- first-come-first-served if both want the same card. The
+      status line reflects this: "Choose N from your team's M available
+      drafted cards" instead of "your M drafted cards" whenever
+      `team_drafted_cards` is present. Every other format (including
+      Closed Team Play) keeps the original personal-pool-only picker.
+      Its title/status text is built from
       `deckBuilding.min_deck_size`/`max_deck_size` (12/16 or 12/18 for
       Quick Draft depending on player count since issue #189 removed its
       flat 16-card ceiling, 12/however-many-you-drafted for Winston Draft
-      and Grid Draft alike), never hardcoded, so
+      and Grid Draft alike, now sized off the combined team pool instead
+      for Open Team Play), never hardcoded, so
       one function serves all three formats' own bounds correctly. The
       "waiting for a deck" status text reads `deckBuilding.other_players`
       (every other seated player's own username/submitted flag, issue

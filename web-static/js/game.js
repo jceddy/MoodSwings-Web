@@ -5083,7 +5083,16 @@
             draftDeckSelectionInitialized = true;
         }
 
-        statusEl.textContent = 'Choose ' + sizeText + ' from your ' + deckBuilding.drafted_cards.length + ' drafted cards for your deck. Tap a card to select/de-select it.';
+        // Open Team Play (deckBuilding.team_drafted_cards non-null): the
+        // picker below is already the team's whole combined pool minus
+        // whatever the teammate's own current deck has claimed (see
+        // GameService::draftDeckBuildingStateFor()'s own docblock) --
+        // "your drafted cards" would misleadingly suggest only your own
+        // personal picks are selectable here.
+        const poolLabel = deckBuilding.team_drafted_cards
+            ? "your team's " + deckBuilding.drafted_cards.length + ' available drafted cards'
+            : 'your ' + deckBuilding.drafted_cards.length + ' drafted cards';
+        statusEl.textContent = 'Choose ' + sizeText + ' from ' + poolLabel + ' for your deck. Tap a card to select/de-select it.';
         picker.innerHTML = '';
 
         deckBuilding.drafted_cards.forEach((card, index) => {

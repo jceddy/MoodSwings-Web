@@ -2502,19 +2502,35 @@ final class GameService
      * Submits (or resubmits, sideboarding between the match's up-to-3
      * games) a draft player's own current deck -- chosen from their fixed
      * drafted_card_ids (never expanded or replaced -- only which of those
-     * are IN the deck this game changes). Shared by Quick Draft, Winston
-     * Draft, and Grid Draft: each has only a floor (QUICK_DRAFT_MIN_DECK_SIZE /
-     * WINSTON_MIN_DECK_SIZE / GRID_DRAFT_MIN_DECK_SIZE) and no fixed
-     * ceiling -- the max is simply however many cards that player actually
-     * drafted (varies by how the draft unfolds for Winston/Grid Draft;
-     * varies by player count for Quick Draft since issue #189's
-     * multiplayer support -- 16 for 2p/4p, 18 for 3p -- deliberately not
-     * capped below that: "smart players will always cut down to the
-     * minimum, regardless"). The very first call (right after drafting
-     * finishes) and every later sideboard call are the same operation
-     * against the same 'deck_building' status -- there's no "first trim"
-     * vs. "a sideboard" distinction worth making, since both just
-     * overwrite deck_card_ids outright.
+     * are IN the deck this game changes), EXCEPT for Open Team Play (see
+     * below). Shared by Quick Draft, Winston Draft, and Grid Draft: each
+     * has only a floor (QUICK_DRAFT_MIN_DECK_SIZE / WINSTON_MIN_DECK_SIZE /
+     * GRID_DRAFT_MIN_DECK_SIZE) and no fixed ceiling -- the max is simply
+     * however many cards were actually available to pick from (varies by
+     * how the draft unfolds for Winston/Grid Draft; varies by player
+     * count for Quick Draft since issue #189's multiplayer support -- 16
+     * for 2p/4p, 18 for 3p -- deliberately not capped below that: "smart
+     * players will always cut down to the minimum, regardless"). The very
+     * first call (right after drafting finishes) and every later sideboard
+     * call are the same operation against the same 'deck_building' status
+     * -- there's no "first trim" vs. "a sideboard" distinction worth
+     * making, since both just overwrite deck_card_ids outright.
+     *
+     * Open Team Play (openTeamPlayTeammateUserId()) builds from the
+     * TEAM's whole combined pool -- both teammates' own drafted_card_ids
+     * -- not just the caller's own, minus whatever the teammate's own
+     * CURRENT deck_card_ids has already claimed: a specific drafted card
+     * can only ever sit in one teammate's deck at a time
+     * (first-come-first-served), so if the teammate already has it in
+     * their own submitted deck, it isn't available here until they
+     * un-select it and resubmit. Exactly mirrors draftDeckBuildingStateFor()'s
+     * own 'drafted_cards'/'max_deck_size' (the picker the frontend
+     * actually renders from), so what the player was shown as pickable
+     * and what actually validates here can never disagree. Every other
+     * format keeps the original personal-pool-only behavior, including
+     * Closed Team Play -- see "Closed Team Play"/"Open Team Play" in
+     * php-app/README.md for why only Open Team Play shares information
+     * (and now cards) between teammates at all.
      *
      * @param int[] $deckCardIds
      */
@@ -2531,8 +2547,9 @@ final class GameService
             'grid_draft' => self::GRID_DRAFT_MIN_DECK_SIZE,
         };
         $maxDeckSize = null;
+        $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
 
-        $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $deckCardIds, $minDeckSize, $maxDeckSize): void {
+        $this->withGameLock($gameId, function () use ($draftMatchId, $userId, $teammateUserId, $deckCardIds, $minDeckSize, $maxDeckSize): void {
             $match = $this->fetchDraftMatch($draftMatchId);
             if ($match['status'] !== 'deck_building') {
                 throw new GameStateException('This match is not currently building/sideboarding a deck');
@@ -2548,7 +2565,25 @@ final class GameService
                 throw new GameStateException("User {$userId} has no drafted cards in this match yet");
             }
             $draftedCardIds = array_map(intval(...), json_decode((string) $draftedCardIdsJson, true));
-            $effectiveMaxDeckSize = $maxDeckSize ?? count($draftedCardIds);
+
+            $pickableCardIds = $draftedCardIds;
+            $errorNoun = 'you drafted';
+            if ($teammateUserId !== null) {
+                $teammateStmt = $pdo->prepare(
+                    'SELECT drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+                );
+                $teammateStmt->execute(['match_id' => $draftMatchId, 'user_id' => $teammateUserId]);
+                $teammateRow = $teammateStmt->fetch();
+                $teammateDraftedCardIds = $teammateRow !== false && $teammateRow['drafted_card_ids'] !== null
+                    ? array_map(intval(...), json_decode((string) $teammateRow['drafted_card_ids'], true))
+                    : [];
+                $teammateDeckCardIds = $teammateRow !== false && $teammateRow['deck_card_ids'] !== null
+                    ? array_map(intval(...), json_decode((string) $teammateRow['deck_card_ids'], true))
+                    : [];
+                $pickableCardIds = $this->multisetSubtract([...$draftedCardIds, ...$teammateDraftedCardIds], $teammateDeckCardIds);
+                $errorNoun = "your team drafted (and that your teammate hasn't already used in their own deck)";
+            }
+            $effectiveMaxDeckSize = $maxDeckSize ?? count($pickableCardIds);
 
             $deckCardIds = array_values(array_map(intval(...), $deckCardIds));
             $count = count($deckCardIds);
@@ -2558,8 +2593,8 @@ final class GameService
                     . ' and ' . $effectiveMaxDeckSize . ' cards'
                 );
             }
-            if ($this->multisetSubtract($deckCardIds, $draftedCardIds) !== []) {
-                throw new GameStateException('Your deck can only contain cards you drafted');
+            if ($this->multisetSubtract($deckCardIds, $pickableCardIds) !== []) {
+                throw new GameStateException("Your deck can only contain cards {$errorNoun}");
             }
 
             $pdo->prepare(
@@ -7720,9 +7755,22 @@ final class GameService
      * drafting-phase visibility. Never populated for Closed Team Play or
      * any non-team draft -- those keep every player's drafted pool
      * private until the whole match completes (draftMatchPoolView()).
-     * Each player still submits their own separate deck from their own
-     * drafted pool either way; this only shares what's visible, never
-     * what's submitted.
+     *
+     * For Open Team Play specifically, each player doesn't just SEE their
+     * teammate's drafted cards -- they can actually build their own deck
+     * from the team's whole combined pool, not only what they personally
+     * drafted (a real request: teammates should be building from a shared
+     * team pool, the same way the physical game's own team draft variant
+     * works). 'drafted_cards' is therefore the actual pickable pool for
+     * this player -- their own drafted cards, plus their teammate's,
+     * minus whatever the teammate's OWN currently-submitted deck has
+     * already claimed (first-come-first-served: a specific drafted card
+     * can only ever sit in one teammate's deck at a time; freeing it back
+     * up just means the other teammate un-selecting it and resubmitting,
+     * exactly the way changing your own mind about a card already works).
+     * submitDraftDeck() enforces the exact same pool server-side. Every
+     * other format (including Closed Team Play) keeps 'drafted_cards' as
+     * just $viewerUserId's own personal pool, unchanged.
      *
      * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
      * @param int[] $otherUserIds
@@ -7762,6 +7810,7 @@ final class GameService
         }
 
         $teamDraftedCards = null;
+        $pickableCardIds = $draftedCardIds;
         if ($teammateUserId !== null) {
             $teammateRow = $playersByUser[$teammateUserId] ?? null;
             $teammateDraftedCardIds = $teammateRow !== null && $teammateRow['drafted_card_ids'] !== null
@@ -7772,14 +7821,19 @@ final class GameService
                 'teammate_username' => $teammateRow['username'] ?? null,
                 'cards' => $this->serializeCatalogCards([...$draftedCardIds, ...$teammateDraftedCardIds]),
             ];
+
+            $teammateDeckCardIds = $teammateRow !== null && $teammateRow['deck_card_ids'] !== null
+                ? array_map(intval(...), json_decode((string) $teammateRow['deck_card_ids'], true))
+                : [];
+            $pickableCardIds = $this->multisetSubtract([...$draftedCardIds, ...$teammateDraftedCardIds], $teammateDeckCardIds);
         }
 
         return [
-            'drafted_cards' => $this->serializeCatalogCards($draftedCardIds),
+            'drafted_cards' => $this->serializeCatalogCards($pickableCardIds),
             'deck_card_ids' => $deckCardIds,
             'previous_deck_card_ids' => $previousDeckCardIds,
             'min_deck_size' => $minDeckSize,
-            'max_deck_size' => $maxDeckSize ?? count($draftedCardIds),
+            'max_deck_size' => $maxDeckSize ?? count($pickableCardIds),
             'you_submitted' => $deckCardIds !== null,
             'opponent_submitted' => $otherPlayers[0]['submitted'] ?? false,
             'other_players' => $otherPlayers,
