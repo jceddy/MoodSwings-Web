@@ -13801,6 +13801,68 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * randomTeams (an alternative to $partnerUserId): no partner needs to
+     * be passed at all, and the game still seats into exactly two teams
+     * of two.
+     */
+    public function testCreateGameWithRandomTeamsAssignsAValidPartnerWithoutOnePassedIn(): void
+    {
+        foreach (['team', 'closed_team'] as $format) {
+            $userIds = $this->insertUsers('rndteam-' . uniqid() . '-', 4);
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: $format,
+                randomTeams: true,
+            );
+
+            self::assertIsInt($gameId, "{$format} should accept randomTeams without an explicit partnerUserId");
+
+            $teamIds = [];
+            foreach ($userIds as $userId) {
+                $stmt = $this->pdo->prepare('SELECT team_id FROM game_players WHERE game_id = :game_id AND user_id = :user_id');
+                $stmt->execute(['game_id' => $gameId, 'user_id' => $userId]);
+                $teamIds[] = (int) $stmt->fetchColumn();
+            }
+
+            self::assertSame(2, count(array_keys($teamIds, 0, true)), "{$format} should still seat exactly two players on team 0");
+            self::assertSame(2, count(array_keys($teamIds, 1, true)), "{$format} should still seat exactly two players on team 1");
+        }
+    }
+
+    /**
+     * Guards against a regression where the random pick always lands on
+     * the same candidate (e.g. array_rand() called on the wrong/empty
+     * array, or the creator's own id sneaking into the candidate pool) --
+     * with 3 possible partners, the odds of all 30 trials picking the
+     * same one by genuine chance are (1/3)^29, so any failure here means
+     * the selection isn't actually random.
+     */
+    public function testCreateGameWithRandomTeamsVariesThePartnerAcrossGames(): void
+    {
+        $userIds = $this->insertUsers('rndteam-vary-' . uniqid() . '-', 4);
+        $creatorUserId = $userIds[0];
+        $partnersSeen = [];
+
+        for ($i = 0; $i < 30; $i++) {
+            $gameId = $this->games->createGame($creatorUserId, $userIds, format: 'team', randomTeams: true);
+
+            $stmt = $this->pdo->prepare(
+                'SELECT gp2.user_id
+                 FROM game_players gp1
+                 JOIN game_players gp2 ON gp2.game_id = gp1.game_id AND gp2.team_id = gp1.team_id AND gp2.user_id != gp1.user_id
+                 WHERE gp1.game_id = :game_id AND gp1.user_id = :creator'
+            );
+            $stmt->execute(['game_id' => $gameId, 'creator' => $creatorUserId]);
+            $partnersSeen[] = (int) $stmt->fetchColumn();
+
+            self::assertNotSame($creatorUserId, end($partnersSeen), 'the creator should never be picked as their own partner');
+        }
+
+        self::assertGreaterThan(1, count(array_unique($partnersSeen)), 'randomTeams should not deterministically pick the same partner every time');
+    }
+
+    /**
      * End to end: draft -> deck-build -> start -> play a Closed Team Play
      * Quick Draft game to completion, exercising both fixes issue #362
      * needed -- BoardStateRepository::load()'s own $hasSeparateDecks check

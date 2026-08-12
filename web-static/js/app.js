@@ -125,7 +125,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -169,6 +169,11 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // instead. See "Practice bots" in web-static/README.md.
             bot_decklist_text: botDecklistText,
             bot_saved_decklist_id: botSavedDecklistId,
+            // Only meaningful for format 'team'/'closed_team' -- randomly
+            // assigns the creator's partner instead of requiring
+            // partner_user_id. See "Open Team Play"/"Closed Team Play" in
+            // web-static/README.md.
+            random_teams: randomTeams,
         }),
     });
 }

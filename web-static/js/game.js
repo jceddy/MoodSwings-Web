@@ -1679,8 +1679,8 @@
     // game's 3 opponents. Preserves the previously-selected partner
     // across a re-population if they're still checked.
     const TEAM_FIELDS_DESCRIPTIONS = {
-        team: "Open Team Play needs exactly 3 opponents (4 players total), seated as two teams of two. Choose which of them is your partner -- you'll sit next to them, see each other's hands, and share a score each round:",
-        closed_team: "Closed Team Play needs exactly 3 opponents (4 players total), seated as two teams of two across the table from each other. Choose which of them is your partner -- your hands stay private from each other, but you'll pass 2 cards to them at the start of the game and share a score each round:",
+        team: "Open Team Play needs exactly 3 opponents (4 players total), seated as two teams of two. Choose which of them is your partner, or have one assigned randomly -- you'll sit next to them, see each other's hands, and share a score each round:",
+        closed_team: "Closed Team Play needs exactly 3 opponents (4 players total), seated as two teams of two across the table from each other. Choose which of them is your partner, or have one assigned randomly -- your hands stay private from each other, but you'll pass 2 cards to them at the start of the game and share a score each round:",
     };
 
     function updateTeamFields() {
@@ -1692,6 +1692,17 @@
         }
 
         document.getElementById('new-game-team-fields-description').textContent = TEAM_FIELDS_DESCRIPTIONS[format];
+
+        // "Assign my partner randomly" (an alternative to picking one via
+        // the select below) -- hides (rather than disables) the picker
+        // when checked, since its value is simply never read at submit
+        // time in that case. No need to repopulate the select while
+        // hidden; unchecking re-runs this same function, which does.
+        const randomTeams = document.getElementById('new-game-random-teams').checked;
+        document.getElementById('new-game-partner-label').hidden = randomTeams;
+        if (randomTeams) {
+            return;
+        }
 
         const partnerSelect = document.getElementById('new-game-partner');
         const previousValue = partnerSelect.value;
@@ -2240,6 +2251,7 @@
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateTeamFields);
+    document.getElementById('new-game-random-teams').addEventListener('change', updateTeamFields);
     document.getElementById('new-game-deck-type').addEventListener('change', updateDeckTypeDescription);
     document.getElementById('new-game-deck-type').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-deck-type').addEventListener('change', updateBotCheckboxAvailability);
@@ -2450,7 +2462,8 @@
         submitButton.disabled = true;
         submitButton.textContent = 'Creating...';
 
-        const partnerUserId = isTeamFormat ? Number(document.getElementById('new-game-partner').value) : undefined;
+        const randomTeams = isTeamFormat && document.getElementById('new-game-random-teams').checked;
+        const partnerUserId = isTeamFormat && !randomTeams ? Number(document.getElementById('new-game-partner').value) : undefined;
         const deckType = document.getElementById('new-game-deck-type').value;
         const decklistText = deckType === 'custom' && document.getElementById('new-game-saved-decklist').value === ''
             ? document.getElementById('new-game-decklist-text').value
@@ -2508,6 +2521,7 @@
             defaultSelectionsMode,
             botDecklistText,
             botSavedDecklistId,
+            randomTeams,
         );
 
         if (!ok) {
