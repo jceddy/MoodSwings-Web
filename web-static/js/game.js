@@ -4865,11 +4865,22 @@
         passButton.hidden = !drafting.is_your_turn;
         passButton.textContent = drafting.current_pile_number === 3 ? 'Pass (draw from deck)' : 'Pass';
 
-        renderList(document.getElementById('winston-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
-            const li = document.createElement('li');
-            li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
-            return li;
-        });
+        // Open Team Play (drafting.team_drafted_cards non-null) shows
+        // "Your team's drafted cards so far" instead (below) -- your own
+        // drafted cards are already part of that team-wide list, so this
+        // plain "Drafted so far" would just be showing a subset of the
+        // same cards a second time right above it. Mirrors Quick Draft's
+        // own identical showKeptSoFar fix in renderQuickDraftDrafting().
+        const showDraftedSoFar = !drafting.team_drafted_cards;
+        document.getElementById('winston-draft-drafted-so-far-heading').hidden = !showDraftedSoFar;
+        document.getElementById('winston-draft-drafted-so-far').hidden = !showDraftedSoFar;
+        if (showDraftedSoFar) {
+            renderList(document.getElementById('winston-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
 
         renderTeamDraftedCards(document.getElementById('winston-draft-team-drafted'), drafting.team_drafted_cards);
     }
