@@ -95,6 +95,16 @@ final class BotChoiceResolver
      * card is already safely in play and needs no such exclusion (see
      * this method's own 'mood' branch).
      *
+     * $forced ORs in with this class's own ALWAYS_FILLED_OPTIONAL_FIELDS
+     * check -- an escape hatch for a caller that decided to volunteer for
+     * an optional field for a reason this class has no visibility into
+     * (BotPlayerService::shouldAttemptValueBoostDiscard()'s own scoring-
+     * aware policy for Dignity/Embarrassment/Cheer/Delight is the only
+     * caller today). Without it, a caller's own forced=true would still
+     * get silently overridden back to null here, since this method
+     * otherwise only ever recognizes ITS OWN reasons to fill an optional
+     * field, not a caller's.
+     *
      * The policy per field type, uniformly non-strategic and driven only
      * by the field's own shape (never a per-card special case, other than
      * MODE_FIELD_OVERRIDES above):
@@ -118,9 +128,9 @@ final class BotChoiceResolver
      *   required -- see CardChoiceSchema's own docblock): null, since a
      *   bot has nothing that needs to fill these in today.
      */
-    public function resolve(BoardState $state, array $field, int $actingPlayerId, int $ownCardId, string $effectKey): mixed
+    public function resolve(BoardState $state, array $field, int $actingPlayerId, int $ownCardId, string $effectKey, bool $forced = false): mixed
     {
-        $forced = $this->isAlwaysFilledOptionalField($effectKey, $field['key'] ?? '');
+        $forced = $forced || $this->isAlwaysFilledOptionalField($effectKey, $field['key'] ?? '');
         if (($field['required'] ?? false) !== true && !$forced) {
             return null;
         }

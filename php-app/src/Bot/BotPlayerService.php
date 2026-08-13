@@ -6,6 +6,7 @@ namespace MoodSwings\Bot;
 
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
+use MoodSwings\Rules\RoundScorer;
 
 /**
  * Decides a practice bot's (issue #140) own action -- what to play (and
@@ -14,7 +15,11 @@ use MoodSwings\Rules\CardChoiceSchema;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on. GameService is the only caller
+ * field-filling policy this builds on -- with one deliberate exception:
+ * shouldAttemptValueBoostDiscard() below, a scoring-aware, partly
+ * probabilistic policy for Dignity/Embarrassment/Cheer/Delight's own
+ * "you may discard a card to boost this mood's value" choice.
+ * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
  * (MoodPlayService::isPlayable()) is GameService's own call to make, not
@@ -24,6 +29,26 @@ use MoodSwings\Rules\CardChoiceSchema;
  */
 final class BotPlayerService
 {
+    /**
+     * Dignity/Embarrassment/Cheer/Delight (every card in the catalog
+     * shaped "after playing this mood, you may discard a card from your
+     * hand with [a qualifying value]. If you do, this mood's value
+     * becomes [X]" -- HandDiscardValueBoostEffect's own family, plus
+     * Dignity's bespoke-but-identically-shaped equivalent) all boost to
+     * 5 today, hand-picked here the same way BotChoiceResolver's own
+     * MODE_FIELD_OVERRIDES/ALWAYS_FILLED_OPTIONAL_FIELDS hand-pick their
+     * own card-specific exceptions, rather than exposed off
+     * BoardState/EffectRegistry just for this.
+     *
+     * @var array<string, int> effect key => boosted value
+     */
+    private const HAND_DISCARD_VALUE_BOOST_EFFECT_BOOSTED_VALUES = [
+        'dignity' => 5,
+        'embarrassment' => 5,
+        'cheer' => 5,
+        'delight' => 5,
+    ];
+
     public function __construct(
         private readonly BotChoiceResolver $resolver,
     ) {
@@ -188,12 +213,15 @@ final class BotPlayerService
 
         foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
             $required = ($field['required'] ?? false) === true;
-            $forced = !$required && $this->resolver->isAlwaysFilledOptionalField($effectKey, $field['key']);
+            $forced = !$required && (
+                $this->resolver->isAlwaysFilledOptionalField($effectKey, $field['key'])
+                || $this->shouldAttemptValueBoostDiscard($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
+            );
             if (!$required && !$forced) {
                 continue;
             }
 
-            $value = $this->resolver->resolve($state, $field, $botGamePlayerId, $cardId, $effectKey);
+            $value = $this->resolver->resolve($state, $field, $botGamePlayerId, $cardId, $effectKey, $forced);
             if ($value === null) {
                 // A required field with no legal value makes the whole
                 // card unplayable this way (existing behavior). A forced
@@ -213,5 +241,97 @@ final class BotPlayerService
         }
 
         return $choices;
+    }
+
+    /**
+     * Whether the bot should volunteer for one of
+     * HAND_DISCARD_VALUE_BOOST_EFFECT_BOOSTED_VALUES' own effect keys'
+     * optional discard_card_id field at all -- unlike every other
+     * optional field (never filled) or ALWAYS_FILLED_OPTIONAL_FIELDS
+     * (always filled), this one scales with both the value of actually
+     * winning and the cost of giving up a spare card:
+     * - Always yes if discarding would make the difference between NOT
+     *   currently having the highest score in the game and having it
+     *   (see wouldBecomeHighestScore()) -- worth spending down to the
+     *   bot's very last spare card for an actual win.
+     * - Otherwise (not decisive either way), a policy driven purely by
+     *   how many OTHER cards are in hand (hand size minus the card being
+     *   played, which is still sitting in hand at this point, same as
+     *   BotChoiceResolver's own $ownCardId exclusion): never with only 1
+     *   spare, always with 4+ spare, and linearly in between --
+     *   (otherCards - 1) / 3, i.e. 1/3 at 2 spare, 2/3 at 3 spare. The 1-
+     *   and 4+-spare cases are handled as flat returns rather than folded
+     *   into the same formula so they're genuinely unconditional (no
+     *   floating-point roll at all), matching "should always"/"only if"
+     *   in the literal sense rather than "almost always"/"almost never".
+     */
+    private function shouldAttemptValueBoostDiscard(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
+    {
+        $boostedValue = self::HAND_DISCARD_VALUE_BOOST_EFFECT_BOOSTED_VALUES[$effectKey] ?? null;
+        if ($boostedValue === null || $fieldKey !== 'discard_card_id') {
+            return false;
+        }
+
+        if ($this->wouldBecomeHighestScore($state, $botGamePlayerId, $this->baseValue($state, $cardId), $boostedValue)) {
+            return true;
+        }
+
+        $otherCardsInHand = count($state->hand($botGamePlayerId)) - 1;
+        if ($otherCardsInHand >= 4) {
+            return true;
+        }
+        if ($otherCardsInHand <= 1) {
+            return false;
+        }
+
+        return mt_rand() / mt_getrandmax() < ($otherCardsInHand - 1) / 3;
+    }
+
+    /**
+     * Whether boosting $cardId's own value from $unboostedValue to
+     * $boostedValue would move the bot's own group (itself, plus a
+     * teammate in Open/Closed Team Play -- see BoardState::isTeammate())
+     * from BELOW the best rival group's current round score to AT OR
+     * ABOVE it. Uses RoundScorer::score() against $state as it stands
+     * right now -- $cardId is still in hand at this point (chooseAction()
+     * builds this whole request before submitting it), so neither its
+     * unboosted nor boosted value is reflected in anyone's total yet;
+     * both are added in here by hand instead of read back off the board.
+     *
+     * A "group" is the acting player plus any isTeammate() of theirs;
+     * every remaining player is grouped among THEMSELVES the same way
+     * (so a genuine opposing team's combined total is compared as one
+     * number, not two separately), and the highest such rival group
+     * total is the bar to clear. Reduces to a plain highest-individual-
+     * score comparison for every non-team format, since isTeammate() is
+     * always false there.
+     */
+    private function wouldBecomeHighestScore(BoardState $state, int $botGamePlayerId, int $unboostedValue, int $boostedValue): bool
+    {
+        $scores = (new RoundScorer())->score($state);
+        $activeIds = $state->activePlayerOrder();
+
+        $myGroupIds = array_values(array_filter(
+            $activeIds,
+            fn (int $id): bool => $id === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $id),
+        ));
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds));
+
+        $rivalIds = array_values(array_diff($activeIds, $myGroupIds));
+        $groupedRivalIds = [];
+        $rivalBest = 0;
+        foreach ($rivalIds as $id) {
+            if (in_array($id, $groupedRivalIds, true)) {
+                continue;
+            }
+            $group = array_values(array_filter(
+                $rivalIds,
+                fn (int $other): bool => $other === $id || $state->isTeammate($id, $other),
+            ));
+            $groupedRivalIds = array_merge($groupedRivalIds, $group);
+            $rivalBest = max($rivalBest, array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group)));
+        }
+
+        return $myTotal + $unboostedValue < $rivalBest && $myTotal + $boostedValue >= $rivalBest;
     }
 }

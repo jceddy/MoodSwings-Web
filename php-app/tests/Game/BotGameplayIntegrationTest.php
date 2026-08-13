@@ -626,6 +626,62 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertSame($p1, (int) $round['current_turn_game_player_id']);
     }
 
+    /**
+     * End-to-end coverage of BotPlayerService::shouldAttemptValueBoostDiscard()
+     * (see BotPlayerServiceTest for the policy itself in isolation) through
+     * the FULL advanceAutomatedTurns() -> playMood() request lifecycle --
+     * this is the level that originally caught a real bug during
+     * development: BotChoiceResolver::resolve() had its own independent
+     * required-or-forced gate that silently discarded BotPlayerService's
+     * own "yes, fill it" decision for any field outside
+     * ALWAYS_FILLED_OPTIONAL_FIELDS, so shouldAttemptValueBoostDiscard()
+     * alone returning true wasn't sufficient proof the choice actually
+     * made it into the real play. 4 spare cards (only 1 of which,
+     * Charity, actually qualifies as a legal discard) makes the "always
+     * discard" branch deterministic, and no mood is in play for anyone
+     * (deliberately non-decisive -- see
+     * testChooseActionAlwaysDiscardsToDelightWithFourOrMoreSpareCards()),
+     * so this is purely the hand-size branch, not the "would win" one.
+     */
+    public function testBotDiscardsToDelightWithFourOrMoreSpareCards(): void
+    {
+        $u1 = $this->insertUser('human2');
+        $botUserId = $this->insertBotUser('bot2');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        // Every other card is deliberately LOWER value than Delight's own
+        // 3, so chooseAction()'s own highest-printed-value ordering picks
+        // Delight first, same as any other card in this hand would only
+        // ever be chosen instead if it were worth more.
+        $this->insertGameCard($gameId, 111, 'hand', $botPlayerId); // Delight, base value 3
+        $this->insertGameCard($gameId, 3, 'hand', $botPlayerId); // Charity, value 1 -- the only eligible discard
+        $this->insertGameCard($gameId, 2, 'hand', $botPlayerId); // Benevolence, value 2 -- not eligible
+        $this->insertGameCard($gameId, 28, 'hand', $botPlayerId); // Anxiety, value 2 -- not eligible
+        $this->insertGameCard($gameId, 36, 'hand', $botPlayerId); // Doubt, value 2 -- not eligible
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too, see testBotPlaysItsHighestValuePlayableCardOnItsOwnTurn()
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 111));
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $delight = null;
+        foreach ($inPlay as $mood) {
+            if ($mood['catalog_card_id'] === 111) {
+                $delight = $mood;
+            }
+        }
+        self::assertNotNull($delight, 'Delight should be in play');
+        self::assertSame(5, $delight['value'], "Delight's value should be boosted to 5");
+
+        self::assertFalse($this->cardIsInHand($gameId, 3), 'Charity should have been discarded, not left in hand');
+        $stmt = $this->pdo->prepare("SELECT 1 FROM game_cards WHERE game_id = :game_id AND card_id = 3 AND zone = 'discard'");
+        $stmt->execute(['game_id' => $gameId]);
+        self::assertNotFalse($stmt->fetchColumn(), 'Charity should be in the discard pile');
+    }
+
     public function testBotPassesWhenItHasNothingPlayable(): void
     {
         $u1 = $this->insertUser('human1');
