@@ -1,0 +1,19 @@
+-- Practice bots (issue #140) previously never volunteered for Dignity/
+-- Embarrassment/Cheer/Delight's own optional "you may discard a card to
+-- boost this mood's value to 5" choice at all -- BotChoiceResolver's own
+-- blanket "never fill an optional field" bias. BotPlayerService now
+-- decides whether to attempt it via a new
+-- shouldAttemptValueBoostDiscard() policy: always when it would make the
+-- difference for having the highest score in the game right now
+-- (RoundScorer-based, team-aware via BoardState::isTeammate()), otherwise
+-- scaling with spare hand size -- never with 1 other card, always with
+-- 4+, and a linear probability roll in between. Also fixes a related bug
+-- this change exposed: BotChoiceResolver::resolve() had its own
+-- independent required-or-forced gate that silently ignored a caller's
+-- own "yes, fill it" decision for any field not in its own
+-- ALWAYS_FILLED_OPTIONAL_FIELDS list -- resolve() now accepts an
+-- explicit $forced parameter instead. See "Picking a legal move:
+-- MoodSwings\Bot\BotChoiceResolver" in php-app/README.md.
+--
+-- Pure backend bot-AI behavior -- no schema change.
+UPDATE schema_version SET version = '1.24.1' WHERE id = 1;

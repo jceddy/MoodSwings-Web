@@ -4808,7 +4808,18 @@ per-card special case:
   "no legal candidate" result differently from a required field's,
   too: the field just stays unfilled (the card is still playable
   without it) rather than making the whole card unplayable the way an
-  actually-required field's own empty result does.
+  actually-required field's own empty result does. A second, narrower
+  exception lives one level up in `BotPlayerService` itself rather than
+  here (see `shouldAttemptValueBoostDiscard()` below) -- unlike
+  Curiosity/Suspicion above (a fixed, always-filled `true`), Dignity/
+  Embarrassment/Cheer/Delight's own optional `discard_card_id` (all four
+  share "you may discard a card to boost this mood's value to 5") is
+  filled in *scoring-and-hand-size-aware, sometimes-probabilistically*:
+  `resolve()` itself accepts an explicit `$forced` parameter (OR'd with
+  its own `ALWAYS_FILLED_OPTIONAL_FIELDS` check) precisely so a caller
+  can volunteer for a reason this class has no visibility into, without
+  that caller's own "yes, fill it" being silently overridden back to
+  `null` by this method's own gate.
 - A required `'mode'` field takes its first option, except a small
   hand-authored override table (`MODE_FIELD_OVERRIDES`) for the one
   shape that would otherwise backfire: Guilt/Contempt/Redemption's own
@@ -4876,6 +4887,49 @@ since it already holds that dependency):
   or worse. Everything not on this list defaults to "always worth
   playing," the unconditional "yes" every effect already got before
   this method existed.
+  `shouldAttemptValueBoostDiscard(BoardState $state, string $effectKey,
+  string $fieldKey, int $cardId, int $botGamePlayerId): bool` is a
+  similarly narrow, similarly whole-board policy, but decides WHETHER to
+  even attempt an optional field (feeding `buildChoicesForCard()`'s own
+  `$forced` the same way `BotChoiceResolver::isAlwaysFilledOptionalField()`
+  does) rather than vetoing a whole card. It applies to exactly Dignity/
+  Embarrassment/Cheer/Delight's own `discard_card_id` (hand-picked in
+  `HAND_DISCARD_VALUE_BOOST_EFFECT_BOOSTED_VALUES`, effect key => boosted
+  value, all four at 5 today) and scales with two things:
+  - **Always yes** if discarding would make the difference between NOT
+    currently having the highest score in the game and having it.
+    `wouldBecomeHighestScore()` compares the acting player's own group
+    total (itself, plus a teammate in Open/Closed Team Play -- see
+    `BoardState::isTeammate()`) against the best RIVAL group's own total
+    (every other player, grouped among themselves the same way, so a
+    genuine opposing team's combined score is one number, not two) --
+    both computed via `RoundScorer::score()` against the board as it
+    stands right now, since the card being played is still in hand at
+    this point and neither its unboosted nor boosted value is reflected
+    in anyone's total yet (both are added in by hand). Worth spending
+    the bot's very last spare card on an actual win, regardless of how
+    few remain.
+  - **Otherwise**, purely a function of how many OTHER cards are in hand
+    (hand size minus the card being played, which -- like
+    `BotChoiceResolver`'s own `$ownCardId` exclusion -- is still sitting
+    in hand at this point): never with only 1 spare card, always with
+    4+, and a linear roll in between -- `(otherCards - 1) / 3`, i.e. 1/3
+    at 2 spare cards, 2/3 at 3. The 1- and 4+-card cases are flat
+    returns rather than folded into the same formula, so they're
+    genuinely unconditional -- no floating-point roll, and no chance of
+    a `mt_rand()` edge case ever producing the "wrong" answer at either
+    boundary.
+
+  This is the one place in the entire bot (`BotChoiceResolver` included)
+  that reaches for actual randomness -- every other decision throughout
+  this section is fully deterministic given the board state. No seedable
+  RNG is injected for it; `mt_rand()` is called directly (matching how
+  `GameService::createGame()`'s own `$randomTeams` and `startGame()`'s
+  Closed Team Play leader pick already use `array_rand()`/`mt_rand()`
+  unseeded elsewhere in this codebase), so tests covering the
+  probabilistic middle band run many trials and assert the observed rate
+  falls within a generous statistical tolerance, rather than asserting
+  an exact outcome.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's
