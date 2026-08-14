@@ -1512,15 +1512,29 @@ too, proportional to the smaller card width.
       shown while `state.rotisserie_draft.status` is `'drafting'`) -- the
       simplest of the four draft panels, since the entire pool is dealt
       face-up once and never refilled or reshuffled: `#rotisserie-draft-
-      pool` renders every card in `drafting.pool_cards` as a plain wrapping
-      grid of clickable thumbnails (the reused `.draft-pool-cards` class
-      from issue #314's own pool view, no new CSS needed), and picking one
+      pool` renders every card in `drafting.pool_cards` (sorted by
+      `compareDraftPoolCards()`, the same color/rarity/name order issue
+      #314's own pool view uses, so the shared pool is easy to scan while
+      choosing rather than sitting in the server's shuffled order) as a
+      plain wrapping grid of clickable thumbnails (the reused
+      `.draft-pool-cards` class from issue #314's own pool view, no new CSS
+      needed). Clicking a card doesn't draft it immediately -- it opens
+      `openCardDetail()`'s own overlay for a proper look first, same as
+      every other card list in the app; when it's actually your turn, the
+      overlay's `actionButton` param (`{ label: 'Draft', onClick }`, a new
+      one-shot sibling to the existing toggle-style `selection` param used
+      by Closed Team Play's initial card pass) shows a "Draft" button that
       calls `submitRotisserieDraftAction(cardId)`
       (`submitRotisserieDraftPick()`, `POST /games/draft/rotisserie-pick`)
-      with that single card's ID -- no row/column/pile selection like Grid
-      Draft or Winston Draft, just a direct card pick like Quick Draft's
-      own, except from one shared pool instead of a personal pack. The
-      title (`#rotisserie-draft-drafting-title`) reads "pick N of M" from
+      and closes the dialog -- "Close" alone, with no action button, backs
+      out without drafting anything. When it isn't your turn, the overlay
+      opens with no action button at all (same as any other read-only card
+      view), so opponents can still look cards over without risk of
+      mis-clicking a pick they can't even submit. There's no row/column/
+      pile selection like Grid Draft or Winston Draft, just a direct card
+      pick like Quick Draft's own, except from one shared pool instead of a
+      personal pack. The title (`#rotisserie-draft-drafting-title`) reads
+      "pick N of M" from
       `drafting.picks_made + 1`/`drafting.total_picks_needed` (`cutoff_count
       * playerCount`) rather than a round number, since there are no rounds
       to speak of. The status line (`#rotisserie-draft-drafting-status`)
@@ -2848,7 +2862,8 @@ using the same-origin `session_token` cookie for auth — see
   `getCardStats()` in `app.js` → `GET /stats/cards`) with one row per
   catalog card and a column each for Name/Set/#/Rarity/Color/Times in
   deck/Deck win rate/Times played/Play win rate/Quick Draft avg.
-  pick/Winston Draft avg. pile size/Grid Draft avg. round — server-wide
+  pick/Winston Draft avg. pile size/Grid Draft avg. round/Rotisserie
+  Draft avg. pick — server-wide
   aggregate data, not tied to any one player. Every `<th data-sort-key>`
   is clickable: a click sorts ascending by that column (and resets to
   page 1), a second click on the same header flips to descending, and a
@@ -2866,7 +2881,7 @@ using the same-origin `session_token` cookie for auth — see
   own return value directly, so a render never mutates the source
   `cards` array as a side effect (harmless in practice today, since
   `compareCards` is a valid deterministic order, but worth not relying
-  on). The three draft-format columns hold `{average,
+  on). The four draft-format columns hold `{average,
   count}` objects (see `CardStatsService::averagePick()` in
   `../php-app/README.md`) so a never-drafted card's `null` average
   always sorts last regardless of direction, instead of sorting

@@ -40,7 +40,7 @@
     // meaning to a player).
     const COLOR_RANK = { white: 0, blue: 1, black: 2, red: 3, green: 4 };
 
-    // The three draft-format columns hold {average, count} rather than a
+    // The four draft-format columns hold {average, count} rather than a
     // plain number (see CardStatsService::averagePick()) -- sorting by
     // .average keeps a never-drafted card's null last regardless of
     // direction, rather than sorting arbitrarily against 0.
@@ -161,6 +161,7 @@
                 formatPick(card.quick_draft),
                 formatPick(card.winston_draft),
                 formatPick(card.grid_draft),
+                formatPick(card.rotisserie_draft),
             ];
             for (const text of cells) {
                 const cell = document.createElement('td');
@@ -252,6 +253,8 @@
         ['winston_draft_count', (card) => card.winston_draft.count],
         ['grid_draft_average', (card) => card.grid_draft.average],
         ['grid_draft_count', (card) => card.grid_draft.count],
+        ['rotisserie_draft_average', (card) => card.rotisserie_draft.average],
+        ['rotisserie_draft_count', (card) => card.rotisserie_draft.count],
     ];
 
     // Per RFC 4180: a field containing a comma, double quote, or newline

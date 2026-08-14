@@ -282,11 +282,27 @@ final class CardStatsServiceTest extends TestCase
         self::assertSame(1, (int) $card['grid_draft_pick_round_count']);
     }
 
+    public function testRecordRotisserieDraftPickUsesTheGlobalPickPosition(): void
+    {
+        $this->stats->recordRotisserieDraftPick([14], position: 5);
+
+        $card = $this->fetchCardStats(14);
+        self::assertSame(5, (int) $card['rotisserie_draft_pick_position_sum']);
+        self::assertSame(1, (int) $card['rotisserie_draft_pick_position_count']);
+
+        $this->stats->recordRotisserieDraftPick([14], position: 3);
+
+        $card = $this->fetchCardStats(14);
+        self::assertSame(8, (int) $card['rotisserie_draft_pick_position_sum'], '5 + 3');
+        self::assertSame(2, (int) $card['rotisserie_draft_pick_position_count']);
+    }
+
     public function testRecordPickMethodsAreNoOpsForAnEmptyCardList(): void
     {
         $this->stats->recordQuickDraftPick([], roundNumber: 1, stageNumber: 1, playerCount: 2);
         $this->stats->recordWinstonDraftPick([], pileSize: 1);
         $this->stats->recordGridDraftPick([], round: 1);
+        $this->stats->recordRotisserieDraftPick([], position: 1);
 
         $stmt = $this->pdo->query('SELECT COUNT(*) FROM card_stats');
         self::assertSame(0, (int) $stmt->fetchColumn());
@@ -325,6 +341,7 @@ final class CardStatsServiceTest extends TestCase
         self::assertSame(['average' => 1.0, 'count' => 1], $recorded['quick_draft']);
         self::assertSame(['average' => null, 'count' => 0], $recorded['winston_draft']);
         self::assertSame(['average' => null, 'count' => 0], $recorded['grid_draft']);
+        self::assertSame(['average' => null, 'count' => 0], $recorded['rotisserie_draft']);
 
         $untouched = $byId[2];
         self::assertSame(0, $untouched['times_in_deck']);
@@ -332,5 +349,6 @@ final class CardStatsServiceTest extends TestCase
         self::assertSame(0, $untouched['times_played']);
         self::assertNull($untouched['play_win_rate']);
         self::assertSame(['average' => null, 'count' => 0], $untouched['quick_draft']);
+        self::assertSame(['average' => null, 'count' => 0], $untouched['rotisserie_draft']);
     }
 }

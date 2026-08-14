@@ -13304,7 +13304,7 @@ final class GameServiceIntegrationTest extends TestCase
     // CardStatsServiceTest.php covers the aggregation math in isolation;
     // these confirm the real game-completion/pick-submission code paths
     // actually call into it -- one per hook point (recordGameCompletionStats(),
-    // and each of the three draft formats' own pick-submission methods).
+    // and each of the four draft formats' own pick-submission methods).
 
     private function fetchCardStatsRow(int $catalogCardId): ?array
     {
@@ -13410,6 +13410,25 @@ final class GameServiceIntegrationTest extends TestCase
         // cells at once) recorded exactly one recordGridDraftPick() pick.
         $totalPicks = (int) $this->pdo->query('SELECT SUM(grid_draft_pick_round_count) FROM card_stats')->fetchColumn();
         self::assertSame($draftedCount, $totalPicks);
+    }
+
+    public function testCompletedRotisserieDraftMatchRecordsPickPositions(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 26; $i++) {
+            $state = $this->fetchRotisserieState($draftMatchId);
+            $pool = json_decode((string) $state['pool_card_ids'], true);
+            $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+        }
+
+        // Every one of the 26 picks (13-card cutoff * 2 players) recorded
+        // exactly one recordRotisserieDraftPick() pick -- see
+        // submitRotisserieDraftPick().
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(rotisserie_draft_pick_position_count) FROM card_stats')->fetchColumn();
+        self::assertSame(26, $totalPicks);
     }
 
     // -- "Default selections" mode (issue #274) -----------------------------
