@@ -2764,8 +2764,12 @@
     // disabled, onToggle } shows a Select/De-select button that calls
     // onToggle() and closes the dialog -- disabled is computed by the
     // caller (true once 2 OTHER cards are already selected, so an
-    // already-selected card can still always be de-selected).
-    function openCardDetail(card, ownerLabel, selection) {
+    // already-selected card can still always be de-selected). `actionButton`,
+    // when passed (and `selection` isn't), is the simpler one-shot form of
+    // the same button -- { label, onClick, disabled } -- for a single
+    // immediate action rather than a toggle, e.g. Rotisserie Draft's own
+    // "Draft" button (see renderRotisserieDraftDrafting()).
+    function openCardDetail(card, ownerLabel, selection, actionButton) {
         const artEl = document.getElementById('card-detail-art');
         artEl.src = cardArtUrl(card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
@@ -2890,6 +2894,14 @@
             selectButton.disabled = selection.disabled;
             selectButton.onclick = () => {
                 selection.onToggle();
+                cardDetailDialog.close();
+            };
+        } else if (actionButton) {
+            selectButton.hidden = false;
+            selectButton.textContent = actionButton.label;
+            selectButton.disabled = actionButton.disabled || false;
+            selectButton.onclick = () => {
+                actionButton.onClick();
                 cardDetailDialog.close();
             };
         } else {
@@ -5224,7 +5236,9 @@
         // display order, so re-sorting here for readability is safe.
         drafting.pool_cards.slice().sort(compareDraftPoolCards).forEach((card) => {
             poolContainer.appendChild(buildCardThumb(card, {
-                onClick: () => (drafting.is_your_turn ? submitRotisserieDraftAction(card.card_id) : openCardDetail(card)),
+                onClick: () => openCardDetail(card, null, null, drafting.is_your_turn
+                    ? { label: 'Draft', onClick: () => submitRotisserieDraftAction(card.card_id) }
+                    : null),
             }));
         });
 
