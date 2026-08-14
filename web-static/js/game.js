@@ -5217,7 +5217,12 @@
         const poolContainer = document.getElementById('rotisserie-draft-pool');
         poolContainer.innerHTML = '';
         poolContainer.className = 'draft-pool-cards';
-        drafting.pool_cards.forEach((card) => {
+        // Sorted by color/rarity/name (compareDraftPoolCards, shared with
+        // issue #314's own pool view above) rather than left in whatever
+        // order the server shuffled the pool into -- the server's own
+        // pick-order/turn logic only cares about card_id membership, not
+        // display order, so re-sorting here for readability is safe.
+        drafting.pool_cards.slice().sort(compareDraftPoolCards).forEach((card) => {
             poolContainer.appendChild(buildCardThumb(card, {
                 onClick: () => (drafting.is_your_turn ? submitRotisserieDraftAction(card.card_id) : openCardDetail(card)),
             }));
