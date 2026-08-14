@@ -556,6 +556,8 @@ body.game-page {
 #winston-draft-drafted-so-far,
 #grid-draft-drafted-so-far,
 #grid-draft-other-players-drafted ul,
+#rotisserie-draft-drafted-so-far,
+#rotisserie-draft-other-players-drafted ul,
 #deck-view-cards,
 #deck-view-sideboard-cards,
 #shared-deck-cards,
@@ -575,6 +577,8 @@ body.game-page {
 #winston-draft-drafted-so-far li,
 #grid-draft-drafted-so-far li,
 #grid-draft-other-players-drafted ul li,
+#rotisserie-draft-drafted-so-far li,
+#rotisserie-draft-other-players-drafted ul li,
 .in-play-zone__list li,
 .spectator-final-hand ul li,
 .team-drafted-cards-list li {
