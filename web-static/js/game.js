@@ -1325,12 +1325,12 @@
     }
 
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
-    // custom_duel and the three draft-based ones puts the whole table on
+    // custom_duel and the four draft-based ones puts the whole table on
     // one shared deck rather than giving each player their own, so those
-    // four are the only deck_types with no single "the deck" for
+    // five are the only deck_types with no single "the deck" for
     // openSharedDeckView() (issue #197) to show.
     function isSharedDeckType(deckType) {
-        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft'].includes(deckType);
+        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'].includes(deckType);
     }
 
     // Plain-language explanation shown under the New Game dialog's own
@@ -1347,6 +1347,7 @@
         quick_draft: '2-4 players each draft their own deck live from a shared card pool (16 cards for 2 or 4 players, 18 for 3), trim it down to at least 12. A 2-player draft plays a best-of-three match, sideboarding freely between games; a 3-4 player draft plays a single game.',
         winston_draft: '2-4 players each draft their own deck from a shared pool (45/70/90 cards for 2/3/4 players) by taking or passing on 3 growing face-down piles, in turn order rotating through every seat. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game -- a player who ends up short of 12 cards is dropped from the match rather than ending it for everyone else.',
         grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/96 cards for 2/3/4 players) over 6 rounds (4 for exactly 4 players, so each player picks first exactly once): each round, cards are dealt into a 3x3 grid (4x4 for exactly 4 players), and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
+        rotisserie_draft: '2-4 players draft one card at a time from a shared, fully face-up pool -- no packs, piles, or grid, just the whole pool laid out at once. A snake-style turn order (choosable cutoff of 13-20 cards per player, default 14) continues until every player has picked that many; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1417,6 +1418,28 @@
         saved_deck: 'Draft from one of your own saved decks (or a friend\'s, if they\'ve shared one with you) instead of pasting or uploading -- narrowed down to the draft\'s target pool size if it has more, same as a Custom pool.',
     };
 
+    // Rotisserie Draft's own pool sources (issue #361) -- unlike every
+    // other draft deck_type's own, these are a FLOOR (cutoff count times
+    // player count), not an exact target: only "Random cards" is sized
+    // exactly to it (GameService::buildRandomDraftCardIds()); every other
+    // source is laid out at its own natural full size when that's larger
+    // (a full Structure deck/jceddy's 75/the whole catalog/whatever a
+    // custom or saved pool actually has), with the leftover simply never
+    // drafted once every player reaches the cutoff -- the same "remainder
+    // discarded" precedent Rarity Rotisserie's own per-rarity rounds
+    // already establish (see php-app/README.md's "Rotisserie Draft").
+    // Unlike Grid Draft, 'structure' IS offered here -- doubled
+    // automatically whenever the floor itself exceeds a single 45-card
+    // copy (see updateRotisserieDraftPoolSourceOptionLabels()).
+    const ROTISSERIE_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
+        random_48: 'Exactly enough random cards, no duplicates, no leftovers -- the cutoff count times the number of players.',
+        structure: 'The 45-card Structure deck -- doubled to 90 automatically if the cutoff count times the number of players exceeds 45. Any cards beyond what every player ends up picking are simply left undrafted.',
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors) -- swapped for jceddy's 150 Card deck's own 150-card pool at exactly 4 players. Any cards beyond what every player ends up picking are simply left undrafted.",
+        one_of_each: 'The full 133-card pool. Any cards beyond what every player ends up picking are simply left undrafted.',
+        custom: 'Paste or upload your own pool of at least the cutoff count times the number of players (same format as a Custom Decklist, but no About/Sideboard sections) -- a floor, not an exact match, so extra cards are simply left undrafted.',
+        saved_deck: 'Draft from one of your own saved decks (or a friend\'s, if they\'ve shared one with you) instead of pasting or uploading -- same floor-not-exact rule as a Custom pool.',
+    };
+
     // Mirrors GameService::quickDraftPoolTargetSize()/
     // winstonDraftPoolTargetSize()/gridDraftPoolTargetSize() -- pure
     // functions of player count alone, so hardcoded here rather than
@@ -1434,6 +1457,20 @@
     function currentDraftPlayerCount() {
         const checkedCount = opponentCheckboxes.querySelectorAll('input:checked').length;
         return Math.min(Math.max(checkedCount + 1, 2), 4);
+    }
+
+    // Rotisserie Draft's own minimum pool size -- cutoff count (13-20,
+    // #new-game-rotisserie-draft-cutoff-count, GameService::
+    // ROTISSERIE_DRAFT_MIN_CUTOFF/MAX_CUTOFF) times player count, mirroring
+    // GameService::rotisserieDraftMinPoolSize(). Unlike GRID_DRAFT_POOL_TARGET_SIZES
+    // and friends (pure functions of player count alone), this also depends
+    // on the cutoff input's own live value, so it's computed rather than a
+    // static per-player-count map.
+    function currentRotisserieDraftMinPoolSize(playerCount) {
+        const cutoffInput = document.getElementById('new-game-rotisserie-draft-cutoff-count');
+        const cutoffCount = Math.min(Math.max(parseInt(cutoffInput.value, 10) || 14, 13), 20);
+
+        return cutoffCount * playerCount;
     }
 
     // jceddy's 75 Card deck pool source's own label -- shared by Quick
@@ -1480,6 +1517,19 @@
         return 'Structure deck x2 (' + poolSize + ' cards)';
     }
 
+    // Rotisserie Draft's own analog of structureOptionLabel() above --
+    // doubles whenever the floor itself (minPoolSize) exceeds a single
+    // 45-card copy, rather than Quick/Winston Draft's own ">2 players"
+    // condition (see buildDraftPool()'s own doubleStructureForMultiplayer
+    // docblock). Never truncates the doubled 90 back down to minPoolSize
+    // the way structureOptionLabel() does -- Rotisserie Draft's own pool
+    // sources are a floor, not an exact target (see
+    // ROTISSERIE_DRAFT_POOL_SOURCE_DESCRIPTIONS above), so the full
+    // doubled pool is always what actually gets laid out.
+    function rotisserieStructureOptionLabel(minPoolSize) {
+        return minPoolSize <= 45 ? 'Structure deck (45 cards)' : 'Structure deck x2 (90 cards)';
+    }
+
     // Re-derives every draft deck_type's pool-source <option> labels for
     // however many opponents are currently checked -- called from
     // updateOpponentSelectionLimit() so it stays current on every
@@ -1506,6 +1556,14 @@
         gridSelect.querySelector('option[value="random_48"]').textContent =
             GRID_DRAFT_POOL_TARGET_SIZES[playerCount] + ' random cards';
         gridSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
+
+        const rotisserieMinPoolSize = currentRotisserieDraftMinPoolSize(playerCount);
+        const rotisserieSelect = document.getElementById('new-game-rotisserie-draft-pool-source');
+        rotisserieSelect.querySelector('option[value="random_48"]').textContent =
+            rotisserieMinPoolSize + ' random cards (exact -- see the description below)';
+        rotisserieSelect.querySelector('option[value="structure"]').textContent =
+            rotisserieStructureOptionLabel(rotisserieMinPoolSize);
+        rotisserieSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
     }
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
@@ -1542,6 +1600,7 @@
         document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
         document.getElementById('new-game-winston-draft-fields').hidden = deckType !== 'winston_draft';
         document.getElementById('new-game-grid-draft-fields').hidden = deckType !== 'grid_draft';
+        document.getElementById('new-game-rotisserie-draft-fields').hidden = deckType !== 'rotisserie_draft';
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
@@ -1553,6 +1612,9 @@
         }
         if (deckType === 'grid_draft') {
             updateGridDraftPoolSourceVisibility();
+        }
+        if (deckType === 'rotisserie_draft') {
+            updateRotisserieDraftPoolSourceVisibility();
         }
         updateBotDecklistFieldsVisibility();
     }
@@ -1584,6 +1646,15 @@
             GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
         document.getElementById('new-game-grid-draft-custom-pool-fields').hidden = poolSource !== 'custom';
         document.getElementById('new-game-grid-draft-saved-deck-fields').hidden = poolSource !== 'saved_deck';
+    }
+
+    // Rotisserie Draft's own analog of updateQuickDraftPoolSourceVisibility().
+    function updateRotisserieDraftPoolSourceVisibility() {
+        const poolSource = document.getElementById('new-game-rotisserie-draft-pool-source').value;
+        document.getElementById('new-game-rotisserie-draft-pool-source-description').textContent =
+            ROTISSERIE_DRAFT_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
+        document.getElementById('new-game-rotisserie-draft-custom-pool-fields').hidden = poolSource !== 'custom';
+        document.getElementById('new-game-rotisserie-draft-saved-deck-fields').hidden = poolSource !== 'saved_deck';
     }
 
     // Shows the locked-in summary for a built-in preset, or the editable
@@ -1621,7 +1692,7 @@
     // exempt from this same rule below.
     function isDeckTypeAvailableForFormat(deckType, format) {
         if (format === 'draft') {
-            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft';
+            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft';
         }
         switch (deckType) {
             case 'custom': return format !== 'duel';
@@ -1629,6 +1700,7 @@
             case 'quick_draft': return format === 'closed_team' || format === 'team';
             case 'winston_draft': return format === 'closed_team' || format === 'team';
             case 'grid_draft': return format === 'closed_team' || format === 'team';
+            case 'rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2124,9 +2196,9 @@
     // 'duel' games require exactly 2 players total (enforced server-side
     // by GameService::isDuelShapedFormat()'s own check in createGame()),
     // so at most 1 opponent may be chosen for that -- every 'draft'
-    // deck_type (quick_draft/grid_draft/winston_draft) now supports 2-4
-    // players (issue #189), so up to 3 opponents; every other format
-    // allows up to 3 as well. Re-run on every checkbox change and every
+    // deck_type (quick_draft/grid_draft/winston_draft/rotisserie_draft)
+    // now supports 2-4 players (issue #189), so up to 3 opponents; every
+    // other format allows up to 3 as well. Re-run on every checkbox change and every
     // format/deck-type-dropdown change, so switching to a 2-player-only
     // combination with 2+ opponents already checked un-checks the extras
     // (keeping the first one) rather than leaving a selection the server
@@ -2261,6 +2333,12 @@
     document.getElementById('new-game-quick-draft-pool-source').addEventListener('change', updateQuickDraftPoolSourceVisibility);
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
     document.getElementById('new-game-grid-draft-pool-source').addEventListener('change', updateGridDraftPoolSourceVisibility);
+    document.getElementById('new-game-rotisserie-draft-pool-source').addEventListener('change', updateRotisserieDraftPoolSourceVisibility);
+    // The cutoff count directly determines the minimum pool size (see
+    // currentRotisserieDraftMinPoolSize()), so a change to it needs the
+    // same option-label refresh a checked-opponent/format change already
+    // triggers via updateOpponentSelectionLimit().
+    document.getElementById('new-game-rotisserie-draft-cutoff-count').addEventListener('input', updateDraftPoolSourceOptionLabels);
 
     document.getElementById('new-game-quick-draft-custom-pool-file').addEventListener('change', async (event) => {
         const file = event.target.files[0];
@@ -2287,6 +2365,15 @@
         }
 
         document.getElementById('new-game-grid-draft-custom-pool-text').value = await file.text();
+    });
+
+    document.getElementById('new-game-rotisserie-draft-custom-pool-file').addEventListener('change', async (event) => {
+        const file = event.target.files[0];
+        if (!file) {
+            return;
+        }
+
+        document.getElementById('new-game-rotisserie-draft-custom-pool-text').value = await file.text();
     });
 
     // Reading an uploaded decklist file into the textarea lets both input
@@ -2426,6 +2513,7 @@
         await populateSavedDecklistSelect(document.getElementById('new-game-quick-draft-saved-decklist'), 'Choose a saved deck');
         await populateSavedDecklistSelect(document.getElementById('new-game-winston-draft-saved-decklist'), 'Choose a saved deck');
         await populateSavedDecklistSelect(document.getElementById('new-game-grid-draft-saved-decklist'), 'Choose a saved deck');
+        await populateSavedDecklistSelect(document.getElementById('new-game-rotisserie-draft-saved-decklist'), 'Choose a saved deck');
         newGameDialog.showModal();
     });
 
@@ -2481,16 +2569,24 @@
         const gridDraftCustomPoolText = deckType === 'grid_draft' && gridDraftPoolSource === 'custom'
             ? document.getElementById('new-game-grid-draft-custom-pool-text').value
             : undefined;
-        // A single param shared by deck_type 'custom' and any of the three
+        const rotisserieDraftPoolSource = deckType === 'rotisserie_draft' ? document.getElementById('new-game-rotisserie-draft-pool-source').value : undefined;
+        const rotisserieDraftCustomPoolText = deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'custom'
+            ? document.getElementById('new-game-rotisserie-draft-custom-pool-text').value
+            : undefined;
+        const rotisserieDraftCutoffCount = deckType === 'rotisserie_draft'
+            ? Number(document.getElementById('new-game-rotisserie-draft-cutoff-count').value) || undefined
+            : undefined;
+        // A single param shared by deck_type 'custom' and any of the four
         // draft pool sources being 'saved_deck' (issue #290) -- only one
-        // of these four is ever active per submission, so whichever
+        // of these five is ever active per submission, so whichever
         // select is currently relevant is the one read here. Mirrors how
         // GameService::createGame() itself reuses one $savedDecklistId
-        // param across all four -- see its own docblock.
+        // param across all five -- see its own docblock.
         const savedDecklistId = deckType === 'custom' ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
             : deckType === 'quick_draft' && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
             : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
             : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
+            : deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-rotisserie-draft-saved-decklist').value) || undefined
             : undefined;
         const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
         // Only meaningful for deck_type 'custom_duel' with a bot checked --
@@ -2522,6 +2618,9 @@
             botDecklistText,
             botSavedDecklistId,
             randomTeams,
+            rotisserieDraftPoolSource,
+            rotisserieDraftCustomPoolText,
+            rotisserieDraftCutoffCount,
         );
 
         if (!ok) {
@@ -3411,7 +3510,8 @@
         const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
             : state.game.deck_type === 'winston_draft' ? state.winston_draft
                 : state.game.deck_type === 'grid_draft' ? state.grid_draft
-                    : null;
+                    : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
+                        : null;
         return Boolean(draftState) && draftState.status === 'deck_building';
     }
 
@@ -3827,7 +3927,7 @@
         // a pending decision is known (nothing can freeze a still-waiting
         // draft the same way, so there's nothing to gate here yet).
         const canResignWhileWaiting = state.game.status === 'waiting'
-            && ['quick_draft', 'winston_draft', 'grid_draft'].includes(state.game.deck_type);
+            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'].includes(state.game.deck_type);
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = isReadOnlyView()
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
@@ -4072,14 +4172,16 @@
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('grid-draft-panel').hidden = true;
+                document.getElementById('rotisserie-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft') {
+            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
-                        : state.grid_draft;
+                        : state.game.deck_type === 'grid_draft' ? state.grid_draft
+                            : state.rotisserie_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
@@ -4103,6 +4205,7 @@
                 document.getElementById('quick-draft-panel').hidden = true;
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('grid-draft-panel').hidden = true;
+                document.getElementById('rotisserie-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
                 autoStartGameIfReady(true);
             }
@@ -4114,6 +4217,7 @@
         document.getElementById('quick-draft-panel').hidden = true;
         document.getElementById('winston-draft-panel').hidden = true;
         document.getElementById('grid-draft-panel').hidden = true;
+        document.getElementById('rotisserie-draft-panel').hidden = true;
         document.getElementById('draft-deck-building').hidden = true;
         inProgressArea.hidden = false;
 
@@ -4593,21 +4697,22 @@
     // so an in-progress selection survives an ordinary poll uneventfully.
 
     // Shared scoreline for every draft-based deck_type's own match --
-    // Quick Draft's, Winston Draft's, and Grid Draft's own getState()
-    // fields (quick_draft/winston_draft/grid_draft) share an identical
-    // outer shape (your_wins/opponent_wins/games_to_win/next_game_id),
-    // even though their own 'drafting' sub-shapes differ -- see
-    // GameService's own docblocks for
-    // quickDraftStateFor()/winstonDraftStateFor()/gridDraftStateFor().
-    // Only the label shown differs, so this one function (and one shared
-    // DOM slot) covers all three instead of duplicating the same
-    // rendering. No format label (Quick Draft/Winston Draft/Grid Draft)
-    // here -- that's already shown elsewhere on the board (the title), so
-    // this line stays purely about the match's own progress.
+    // Quick Draft's, Winston Draft's, Grid Draft's, and Rotisserie
+    // Draft's own getState() fields (quick_draft/winston_draft/
+    // grid_draft/rotisserie_draft) share an identical outer shape
+    // (your_wins/opponent_wins/games_to_win/next_game_id), even though
+    // their own 'drafting' sub-shapes differ -- see GameService's own
+    // docblocks for quickDraftStateFor()/winstonDraftStateFor()/
+    // gridDraftStateFor()/rotisserieDraftStateFor(). Only the label shown
+    // differs, so this one function (and one shared DOM slot) covers all
+    // four instead of duplicating the same rendering. No format label
+    // (Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft) here --
+    // that's already shown elsewhere on the board (the title), so this
+    // line stays purely about the match's own progress.
     function renderDraftMatchScoreline(state) {
         const el = document.getElementById('draft-match-scoreline');
         const nextGameButton = document.getElementById('draft-match-next-game-button');
-        const draftState = state.quick_draft || state.winston_draft || state.grid_draft;
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft;
         if (!draftState) {
             el.hidden = true;
             nextGameButton.hidden = true;
@@ -5089,6 +5194,120 @@
         await refreshBoard();
     }
 
+    // Rotisserie Draft's (issue #361) own drafting UI -- unlike Grid
+    // Draft's own row/column buttons acting on a batch of cells at once,
+    // this format's own pick unit IS a single card: clicking any card in
+    // the shared pool immediately picks it, the same one-click-commits
+    // directness Grid Draft's own row/column buttons already use (no
+    // confirmation step) -- while it's someone else's turn, clicking a
+    // pool card instead just opens the read-only card-detail view (same
+    // as Grid Draft's own always-inspectable grid cells), so waiting
+    // players can still look cards over. The entire pool is always fully
+    // visible face-up (drafting.pool_cards, see
+    // GameService::rotisserieDraftDraftingStateFor()'s own docblock) --
+    // there's no hidden reserve to report a count for the way Grid
+    // Draft's own remaining_deck_count does.
+    function renderRotisserieDraftDrafting(drafting) {
+        document.getElementById('rotisserie-draft-drafting-title').textContent =
+            'Rotisserie Draft — pick ' + (drafting.picks_made + 1) + ' of ' + drafting.total_picks_needed;
+        document.getElementById('rotisserie-draft-drafting-status').textContent = drafting.is_your_turn
+            ? 'Your turn -- choose a card from the shared pool.'
+            : 'Waiting for ' + (drafting.current_turn_username || 'your opponent') + "'s turn.";
+
+        const poolContainer = document.getElementById('rotisserie-draft-pool');
+        poolContainer.innerHTML = '';
+        poolContainer.className = 'draft-pool-cards';
+        // Sorted by color/rarity/name (compareDraftPoolCards, shared with
+        // issue #314's own pool view above) rather than left in whatever
+        // order the server shuffled the pool into -- the server's own
+        // pick-order/turn logic only cares about card_id membership, not
+        // display order, so re-sorting here for readability is safe.
+        drafting.pool_cards.slice().sort(compareDraftPoolCards).forEach((card) => {
+            poolContainer.appendChild(buildCardThumb(card, {
+                onClick: () => (drafting.is_your_turn ? submitRotisserieDraftAction(card.card_id) : openCardDetail(card)),
+            }));
+        });
+
+        // Open Team Play (drafting.teams_drafted_so_far non-null) shows
+        // "Your team's"/"Opposing team's drafted so far" instead (below)
+        // -- your own drafted cards are already part of the "Your team"
+        // entry there, so this plain "Drafted so far" would just be
+        // showing a subset of the same cards a second time right above
+        // it. Mirrors Quick/Winston/Grid Draft's own identical fix
+        // (showKeptSoFar/showDraftedSoFar) for the same bug.
+        const showDraftedSoFar = !drafting.teams_drafted_so_far;
+        document.getElementById('rotisserie-draft-drafted-so-far-heading').hidden = !showDraftedSoFar;
+        document.getElementById('rotisserie-draft-drafted-so-far').hidden = !showDraftedSoFar;
+        if (showDraftedSoFar) {
+            renderList(document.getElementById('rotisserie-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
+
+        // Unlike Quick Draft/Winston Draft, Rotisserie Draft is open
+        // information end to end -- every card any player has ever
+        // drafted was already visible to everyone else the moment it was
+        // dealt into the shared face-up pool, so there's nothing to hide
+        // here. other_players_drafted_so_far covers every OTHER seated
+        // player (1 for a 2-player match, up to 3 for 3-4 players), each
+        // getting its own heading + list -- shown for every format EXCEPT
+        // Open Team Play, which shows the same already-open information
+        // grouped by team instead (teams_drafted_so_far).
+        const otherPlayersContainer = document.getElementById('rotisserie-draft-other-players-drafted');
+        const teamsContainer = document.getElementById('rotisserie-draft-teams-drafted');
+        otherPlayersContainer.innerHTML = '';
+        otherPlayersContainer.hidden = !!drafting.teams_drafted_so_far;
+        (drafting.other_players_drafted_so_far || []).forEach((other) => {
+            const heading = document.createElement('h4');
+            heading.textContent = other.username + "'s drafted so far";
+            otherPlayersContainer.appendChild(heading);
+
+            const list = document.createElement('ul');
+            other.drafted_so_far.forEach((card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                list.appendChild(li);
+            });
+            otherPlayersContainer.appendChild(list);
+        });
+
+        teamsContainer.hidden = !drafting.teams_drafted_so_far;
+        teamsContainer.innerHTML = '';
+        (drafting.teams_drafted_so_far || []).forEach((team) => {
+            const heading = document.createElement('h4');
+            heading.textContent = (team.is_your_team ? 'Your team' : 'Opposing team') + "'s drafted so far ("
+                + team.member_usernames.join(' & ') + ')';
+            teamsContainer.appendChild(heading);
+
+            // .team-drafted-cards-list (style.css) gives this a
+            // horizontal, wrapping row of thumbnails instead of one huge
+            // vertical column -- same reused class Quick/Winston/Grid
+            // Draft's own team lists already apply.
+            const list = document.createElement('ul');
+            list.className = 'team-drafted-cards-list';
+            team.drafted_so_far.forEach((card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                list.appendChild(li);
+            });
+            teamsContainer.appendChild(list);
+        });
+    }
+
+    async function submitRotisserieDraftAction(cardId) {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await submitRotisserieDraftPick(currentGameId, cardId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit that pick.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
     // Converts a multiset of card_ids (e.g. deck_card_ids, which may
     // legally contain duplicates -- a jceddys_75 or custom pool can draft
     // more than one copy of the same card) into a Set of *indices* into
@@ -5373,6 +5592,7 @@
             document.getElementById('quick-draft-panel').hidden = false;
             document.getElementById('winston-draft-panel').hidden = true;
             document.getElementById('grid-draft-panel').hidden = true;
+            document.getElementById('rotisserie-draft-panel').hidden = true;
             document.getElementById('quick-draft-drafting').hidden = qd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = qd.status !== 'deck_building';
 
@@ -5386,6 +5606,7 @@
             document.getElementById('winston-draft-panel').hidden = false;
             document.getElementById('quick-draft-panel').hidden = true;
             document.getElementById('grid-draft-panel').hidden = true;
+            document.getElementById('rotisserie-draft-panel').hidden = true;
             document.getElementById('winston-draft-drafting').hidden = wd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = wd.status !== 'deck_building';
 
@@ -5394,11 +5615,12 @@
             } else if (wd.status === 'deck_building') {
                 renderDraftDeckBuilding(wd.deck_building);
             }
-        } else {
+        } else if (state.game.deck_type === 'grid_draft') {
             const gd = state.grid_draft;
             document.getElementById('grid-draft-panel').hidden = false;
             document.getElementById('quick-draft-panel').hidden = true;
             document.getElementById('winston-draft-panel').hidden = true;
+            document.getElementById('rotisserie-draft-panel').hidden = true;
             document.getElementById('grid-draft-drafting').hidden = gd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = gd.status !== 'deck_building';
 
@@ -5406,6 +5628,20 @@
                 renderGridDraftDrafting(gd.drafting);
             } else if (gd.status === 'deck_building') {
                 renderDraftDeckBuilding(gd.deck_building);
+            }
+        } else {
+            const rd = state.rotisserie_draft;
+            document.getElementById('rotisserie-draft-panel').hidden = false;
+            document.getElementById('quick-draft-panel').hidden = true;
+            document.getElementById('winston-draft-panel').hidden = true;
+            document.getElementById('grid-draft-panel').hidden = true;
+            document.getElementById('rotisserie-draft-drafting').hidden = rd.status !== 'drafting';
+            document.getElementById('draft-deck-building').hidden = rd.status !== 'deck_building';
+
+            if (rd.status === 'drafting') {
+                renderRotisserieDraftDrafting(rd.drafting);
+            } else if (rd.status === 'deck_building') {
+                renderDraftDeckBuilding(rd.deck_building);
             }
         }
     }

@@ -62,6 +62,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE draft_pile_stage_picks');
         $pdo->exec('TRUNCATE TABLE draft_winston_state');
         $pdo->exec('TRUNCATE TABLE draft_grid_state');
+        $pdo->exec('TRUNCATE TABLE draft_rotisserie_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
         $pdo->exec('TRUNCATE TABLE game_notes');
@@ -8433,7 +8434,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -14321,6 +14322,364 @@ final class GameServiceIntegrationTest extends TestCase
             gridDraftPoolSource: 'random_48',
         );
         self::assertNull($this->games->getState($draftGameId, $userIds[0])['grid_draft']['drafting']['teams_drafted_so_far']);
+    }
+
+    // -- Rotisserie Draft (issue #361) --------------------------------------
+
+    private function buildRotisserieDraftFixture(
+        int $playerCount = 2,
+        int $cutoffCount = 13,
+        string $poolSource = 'random_48',
+        ?string $customPoolText = null,
+    ): array {
+        $userIds = $this->insertUsers('rotdraft-' . uniqid() . '-', $playerCount);
+
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: $poolSource,
+            rotisserieDraftCustomPoolText: $customPoolText,
+            rotisserieDraftCutoffCount: $cutoffCount,
+        );
+
+        return ['gameId' => $gameId, 'userIds' => $userIds];
+    }
+
+    private function fetchRotisserieState(int $draftMatchId): array|false
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    public function testCreateGameRejectsRotisserieDraftForNonDraftFormat(): void
+    {
+        $userIds = $this->insertUsers('rotformat-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+
+        $this->games->createGame($userIds[0], $userIds, format: 'standard', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameRejectsRotisserieDraftCutoffCountBelowMinimum(): void
+    {
+        $userIds = $this->insertUsers('rotcutofflow-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 13 and 20');
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 12);
+    }
+
+    public function testCreateGameRejectsRotisserieDraftCutoffCountAboveMaximum(): void
+    {
+        $userIds = $this->insertUsers('rotcutoffhigh-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 13 and 20');
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 21);
+    }
+
+    public function testCreateGameAcceptsRotisserieDraftCutoffCountAtBothBoundaries(): void
+    {
+        foreach ([13, 20] as $cutoff) {
+            $userIds = $this->insertUsers('rotcutoffok-' . uniqid() . '-', 2);
+            $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: $cutoff);
+            self::assertIsInt($gameId, "cutoff {$cutoff} should be accepted");
+        }
+    }
+
+    public function testCreateGameRotisserieDraftDefaultCutoffIsFourteen(): void
+    {
+        $userIds = $this->insertUsers('rotcutoffdefault-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48');
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame(14, (int) $this->fetchRotisserieState($draftMatchId)['cutoff_count']);
+    }
+
+    /**
+     * "N random cards, where N is the minimum pool size" -- the ONE pool
+     * source sized exactly to the floor, no leftover, unlike every other
+     * source below.
+     */
+    public function testCreateGameRotisserieDraftRandomPoolIsSizedExactlyToTheMinimum(): void
+    {
+        $userIds = $this->insertUsers('rotrandom-' . uniqid() . '-', 3);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 15);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $pool = json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true);
+        self::assertCount(45, $pool, '15-card cutoff * 3 players');
+        self::assertSame(count($pool), count(array_unique($pool)), 'random_48 never duplicates a card');
+    }
+
+    /**
+     * 'structure' is doubled only when the floor itself (cutoff * players)
+     * exceeds a single 45-card copy -- a different condition from Quick/
+     * Winston Draft's own ">2 players" (see buildDraftPool()'s own
+     * doubleStructureForMultiplayer docblock).
+     */
+    public function testCreateGameRotisserieDraftStructurePoolDoublesOnlyWhenTheFloorExceedsFortyFive(): void
+    {
+        // 2 players * 13 cutoff = 26 <= 45 -- stays a single 45-card copy.
+        $userIds = $this->insertUsers('rotstructlow-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'structure', rotisserieDraftCutoffCount: 13);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(45, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+
+        // 3 players * 16 cutoff = 48 > 45 -- doubles to 90.
+        $userIds2 = $this->insertUsers('rotstructhigh-' . uniqid() . '-', 3);
+        $gameId2 = $this->games->createGame($userIds2[0], $userIds2, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'structure', rotisserieDraftCutoffCount: 16);
+        $draftMatchId2 = (int) $this->fetchGame($gameId2)['draft_match_id'];
+        self::assertCount(90, json_decode((string) $this->fetchRotisserieState($draftMatchId2)['pool_card_ids'], true));
+    }
+
+    public function testCreateGameRotisserieDraftCustomPoolBelowMinimumIsRejected(): void
+    {
+        $userIds = $this->insertUsers('rotcustomlow-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 26');
+
+        $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: "20 Charity\n",
+            rotisserieDraftCutoffCount: 13,
+        );
+    }
+
+    /**
+     * "A floor, not an exact match" (the maintainer's own words) -- unlike
+     * Quick/Winston/Grid Draft, which all truncate an oversized pool down
+     * to their own exact target before drafting starts, an oversized
+     * Rotisserie Draft pool is laid out in FULL; the leftover simply never
+     * gets drafted once every player reaches the cutoff.
+     */
+    public function testCreateGameRotisserieDraftCustomPoolAboveMinimumIsLaidOutInFullNotTruncated(): void
+    {
+        $userIds = $this->insertUsers('rotcustomhigh-' . uniqid() . '-', 2);
+        $poolText = implode("\n", array_fill(0, 40, '1 Charity')) . "\n"; // 40 cards, well above the 26-card minimum
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: $poolText,
+            rotisserieDraftCutoffCount: 13,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(40, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    public function testRotisserieDraftDealsTheFullPoolFaceUpAndPicksARandomFirstPicker(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $state = $this->fetchRotisserieState($draftMatchId);
+
+        self::assertCount(26, json_decode((string) $state['pool_card_ids'], true));
+        self::assertSame(13, (int) $state['cutoff_count']);
+        self::assertSame(0, (int) $state['pick_index']);
+        self::assertContains((int) $state['current_turn_user_id'], $userIds);
+
+        $apiState = $this->games->getState($gameId, $userIds[0]);
+        self::assertSame('drafting', $apiState['rotisserie_draft']['status']);
+        self::assertCount(26, $apiState['rotisserie_draft']['drafting']['pool_cards']);
+        self::assertSame(13, $apiState['rotisserie_draft']['drafting']['cutoff_count']);
+        self::assertSame(0, $apiState['rotisserie_draft']['drafting']['picks_made']);
+        self::assertSame(26, $apiState['rotisserie_draft']['drafting']['total_picks_needed']);
+    }
+
+    public function testRotisserieDraftRejectsAPickFromWhoeverIsNotTheCurrentTurn(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture();
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+        $otherUserId = $currentTurnUserId === $userIds[0] ? $userIds[1] : $userIds[0];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("It's not your turn");
+
+        $this->games->submitRotisserieDraftPick($gameId, $otherUserId, 1);
+    }
+
+    public function testRotisserieDraftRejectsAPickOfACardNotInThePool(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture();
+        $gameId = $fixture['gameId'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('is not available in the pool');
+
+        $this->games->submitRotisserieDraftPick($gameId, $currentTurnUserId, 999999);
+    }
+
+    /**
+     * @dataProvider rotisseriePickOrderProvider
+     */
+    public function testRotisserieDraftPickOrderMatchesTheConfirmedSequence(int $playerCount, array $expectedSeatSequence): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: $playerCount, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // draftMatchUserIds() (seat order) is insertion order into
+        // draft_match_players, which createGame() populates in $userIds'
+        // own order -- so $userIds[$seat] is exactly the seat sequence's
+        // own user id.
+        $actualSeatSequence = [];
+        for ($i = 0; $i < count($expectedSeatSequence); $i++) {
+            $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+            $actualSeatSequence[] = array_search($currentTurnUserId, $userIds, true);
+
+            $pool = json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true);
+            $this->games->submitRotisserieDraftPick($gameId, $currentTurnUserId, (int) $pool[0]);
+        }
+
+        self::assertSame($expectedSeatSequence, $actualSeatSequence);
+    }
+
+    public static function rotisseriePickOrderProvider(): array
+    {
+        return [
+            '2 players' => [2, [0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0]],
+            '3 players' => [3, [0, 1, 2, 2, 1, 0, 1, 2, 0, 0, 2, 1, 2, 0, 1, 1, 0, 2, 0, 1, 2, 2, 1, 0]],
+            '4 players' => [4, [0, 1, 2, 3, 3, 2, 1, 0, 1, 2, 3, 0, 0, 3, 2, 1, 2, 3, 0, 1, 1, 0, 3, 2]],
+        ];
+    }
+
+    /**
+     * cutoff_count (13) is odd, so the draft ends mid-double-round -- no
+     * special-casing needed anywhere (see rotisserieDraftPickUserId()'s
+     * own docblock), it's simply wherever pick_index reaches
+     * cutoff_count * playerCount.
+     */
+    public function testRotisserieDraftEndsExactlyAtCutoffTimesPlayerCountAndProceedsToDeckBuilding(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 26; $i++) {
+            $state = $this->fetchRotisserieState($draftMatchId);
+            self::assertNotFalse($state, "draft_rotisserie_state should still exist before pick " . ($i + 1));
+            $pool = json_decode((string) $state['pool_card_ids'], true);
+            $result = $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+
+            if ($i < 25) {
+                self::assertFalse($result['draft_completed'], "pick " . ($i + 1) . " should not complete the draft yet");
+            } else {
+                self::assertTrue($result['draft_completed'], 'the 26th pick should complete the draft');
+            }
+        }
+
+        self::assertFalse($this->fetchRotisserieState($draftMatchId), 'draft_rotisserie_state should be cleaned up once the draft completes');
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $draftedCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            self::assertCount(13, $draftedCardIds, "each player should have drafted exactly the 13-card cutoff");
+        }
+    }
+
+    public function testRotisserieDraftDeckBuildingUsesMinDeckSizeTwelve(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 26; $i++) {
+            $state = $this->fetchRotisserieState($draftMatchId);
+            $pool = json_decode((string) $state['pool_card_ids'], true);
+            $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+        }
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['rotisserie_draft']['deck_building'];
+        self::assertSame(12, $deckBuilding['min_deck_size']);
+        self::assertCount(13, $deckBuilding['drafted_cards']);
+    }
+
+    public function testCreateGameAcceptsRotisserieDraftWithThreeOrFourPlayers(): void
+    {
+        foreach ([3, 4] as $playerCount) {
+            $userIds = $this->insertUsers('rotmulti-' . uniqid() . '-', $playerCount);
+            $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 13);
+            self::assertIsInt($gameId, "{$playerCount} players should be accepted");
+        }
+    }
+
+    public function testCreateGameRejectsRotisserieDraftWithMoreThanFourPlayers(): void
+    {
+        // 5 players trips the game-wide MAX_PLAYERS check before ever
+        // reaching Rotisserie Draft's own 2-4 player validation -- there's
+        // no way to reach a "2-4 players" message with more than
+        // MAX_PLAYERS (4) total players regardless of deck_type.
+        $userIds = $this->insertUsers('rottoomany-' . uniqid() . '-', 5);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot have more than 4 players');
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48');
+    }
+
+    public function testOpenTeamRotisserieDraftGroupsDraftedCardsPerTeamInsteadOfPerPlayer(): void
+    {
+        $userIds = $this->insertUsers('otrd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'rotisserie_draft',
+            partnerUserId: $userIds[1],
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13,
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $state = $this->fetchRotisserieState($draftMatchId);
+        $pool = json_decode((string) $state['pool_card_ids'], true);
+        $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+
+        $drafting = $this->games->getState($gameId, $userIds[0])['rotisserie_draft']['drafting'];
+        self::assertNotNull($drafting['teams_drafted_so_far']);
+        self::assertCount(2, $drafting['teams_drafted_so_far']);
+
+        $totalTeamsDraftedCount = array_sum(array_map(fn (array $t) => count($t['drafted_so_far']), $drafting['teams_drafted_so_far']));
+        self::assertSame(1, $totalTeamsDraftedCount);
+
+        // A non-team format never groups by team at all.
+        $draftGameId = $this->games->createGame(
+            $userIds[0],
+            [$userIds[0], $userIds[2]],
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13,
+        );
+        self::assertNull($this->games->getState($draftGameId, $userIds[0])['rotisserie_draft']['drafting']['teams_drafted_so_far']);
     }
 
     /**

@@ -1507,6 +1507,41 @@ too, proportional to the smaller card width.
       bare, class-less `<ul>` (matching none of `style.css`'s own
       flex-wrap card-list rules), so "Your team's"/"Opposing team's
       drafted so far" both rendered as one huge vertical column instead.
+    - **Rotisserie Draft's own drafting phase** (`#rotisserie-draft-panel`
+      > `#rotisserie-draft-drafting`, `renderRotisserieDraftDrafting()`,
+      shown while `state.rotisserie_draft.status` is `'drafting'`) -- the
+      simplest of the four draft panels, since the entire pool is dealt
+      face-up once and never refilled or reshuffled: `#rotisserie-draft-
+      pool` renders every card in `drafting.pool_cards` as a plain wrapping
+      grid of clickable thumbnails (the reused `.draft-pool-cards` class
+      from issue #314's own pool view, no new CSS needed), and picking one
+      calls `submitRotisserieDraftAction(cardId)`
+      (`submitRotisserieDraftPick()`, `POST /games/draft/rotisserie-pick`)
+      with that single card's ID -- no row/column/pile selection like Grid
+      Draft or Winston Draft, just a direct card pick like Quick Draft's
+      own, except from one shared pool instead of a personal pack. The
+      title (`#rotisserie-draft-drafting-title`) reads "pick N of M" from
+      `drafting.picks_made + 1`/`drafting.total_picks_needed` (`cutoff_count
+      * playerCount`) rather than a round number, since there are no rounds
+      to speak of. The status line (`#rotisserie-draft-drafting-status`)
+      reads whose turn it is by `drafting.current_turn_username` when it
+      isn't yours, the same issue #189 convention Winston/Grid Draft's own
+      status lines use. Like Grid Draft, the pool is open information end
+      to end, so `#rotisserie-draft-drafted-so-far` (your own picks),
+      `#rotisserie-draft-other-players-drafted` (issue #189, one heading +
+      list per other seated player), and `#rotisserie-draft-teams-drafted`
+      (Open Team Play, issue #362 stage 2 -- hides the other-players list
+      when present, same as Grid Draft) all render exactly as Grid Draft's
+      own equivalents do. The New Game dialog's own
+      `#new-game-rotisserie-draft-fields` additionally exposes a
+      `#new-game-rotisserie-draft-cutoff-count` number input (13-20,
+      default 14) alongside the pool-source picker; its live value feeds
+      `currentRotisserieDraftMinPoolSize()`, which
+      `updateDraftPoolSourceOptionLabels()` uses to recompute the pool
+      source select's own option labels (e.g. "39 random cards") on every
+      change to either the cutoff count or the opponent selection, the
+      same dynamic-relabeling pattern Quick/Winston/Grid Draft's own pool
+      pickers already use.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
