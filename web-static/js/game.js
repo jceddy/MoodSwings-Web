@@ -6538,8 +6538,20 @@
         // it would be while that card was still being played) -- every
         // other decision type has no "card being played" from the
         // responder's own perspective, so the placeholder stays a no-op.
+        // Looked up from currentState.in_play (a played mood stays there
+        // until something else removes it) rather than a bare {card_id}
+        // stub -- a bug caught live: for a field with includes_self
+        // (e.g. Hate's own "any mood" target), fieldOptions()'s self-option
+        // calls cardLabel(card), which needs card.name/color/value, not
+        // just its id -- the bare stub rendered as a literal "undefined"
+        // name in the repeat offer's own dropdown. Falls back to the bare
+        // stub only if the card somehow isn't in play anymore (e.g. it
+        // discarded itself as part of its own effect), so the
+        // card_id-only exclusion this was originally added for still
+        // works either way.
+        const playedCardInPlay = currentState.in_play.find((c) => c.card_id === pendingDecision.played_card_id);
         const fieldCard = pendingDecision.decision_type === 'duplicity_repeat_offer'
-            ? { card_id: pendingDecision.played_card_id }
+            ? (playedCardInPlay || { card_id: pendingDecision.played_card_id })
             : PENDING_DECISION_PLACEHOLDER_CARD;
 
         const fieldContainer = document.getElementById('pending-decision-field');
