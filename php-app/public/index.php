@@ -920,6 +920,11 @@ if ($path === '/games' && $method === 'POST') {
     // the creator's partner instead of requiring partner_user_id. See
     // createGame()'s own docblock.
     $randomTeams = (bool) ($body['random_teams'] ?? false);
+    // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
+    $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
+    $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
+    // 14 matches createGame()'s own ROTISSERIE_DRAFT_DEFAULT_CUTOFF, same as $winsNeeded's literal 3 above matching its own default.
+    $rotisserieDraftCutoffCount = isset($body['rotisserie_draft_cutoff_count']) ? (int) $body['rotisserie_draft_cutoff_count'] : 14;
 
     try {
         $gameId = $games->createGame(
@@ -942,6 +947,9 @@ if ($path === '/games' && $method === 'POST') {
             $botDecklistText,
             $botSavedDecklistId,
             $randomTeams,
+            $rotisserieDraftPoolSource,
+            $rotisserieDraftCustomPoolText,
+            $rotisserieDraftCutoffCount,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1539,6 +1547,26 @@ if ($path === '/games/draft/grid-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitGridDraftPick($gameId, (int) $currentUser['id'], $axis, $index);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/rotisserie-pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardId = (int) ($body['card_id'] ?? 0);
+
+    // Rotisserie Draft's own picks are keyed by user_id, not
+    // game_player_id (same rationale as /games/draft/pick above) --
+    // requireGamePlayer() here is purely the seated-in-this-game auth
+    // check every other route already uses.
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitRotisserieDraftPick($gameId, (int) $currentUser['id'], $cardId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

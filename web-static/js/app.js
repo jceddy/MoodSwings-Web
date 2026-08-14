@@ -125,7 +125,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -174,6 +174,11 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // partner_user_id. See "Open Team Play"/"Closed Team Play" in
             // web-static/README.md.
             random_teams: randomTeams,
+            // Only meaningful for deck_type 'rotisserie_draft' -- see
+            // "Rotisserie Draft" in web-static/README.md.
+            rotisserie_draft_pool_source: rotisserieDraftPoolSource,
+            rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
+            rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
         }),
     });
 }
@@ -363,6 +368,13 @@ function submitGridDraftPick(gameId, axis, index) {
     return apiRequest('/games/draft/grid-pick', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, axis, index }),
+    });
+}
+
+function submitRotisserieDraftPick(gameId, cardId) {
+    return apiRequest('/games/draft/rotisserie-pick', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, card_id: cardId }),
     });
 }
 

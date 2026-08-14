@@ -2622,6 +2622,120 @@ with `GRID_DRAFT_MIN_DECK_SIZE` (12) and no fixed max, same rationale as
 Winston Draft's own open-ended range -- and, for 3-4 players, the same
 `other_players` array Quick Draft's own multiplayer support added.
 
+### Rotisserie Draft
+
+`deck_type: 'rotisserie_draft'` (issue #361) is the fourth `format: 'draft'`
+deck type, reusing the same `draft_matches`/`draft_match_players` tables and
+best-of-three/deck-building infrastructure as the other three variants
+(`games.deck_type = 'rotisserie_draft'` is the only thing distinguishing it).
+What's genuinely different is the draft mechanic: the *entire* pool is dealt
+face-up once at the start of the match, and players take turns picking a
+single card from it in a fixed snake order until a per-player cutoff is
+reached -- there's no per-round dealing/refilling at all, unlike Quick
+Draft's packs, Winston Draft's piles, or Grid Draft's grid.
+
+**Cutoff count** -- the creator picks a `rotisserie_draft_cutoff_count`
+between `ROTISSERIE_DRAFT_MIN_CUTOFF` (13) and `ROTISSERIE_DRAFT_MAX_CUTOFF`
+(20) inclusive, defaulting to `ROTISSERIE_DRAFT_DEFAULT_CUTOFF` (14) --
+validated in `createGame()` before any pool building happens. This is how
+many cards *each* player ends up drafting; the draft ends the instant every
+seated player has picked exactly that many cards, regardless of how much of
+the shared pool is left over.
+
+**Pool building -- a floor, not an exact match** -- `buildRotisserieDraftPool()`
+computes `rotisserieDraftMinPoolSize($cutoffCount, $playerCount)` (simply
+`$cutoffCount * $playerCount`) and requires the chosen pool source to
+produce *at least* that many cards, throwing a `GameStateException` if it
+can't. This is the opposite of Quick/Winston/Grid Draft's own pool sizing,
+which always truncates down to an exact target -- Rotisserie Draft instead
+calls the shared `buildDraftPool()` helper with `truncateToTarget: false`,
+so any pool source larger than the minimum is laid out at its own natural
+full size, with the leftover, undrafted cards simply never dealt (mirroring
+Rarity Rotisserie's own precedent of discarding a remainder rather than
+forcing an exact count). The `random_48`-equivalent source (despite its
+name, sized however many cards are actually needed) is the only source
+sized *exactly* to the minimum -- it pulls that many unique random catalog
+cards outright. Every other source (`structure`, `jceddys_75`, `one_of_each`,
+`custom`, `saved_deck`) is laid out at whatever size it naturally is; a
+`structure` pool doubles to two structure decks only when the minimum pool
+size exceeds 45 (`doubleStructureForMultiplayer: $minPoolSize > 45` -- note
+this is a different condition from Quick/Winston Draft's own doubling rule,
+which is based on player count rather than the computed floor), and a
+`custom` pool is rejected if it's smaller than the minimum but otherwise
+used in full even when it's larger.
+
+**Pick order -- snaking with a rotating starter, alternating every two
+rounds** -- `rotisserieDraftPickUserId($userIds, $pickIndex)` computes,
+from a 0-indexed global pick counter, which seat picks next. Every 2
+rounds (a "double-round" of `2 * $playerCount` picks) forms a matched pair:
+a forward pass starting from that double-round's "starter" seat, followed
+by an exact mirror-image reverse pass ending back on the starter -- a
+standard snake pair, except the seat at the pivot between the two passes
+picks twice in a row (once to end the forward pass, once to begin the
+reverse pass). For 3-4 players, the starter seat rotates by one position
+every double-round (`$doubleRoundIndex % $playerCount`), so first-pick duty
+for each pair of rounds is shared evenly around the table; for exactly 2
+players the starter never rotates (staying fixed at seat 0 throughout the
+match) since with only 2 seats a snake pair is already symmetric and
+rotating the starter would simply swap which one of two functionally
+identical orderings is used. Because `$cutoffCount` need not be even, a
+draft frequently ends mid-double-round -- no special-casing is needed for
+this, since the draft simply stops generating further picks once
+`pick_index` reaches `$cutoffCount * $playerCount`, whatever position that
+falls at within the in-progress double-round.
+
+**State** -- `draft_rotisserie_state` (migration `0125`) holds the whole
+match's mechanic in one row: `pool_card_ids` (a JSON array, the shrinking
+face-up pool -- cards are removed from it as they're picked, never
+re-added), `cutoff_count`, `pick_index` (the 0-based global counter --
+simultaneously the single source of truth for whose turn it is, via
+`rotisserieDraftPickUserId()`, and for whether the draft is complete, via
+comparison against `cutoff_count * $playerCount`), and
+`current_turn_user_id` (a cached/derived value kept in sync on every pick,
+so turn-lookup queries don't need to recompute the pick-order formula).
+`initializeRotisserieDraft()` shuffles the pool once and inserts this row
+at `pick_index = 0`. `submitRotisserieDraftPick()` validates the caller is
+the current picker and the chosen card is still in the pool, removes it
+from `pool_card_ids`, appends it to the picker's `drafted_card_ids` (the
+same shared column every draft variant uses), and either advances
+`pick_index`/`current_turn_user_id` to the next pick or, once the cutoff is
+reached, deletes the `draft_rotisserie_state` row outright and transitions
+the match to `deck_building` -- there's nothing left to persist once every
+pick has been made, unlike Winston Draft's leftover deck/piles or Grid
+Draft's leftover grid cells.
+
+**Deck-building** uses the same shared `draftDeckBuildingStateFor()`/
+`submitDraftDeck()` infrastructure as the other three variants, with
+`ROTISSERIE_DRAFT_MIN_DECK_SIZE` (12) as the minimum -- fixed regardless of
+`cutoff_count`, unlike Quick Draft's guaranteed-per-player total, since the
+drafted pool is always exactly `cutoff_count` cards per player (13-20) and
+12 simply matches every other format's own floor.
+
+**State exposure** -- `getState()`'s `rotisserie_draft` field (`null` for
+every other deck_type) mirrors the other three draft variants' own shape
+(an always-present match scoreline, a `players` array, `games_to_win` via
+the shared `draftGamesToWin($playerCount)` helper, plus whichever of
+`drafting`/`deck_building` is currently live). `drafting`
+(`rotisserieDraftDraftingStateFor()`) is `is_your_turn`,
+`current_turn_username`, `cutoff_count`, `picks_made` (`pick_index`),
+`total_picks_needed` (`cutoff_count * $playerCount`), `pool_cards` (every
+card still in the pool, fully serialized -- unlike Grid Draft's grid, which
+can contain `null` gaps mid-round, Rotisserie Draft's face-up pool is
+always fully populated between picks, so there's nothing to hide or leave
+as a placeholder), `drafted_so_far` (the viewer's own accumulated picks),
+`opponent_drafted_so_far`/`other_players_drafted_so_far` (issue #189-style,
+mirroring Grid Draft's own multiplayer shape), and `teams_drafted_so_far`
+for Open Team Play (see below). Like Grid Draft, this is open information
+end to end -- every card any player has drafted was already visible to
+everyone else the moment the pool itself was dealt face-up, so there's no
+game-integrity reason to hide anyone's drafted list. `deck_building` is the
+same shared shape the other variants use, called with
+`ROTISSERIE_DRAFT_MIN_DECK_SIZE` and no fixed max.
+
+**Open Team Play** -- like Grid Draft, drafted cards are aggregated per
+team (`teams_drafted_so_far`) rather than per player when `format: 'team'`,
+reusing the same team-grouping helpers.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next
