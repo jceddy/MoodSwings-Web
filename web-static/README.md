@@ -2862,7 +2862,8 @@ using the same-origin `session_token` cookie for auth — see
   `getCardStats()` in `app.js` → `GET /stats/cards`) with one row per
   catalog card and a column each for Name/Set/#/Rarity/Color/Times in
   deck/Deck win rate/Times played/Play win rate/Quick Draft avg.
-  pick/Winston Draft avg. pile size/Grid Draft avg. round — server-wide
+  pick/Winston Draft avg. pile size/Grid Draft avg. round/Rotisserie
+  Draft avg. pick — server-wide
   aggregate data, not tied to any one player. Every `<th data-sort-key>`
   is clickable: a click sorts ascending by that column (and resets to
   page 1), a second click on the same header flips to descending, and a
@@ -2880,7 +2881,7 @@ using the same-origin `session_token` cookie for auth — see
   own return value directly, so a render never mutates the source
   `cards` array as a side effect (harmless in practice today, since
   `compareCards` is a valid deterministic order, but worth not relying
-  on). The three draft-format columns hold `{average,
+  on). The four draft-format columns hold `{average,
   count}` objects (see `CardStatsService::averagePick()` in
   `../php-app/README.md`) so a never-drafted card's `null` average
   always sorts last regardless of direction, instead of sorting

@@ -42,8 +42,9 @@ use MoodSwings\Game\CardCatalog;
  * Each draft format's own "how early was this taken" signal is measured
  * on a different, format-native scale (Quick Draft's round/stage
  * ordinal, Winston Draft's pile size at the moment of taking, Grid
- * Draft's round number) -- never compared across formats, so each gets
- * its own sum/count column pair rather than one shared value.
+ * Draft's round number, Rotisserie Draft's own 1-based global pick_index)
+ * -- never compared across formats, so each gets its own sum/count
+ * column pair rather than one shared value.
  */
 final class CardStatsService
 {
@@ -188,6 +189,20 @@ final class CardStatsService
         $this->bumpPickPosition($catalogCardIds, 'grid_draft_pick_round_sum', 'grid_draft_pick_round_count', $round);
     }
 
+    /**
+     * Rotisserie Draft's own "how early" signal: the draft's 1-based
+     * global pick position at the moment of the pick (the whole pool is
+     * dealt face-up once and drafted in a fixed snake order, so this is a
+     * genuine ordinal rather than a proxy like the other three formats
+     * each need) -- see submitRotisserieDraftPick().
+     *
+     * @param int[] $catalogCardIds
+     */
+    public function recordRotisserieDraftPick(array $catalogCardIds, int $position): void
+    {
+        $this->bumpPickPosition($catalogCardIds, 'rotisserie_draft_pick_position_sum', 'rotisserie_draft_pick_position_count', $position);
+    }
+
     /** @param int[] $catalogCardIds @param string $sumColumn/$countColumn always one of card_stats' own column names, never user input -- safe to interpolate */
     private function bumpPickPosition(array $catalogCardIds, string $sumColumn, string $countColumn, int $position): void
     {
@@ -221,7 +236,7 @@ final class CardStatsService
      * rate/average, so a low-sample stat is visible as such rather than
      * hidden or flagged.
      *
-     * @return array<int, array{catalog_card_id:int, name:string, set_code:?string, collector_number:?int, rarity:string, color:string, times_in_deck:int, deck_win_rate:?float, times_played:int, play_win_rate:?float, quick_draft:array{average:?float, count:int}, winston_draft:array{average:?float, count:int}, grid_draft:array{average:?float, count:int}}>
+     * @return array<int, array{catalog_card_id:int, name:string, set_code:?string, collector_number:?int, rarity:string, color:string, times_in_deck:int, deck_win_rate:?float, times_played:int, play_win_rate:?float, quick_draft:array{average:?float, count:int}, winston_draft:array{average:?float, count:int}, grid_draft:array{average:?float, count:int}, rotisserie_draft:array{average:?float, count:int}}>
      */
     public function allCardStats(): array
     {
@@ -257,6 +272,7 @@ final class CardStatsService
                 'quick_draft' => self::averagePick($row, 'quick_draft_pick_position_sum', 'quick_draft_pick_position_count'),
                 'winston_draft' => self::averagePick($row, 'winston_draft_pick_pile_size_sum', 'winston_draft_pick_pile_size_count'),
                 'grid_draft' => self::averagePick($row, 'grid_draft_pick_round_sum', 'grid_draft_pick_round_count'),
+                'rotisserie_draft' => self::averagePick($row, 'rotisserie_draft_pick_position_sum', 'rotisserie_draft_pick_position_count'),
             ];
         }
 

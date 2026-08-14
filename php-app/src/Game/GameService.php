@@ -3540,6 +3540,13 @@ final class GameService
             $pickIndex = (int) $state['pick_index'] + 1;
             $totalPicksNeeded = (int) $state['cutoff_count'] * $playerCount;
 
+            // Issue #315's Rotisserie Draft pick-position signal -- the
+            // draft's own 1-based global pick position, written live
+            // right alongside the pick itself, same as the other three
+            // draft formats' own recordQuickDraftPick()/
+            // recordWinstonDraftPick()/recordGridDraftPick() calls.
+            $this->cardStats->recordRotisserieDraftPick([$cardId], $pickIndex);
+
             if ($pickIndex >= $totalPicksNeeded) {
                 // The draft is complete -- whatever's left in $pool is
                 // simply discarded, never reshuffled back in (same

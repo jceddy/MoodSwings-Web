@@ -96,7 +96,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
 | GET    | `/games/draft-pool` | query params `game_id`, `code`?                             | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/log`/`GET /games/replay/state` use). `409` if `game_id` isn't part of a draft match, or its match hasn't `completed` yet. Returns `{"draft_match_id", "players": [{"user_id", "username", "cards": [...]}], "undrafted_cards": [...]}` -- the whole Quick/Winston/Grid Draft match's shared `pool_card_ids`, sectioned by which player's `drafted_card_ids` each card ended up in, plus whatever nobody drafted (issue #314). See "View draft pool" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
-| GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
+| GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}, "rotisserie_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
@@ -4273,9 +4273,10 @@ Server-wide, 17lands-style aggregate data -- not tied to any one
 player -- per catalog card (`cards.id`, never a per-game instance id):
 how many completed games' decks it ended up in and how many of those
 were won, how many times it was actually played and how many of those
-games were won, and (for Quick/Winston/Grid Draft) an average
+games were won, and (for Quick/Winston/Grid/Rotisserie Draft) an average
 "how early was this taken" signal per format. Backed by a new
-`card_stats` table (migration `0070`) and a new `MoodSwings\Stats\
+`card_stats` table (migration `0070`, later extended by migration `0126`
+for Rotisserie Draft's own column pair) and a new `MoodSwings\Stats\
 CardStatsService` class -- deliberately its own small service (mirroring
 the `UserDecklistService`/`ReplayStateBuilder` precedent) rather than
 more private methods on the already-large `GameService`, and injected
@@ -4316,12 +4317,12 @@ hook point:
   game via Duplicity's repeat mechanic still only counts once).
 - **Draft pick-position signal**
   (`recordQuickDraftPick()`/`recordWinstonDraftPick()`/
-  `recordGridDraftPick()`) is knowable the instant a pick happens,
-  independent of the eventual game/match outcome (same as 17lands' own
-  ATA, a pure draft signal) -- and for Winston/Grid Draft, deferring
-  wouldn't even be possible, since their own pick state is gone by match
-  completion. Each is called directly from its own pick-submission
-  method instead:
+  `recordGridDraftPick()`/`recordRotisserieDraftPick()`) is knowable the
+  instant a pick happens, independent of the eventual game/match outcome
+  (same as 17lands' own ATA, a pure draft signal) -- and for
+  Winston/Grid Draft, deferring wouldn't even be possible, since their
+  own pick state is gone by match completion. Each is called directly
+  from its own pick-submission method instead:
   - Quick Draft (`submitQuickDraftPick()`): `(round_number - 1) *
     playerCount + stage_number` -- a genuine ATA-style ordinal, since
     `draft_pile_stage_picks` already records exactly which (round,
@@ -4337,8 +4338,13 @@ hook point:
   - Grid Draft (`submitGridDraftPick()`): the round the pick happened in
     (`draft_grid_state.current_round`, read before it's ever
     incremented).
+  - Rotisserie Draft (`submitRotisserieDraftPick()`): the draft's own
+    1-based global `pick_index` at the moment of the pick -- unlike the
+    other three, this is a genuine ordinal rather than a proxy, since the
+    whole pool is dealt face-up once and drafted in a single fixed snake
+    order with no rounds/piles/grid to derive a stand-in from.
 
-  These three numbers are on different scales and never compared across
+  These four numbers are on different scales and never compared across
   formats (same as 17lands' own ATA, which is always within-format), so
   each gets its own `*_sum`/`*_count` column pair on `card_stats` rather
   than one shared value.
