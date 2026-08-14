@@ -3598,13 +3598,21 @@ final class GameServiceIntegrationTest extends TestCase
         $recentEvents = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertCount(15, $recentEvents, "recentEvents()'s own hardcoded limit");
 
-        $countStmt = $this->pdo->prepare('SELECT COUNT(*) FROM game_events WHERE game_id = :game_id');
+        // Excludes 'round_grants_computed' the same way fullEventLog()
+        // itself now does -- a diagnostic-only row (logFreshGrants(),
+        // added after a real "no legal play despite a full hand" report
+        // turned out to be unreconstructable from game_rounds alone)
+        // fired on every turn/round boundary, deliberately never surfaced
+        // to players on either log read path.
+        $countStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND event_type != 'round_grants_computed'"
+        );
         $countStmt->execute(['game_id' => $gameId]);
         $actualEventCount = (int) $countStmt->fetchColumn();
         self::assertGreaterThan(15, $actualEventCount, 'sanity check that this scenario really does exceed the 15-row limit');
 
         $fullLog = $this->games->fullEventLog($gameId);
-        self::assertCount($actualEventCount, $fullLog, 'fullEventLog() has no cap at all');
+        self::assertCount($actualEventCount, $fullLog, 'fullEventLog() has no cap on player-visible events');
 
         $ids = array_column($fullLog, 'id');
         $sortedIds = $ids;
@@ -5420,6 +5428,71 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Diagnostic-only instrumentation, added after a real "why did this
+     * player have no legal play" report turned out to be unreproducible
+     * from game_rounds alone -- a same-round turn switch overwrites that
+     * row in place, so a round's own opening grants are otherwise lost
+     * forever the moment the next turn starts. logFreshGrants() records
+     * them permanently in game_events instead, but must stay invisible to
+     * players (fullEventLog()/recentEvents() both filter it out) since it
+     * fires on literally every turn/round boundary.
+     */
+    public function testRoundGrantsComputedIsLoggedButHiddenFromThePlayerFacingLog(): void
+    {
+        $u1 = $this->insertUser('rgc1');
+        $u2 = $this->insertUser('rgc2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $joyId = $this->insertGameCard($gameId, 125, 'hand', $p1); // Joy, value 3
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $joyId, []);
+        $this->games->pass($gameId, $p2);
+
+        $eventsStmt = $this->pdo->prepare(
+            "SELECT * FROM game_events WHERE game_id = :game_id AND event_type = 'round_grants_computed' ORDER BY id ASC"
+        );
+        $eventsStmt->execute(['game_id' => $gameId]);
+        $grantEvents = $eventsStmt->fetchAll();
+
+        // One per turn/round boundary computeFreshGrants() actually runs
+        // for -- NOT p1's own round-1 turn start, which this test's fixture
+        // seeds directly via insertGameRound() (a raw INSERT mimicking
+        // BoardState::startTurn()'s own simpler round-1 allowance, which
+        // never calls computeFreshGrants() at all: Hope/Grace/Stubbornness
+        // all require moods already in play, and no plays can possibly be
+        // banked yet, before a single card has been played in the whole
+        // game). So just p2's round-1 turn start (base only, via
+        // advanceTurn()) and p1's round-2 turn start (base + Joy's banked
+        // play, via finishScoringAndAdvance()).
+        self::assertCount(2, $grantEvents);
+        self::assertSame($p1, (int) $grantEvents[1]['acting_game_player_id']);
+        $round2Grants = json_decode((string) $grantEvents[1]['details'], true)['grants'];
+        self::assertCount(2, $round2Grants, 'base allowance + Joy\'s banked play');
+
+        // Never surfaced to players, on either log read path.
+        $fullLogEventTypes = array_column($this->games->fullEventLog($gameId), 'event_type');
+        self::assertNotContains('round_grants_computed', $fullLogEventTypes);
+
+        // recentEvents()'s own mapped shape (id/created_at/description)
+        // doesn't expose event_type at all, so the exclusion is checked
+        // arithmetically instead: p1's Joy play, p2's pass, and the
+        // round-1 round_scored that pass triggers are the only real,
+        // player-visible events here -- if the 2 round_grants_computed
+        // rows leaked through, this count would be 5, not 3.
+        $state = $this->games->getState($gameId, $u1);
+        self::assertCount(3, $state['recent_events']);
+    }
+
+    /**
      * Arrogance's "give it back if you still have it" only triggers once
      * the mood actually leaves play -- exercised here via a direct
      * BoardStateRepository round trip, since no player action in this
@@ -6012,6 +6085,73 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($state->isInPlay($disciplineId)); // white, not chosen by anyone
         self::assertFalse($state->isInPlay($ambitionId)); // black
         self::assertFalse($state->isInPlay($anxietyId)); // blue
+    }
+
+    /**
+     * Each player's own color pick (or decline) is logged the instant they
+     * answer -- well before the queue's last response actually moves any
+     * moods -- so a later player can see every earlier pick before making
+     * their own, the same way it would be spoken aloud around a real
+     * table. A bug caught live: this used to only ever surface once, for
+     * the LAST responder, folded into the combined pending_decision_resolved
+     * event -- everyone else's own pick was recorded in
+     * game_pending_decisions but never once reached the public log.
+     */
+    public function testDisillusionmentLogsEachPlayersColorChoiceAsTheyRespond(): void
+    {
+        $u1 = $this->insertUser('disillog1');
+        $u2 = $this->insertUser('disillog2');
+        $u3 = $this->insertUser('disillog3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $disillusionmentId = $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
+
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->games->playMood($gameId, $p1, $disillusionmentId, []);
+
+        // p2 picks black; check the log BEFORE p3/p1 have answered at all
+        // -- this is the "can a later player already see it" moment the
+        // card's own text implies.
+        $this->games->respondToDecision($gameId, $p2, ['chosen_color_' . $p2 => 'black']);
+        $descriptionsAfterP2 = array_column($this->games->fullEventLog($gameId), 'description');
+        self::assertContains($this->fetchUsername($u2) . ' chose black for Disillusionment', $descriptionsAfterP2);
+
+        // p3 declines outright.
+        $this->games->respondToDecision($gameId, $p3, []);
+        $descriptionsAfterP3 = array_column($this->games->fullEventLog($gameId), 'description');
+        self::assertContains($this->fetchUsername($u3) . ' declined to choose a color for Disillusionment', $descriptionsAfterP3);
+
+        // p1 (the acting player) answers last, completing the queue.
+        $this->games->respondToDecision($gameId, $p1, ['chosen_color_' . $p1 => 'red']);
+        $finalDescriptions = array_column($this->games->fullEventLog($gameId), 'description');
+
+        // All three individual picks survive in the final log, in order,
+        // alongside the combined resolution event.
+        $disillusionmentLines = array_values(array_filter(
+            $finalDescriptions,
+            fn (string $d) => str_contains($d, 'Disillusionment'),
+        ));
+        self::assertSame([
+            $this->fetchUsername($u1) . ' played Disillusionment from hand, waiting on a response',
+            $this->fetchUsername($u2) . ' chose black for Disillusionment',
+            $this->fetchUsername($u3) . ' declined to choose a color for Disillusionment',
+            $this->fetchUsername($u1) . ' chose red for Disillusionment',
+            // Pre-existing, unchanged behavior: the combined resolution
+            // event still folds in the LAST responder's own raw answer via
+            // describeChoices() -- p1's own pick is now visible twice
+            // (once via the new per-player line just above, once here),
+            // which is harmless and not what this test is about.
+            'A response to Disillusionment was resolved (chosen color: red)',
+        ], $disillusionmentLines);
     }
 
     /**

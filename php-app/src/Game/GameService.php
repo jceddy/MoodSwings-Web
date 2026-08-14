@@ -1793,6 +1793,7 @@ final class GameService
 
             $state = $this->boardStates->load($gameId);
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+            $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
             $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
 
@@ -4466,6 +4467,26 @@ final class GameService
                         'id' => $decisionRow['id'],
                     ]);
 
+                // Disillusionment's own queue asks every player in turn
+                // order for a color, but only actually moves any moods once
+                // every answer is in (its own combined pending_decision_resolved
+                // event, further below) -- so without this, an earlier
+                // player's own pick was invisible to everyone else the
+                // whole time they were waiting their own turn to answer,
+                // even though the card's own text is explicit that later
+                // players decide with that information already public
+                // (their own chosen colors apply simultaneously, but
+                // choosing itself is sequential and, on a real table,
+                // spoken aloud as it happens). Logged here, immediately,
+                // rather than waiting for the whole batch to resolve --
+                // deliberately scoped to just this one decision_type rather
+                // than every multi-target batch (e.g. Suspicion's own
+                // per-player discard choices), since that's what was
+                // actually asked for.
+                if ($decisionRow['decision_type'] === 'disillusionment_choose_color') {
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'disillusionment_color_chosen', (int) $batchRow['played_card_id'], ['color' => $choices[$answerKey] ?? null]);
+                }
+
                 $remainingStmt = $pdo->prepare(
                     'SELECT COUNT(*) FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL'
                 );
@@ -4717,6 +4738,7 @@ final class GameService
                 $firstPlayerId = (int) $round['first_game_player_id'];
                 $freshState = $this->boardStates->load($gameId);
                 $freshGrants = $this->computeFreshGrants($freshState, $firstPlayerId, 1);
+                $this->logFreshGrants($gameId, (int) $round['id'], $firstPlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $freshState);
                 $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound());
             }
@@ -4919,6 +4941,7 @@ final class GameService
         if ($round['current_turn_game_player_id'] === null) {
             // Hurt Feelings never applies in team format -- see php-app/README.md.
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+            $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
             $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
         }
@@ -4963,6 +4986,7 @@ final class GameService
         // Team Play -- see "Closed Team Play" in php-app/README.md), so
         // the base grant is always 1.
         $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+        $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
         $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
 
@@ -5010,6 +5034,7 @@ final class GameService
         // grant is always 1 -- same as applyTurnOrderDecision()'s/
         // applyClosedTeamLeaderDecision()'s own identical comment.
         $freshGrants = $this->computeFreshGrants($state, $overridePlayerId, 1);
+        $this->logFreshGrants($gameId, $roundId, $overridePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
         $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound());
 
@@ -5239,6 +5264,7 @@ final class GameService
         $hurtFeelingsHolder = $round['hurt_feelings_game_player_id'] !== null ? (int) $round['hurt_feelings_game_player_id'] : null;
 
         $freshGrants = $this->computeFreshGrants($state, $nextPlayerId, $nextPlayerId === $hurtFeelingsHolder ? 2 : 1);
+        $this->logFreshGrants($gameId, (int) $round['id'], $nextPlayerId, $freshGrants);
         // computeFreshGrants() may consume a banked Generosity/Joy tag,
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
@@ -5316,6 +5342,7 @@ final class GameService
     private function unfreezeRoundForTeamPlayer(int $gameId, int $roundId, int $playerId, BoardState $state): void
     {
         $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
+        $this->logFreshGrants($gameId, $roundId, $playerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
         $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound());
     }
@@ -5978,6 +6005,8 @@ final class GameService
             'plays_remaining' => count($nextRoundGrants),
             'pending_play_grants' => json_encode($nextRoundGrants),
         ]);
+        $newRoundId = (int) $pdo->lastInsertId();
+        $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
         // Unlike an ordinary same-round turn advance (updateRoundTurnState(),
         // which this INSERT deliberately doesn't go through -- there's no
         // existing row to UPDATE yet), a brand new round setting a real
@@ -5985,7 +6014,7 @@ final class GameService
         // "your turn" moment, and was missing its own notification entirely
         // until now -- the exact gap that made round-to-round handoffs go
         // silent even though same-round turn advances already worked.
-        $this->notifyItsYourTurn((int) $pdo->lastInsertId(), $nextFirstPlayer);
+        $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
 
         return ['round_scored' => true, 'game_completed' => false];
     }
@@ -6990,6 +7019,31 @@ final class GameService
     }
 
     /**
+     * Diagnostic-only record of exactly what computeFreshGrants() just
+     * handed $playerId, written to game_events (so it survives a same-
+     * round turn switch overwriting game_rounds.pending_play_grants in
+     * place, and a whole new round's own opening grants being otherwise
+     * unrecoverable once a later turn switch overwrites that round's row
+     * too) but deliberately excluded from both player-facing log reads
+     * (fullEventLog()/recentEvents()'s own event_type filters) -- a
+     * player doesn't need to see "grants computed" fire on literally
+     * every turn/round boundary, this exists purely so a future "why did
+     * this player have no legal play" mystery (a real one caught live --
+     * a player's own auto-pass-on-empty-hand fired despite them holding
+     * cards, and by the time it was reported, the round's own row had
+     * already been overwritten by the very next turn switch, leaving no
+     * way to see what grants that turn had actually opened with) can be
+     * answered straight from this table instead of needing this same
+     * from-scratch forensic reconstruction again.
+     *
+     * @param array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string, requiresSourceInPlay?: bool}> $grants
+     */
+    private function logFreshGrants(int $gameId, ?int $roundId, int $playerId, array $grants): void
+    {
+        $this->logEvent($gameId, $roundId, $playerId, 'round_grants_computed', null, ['grants' => $grants]);
+    }
+
+    /**
      * The instance id of every one of $playerId's own in-play moods whose
      * EFFECTIVE (copy-aware) effect key is $effectKey -- the same
      * effectiveCardId()-per-mood scan
@@ -7123,10 +7177,12 @@ final class GameService
                     'plays_remaining' => count($nextRoundGrants),
                     'pending_play_grants' => json_encode($nextRoundGrants),
                 ]);
+                $newRoundId = (int) $pdo->lastInsertId();
+                $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
                 // Same gap as finishScoringAndAdvance()'s own "create the
                 // next round" INSERT -- this is Awe's own skip-scoring
                 // equivalent of it, and was missing the same notification.
-                $this->notifyItsYourTurn((int) $pdo->lastInsertId(), $nextFirstPlayer);
+                $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
             }
 
             $pdo->commit();
@@ -9636,10 +9692,10 @@ final class GameService
         }
 
         $stmt = $pdo->prepare(
-            'SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
+            "SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
              FROM game_events e
              LEFT JOIN game_rounds r ON r.id = e.game_round_id
-             WHERE e.game_id = :game_id ORDER BY e.id ASC'
+             WHERE e.game_id = :game_id AND e.event_type != 'round_grants_computed' ORDER BY e.id ASC"
         );
         $stmt->execute(['game_id' => $gameId]);
 
@@ -10147,8 +10203,8 @@ final class GameService
      */
     private function recentEvents(int $gameId, array $players, int $limit = 15, ?int $upToEventId = null): array
     {
-        $sql = 'SELECT id, event_type, acting_game_player_id, card_id, details, created_at
-                 FROM game_events WHERE game_id = :game_id';
+        $sql = "SELECT id, event_type, acting_game_player_id, card_id, details, created_at
+                 FROM game_events WHERE game_id = :game_id AND event_type != 'round_grants_computed'";
         if ($upToEventId !== null) {
             $sql .= ' AND id <= :up_to_event_id';
         }
@@ -10239,6 +10295,15 @@ final class GameService
                 : "{$actor} passed",
             $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
             $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
+            // Disillusionment's own per-player color pick (see
+            // respondToDecision()'s own docblock comment) -- logged the
+            // instant each player answers, well before the combined
+            // pending_decision_resolved event below actually moves any
+            // moods, so a later player in the queue can see every earlier
+            // pick before making their own.
+            $row['event_type'] === 'disillusionment_color_chosen' => ($details['color'] ?? null) !== null
+                ? "{$actor} chose {$details['color']} for {$cardName}"
+                : "{$actor} declined to choose a color for {$cardName}",
             $row['event_type'] === 'pending_decision_resolved' => "A response to {$cardName} was resolved",
             $row['event_type'] === 'round_scored' => $this->describeRoundScored($details, $playerNames, $teamMembersByTeamId),
             // 'automated' (seatFirstPlayerOverride(), same flag shape as
