@@ -139,9 +139,7 @@ final class BoardStateRepository
                 (int) $row['id'],
                 (int) $row['owner_game_player_id'],
                 $row['copied_card_id'] !== null ? (int) $row['copied_card_id'] : null,
-                (bool) $row['is_suppressed'],
-                $row['suppression_expiry'],
-                $row['suppression_source_game_card_id'] !== null ? (int) $row['suppression_source_game_card_id'] : null,
+                $this->decodeSuppressions($row['suppressions']),
                 $row['effect_state'] !== null ? json_decode((string) $row['effect_state'], true) : [],
             );
         }
@@ -196,18 +194,16 @@ final class BoardStateRepository
         // this only ever moves an existing row between zones. $cardId is
         // the row's own surrogate id (see load()'s $catalogCardIdFor), so
         // a plain UPDATE-by-id replaces the old upsert-by-(game_id,card_id)
-        // -- and since suppression_source_game_card_id is now already a
-        // real instance id rather than needing translation from a catalog
-        // id, it can be written in this same pass instead of a second one.
+        // -- and since a suppression source id is now already a real
+        // instance id rather than needing translation from a catalog id,
+        // it can be written in this same pass instead of a second one.
         $update = $pdo->prepare(
             'UPDATE game_cards SET
                 zone = :zone,
                 owner_game_player_id = :owner,
                 deck_position = :deck_position,
                 copied_card_id = :copied_card_id,
-                is_suppressed = :is_suppressed,
-                suppression_expiry = :suppression_expiry,
-                suppression_source_game_card_id = :suppression_source_id,
+                suppressions = :suppressions,
                 effect_state = :effect_state
              WHERE id = :id AND game_id = :game_id'
         );
@@ -218,9 +214,7 @@ final class BoardStateRepository
             ?int $owner,
             ?int $deckPosition,
             ?int $copiedCardId,
-            bool $isSuppressed,
-            ?string $suppressionExpiry,
-            ?int $suppressionSourceId,
+            array $suppressions,
             array $effectState,
         ) use ($update, $gameId): void {
             $update->execute([
@@ -230,28 +224,26 @@ final class BoardStateRepository
                 'owner' => $owner,
                 'deck_position' => $deckPosition,
                 'copied_card_id' => $copiedCardId,
-                'is_suppressed' => $isSuppressed ? 1 : 0,
-                'suppression_expiry' => $suppressionExpiry,
-                'suppression_source_id' => $suppressionSourceId,
+                'suppressions' => $this->encodeSuppressions($suppressions),
                 'effect_state' => $effectState === [] ? null : json_encode($effectState),
             ]);
         };
 
         foreach ($state->playerOrder() as $playerId) {
             foreach ($state->hand($playerId) as $cardId) {
-                $write($cardId, 'hand', $playerId, null, null, false, null, null, []);
+                $write($cardId, 'hand', $playerId, null, null, [], []);
             }
         }
 
         foreach ($state->decks() as $deckKey => $deckCards) {
             $owner = $deckKey === BoardState::SHARED_DECK_KEY ? null : $deckKey;
             foreach ($deckCards as $position => $cardId) {
-                $write($cardId, 'deck', $owner, $position, null, false, null, null, []);
+                $write($cardId, 'deck', $owner, $position, null, [], []);
             }
         }
 
         foreach ($state->discardPile() as $cardId) {
-            $write($cardId, 'discard', $state->discardOwnerOf($cardId), null, null, false, null, null, []);
+            $write($cardId, 'discard', $state->discardOwnerOf($cardId), null, null, [], []);
         }
 
         foreach ($state->moodsInPlay() as $mood) {
@@ -261,9 +253,7 @@ final class BoardStateRepository
                 $mood->ownerId,
                 null,
                 $mood->copiedCardId,
-                $mood->isSuppressed,
-                $mood->suppressionExpiry,
-                $mood->suppressionSourceCardId,
+                $mood->suppressions,
                 $mood->effectState,
             );
         }
@@ -286,6 +276,34 @@ final class BoardStateRepository
                 'banked_extra_plays' => $banked === [] ? null : json_encode($banked),
             ]);
         }
+    }
+
+    /**
+     * @param array<int, array{expiry: string, sourceCardId: ?int}> $suppressions
+     */
+    private function encodeSuppressions(array $suppressions): ?string
+    {
+        if ($suppressions === []) {
+            return null;
+        }
+
+        return json_encode(array_map(
+            static fn (array $s) => ['expiry' => $s['expiry'], 'sourceCardId' => $s['sourceCardId']],
+            $suppressions,
+        ));
+    }
+
+    /** @return array<int, array{expiry: string, sourceCardId: ?int}> */
+    private function decodeSuppressions(?string $json): array
+    {
+        if ($json === null) {
+            return [];
+        }
+
+        return array_map(
+            static fn (array $s) => ['expiry' => $s['expiry'], 'sourceCardId' => $s['sourceCardId'] !== null ? (int) $s['sourceCardId'] : null],
+            json_decode($json, true),
+        );
     }
 
     /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */

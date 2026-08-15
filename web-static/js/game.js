@@ -2808,16 +2808,23 @@
 
         const suppressionEl = document.getElementById('card-detail-suppression');
         if (card.is_suppressed) {
-            let text = 'Suppressed';
-            if (card.suppressed_by_name) {
-                text += ' by ' + card.suppressed_by_name;
-            }
-            if (card.suppression_expiry === 'while_source_in_play') {
-                text += ' — lasts as long as that mood stays in play.';
-            } else if (card.suppression_expiry === 'end_of_round') {
-                text += ' — lasts until the end of this round.';
-            }
-            suppressionEl.textContent = text;
+            // A mood can be suppressed by more than one source at once,
+            // each on its own independent timer (e.g. Scorn suppressing it
+            // until end of round while a Shame the owner played earlier
+            // also suppresses it for as long as Shame stays in play) --
+            // see GameService::suppressionFields(). One line per source.
+            suppressionEl.textContent = card.suppressions.map((suppression) => {
+                let text = 'Suppressed';
+                if (suppression.suppressed_by_name) {
+                    text += ' by ' + suppression.suppressed_by_name;
+                }
+                if (suppression.expiry === 'while_source_in_play') {
+                    text += ' — lasts as long as that mood stays in play.';
+                } else if (suppression.expiry === 'end_of_round') {
+                    text += ' — lasts until the end of this round.';
+                }
+                return text;
+            }).join(' ');
             suppressionEl.hidden = false;
         } else {
             suppressionEl.hidden = true;

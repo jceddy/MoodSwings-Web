@@ -9558,7 +9558,6 @@ final class GameService
             $response['in_play'][] = [
                 ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
-                'is_suppressed' => $mood->isSuppressed,
                 // Whether this specific card currently has an unused play
                 // grant it's responsible for -- most useful for Hope/Grace,
                 // whose own grant (see BoardState::grantIsActive()) is lost
@@ -9578,11 +9577,7 @@ final class GameService
                 // this to distinguish the two visually (see "Card art
                 // rendering" in web-static/README.md).
                 'value_locked' => array_key_exists('valueOverride', $mood->effectState),
-                'suppression_expiry' => $mood->suppressionExpiry,
-                'suppressed_by_card_id' => $mood->suppressionSourceCardId,
-                'suppressed_by_name' => $mood->suppressionSourceCardId !== null
-                    ? ($names[$mood->suppressionSourceCardId] ?? null)
-                    : null,
+                ...$this->suppressionFields($state, $cardId, $names),
                 'boosted_by_card_id' => $boosterCardId,
                 'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
                 'affecting' => $this->affectingEntries($state, $cardId, $names),
@@ -10079,14 +10074,9 @@ final class GameService
                     return [
                         ...$serialized,
                         'owner_game_player_id' => $mood->ownerId,
-                        'is_suppressed' => $mood->isSuppressed,
                         'has_unused_play_grant' => false,
                         'value_locked' => array_key_exists('valueOverride', $mood->effectState),
-                        'suppression_expiry' => $mood->suppressionExpiry,
-                        'suppressed_by_card_id' => $mood->suppressionSourceCardId,
-                        'suppressed_by_name' => $mood->suppressionSourceCardId !== null
-                            ? ($names[$mood->suppressionSourceCardId] ?? null)
-                            : null,
+                        ...$this->suppressionFields($state, $cardId, $names),
                         'boosted_by_card_id' => $boosterCardId,
                         'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
                         'affecting' => $this->affectingEntries($state, $cardId, $names),
@@ -11117,6 +11107,35 @@ final class GameService
      * @param array<int, string> $names
      * @return array<int, array{card_id:int, name:string, relationship:string}>
      */
+    /**
+     * A mood can be suppressed by more than one source at once, each on
+     * its own independent expiry (see MoodInPlay's own docblock) -- e.g.
+     * Scorn suppressing a mood 'end_of_round' while a Shame the owner
+     * played earlier also suppresses it 'while_source_in_play'. `suppressions`
+     * lists every currently-active one; `is_suppressed` is just whether
+     * that list is non-empty, kept as its own field since every caller
+     * already checks it before bothering to read the list itself.
+     *
+     * @param array<int, string> $names
+     * @return array{is_suppressed: bool, suppressions: array<int, array{expiry: string, suppressed_by_card_id: ?int, suppressed_by_name: ?string}>}
+     */
+    private function suppressionFields(BoardState $state, int $cardId, array $names): array
+    {
+        $suppressions = array_map(
+            static fn (array $s) => [
+                'expiry' => $s['expiry'],
+                'suppressed_by_card_id' => $s['sourceCardId'],
+                'suppressed_by_name' => $s['sourceCardId'] !== null ? ($names[$s['sourceCardId']] ?? null) : null,
+            ],
+            $state->suppressionsFor($cardId),
+        );
+
+        return [
+            'is_suppressed' => $suppressions !== [],
+            'suppressions' => $suppressions,
+        ];
+    }
+
     private function affectingEntries(BoardState $state, int $cardId, array $names): array
     {
         $affecting = [];

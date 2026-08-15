@@ -1803,9 +1803,12 @@ too, proportional to the smaller card width.
     while-in-play effect has changed it, its printed color too if
     Imagination has recolored it (or, for a Creativity copy, if that
     differs from whatever it's copying), owner, rules text, and — if it's
-    currently suppressed — an indicator naming the suppressing mood, if the
-    game tracks one, and whether the suppression lasts as long as that mood
-    stays in play or just until the end of the current round). An in-play
+    currently suppressed — one line per active suppression (a mood can be
+    suppressed by more than one source at once, each on its own timer, see
+    `MoodInPlay`'s own docblock in php-app/README.md) naming the
+    suppressing mood, if the game tracks one, and whether that particular
+    suppression lasts as long as that mood stays in play or just until the
+    end of the current round). An in-play
     Creativity that's actually copying something displays AS the copied
     mood rather than as Creativity everywhere on the board — its in-play
     list entry, and this detail view's name/rules text, all read as e.g.

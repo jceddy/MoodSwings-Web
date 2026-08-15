@@ -177,16 +177,21 @@ final class BoardState
     private array $pendingDraws = [];
 
     /**
-     * @var array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
-     * One entry per mood whose suppression actually changed (newly
-     * suppressed via suppress(), or lifted via clearSuppressionsFrom()/
+     * @var array<int, array{card_id: int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>}>
+     * One entry per mood whose suppression list actually changed (a source
+     * added via suppress(), or removed via clearSuppressionsFrom()/
      * clearEndOfRoundSuppressions()) this play/response/scoring pass --
-     * suppression itself is otherwise tracked only as each MoodInPlay's own
-     * current field, with no historical trail (game_cards persists just the
-     * latest value, overwritten every save), so a completed game's replay
-     * (issue #240) needs this queue to reconstruct when a suppression
-     * started/ended. Same consume-before-logging convention as
-     * $pendingCardMoves/$pendingOwnershipChanges.
+     * each entry carries the mood's *entire* resulting suppression list
+     * (see MoodInPlay's own docblock for why it's a list, not a single
+     * expiry/source pair), since that's otherwise tracked only as each
+     * MoodInPlay's own current field, with no historical trail (game_cards
+     * persists just the latest value, overwritten every save), so a
+     * completed game's replay (issue #240) needs this queue to reconstruct
+     * when a suppression started/ended -- ReplayStateBuilder just replaces
+     * the target mood's list wholesale with whatever's recorded here, the
+     * same way it already did for the single-value version of this field.
+     * Same consume-before-logging convention as $pendingCardMoves/
+     * $pendingOwnershipChanges.
      */
     private array $pendingSuppressionChanges = [];
 
@@ -872,23 +877,22 @@ final class BoardState
     // mood is already in play, or the turn is already partway through, by
     // the time a request loads the state back from the database).
 
-    /** @param array<string, mixed> $effectState */
+    /**
+     * @param array<string, mixed> $effectState
+     * @param array<int, array{expiry: string, sourceCardId: ?int}> $suppressions
+     */
     public function restoreMoodInPlay(
         int $cardId,
         int $ownerId,
         ?int $copiedCardId,
-        bool $isSuppressed,
-        ?string $suppressionExpiry,
-        ?int $suppressionSourceCardId,
+        array $suppressions,
         array $effectState,
     ): void {
         $this->moodsInPlay[$cardId] = new MoodInPlay(
             $cardId,
             $ownerId,
             $copiedCardId,
-            $isSuppressed,
-            $suppressionExpiry,
-            $suppressionSourceCardId,
+            $suppressions,
             $effectState,
         );
     }
@@ -911,22 +915,36 @@ final class BoardState
 
     // --- suppression ---
 
+    /**
+     * Adds $cardId's suppression by $sourceCardId (or, for Repentance's own
+     * sourceless "suppress a mood you don't control" ability, by nothing in
+     * particular -- see RepentanceEffect). Idempotent per source: calling
+     * this again for the same ($cardId, $sourceCardId) pair replaces that
+     * source's own entry (a fresh expiry, if it somehow changed) rather
+     * than appending a duplicate, but leaves every OTHER source's own
+     * still-active entry alone -- see MoodInPlay's own docblock for why a
+     * mood can be suppressed by more than one source at once, each with
+     * its own independent expiry.
+     */
     public function suppress(int $cardId, string $expiry, ?int $sourceCardId = null): void
     {
         $mood = $this->moodInPlay($cardId);
-        $mood->isSuppressed = true;
-        $mood->suppressionExpiry = $expiry;
-        $mood->suppressionSourceCardId = $sourceCardId;
-        $this->recordSuppressionChange($cardId, true, $expiry, $sourceCardId);
+        $mood->suppressions = [
+            ...array_filter($mood->suppressions, static fn (array $s) => $s['sourceCardId'] !== $sourceCardId),
+            ['expiry' => $expiry, 'sourceCardId' => $sourceCardId],
+        ];
+        $this->recordSuppressionChange($cardId, $mood->suppressions);
     }
 
-    private function recordSuppressionChange(int $cardId, bool $isSuppressed, ?string $expiry, ?int $sourceCardId): void
+    /** @param array<int, array{expiry: string, sourceCardId: ?int}> $suppressions */
+    private function recordSuppressionChange(int $cardId, array $suppressions): void
     {
         $this->pendingSuppressionChanges[] = [
             'card_id' => $cardId,
-            'is_suppressed' => $isSuppressed,
-            'suppression_expiry' => $expiry,
-            'suppression_source_card_id' => $sourceCardId,
+            'suppressions' => array_map(
+                static fn (array $s) => ['expiry' => $s['expiry'], 'suppression_source_card_id' => $s['sourceCardId']],
+                $suppressions,
+            ),
         ];
     }
 
@@ -937,7 +955,7 @@ final class BoardState
      * consume-before-logging convention as consumeCardMoves()/
      * consumeOwnershipChanges().
      *
-     * @return array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
+     * @return array<int, array{card_id: int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>}>
      */
     public function consumeSuppressionChanges(): array
     {
@@ -949,16 +967,24 @@ final class BoardState
 
     public function isSuppressed(int $cardId): bool
     {
-        return $this->moodInPlay($cardId)->isSuppressed;
+        return $this->moodInPlay($cardId)->suppressions !== [];
     }
 
     /**
-     * The reverse of a suppressed mood's own suppressionSourceCardId --
-     * every mood currently suppressed *by* $sourceCardId. Purely a UI
-     * reminder-text lookup (see GameService's "affecting" field on each
-     * in-play card's serialization): the target's own suppressionSourceCardId
-     * already drives the actual suppression, this just answers it from the
-     * source's side.
+     * @return array<int, array{expiry: string, sourceCardId: ?int}>
+     */
+    public function suppressionsFor(int $cardId): array
+    {
+        return $this->moodInPlay($cardId)->suppressions;
+    }
+
+    /**
+     * The reverse of a suppressed mood's own suppression sources -- every
+     * mood currently suppressed *by* $sourceCardId (among possibly several
+     * other sources it's also suppressed by). Purely a UI reminder-text
+     * lookup (see GameService's "affecting" field on each in-play card's
+     * serialization): the target's own suppressions list already drives
+     * the actual suppression, this just answers it from the source's side.
      *
      * @return int[]
      */
@@ -966,8 +992,11 @@ final class BoardState
     {
         $result = [];
         foreach ($this->moodsInPlay as $cardId => $mood) {
-            if ($mood->isSuppressed && $mood->suppressionSourceCardId === $sourceCardId) {
-                $result[] = $cardId;
+            foreach ($mood->suppressions as $suppression) {
+                if ($suppression['sourceCardId'] === $sourceCardId) {
+                    $result[] = $cardId;
+                    break;
+                }
             }
         }
 
@@ -1063,29 +1092,38 @@ final class BoardState
     public function clearSuppressionsFrom(int $sourceCardId, ?string $onlyExpiry = null): void
     {
         foreach ($this->moodsInPlay as $mood) {
-            if ($mood->suppressionSourceCardId !== $sourceCardId) {
+            $remaining = array_values(array_filter(
+                $mood->suppressions,
+                static fn (array $s) => $s['sourceCardId'] !== $sourceCardId
+                    || ($onlyExpiry !== null && $s['expiry'] !== $onlyExpiry),
+            ));
+            if ($remaining === $mood->suppressions) {
                 continue;
             }
-            if ($onlyExpiry !== null && $mood->suppressionExpiry !== $onlyExpiry) {
-                continue;
-            }
-            $mood->isSuppressed = false;
-            $mood->suppressionExpiry = null;
-            $mood->suppressionSourceCardId = null;
-            $this->recordSuppressionChange($mood->cardId, false, null, null);
+            $mood->suppressions = $remaining;
+            $this->recordSuppressionChange($mood->cardId, $remaining);
         }
     }
 
-    /** Clears every suppression that only lasts "until the end of this round". */
+    /**
+     * Clears every suppression entry that lasts "until the end of this
+     * round" -- from every mood, regardless of source, so a mood suppressed
+     * by an 'end_of_round' source AND a still-active 'while_source_in_play'
+     * one (see MoodInPlay's own docblock) stays suppressed by the latter
+     * instead of losing its whole suppression list to this call.
+     */
     public function clearEndOfRoundSuppressions(): void
     {
         foreach ($this->moodsInPlay as $mood) {
-            if ($mood->suppressionExpiry === 'end_of_round') {
-                $mood->isSuppressed = false;
-                $mood->suppressionExpiry = null;
-                $mood->suppressionSourceCardId = null;
-                $this->recordSuppressionChange($mood->cardId, false, null, null);
+            $remaining = array_values(array_filter(
+                $mood->suppressions,
+                static fn (array $s) => $s['expiry'] !== 'end_of_round',
+            ));
+            if ($remaining === $mood->suppressions) {
+                continue;
             }
+            $mood->suppressions = $remaining;
+            $this->recordSuppressionChange($mood->cardId, $remaining);
         }
     }
 
@@ -1202,7 +1240,7 @@ final class BoardState
     public function valueOf(int $cardId): int
     {
         $mood = $this->moodInPlay($cardId);
-        if ($mood->isSuppressed) {
+        if ($mood->suppressions !== []) {
             return 0;
         }
         if (array_key_exists('valueOverride', $mood->effectState)) {

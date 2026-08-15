@@ -2900,36 +2900,112 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGamePlayer($gameId, $u2, 1);
 
         $faithId = $this->insertGameCard($gameId, 12, 'in_play', $p1); // Faith
-        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by Faith, for as long as Faith is in play
+        $scornId = $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by BOTH Faith and Scorn at once
         $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- suppressed until the end of the round, no tracked source (mirrors Repentance)
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->pdo->prepare(
-            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'while_source_in_play', suppression_source_game_card_id = :source
-             WHERE id = :id"
-        )->execute(['source' => $faithId, 'id' => $courageId]);
+        // A mood can be suppressed by more than one source at once, each on
+        // its own independent expiry -- see MoodInPlay's own docblock and
+        // migration 0128. Courage here carries both a 'while_source_in_play'
+        // entry from Faith and an 'end_of_round' one from Scorn.
+        $this->pdo->prepare('UPDATE game_cards SET suppressions = :suppressions WHERE id = :id')->execute([
+            'suppressions' => json_encode([
+                ['expiry' => 'while_source_in_play', 'sourceCardId' => $faithId],
+                ['expiry' => 'end_of_round', 'sourceCardId' => $scornId],
+            ]),
+            'id' => $courageId,
+        ]);
 
-        $this->pdo->prepare(
-            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'end_of_round'
-             WHERE id = :id"
-        )->execute(['id' => $dignityId]);
+        $this->pdo->prepare('UPDATE game_cards SET suppressions = :suppressions WHERE id = :id')->execute([
+            'suppressions' => json_encode([['expiry' => 'end_of_round', 'sourceCardId' => null]]),
+            'id' => $dignityId,
+        ]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
 
         $courage = self::findByCardId($inPlay, $courageId);
         self::assertTrue($courage['is_suppressed']);
-        self::assertSame('while_source_in_play', $courage['suppression_expiry']);
-        self::assertSame($faithId, $courage['suppressed_by_card_id']);
-        self::assertSame('Faith', $courage['suppressed_by_name']);
+        self::assertSame(
+            [
+                ['expiry' => 'while_source_in_play', 'suppressed_by_card_id' => $faithId, 'suppressed_by_name' => 'Faith'],
+                ['expiry' => 'end_of_round', 'suppressed_by_card_id' => $scornId, 'suppressed_by_name' => 'Scorn'],
+            ],
+            $courage['suppressions'],
+        );
 
         $dignity = self::findByCardId($inPlay, $dignityId);
         self::assertTrue($dignity['is_suppressed']);
-        self::assertSame('end_of_round', $dignity['suppression_expiry']);
-        self::assertNull($dignity['suppressed_by_card_id']);
-        self::assertNull($dignity['suppressed_by_name']);
+        self::assertSame(
+            [['expiry' => 'end_of_round', 'suppressed_by_card_id' => null, 'suppressed_by_name' => null]],
+            $dignity['suppressions'],
+        );
 
         $faith = self::findByCardId($inPlay, $faithId);
         self::assertFalse($faith['is_suppressed']);
+        self::assertSame([], $faith['suppressions']);
+    }
+
+    /**
+     * A real bug, caught live: with Scorn already in play, playing Shame
+     * (discarding a white card) suppressed an opponent's Loyalty
+     * 'while_source_in_play' via Shame's own effect, and Scorn's own
+     * reaction to that same play then ALSO suppressed that Loyalty
+     * 'end_of_round'. The old single-slot suppression columns could only
+     * remember one source at a time, so Scorn's own suppress() call
+     * silently overwrote Shame's -- when the round ended,
+     * clearEndOfRoundSuppressions() lifted Loyalty's suppression entirely,
+     * even though Shame (still in play) should have kept it suppressed.
+     * See MoodInPlay's own docblock and migration 0128.
+     */
+    public function testAScornSuppressionExpiringAtRoundEndDoesNotClobberAStillActiveShameSuppression(): void
+    {
+        $u1 = $this->insertUser('scornshame1');
+        $u2 = $this->insertUser('scornshame2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $scornId = $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn
+        $shameId = $this->insertGameCard($gameId, 25, 'hand', $p1); // Shame
+        $guiltHandId = $this->insertGameCard($gameId, 14, 'hand', $p1); // Guilt (white) -- discarded to Shame to suppress white
+        $loyaltyId = $this->insertGameCard($gameId, 18, 'in_play', $p2); // Loyalty (white) -- opponent's, shares color with the discard
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Scorn's own reaction to Shame's play reads its choice
+        // (scorn_suppress_target) from the same top-level choices bag as
+        // Shame's own (discard_card_id) -- it's the same player's own
+        // decision, made in the same request, not a separate pending
+        // decision (see MoodEffect::reactToAnotherPlay()'s own docblock).
+        $playResult = $this->games->playMood($gameId, $p1, $shameId, [
+            'discard_card_id' => $guiltHandId,
+            'scorn_suppress_target' => $loyaltyId,
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $playResult);
+
+        $inPlayDuringRound1 = $this->games->getState($gameId, $u1)['in_play'];
+        $loyaltyDuringRound1 = self::findByCardId($inPlayDuringRound1, $loyaltyId);
+        self::assertTrue($loyaltyDuringRound1['is_suppressed']);
+        self::assertCount(2, $loyaltyDuringRound1['suppressions']);
+
+        $this->games->pass($gameId, $p2); // p1 already used their only play -- this ends round 1
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+
+        $inPlayDuringRound2 = $this->games->getState($gameId, $u1)['in_play'];
+        $loyaltyDuringRound2 = self::findByCardId($inPlayDuringRound2, $loyaltyId);
+        self::assertTrue($loyaltyDuringRound2['is_suppressed'], "Shame's own 'while_source_in_play' suppression should survive the round ending");
+        self::assertSame(
+            [['expiry' => 'while_source_in_play', 'suppressed_by_card_id' => $shameId, 'suppressed_by_name' => 'Shame']],
+            $loyaltyDuringRound2['suppressions'],
+        );
     }
 
     /**
@@ -2963,7 +3039,7 @@ final class GameServiceIntegrationTest extends TestCase
         $inPlayDuringRound1 = $this->games->getState($gameId, $u1)['in_play'];
         $courageDuringRound1 = self::findByCardId($inPlayDuringRound1, $courageId);
         self::assertTrue($courageDuringRound1['is_suppressed']);
-        self::assertSame('end_of_round', $courageDuringRound1['suppression_expiry']);
+        self::assertSame('end_of_round', $courageDuringRound1['suppressions'][0]['expiry']);
 
         $this->games->pass($gameId, $p2); // p1 already used their only play -- this ends round 1
 
@@ -2973,7 +3049,7 @@ final class GameServiceIntegrationTest extends TestCase
         $inPlayDuringRound2 = $this->games->getState($gameId, $u1)['in_play'];
         $courageDuringRound2 = self::findByCardId($inPlayDuringRound2, $courageId);
         self::assertFalse($courageDuringRound2['is_suppressed']);
-        self::assertNull($courageDuringRound2['suppression_expiry']);
+        self::assertSame([], $courageDuringRound2['suppressions']);
     }
 
     /**
@@ -3103,9 +3179,11 @@ final class GameServiceIntegrationTest extends TestCase
         )->execute(['effect_state' => json_encode(['boostedMoodId' => $dignityId]), 'id' => $encouragementId]);
 
         $this->pdo->prepare(
-            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'while_source_in_play', suppression_source_game_card_id = :source
-             WHERE id = :id"
-        )->execute(['source' => $faithId, 'id' => $courageId]);
+            'UPDATE game_cards SET suppressions = :suppressions WHERE id = :id'
+        )->execute([
+            'suppressions' => json_encode([['expiry' => 'while_source_in_play', 'sourceCardId' => $faithId]]),
+            'id' => $courageId,
+        ]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
 
@@ -3822,7 +3900,7 @@ final class GameServiceIntegrationTest extends TestCase
         $entry = $this->games->fullEventLog($gameId)[0];
 
         self::assertSame(
-            [['card_id' => $charityId, 'is_suppressed' => true, 'suppression_expiry' => 'end_of_round', 'suppression_source_card_id' => $scornId]],
+            [['card_id' => $charityId, 'suppressions' => [['expiry' => 'end_of_round', 'suppression_source_card_id' => $scornId]]]],
             $entry['details']['suppression_changes'],
         );
         self::assertContains(
