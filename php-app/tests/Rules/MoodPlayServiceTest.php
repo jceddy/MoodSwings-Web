@@ -2181,6 +2181,31 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
+    /**
+     * A real bug, caught live: Validation never reacted to Thrill's own
+     * play when Thrill's own choice happened to return Validation itself
+     * to hand -- even though Validation genuinely was in play at the
+     * moment Thrill (base value 1, a qualifying "0 or 1" mood) was
+     * played. The old design re-queried "who's in play right now" only
+     * after Thrill's own afterPlaying() had already moved Validation out,
+     * so it silently never saw it. See PlayResult's own
+     * $reactorCandidateCardIds docblock.
+     */
+    public function testThrillReturningValidationStillLetsValidationReactToThrillsOwnPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 26]]); // Thrill, Validation
+        $state->moveHandToInPlay(1, 26); // Validation, already in play
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 103, new PlayerChoices(['hand_mood_ids' => [26]]));
+
+        self::assertTrue($state->isInHand(1, 26));
+        // Base play consumed by playing Thrill (1 -> 0), +1 from Thrill's
+        // own "returned 1 mood" grant, +1 from Validation's own
+        // reactToAnotherPlay() reacting to Thrill's own play = 2.
+        self::assertSame(2, $state->playsRemaining());
+    }
+
     public function testFearGrantsAnUnconditionalExtraPlayAndOptionallyReturnsAMood(): void
     {
         $state = $this->boardState(hands: [1 => [38, 9, 106]]);

@@ -38,6 +38,27 @@ namespace MoodSwings\Rules;
  * share a color with one of its own resolveDecisions() targets) used to
  * silently lose this snapshot the moment it left play, so Duplicity
  * never got offered a repeat of it at all.
+ *
+ * $reactorCandidateCardIds is the exact same kind of pre-mutation
+ * snapshot, for the same reason, for MoodEffect::reactToAnotherPlay()'s
+ * own candidates (Scorn, Validation) instead of Duplicity's own repeat
+ * count -- see MoodPlayService::resolveAfterPlayingChain()'s own
+ * docblock. Every OTHER card the acting player currently owns in play,
+ * captured *before* this invocation's own afterPlaying()/
+ * resolveDecisions() can move any of them: a card whose own effect
+ * returns or discards one of the player's own OTHER in-play moods as a
+ * side effect (Thrill's "you may put any number of your other moods
+ * into your hand" is the clearest example) used to silently rob that
+ * mood of the chance to react to the very play that displaced it, since
+ * the reaction loop used to re-query "who's in play right now" fresh,
+ * well after that mood had already left. A "while in play, each time
+ * you play another mood" trigger has to be judged at the moment the
+ * other mood was played, not after that mood's own effect has already
+ * finished rearranging the board -- the same principle
+ * $duplicityEligibleSources above already established for Duplicity's
+ * own repeat opportunity.
+ *
+ * @param int[] $reactorCandidateCardIds
  */
 final class PlayResult
 {
@@ -49,6 +70,7 @@ final class PlayResult
         public readonly int $invocationSeq = 0,
         public readonly ?PlayerChoices $invocationChoices = null,
         public readonly int $duplicityEligibleSources = 0,
+        public readonly array $reactorCandidateCardIds = [],
     ) {
     }
 
@@ -57,9 +79,12 @@ final class PlayResult
         return new self(isPending: false);
     }
 
-    /** @param PendingDecisionRequest[] $pendingDecisions */
-    public static function pending(array $pendingDecisions, int $playedCardId, int $invocationSeq, PlayerChoices $invocationChoices, int $duplicityEligibleSources): self
+    /**
+     * @param PendingDecisionRequest[] $pendingDecisions
+     * @param int[] $reactorCandidateCardIds
+     */
+    public static function pending(array $pendingDecisions, int $playedCardId, int $invocationSeq, PlayerChoices $invocationChoices, int $duplicityEligibleSources, array $reactorCandidateCardIds = []): self
     {
-        return new self(isPending: true, pendingDecisions: $pendingDecisions, playedCardId: $playedCardId, invocationSeq: $invocationSeq, invocationChoices: $invocationChoices, duplicityEligibleSources: $duplicityEligibleSources);
+        return new self(isPending: true, pendingDecisions: $pendingDecisions, playedCardId: $playedCardId, invocationSeq: $invocationSeq, invocationChoices: $invocationChoices, duplicityEligibleSources: $duplicityEligibleSources, reactorCandidateCardIds: $reactorCandidateCardIds);
     }
 }

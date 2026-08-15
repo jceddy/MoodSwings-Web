@@ -2692,6 +2692,62 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A real bug, caught live: Validation never reacted to Thrill's own
+     * play when Thrill's own choice happened to return Validation itself
+     * to hand, because the reaction loop used to re-query "who's in play
+     * right now" only after Thrill's own afterPlaying() had already
+     * moved Validation out. Exercises the REAL round trip the fix needed:
+     * playMood() writes the pending batch
+     * (game_pending_decision_batches.reactor_candidate_card_ids,
+     * migration 0127) while pausing for Duplicity's own "repeat again?"
+     * offer, and respondToDecision() reads that persisted snapshot back
+     * in a separate call -- same as GameService's own two public entry
+     * points a real client actually calls across two separate HTTP
+     * requests -- proving the fix survives a genuine request boundary,
+     * not just in-memory threading within a single playMood() call. See
+     * PlayResult's own $reactorCandidateCardIds docblock.
+     */
+    public function testRespondToDecisionLetsValidationReactToThrillAfterAPersistedDuplicityRepeatPause(): void
+    {
+        $u1 = $this->insertUser('thrillval1');
+        $u2 = $this->insertUser('thrillval2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $validationId = $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation, already in play
+        $thrillId = $this->insertGameCard($gameId, 103, 'hand', $p1); // Thrill, value 1
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$validationId]]);
+        self::assertTrue($playResult['pending_decision'] ?? false, "Duplicity's own repeat offer should pause the play before Validation's reaction has a chance to run");
+
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('duplicity_repeat_offer', $pending['decision_type']);
+
+        $registry = DefaultEffectRegistry::build();
+        $stateAfterPlay = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($stateAfterPlay->isInHand($p1, $validationId), "Thrill's own effect should already have returned Validation to hand");
+        self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining']); // base 1 -> 0 for playing Thrill, +1 from Thrill's own "returned 1 mood" grant
+
+        $respondResult = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => false],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInHand($p1, $validationId));
+        self::assertSame(2, (int) $this->fetchRound($gameId)['plays_remaining']); // +1 more from Validation's own reactToAnotherPlay(), read back from the persisted reactor_candidate_card_ids snapshot
+    }
+
+    /**
      * Hurt Feelings' own second base play must be described as
      * attributable to Hurt Feelings, not render as an indistinguishable
      * second "Your normal turn" -- see

@@ -4553,6 +4553,7 @@ final class GameService
                 $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
                 $invocationSeq = (int) $batchRow['invocation_seq'];
                 $duplicityEligibleSources = (int) $batchRow['duplicity_eligible_sources'];
+                $reactorCandidateCardIds = array_map(intval(...), (array) json_decode((string) $batchRow['reactor_candidate_card_ids'], true));
 
                 $result = $this->plays->resolvePendingDecisions(
                     $state,
@@ -4563,6 +4564,7 @@ final class GameService
                     $invocationSeq,
                     $answers,
                     $duplicityEligibleSources,
+                    $reactorCandidateCardIds,
                 );
 
                 // Logged only now, after resolvePendingDecisions() has
@@ -11843,8 +11845,8 @@ final class GameService
 
         $insertBatch = $pdo->prepare(
             'INSERT INTO game_pending_decision_batches
-                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices, duplicity_eligible_sources)
-             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices, :duplicity_eligible_sources)'
+                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices, duplicity_eligible_sources, reactor_candidate_card_ids)
+             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices, :duplicity_eligible_sources, :reactor_candidate_card_ids)'
         );
 
         try {
@@ -11857,6 +11859,7 @@ final class GameService
                 'top_level_choices' => json_encode($topLevelChoices->toArray()),
                 'invocation_choices' => json_encode($invocationChoices->toArray()),
                 'duplicity_eligible_sources' => $result->duplicityEligibleSources,
+                'reactor_candidate_card_ids' => json_encode($result->reactorCandidateCardIds),
             ]);
         } catch (PDOException $e) {
             if ($e->getCode() === '23000') {
