@@ -444,14 +444,14 @@ final class BoardStateTest extends TestCase
         $state->suppress(56, 'end_of_round', sourceCardId: 42);
 
         self::assertSame(
-            [['card_id' => 56, 'is_suppressed' => true, 'suppression_expiry' => 'end_of_round', 'suppression_source_card_id' => 42]],
+            [['card_id' => 56, 'suppressions' => [['expiry' => 'end_of_round', 'suppression_source_card_id' => 42]]]],
             $state->consumeSuppressionChanges(),
         );
 
         $state->clearEndOfRoundSuppressions();
 
         self::assertSame(
-            [['card_id' => 56, 'is_suppressed' => false, 'suppression_expiry' => null, 'suppression_source_card_id' => null]],
+            [['card_id' => 56, 'suppressions' => []]],
             $state->consumeSuppressionChanges(),
         );
     }
@@ -466,7 +466,7 @@ final class BoardStateTest extends TestCase
         $state->clearSuppressionsFrom(42);
 
         self::assertSame(
-            [['card_id' => 56, 'is_suppressed' => false, 'suppression_expiry' => null, 'suppression_source_card_id' => null]],
+            [['card_id' => 56, 'suppressions' => []]],
             $state->consumeSuppressionChanges(),
         );
     }

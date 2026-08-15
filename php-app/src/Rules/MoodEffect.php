@@ -47,11 +47,17 @@ interface MoodEffect
     public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void;
 
     /**
-     * Called on every one of $playerId's *other* moods already in play,
-     * immediately after $playerId plays $playedCardId (and that card's own
-     * afterPlaying(), if any, has resolved) -- see
-     * MoodPlayService::playMood(). $reactorCardId is the reacting mood
-     * (this effect's own card), distinct from $playedCardId. Reads its
+     * Called on every one of $playerId's *other* moods that were already
+     * in play at the moment $playerId played $playedCardId -- judged as
+     * of right BEFORE $playedCardId's own afterPlaying()/resolveDecisions()
+     * runs, not after (see MoodPlayService::resolveAfterPlayingChain()'s
+     * own docblock and PlayResult's $reactorCandidateCardIds): a card
+     * whose own effect returns or discards one of the player's other
+     * in-play moods as a side effect (Thrill is the clearest example)
+     * must not rob that mood of the chance to react to the very play
+     * that displaced it. $reactorCardId is the reacting mood (this
+     * effect's own card), distinct from $playedCardId, and may itself no
+     * longer be in play by the time this actually runs. Reads its
      * optional choices from the same PlayerChoices submitted for the
      * triggering play, since the reaction is the same player's own
      * decision, made in the same request.

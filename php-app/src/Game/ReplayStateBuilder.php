@@ -85,7 +85,7 @@ final class ReplayStateBuilder
         $decks = $genesis['decks'];
         $discard = [];
         $discardOwners = [];
-        /** @var array<int, array{owner_id: int, copied_card_id: ?int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int, effect_state: array<string, mixed>}> */
+        /** @var array<int, array{owner_id: int, copied_card_id: ?int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>, effect_state: array<string, mixed>}> */
         $inPlay = [];
 
         for ($i = 0; $i <= $targetIndex; $i++) {
@@ -146,7 +146,7 @@ final class ReplayStateBuilder
      * @param array<int, int[]> $decks
      * @param int[] $discard
      * @param array<int, int> $discardOwners
-     * @param array<int, array{owner_id:int, copied_card_id:?int, is_suppressed:bool, suppression_expiry:?string, suppression_source_card_id:?int, effect_state: array<string, mixed>}> $inPlay
+     * @param array<int, array{owner_id:int, copied_card_id:?int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>, effect_state: array<string, mixed>}> $inPlay
      */
     private function assembleBoardState(array $context, array $hands, array $decks, array $discard, array $discardOwners, array $inPlay): BoardState
     {
@@ -171,9 +171,10 @@ final class ReplayStateBuilder
                 $cardId,
                 $mood['owner_id'],
                 $mood['copied_card_id'],
-                $mood['is_suppressed'],
-                $mood['suppression_expiry'],
-                $mood['suppression_source_card_id'],
+                array_map(
+                    static fn (array $s) => ['expiry' => $s['expiry'], 'sourceCardId' => $s['suppression_source_card_id']],
+                    $mood['suppressions'],
+                ),
                 $mood['effect_state'],
             );
         }
@@ -187,7 +188,7 @@ final class ReplayStateBuilder
      * @param array<int, int[]> &$decks deck key => card ids
      * @param int[] &$discard
      * @param array<int, int> &$discardOwners
-     * @param array<int, array{owner_id:int, copied_card_id:?int, is_suppressed:bool, suppression_expiry:?string, suppression_source_card_id:?int, effect_state: array<string, mixed>}> &$inPlay
+     * @param array<int, array{owner_id:int, copied_card_id:?int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>, effect_state: array<string, mixed>}> &$inPlay
      */
     private function applyEventForward(
         array $event,
@@ -223,9 +224,7 @@ final class ReplayStateBuilder
             $inPlay[$cardId] = [
                 'owner_id' => $ownerId,
                 'copied_card_id' => $details['copy_card_id'] ?? null,
-                'is_suppressed' => false,
-                'suppression_expiry' => null,
-                'suppression_source_card_id' => null,
+                'suppressions' => [],
                 'effect_state' => [],
             ];
         }
@@ -247,11 +246,20 @@ final class ReplayStateBuilder
         }
 
         foreach ($details['suppression_changes'] ?? [] as $change) {
-            if (isset($inPlay[$change['card_id']])) {
-                $inPlay[$change['card_id']]['is_suppressed'] = $change['is_suppressed'];
-                $inPlay[$change['card_id']]['suppression_expiry'] = $change['suppression_expiry'];
-                $inPlay[$change['card_id']]['suppression_source_card_id'] = $change['suppression_source_card_id'];
+            if (!isset($inPlay[$change['card_id']])) {
+                continue;
             }
+            // A game_events row logged before the reactor-snapshot fix
+            // (migration 0128) recorded a single expiry/source pair --
+            // the mood's entire suppression state at the time, since
+            // multi-source suppression wasn't tracked yet -- rather than
+            // today's full list. Both shapes replace the mood's list
+            // wholesale; only where that list comes from differs.
+            $inPlay[$change['card_id']]['suppressions'] = array_key_exists('suppressions', $change)
+                ? $change['suppressions']
+                : ($change['is_suppressed']
+                    ? [['expiry' => $change['suppression_expiry'], 'suppression_source_card_id' => $change['suppression_source_card_id']]]
+                    : []);
         }
 
         foreach ($details['effect_state_changes'] ?? [] as $change) {
@@ -272,7 +280,7 @@ final class ReplayStateBuilder
      * @param array<int, int[]> &$decks
      * @param int[] &$discard
      * @param array<int, int> &$discardOwners
-     * @param array<int, array{owner_id:int, copied_card_id:?int, is_suppressed:bool, suppression_expiry:?string, suppression_source_card_id:?int, effect_state: array<string, mixed>}> &$inPlay
+     * @param array<int, array{owner_id:int, copied_card_id:?int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>, effect_state: array<string, mixed>}> &$inPlay
      */
     private function applyCardMoveForward(
         array $move,

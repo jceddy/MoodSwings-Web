@@ -1034,17 +1034,28 @@ dynamically once the panel is open and a candidate is chosen, via
 attempt still surfaces the usual server-side rejection at submit time
 regardless.
 
-Every in-play mood also carries `is_suppressed` plus, when suppressed,
-`suppression_expiry` (`'while_source_in_play'` or `'end_of_round'`) and
-`suppressed_by_card_id`/`suppressed_by_name` — the suppressing mood's id
-and name, resolved from `BoardState`'s `suppressionSourceCardId`/
-`GameService::cardNamesFor()`. A source is only ever present for a
-`'while_source_in_play'` suppression (Faith/Guilt/Meekness/Pacifism/Shame,
-and Scorn's own version, which uses `'end_of_round'` *with* a source);
-Repentance's blanket `'end_of_round'` suppression never tracks one, since
-the suppression doesn't need to watch for anything leaving play to know
-when to lift — it just expires at the round boundary regardless
-(`BoardState::clearEndOfRoundSuppressions()`).
+Every in-play mood also carries `is_suppressed` plus `suppressions` -- a
+*list*, since a mood can genuinely be suppressed by more than one source
+at once, each on its own independent expiry (e.g. Scorn suppressing an
+opponent's Loyalty `'end_of_round'` while a Shame the owner played earlier
+also suppresses it `'while_source_in_play'`; see `MoodInPlay`'s own
+docblock). `is_suppressed` is just whether that list is non-empty. Each
+entry is `{expiry, suppressed_by_card_id, suppressed_by_name}` --
+`suppressed_by_card_id`/`suppressed_by_name` are that one entry's own
+suppressing mood's id and name, resolved from `BoardState::
+suppressionsFor()`/`GameService::cardNamesFor()`. A source is only ever
+present for a `'while_source_in_play'` entry (Faith/Guilt/Meekness/
+Pacifism/Shame, and Scorn's own version, which uses `'end_of_round'`
+*with* a source); Repentance's blanket `'end_of_round'` suppression never
+tracks one, since the suppression doesn't need to watch for anything
+leaving play to know when to lift — it just expires at the round boundary
+regardless (`BoardState::clearEndOfRoundSuppressions()`, which now only
+strips the `'end_of_round'` *entries* out of each mood's list, leaving any
+other still-active `'while_source_in_play'` entry alone -- the bug this
+fixed: a second suppress() call used to silently overwrite the entire
+single suppression slot a mood used to have room for, so a later
+`'end_of_round'` source clobbering an earlier `'while_source_in_play'`
+one meant the round ending erased both, not just its own).
 
 `'while_source_in_play'`'s name is a slight misnomer: the card text on
 all five of Faith/Guilt/Meekness/Pacifism/Shame actually reads "for as
@@ -1085,7 +1096,8 @@ now carries `boosted_by_card_id`/`boosted_by_name` (the reverse of
 applies) and `affecting` -- an array of `{card_id, name, relationship}`
 naming every OTHER in-play mood this one is currently suppressing
 (`relationship: 'suppressed'`, via the new `BoardState::
-suppressedByCardId()`, the reverse lookup of `suppressionSourceCardId`) or
+suppressedByCardId()`, the reverse lookup across every mood's own
+suppressions list for one suppressing card) or
 dice-value-boosting (`relationship: 'dice_value'`, one entry for
 Encouragement's single target, several for Idealism's blanket one -- both
 fall out of the same `diceValueBoosterCardId()` check against every other
