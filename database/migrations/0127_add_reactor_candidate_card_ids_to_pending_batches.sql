@@ -23,7 +23,16 @@
 -- and read back the exact same way duplicity_eligible_sources already is
 -- before resuming via MoodPlayService::resolvePendingDecisions(). See
 -- "Validation"/"Scorn" in php-app/README.md.
+--
+-- Nullable rather than `NOT NULL DEFAULT (JSON_ARRAY())`: a JSON/TEXT/BLOB
+-- column can only ever default to NULL on MySQL versions before the
+-- 8.0.13 expression-default syntax (production's own MySQL rejected the
+-- parenthesized-expression form outright with a 1064 syntax error) --
+-- NULL is safe here since writePendingBatch() always writes an explicit
+-- '[]'-or-populated JSON array itself, and the read-back in
+-- GameService::respondToDecision() already treats a NULL/absent value as
+-- an empty array via `(array) json_decode((string) $value, true)`.
 ALTER TABLE game_pending_decision_batches
-    ADD COLUMN reactor_candidate_card_ids JSON NOT NULL DEFAULT (JSON_ARRAY()) AFTER duplicity_eligible_sources;
+    ADD COLUMN reactor_candidate_card_ids JSON DEFAULT NULL AFTER duplicity_eligible_sources;
 
 UPDATE schema_version SET version = '1.25.2' WHERE id = 1;
