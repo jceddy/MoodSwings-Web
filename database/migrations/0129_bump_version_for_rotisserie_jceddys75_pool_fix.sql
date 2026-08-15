@@ -1,0 +1,17 @@
+-- No schema change: buildDraftPool()'s 'jceddys_75' pool source used to
+-- swap up to jceddy's 150 Card deck whenever $playerCount === 4,
+-- unconditionally -- correct for Quick/Winston/Grid Draft (their own
+-- 4-player targets always exceed jceddy's 75 Card deck's own 75 cards),
+-- but wrong for Rotisserie Draft, whose own floor (cutoff count times
+-- player count) can land well under 75 even at 4 players (e.g. the
+-- default 14-card cutoff needs only 56). Now checked against the actual
+-- target size ($targetSize > JCEDDYS_75_DECK_SIZE) instead of hardcoding
+-- "4 players", so a 4-player Rotisserie Draft match only swaps up once
+-- its own cutoff genuinely needs more than 75 cards.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0128 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.25.4' WHERE id = 1;
