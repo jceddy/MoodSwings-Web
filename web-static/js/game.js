@@ -1434,7 +1434,7 @@
     const ROTISSERIE_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
         random_48: 'Exactly enough random cards, no duplicates, no leftovers -- the cutoff count times the number of players.',
         structure: 'The 45-card Structure deck -- doubled to 90 automatically if the cutoff count times the number of players exceeds 45. Any cards beyond what every player ends up picking are simply left undrafted.',
-        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors) -- swapped for jceddy's 150 Card deck's own 150-card pool at exactly 4 players. Any cards beyond what every player ends up picking are simply left undrafted.",
+        jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors) -- swapped for jceddy's 150 Card deck's own 150-card pool once the cutoff count times the number of players exceeds 75. Any cards beyond what every player ends up picking are simply left undrafted.",
         one_of_each: 'The full 133-card pool. Any cards beyond what every player ends up picking are simply left undrafted.',
         custom: 'Paste or upload your own pool of at least the cutoff count times the number of players (same format as a Custom Decklist, but no About/Sideboard sections) -- a floor, not an exact match, so extra cards are simply left undrafted.',
         saved_deck: 'Draft from one of your own saved decks (or a friend\'s, if they\'ve shared one with you) instead of pasting or uploading -- same floor-not-exact rule as a Custom pool.',
@@ -1481,9 +1481,33 @@
     // below the dropdown already spells out the swap in full, so the
     // option label itself just names whichever deck is actually in play
     // ("Card", no "deck" suffix, matching the Traditional format's own
-    // deck_type <select> in index.html).
+    // deck_type <select> in index.html). Rotisserie Draft does NOT use
+    // this -- its own floor depends on the cutoff too, not just player
+    // count, so it needs rotisserieJceddys75OptionLabel() below instead.
     function jceddys75OptionLabel(playerCount) {
         return playerCount === 4
+            ? "jceddy's 150 Card (150 cards)"
+            : "jceddy's 75 Card (75 cards)";
+    }
+
+    // Mirrors GameService::JCEDDYS_75_DECK_SIZE -- the threshold
+    // buildDraftPool() swaps a 'jceddys_75' pool source up to jceddy's
+    // 150 Card deck at, once the target pool size actually needed
+    // exceeds it.
+    const JCEDDYS_75_DECK_SIZE = 75;
+
+    // Rotisserie Draft's own analog of jceddys75OptionLabel() above --
+    // driven by the match's own floor (minPoolSize, cutoff count times
+    // player count) rather than player count alone. A real bug, caught
+    // live: this dropdown used to reuse jceddys75OptionLabel() itself,
+    // which only ever checks playerCount === 4 -- correct for Quick/
+    // Winston/Grid Draft (their own 4-player targets always exceed 75),
+    // but wrong here, where a 4-player match can still have a floor well
+    // under 75 depending on the cutoff (e.g. the default 14-card cutoff
+    // needs only 56) -- see buildDraftPool()'s own docblock in
+    // php-app/src/Game/GameService.php.
+    function rotisserieJceddys75OptionLabel(minPoolSize) {
+        return minPoolSize > JCEDDYS_75_DECK_SIZE
             ? "jceddy's 150 Card (150 cards)"
             : "jceddy's 75 Card (75 cards)";
     }
@@ -1563,7 +1587,8 @@
             rotisserieMinPoolSize + ' random cards (exact -- see the description below)';
         rotisserieSelect.querySelector('option[value="structure"]').textContent =
             rotisserieStructureOptionLabel(rotisserieMinPoolSize);
-        rotisserieSelect.querySelector('option[value="jceddys_75"]').textContent = jceddys75OptionLabel(playerCount);
+        rotisserieSelect.querySelector('option[value="jceddys_75"]').textContent =
+            rotisserieJceddys75OptionLabel(rotisserieMinPoolSize);
     }
 
     const RARITIES = ['common', 'uncommon', 'rare', 'mythic'];
