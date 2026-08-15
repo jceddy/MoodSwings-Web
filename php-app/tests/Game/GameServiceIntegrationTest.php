@@ -14732,6 +14732,32 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(90, json_decode((string) $this->fetchRotisserieState($draftMatchId2)['pool_card_ids'], true));
     }
 
+    /**
+     * A real bug, caught live: 'jceddys_75' used to swap up to the 150-card
+     * 'jceddys_150' pool at exactly 4 players, unconditionally -- correct
+     * for Quick/Winston/Grid Draft (their own 4-player targets always
+     * exceed 75), but wrong for Rotisserie Draft, whose own floor
+     * (cutoff * players) can land well under 75 even at 4 players. A
+     * 4-player, 14-card-cutoff match (the default cutoff) only needs 56,
+     * so it should stay on the 75-card pool -- only once the cutoff itself
+     * pushes the floor past 75 (19+ at 4 players) should it swap up. See
+     * buildDraftPool()'s own docblock.
+     */
+    public function testCreateGameRotisserieDraftJceddys75PoolOnlySwapsToJceddys150OnceTheFloorExceedsSeventyFive(): void
+    {
+        // 4 players * 14 cutoff (the default) = 56 <= 75 -- stays on the 75-card pool.
+        $userIds = $this->insertUsers('rotjceddyslow-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'jceddys_75', rotisserieDraftCutoffCount: 14);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(75, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+
+        // 4 players * 19 cutoff = 76 > 75 -- swaps up to the 150-card pool.
+        $userIds2 = $this->insertUsers('rotjceddyshigh-' . uniqid() . '-', 4);
+        $gameId2 = $this->games->createGame($userIds2[0], $userIds2, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'jceddys_75', rotisserieDraftCutoffCount: 19);
+        $draftMatchId2 = (int) $this->fetchGame($gameId2)['draft_match_id'];
+        self::assertCount(150, json_decode((string) $this->fetchRotisserieState($draftMatchId2)['pool_card_ids'], true));
+    }
+
     public function testCreateGameRotisserieDraftCustomPoolBelowMinimumIsRejected(): void
     {
         $userIds = $this->insertUsers('rotcustomlow-' . uniqid() . '-', 2);

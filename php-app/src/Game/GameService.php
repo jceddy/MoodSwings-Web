@@ -124,10 +124,21 @@ final class GameService
     ];
 
     /**
-     * jceddy's 150 Card deck's own per-color spec -- used only for a
-     * 4-player Quick Draft/Grid Draft 'jceddys_75' pool (the one player
-     * count whose own target pool size, 96/90, exceeds jceddy's 75 Card
-     * deck's 75 cards). Not a literal doubling of the 75-card pool (which
+     * jceddy's 75 Card deck's own total size -- the threshold buildDraftPool()
+     * swaps a 'jceddys_75' pool source up to jceddy's 150 Card deck at, once
+     * whatever target size the caller actually needs exceeds it. See
+     * buildDraftPool()'s own docblock.
+     */
+    private const JCEDDYS_75_DECK_SIZE = 75;
+
+    /**
+     * jceddy's 150 Card deck's own per-color spec -- used for a 'jceddys_75'
+     * pool source whenever the target pool size actually needed exceeds
+     * jceddy's 75 Card deck's own 75 cards (JCEDDYS_75_DECK_SIZE): always
+     * true at 4 players for Quick/Winston/Grid Draft (96/90/96), but for
+     * Rotisserie Draft only once its own cutoff-count-times-player-count
+     * floor crosses that same line -- see buildDraftPool()'s own docblock.
+     * Not a literal doubling of the 75-card pool (which
      * would just duplicate the same 75 card ids) -- its own themed
      * 150-card construction, every one of JCEDDYS_75_DECK_RARITY_SPEC's
      * count/max_copies pairs doubled: 2 Mythics, 4 *different* Rares, 8
@@ -255,9 +266,10 @@ final class GameService
      * additional seat meaningfully better-stocked, and specifically
      * ensures jceddy's 75 Card deck's own 75 cards still cover a 3-player
      * pool (70) without needing jceddy's 150 Card deck's own themed
-     * 150-card pool -- that swap only ever triggers at exactly 4 players
-     * (90 > 75), the same trigger point as Quick Draft's/Grid Draft's own
-     * jceddys_75 handling (see buildDraftPool()).
+     * 150-card pool -- that swap (buildDraftPool()'s own
+     * $targetSize > JCEDDYS_75_DECK_SIZE check) only ever triggers at
+     * exactly 4 players here (90 > 75), the same trigger point as Quick
+     * Draft's/Grid Draft's own jceddys_75 handling.
      */
     private static function winstonDraftPoolTargetSize(int $playerCount): int
     {
@@ -2031,9 +2043,18 @@ final class GameService
      * mistakenly did before. Grid Draft rejects 'structure' outright
      * instead, since it has no top-up mechanism of any kind), 'jceddys_75' (reuses
      * buildJceddys75DeckCardIds() as-is -- its own 75-card pool -- except
-     * at exactly 4 players, where buildJceddys150DeckCardIds()'s own
-     * 150-card pool is used instead, since 75 falls short of every
-     * 4-player target this pool source is ever used for), 'one_of_each'
+     * once $targetSize itself exceeds JCEDDYS_75_DECK_SIZE (75), where
+     * buildJceddys150DeckCardIds()'s own 150-card pool is used instead.
+     * For Quick/Winston/Grid Draft that's always exactly the 4-player case
+     * (their own 4-player targets, 96/90/96, all exceed 75, and every
+     * lower player count's own target never does), but this is checked
+     * against $targetSize itself rather than hardcoding "4 players" --
+     * Rotisserie Draft's own target (buildRotisserieDraftPool()'s
+     * cutoff-count-times-player-count floor) can land on either side of
+     * that line even at 4 players, depending on the cutoff chosen (e.g. a
+     * 4-player, 14-card-cutoff match needs only 56, comfortably under 75,
+     * so it correctly stays on the 75-card pool instead of needlessly
+     * jumping to the 150-card one)), 'one_of_each'
      * (the full TOTAL_CARDS catalog), or 'custom' (parseDraftCustomPool()).
      * Whatever the source produces, anything over $targetSize is randomly
      * truncated down to it -- "if more than 48 cards are in the pool, just
@@ -2044,9 +2065,9 @@ final class GameService
      * 133, and an oversized 'custom' pool all end up the same size as
      * 'random_48' before drafting ever starts. Shared by
      * buildQuickDraftPool()/buildWinstonDraftPool()/buildGridDraftPool()
-     * below, parameterized only by target/minimum pool size, player
-     * count, and the structure-doubling flag -- the pool assembly logic
-     * itself has nothing else format-specific about it. Plus 'saved_deck'
+     * below, parameterized only by target/minimum pool size and the
+     * structure-doubling flag -- the pool assembly logic itself has
+     * nothing else format-specific about it. Plus 'saved_deck'
      * (issue #290): reuses one of $requestingUserId's own saved decklists
      * (issue #92's UserDecklistService -- friends'-visibility decks
      * included, via the exact same authorization cardIdsForUse() already
@@ -2074,14 +2095,14 @@ final class GameService
      *        "a floor, not an exact match" pool-source convention -- see
      *        buildRotisserieDraftPool()).
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false, bool $truncateToTarget = true): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, bool $doubleStructureForMultiplayer = false, bool $truncateToTarget = true): array
     {
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomDraftCardIds($targetSize),
             'structure' => $doubleStructureForMultiplayer
                 ? [...$this->buildStructureDeckCardIds(), ...$this->buildStructureDeckCardIds()]
                 : $this->buildStructureDeckCardIds(),
-            'jceddys_75' => $playerCount === 4 ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
+            'jceddys_75' => $targetSize > self::JCEDDYS_75_DECK_SIZE ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
             'saved_deck' => $this->resolveSavedDeckDraftPool($requestingUserId, $savedDecklistId, $minCustomPoolSize),
@@ -2181,8 +2202,9 @@ final class GameService
      *         3-4 player shortfall. `'jceddys_75'` is the one pool source
      *         that never needs the reshuffle top-up at all: buildDraftPool()
      *         itself swaps in buildJceddys150DeckCardIds()'s own 150-card
-     *         pool at exactly 4 players, comfortably covering that target
-     *         outright.
+     *         pool once the 4-player target itself exceeds
+     *         JCEDDYS_75_DECK_SIZE (always true here), comfortably covering
+     *         that target outright.
      */
     private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
@@ -2193,7 +2215,6 @@ final class GameService
             $requestingUserId,
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
-            $playerCount,
             doubleStructureForMultiplayer: $playerCount > 2,
         );
     }
@@ -2208,7 +2229,6 @@ final class GameService
             $requestingUserId,
             self::winstonDraftPoolTargetSize($playerCount),
             self::winstonDraftMinCustomPoolSize($playerCount),
-            $playerCount,
             doubleStructureForMultiplayer: $playerCount > 2,
         );
     }
@@ -2228,13 +2248,14 @@ final class GameService
      *         rather than silently dealing a final round or two short of
      *         cards -- 'jceddys_75' doesn't need this rejection at 4
      *         players, since buildDraftPool() itself already swaps in the
-     *         150-card 'jceddys_150' pool for that case.
+     *         150-card 'jceddys_150' pool once its own 96-card target
+     *         exceeds JCEDDYS_75_DECK_SIZE.
      */
     private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount));
 
         if (count($cardIds) < $targetSize) {
             throw new GameStateException(
@@ -2264,7 +2285,16 @@ final class GameService
      *         buildDraftPool()) -- and, since $cutoffCount/$playerCount
      *         are both capped (13-20, 2-4), the minimum pool size can
      *         never exceed 80, so doubling (up to 90) always suffices;
-     *         no format here ever needs a 3rd copy.
+     *         no format here ever needs a 3rd copy. Likewise, 'jceddys_75'
+     *         only swaps up to the 150-card 'jceddys_150' pool once
+     *         $minPoolSize itself exceeds JCEDDYS_75_DECK_SIZE (75) --
+     *         unlike Quick/Winston/Grid Draft, where that's always exactly
+     *         the 4-player case, here it depends on $cutoffCount too: a
+     *         4-player match with a 14-card cutoff (the default) needs
+     *         only 56, so it correctly stays on the 75-card pool, while an
+     *         18-card cutoff (72) still fits but a 19-card one (76) tips
+     *         over into needing the 150-card pool -- see
+     *         buildDraftPool()'s own docblock.
      */
     private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount): array
     {
@@ -2277,7 +2307,6 @@ final class GameService
             $requestingUserId,
             $minPoolSize,
             $minPoolSize,
-            $playerCount,
             doubleStructureForMultiplayer: $minPoolSize > 45,
             truncateToTarget: false,
         );

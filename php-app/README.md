@@ -2277,9 +2277,14 @@ their own sections below rather than repeated here):
   players, rounding up -- 45 for 2p, 90 for 3-4p -- matching exactly what
   the doubled built-in `structure` pool source now actually produces.
 - **jceddy's 150 Card deck** (`buildJceddys150DeckCardIds()`,
-  `JCEDDYS_150_DECK_RARITY_SPEC`) -- shared by Quick Draft's and Grid
-  Draft's own 4-player `jceddys_75` pool sourcing (both go through the
-  same `buildDraftPool()`). Not a literal doubling of jceddy's 75 Card
+  `JCEDDYS_150_DECK_RARITY_SPEC`) -- shared by every format's own
+  `jceddys_75` pool sourcing (Quick Draft, Winston Draft, Grid Draft, and
+  Rotisserie Draft all go through the same `buildDraftPool()`), swapped
+  in whenever the target pool size actually needed exceeds jceddy's 75
+  Card deck's own 75 cards (`JCEDDYS_75_DECK_SIZE`) -- always true at 4
+  players for Quick/Winston/Grid Draft, but for Rotisserie Draft only
+  once its own cutoff-count-times-player-count floor crosses that same
+  line (see "Rotisserie Draft" below). Not a literal doubling of jceddy's 75 Card
   deck's own 75-card pool (which would just duplicate the same 75 card
   ids) -- its own themed 150-card construction, every one of jceddy's 75
   Card deck's own per-color count/max-copies pairs doubled: 2 Mythics, 4
@@ -2674,7 +2679,20 @@ size exceeds 45 (`doubleStructureForMultiplayer: $minPoolSize > 45` -- note
 this is a different condition from Quick/Winston Draft's own doubling rule,
 which is based on player count rather than the computed floor), and a
 `custom` pool is rejected if it's smaller than the minimum but otherwise
-used in full even when it's larger.
+used in full even when it's larger. `jceddys_75` similarly swaps up to
+jceddy's 150 Card deck (see "Multiplayer" in "Quick Draft" above) only
+when the minimum pool size itself exceeds `JCEDDYS_75_DECK_SIZE` (75) --
+a different condition from Quick/Winston/Grid Draft's own flat "at 4
+players" rule (those formats' own 4-player targets always exceed 75, so
+the two conditions happen to coincide there): a real bug, caught live,
+had this hardcoded to "exactly 4 players" here too, so a 4-player match
+with the default 14-card cutoff (floor 56, comfortably under 75) was
+needlessly bumped up to the 150-card pool; it now only swaps once the
+cutoff itself pushes the floor past 75. Since `cutoff * playerCount` is
+capped at `ROTISSERIE_DRAFT_MAX_CUTOFF * playerCount`, only a 4-player
+match can ever actually cross that line (a 19-20 cutoff, floor 76-80) --
+2-3 players max out at 40/60, both comfortably under 75, so they always
+stay on the 75-card pool regardless of cutoff.
 
 **Pick order -- snaking with a rotating starter, alternating every two
 rounds** -- `rotisserieDraftPickUserId($userIds, $pickIndex)` computes,
