@@ -6649,9 +6649,10 @@
         });
     }
 
-    // Board-wide, always-visible summary of every in-play mood whose
-    // ability reshapes every mood on the board (not just scoring) --
-    // currently just Imagination overriding every mood's color -- see
+    // Board-wide, always-visible summary of every in-play mood currently
+    // affecting the board as a whole (not just scoring) -- Imagination
+    // overriding every mood's color, or Doubt's color ban still active
+    // for the round right after it was played -- see
     // GameService::boardEffectEntries().
     function renderBoardEffects(effects) {
         const container = document.getElementById('board-effects');
