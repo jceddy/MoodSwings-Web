@@ -583,9 +583,11 @@ final class GameService
 
     /**
      * @param int[] $userIds seat order follows array order for every format
-     *        except 'team'/'closed_team', where seating is instead derived
-     *        from $partnerUserId -- see seatOrderForTeamGame()/
-     *        seatOrderForClosedTeamGame().
+     *        except 'team'/'closed_team' (seating instead derived from
+     *        $partnerUserId -- see seatOrderForTeamGame()/
+     *        seatOrderForClosedTeamGame()) and 'draft' (seating shuffled --
+     *        see shuffledSeatOrder()'s own docblock for why a draft's own
+     *        table position needs randomizing, unlike every other format's).
      * @param ?int $partnerUserId only meaningful (and required) when
      *        $format is 'team' or 'closed_team': which of $userIds (other
      *        than $createdByUserId) the creator pairs up with as their
@@ -888,6 +890,7 @@ final class GameService
             $seatedUserIds = match ($format) {
                 'team' => $this->seatOrderForTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
                 'closed_team' => $this->seatOrderForClosedTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
+                'draft' => $this->shuffledSeatOrder($userIds),
                 default => array_values($userIds),
             };
             $botGamePlayerId = null;
@@ -1105,6 +1108,46 @@ final class GameService
         ));
 
         return [$createdByUserId, $others[0], $partnerUserId, $others[1]];
+    }
+
+    /**
+     * A real bug, caught live: every other format seats players in
+     * whatever order $userIds itself arrives in -- the creator first,
+     * then opponents in whichever order they were selected in the New
+     * Game dialog -- which is harmless for standard/duel (round 1's own
+     * leader is separately randomized, see startGame()) and meaningless
+     * for team/closed_team (seatOrderForTeamGame()/
+     * seatOrderForClosedTeamGame() already derive seating from
+     * $partnerUserId instead). A draft's own snake/rotation turn order
+     * makes table position itself matter, though, in a way those other
+     * formats' own "who goes first" randomization never fixes: who picks
+     * immediately before/after whom repeats every lap of every round, for
+     * the whole match (best-of-three included) -- so leaving seat order
+     * as bare creation order means the same two players are always
+     * neighbors, every single draft, however many times they play each
+     * other. Winston/Grid Draft separately randomize which *seat* picks
+     * first (initializeWinstonDraft()/initializeGridDraft()'s own
+     * array_rand($userIds)), which only rotates the starting point around
+     * an otherwise-fixed ring -- it doesn't touch who's adjacent to whom.
+     * Rotisserie Draft didn't even have that: rotisserieDraftPickUserId()
+     * always starts at seat 0, so the creator picked first in literally
+     * every Rotisserie Draft match before this fix. Shuffling the actual
+     * seat assignment here, once, fixes all of this at the source: every
+     * draft init function (dealQuickDraftRound()/initializeWinstonDraft()/
+     * initializeGridDraft()/initializeRotisserieDraft()) already receives
+     * this same seated order, so neighbor relationships -- and, for
+     * Rotisserie Draft, who picks first at all -- are now genuinely random
+     * per match rather than fixed by opponent-selection order.
+     *
+     * @param int[] $userIds
+     * @return int[]
+     */
+    private function shuffledSeatOrder(array $userIds): array
+    {
+        $shuffled = array_values($userIds);
+        shuffle($shuffled);
+
+        return $shuffled;
     }
 
     /**

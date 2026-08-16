@@ -7614,6 +7614,49 @@ final class GameServiceIntegrationTest extends TestCase
         $this->games->createGame($u1, [$u1, $u2, $u3, $u4], 'team', 3, 'structure', null, null, null);
     }
 
+    /**
+     * A real bug, caught live: 'draft' format used to seat players in
+     * whatever order $userIds itself arrived in -- the creator first,
+     * then opponents in whichever order they were selected in the New
+     * Game dialog -- exactly like every non-team format, which is
+     * harmless there (round 1's own leader is separately randomized, see
+     * startGame()) but wrong for a draft, where table position itself
+     * determines who's adjacent to whom in the snake/rotation order for
+     * the whole match. See GameService::shuffledSeatOrder()'s own
+     * docblock. With 4 possible seats for the creator's own partner-to-
+     * neighbor arrangement (and 4! = 24 full permutations), the odds of
+     * all 30 trials landing on the exact same seat_order by genuine
+     * chance are astronomically low, so any failure here means seating
+     * isn't actually randomized -- mirrors
+     * testCreateGameWithRandomTeamsVariesThePartnerAcrossGames()'s own
+     * pattern for the same class of regression.
+     */
+    public function testCreateGameDraftFormatVariesSeatOrderAcrossGames(): void
+    {
+        $userIds = $this->insertUsers('draftseat-vary-' . uniqid() . '-', 4);
+        $seatOrdersSeen = [];
+
+        for ($i = 0; $i < 30; $i++) {
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: 'draft',
+                deckType: 'quick_draft',
+                quickDraftPoolSource: 'random_48',
+            );
+
+            $stmt = $this->pdo->prepare(
+                'SELECT user_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+            );
+            $stmt->execute(['game_id' => $gameId]);
+            $seatOrdersSeen[] = implode(',', array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN)));
+
+            self::assertEqualsCanonicalizing($userIds, array_map(intval(...), explode(',', end($seatOrdersSeen))), 'every seat is still filled by exactly the same 4 players, just reordered');
+        }
+
+        self::assertGreaterThan(1, count(array_unique($seatOrdersSeen)), 'draft format should not deterministically seat players in the same order every time');
+    }
+
     public function testCreateGameTeamFormatSeatsPartnersAdjacentAndAssignsTeamIds(): void
     {
         $u1 = $this->insertUser('c1');
@@ -9869,7 +9912,11 @@ final class GameServiceIntegrationTest extends TestCase
 
         $summary = $summaryFor($u1);
         self::assertNull($summary['current_turn_username']);
-        self::assertSame([$u1Username, $u2Username], $summary['awaiting_response_usernames'], 'nobody has submitted a draw-stage pick yet -- both owe one');
+        // Both players owe a response here -- an unordered set, not a
+        // sequence -- and 'draft' format now shuffles seat order (see
+        // GameService::shuffledSeatOrder()), so which of the two comes
+        // first is no longer guaranteed to be creation order.
+        self::assertEqualsCanonicalizing([$u1Username, $u2Username], $summary['awaiting_response_usernames'], 'nobody has submitted a draw-stage pick yet -- both owe one');
         self::assertTrue($summaryFor($u1)['is_awaiting_your_response']);
         self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
 
@@ -9883,7 +9930,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pack = $this->games->getState($gameId, $u2)['quick_draft']['drafting']['pack'];
         $this->games->submitQuickDraftPick($gameId, $u2, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
 
-        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'both have their draw-stage picks in -- the received stage is now open and owed by both');
+        self::assertEqualsCanonicalizing([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'both have their draw-stage picks in -- the received stage is now open and owed by both');
 
         $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
         $this->games->submitQuickDraftPick($gameId, $u1, 1, 2, [$pack[0]['card_id'], $pack[1]['card_id']]);
@@ -9915,7 +9962,7 @@ final class GameServiceIntegrationTest extends TestCase
             self::fail("game {$gameId} missing from listGamesForUser()");
         };
 
-        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'neither has submitted a deck yet');
+        self::assertEqualsCanonicalizing([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'neither has submitted a deck yet');
 
         $this->submitFullQuickDraftDeck($gameId, $u1);
 
@@ -14708,6 +14755,25 @@ final class GameServiceIntegrationTest extends TestCase
         return $stmt->fetch();
     }
 
+    /**
+     * The actual seated order a draft match's players ended up in --
+     * insertion order into draft_match_players, which createGame()
+     * populates from $seatedUserIds (see GameService::shuffledSeatOrder()),
+     * NOT necessarily the raw creation-order $userIds array a fixture's
+     * own insertUsers() call returns, since 'draft' format shuffles
+     * seating rather than seating players in array order like every other
+     * format does.
+     *
+     * @return int[]
+     */
+    private function fetchDraftMatchSeatOrder(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT user_id FROM draft_match_players WHERE draft_match_id = :id ORDER BY id ASC');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
     public function testCreateGameRejectsRotisserieDraftForNonDraftFormat(): void
     {
         $userIds = $this->insertUsers('rotformat-' . uniqid() . '-', 2);
@@ -14920,17 +14986,19 @@ final class GameServiceIntegrationTest extends TestCase
     {
         $fixture = $this->buildRotisserieDraftFixture(playerCount: $playerCount, cutoffCount: 13);
         $gameId = $fixture['gameId'];
-        $userIds = $fixture['userIds'];
         $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
 
-        // draftMatchUserIds() (seat order) is insertion order into
-        // draft_match_players, which createGame() populates in $userIds'
-        // own order -- so $userIds[$seat] is exactly the seat sequence's
-        // own user id.
+        // The actual seated order -- NOT $fixture['userIds']' own creation
+        // order, since 'draft' format shuffles seating (see
+        // GameService::shuffledSeatOrder()) -- is insertion order into
+        // draft_match_players, which createGame() populates from the
+        // shuffled $seatedUserIds, so $seatOrder[$seat] is exactly the
+        // seat sequence's own user id.
+        $seatOrder = $this->fetchDraftMatchSeatOrder($draftMatchId);
         $actualSeatSequence = [];
         for ($i = 0; $i < count($expectedSeatSequence); $i++) {
             $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
-            $actualSeatSequence[] = array_search($currentTurnUserId, $userIds, true);
+            $actualSeatSequence[] = array_search($currentTurnUserId, $seatOrder, true);
 
             $pool = json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true);
             $this->games->submitRotisserieDraftPick($gameId, $currentTurnUserId, (int) $pool[0]);
