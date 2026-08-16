@@ -1,0 +1,19 @@
+-- No schema change: Doubt's own "During the next round, players can't
+-- play moods that share a color with any of the revealed cards" ban was
+-- previously enforced entirely server-side (an illegal play targeting a
+-- banned color is simply rejected, see BoardState::bannedColorsThisRound())
+-- with nothing telling a player the ban was even active until they tried
+-- and failed. Added GameService::doubtBoardDescription(), wired into the
+-- existing round.board_effects list (GameService::boardEffectEntries(),
+-- previously only ever populated by Imagination) -- reads the same
+-- 'bannedColors'/'playedInRound' effectState tags DoubtEffect::afterPlaying()
+-- already stamps, gated on the same "only for the single round
+-- immediately after it was played" window bannedColorsThisRound() itself
+-- checks, so the entry disappears the moment the ban actually lifts.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0130 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.25.6' WHERE id = 1;

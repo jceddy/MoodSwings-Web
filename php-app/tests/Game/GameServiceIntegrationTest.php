@@ -3368,6 +3368,66 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame([], $this->games->getState($gameId, $u1)['round']['board_effects']);
     }
 
+    /**
+     * Doubt's own ban was previously enforced purely server-side (an
+     * illegal play targeting a banned color is just rejected) with no
+     * indication anywhere that it was even active -- now surfaced in
+     * board_effects for the single round it actually applies to, the
+     * same "played in round N -> active in round N+1" window
+     * BoardState::bannedColorsThisRound() itself checks.
+     */
+    public function testGetStateExposesBoardEffectsForDoubtsColorBanStillActiveThisRound(): void
+    {
+        $u1 = $this->insertUser('doubtboardfx1');
+        $u2 = $this->insertUser('doubtboardfx2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $doubtId = $this->insertGameCard($gameId, 36, 'in_play', $p1); // Doubt
+        $this->insertGameRound($gameId, 2, $p1, $p1, 1); // current round 2 -- one after Doubt's own playedInRound (1)
+
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['bannedColors' => ['blue', 'red'], 'playedInRound' => 1]), 'id' => $doubtId]);
+
+        $effects = $this->games->getState($gameId, $u1)['round']['board_effects'];
+
+        self::assertCount(1, $effects);
+        self::assertSame($doubtId, $effects[0]['card_id']);
+        self::assertSame($p1, $effects[0]['owner_game_player_id']);
+        self::assertStringContainsString("doubtboardfx1's Doubt", $effects[0]['description']);
+        self::assertStringContainsString('blue, red', $effects[0]['description']);
+    }
+
+    public function testGetStateOmitsDoubtFromBoardEffectsOnceTheBannedRoundHasPassed(): void
+    {
+        $u1 = $this->insertUser('doubtboardfxstale1');
+        $u2 = $this->insertUser('doubtboardfxstale2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $doubtId = $this->insertGameCard($gameId, 36, 'in_play', $p1); // Doubt
+        $this->insertGameRound($gameId, 3, $p1, $p1, 1); // current round 3 -- two rounds after Doubt's own playedInRound (1), so its ban already lifted
+
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['bannedColors' => ['blue'], 'playedInRound' => 1]), 'id' => $doubtId]);
+
+        self::assertSame([], $this->games->getState($gameId, $u1)['round']['board_effects']);
+    }
+
     public function testGetStateExposesEachDiscardPileCardsLastKnownOwnerToDisambiguateIdenticalCards(): void
     {
         $u1 = $this->insertUser('discardowner1');

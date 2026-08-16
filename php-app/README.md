@@ -921,14 +921,30 @@ having to remember what they discarded.
 `round.board_effects` is `scoring_effects`' sibling for non-scoring
 board-wide reshaping: same `{card_id, card_name, owner_game_player_id,
 description}` shape, built by `GameService::boardEffectEntries()`, but for
-an in-play mood whose "while in play" ability changes what every mood *is*
-rather than what it's worth. Today that's just Imagination — "While in
-play, all moods are the chosen color and no other colors" — read from its
-own `color` `effectState` (set by `ImaginationEffect::afterPlaying()`, the
-same tag `BoardState::colorOf()` already consults for every color-counting
-effect); an in-play Imagination with no `color` tagged yet (a test-only
-state a real play can't produce) is simply omitted. The two lists are kept
-separate rather than merged because they answer different questions —
+an in-play mood currently affecting the board as a whole rather than what
+it's worth. Two cards feed this today:
+
+- Imagination — "While in play, all moods are the chosen color and no
+  other colors" — read from its own `color` `effectState` (set by
+  `ImaginationEffect::afterPlaying()`, the same tag `BoardState::colorOf()`
+  already consults for every color-counting effect); an in-play Imagination
+  with no `color` tagged yet (a test-only state a real play can't produce)
+  is simply omitted.
+- Doubt — "During the next round, players can't play moods that share a
+  color with any of the revealed cards" — previously enforced entirely
+  server-side (an illegal play targeting a banned color is just rejected,
+  see `BoardState::bannedColorsThisRound()`) with nothing telling a player
+  the ban was even active until they tried and failed. `doubtBoardDescription()`
+  reads the exact same `bannedColors`/`playedInRound` `effectState` tags
+  `DoubtEffect::afterPlaying()` stamps on it, gated on the same "only for
+  the single round immediately after it was played" window
+  `bannedColorsThisRound()` itself checks — so this entry disappears the
+  moment the ban actually lifts, and stays absent both before Doubt's own
+  choice was ever made (declined, or nothing revealed) and once the round
+  it applied to has passed.
+
+The two lists (`scoring_effects`/`board_effects`) are kept separate rather
+than merged because they answer different questions —
 `scoring_effects` is "how will this round's score come out,"
 `board_effects` is "what do the cards on the table actually look like
 right now" — so a future card that does both would appear in both lists,

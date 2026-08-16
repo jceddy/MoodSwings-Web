@@ -11790,13 +11790,17 @@ final class GameService
     }
 
     /**
-     * A board-wide summary of every in-play mood whose "while in play"
-     * ability reshapes every mood on the board (not just how scoring
-     * works, which scoringEffectEntries() above already covers) -- e.g.
-     * Imagination overriding every mood's color via
-     * BoardState::colorOf(). Sits alongside scoring_effects as its own
-     * always-visible list rather than folded into it, since this is about
-     * what a mood *is* right now, not what it's worth.
+     * A board-wide summary of every in-play mood currently affecting the
+     * board as a whole (not just how scoring works, which
+     * scoringEffectEntries() above already covers) -- a "while in play"
+     * ability that reshapes every mood on the board (Imagination
+     * overriding every mood's color via BoardState::colorOf()), or an
+     * "after playing" effect whose consequence still lingers into a
+     * later round (Doubt's color ban, active only for the single round
+     * immediately after it was played -- see doubtBoardDescription()).
+     * Sits alongside scoring_effects as its own always-visible list
+     * rather than folded into it, since this is about what a mood *is*
+     * or *does* to the board right now, not what it's worth.
      *
      * @param array<int, string> $names
      * @param array<int, string> $playerNames
@@ -11812,6 +11816,7 @@ final class GameService
 
             $description = match ($effectKey) {
                 'imagination' => $this->imaginationBoardDescription($state, $mood, $ownerName, $cardName),
+                'doubt' => $this->doubtBoardDescription($state, $mood, $ownerName, $cardName),
                 default => null,
             };
 
@@ -11836,6 +11841,31 @@ final class GameService
         }
 
         return "{$ownerName}'s {$cardName} — all moods are {$color}.";
+    }
+
+    /**
+     * Doubt's own "During the next round, players can't play moods that
+     * share a color with any of the revealed cards" -- previously
+     * enforced entirely server-side (an illegal play is simply rejected,
+     * see BoardState::bannedColorsThisRound()) with nothing telling a
+     * player the ban was even active until they tried and failed. Reads
+     * the exact same 'bannedColors'/'playedInRound' effectState tags
+     * DoubtEffect::afterPlaying() stamped on this Doubt, gated on the
+     * same "only for the single round immediately after it was played"
+     * window bannedColorsThisRound() itself checks, so this entry
+     * disappears the moment the ban actually lifts -- null both before
+     * Doubt's own choice was ever made (declined, or not yet resolved)
+     * and once the round it applied to has passed.
+     */
+    private function doubtBoardDescription(BoardState $state, MoodInPlay $mood, string $ownerName, string $cardName): ?string
+    {
+        $bannedColors = $state->effectState($mood->cardId, 'bannedColors');
+        $playedInRound = $state->effectState($mood->cardId, 'playedInRound');
+        if ($bannedColors === null || $bannedColors === [] || $playedInRound === null || $state->currentRoundNumber() !== $playedInRound + 1) {
+            return null;
+        }
+
+        return "{$ownerName}'s {$cardName} — " . implode(', ', $bannedColors) . " moods can't be played this round.";
     }
 
     /**

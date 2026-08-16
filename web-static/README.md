@@ -1939,9 +1939,13 @@ too, proportional to the smaller card width.
 
     `round.board_effects` is `scoring_effects`' sibling section, rendered
     directly below it (`#board-effects`, `renderBoardEffects()`) for
-    in-play moods whose "while in play" ability reshapes the board itself
-    rather than how scoring works — today that's just Imagination, shown
-    as e.g. "Alice's Imagination — all moods are red." Hidden entirely
+    in-play moods currently affecting the board itself rather than how
+    scoring works — Imagination's "while in play" recolor, shown as e.g.
+    "Alice's Imagination — all moods are red," or Doubt's own lingering
+    color ban from the round it was played, shown as e.g. "Bob's Doubt —
+    blue moods can't be played this round" (only while that ban is
+    actually still active — see `GameService::doubtBoardDescription()`).
+    Hidden entirely
     (both sections independently collapse to nothing, via the same
     `container.hidden = entries.length === 0` pattern) whenever there's
     nothing to say, so an ordinary board with neither in play shows
