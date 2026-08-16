@@ -1,0 +1,21 @@
+-- No schema change: createGame() used to seat every non-team format
+-- (including 'draft') in whatever order $userIds itself arrived in --
+-- the creator first, then opponents in whichever order they were
+-- selected in the New Game dialog. Harmless for standard/duel (round 1's
+-- own leader is separately randomized), but wrong for a draft, whose own
+-- snake/rotation turn order makes table position itself matter: who
+-- picks immediately before/after whom repeats every lap of every round,
+-- for the whole match, so a fixed creation-order seating meant the same
+-- two players were always neighbors. Added shuffledSeatOrder() and
+-- wired it into 'draft' format's own seat assignment -- 'team'/
+-- 'closed_team' are unaffected, since their own seating is already
+-- derived from partner_user_id, not $userIds' own order. See
+-- php-app/README.md's "Quick Draft" section ("Seating is shuffled,
+-- unlike every other format").
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0131 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.25.7' WHERE id = 1;

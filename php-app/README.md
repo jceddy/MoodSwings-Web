@@ -2024,6 +2024,29 @@ one where deck-acquisition data has to survive across up to 3 separate
 within one, so it gets its own match-level tables (migration `0027`)
 instead of columns on `games`/`game_players`.
 
+**Seating is shuffled, unlike every other format.** A real bug, caught
+live: `createGame()` used to seat every non-team format in whatever order
+`$userIds` itself arrived in -- the creator first, then opponents in
+whichever order they were selected in the New Game dialog -- which is
+harmless for `standard`/`duel` (round 1's own leader is separately
+randomized, see "Turn order" below) but wrong for `format: 'draft'`
+(shared by all four deck types above), whose own snake/rotation turn
+order makes table position itself matter in a way that randomization
+never fixed: who picks immediately before/after whom repeats every lap of
+every round, for the whole match, so a fixed creation-order seating meant
+the same two players were always neighbors, every single draft, however
+many times they played each other. `GameService::shuffledSeatOrder()`
+now seats a `'draft'`-format game's players in a genuinely random order
+instead -- this incidentally also fixes Rotisserie Draft's own separate
+problem of the creator always picking first (`rotisserieDraftPickUserId()`
+always starts at seat 0; Quick/Winston/Grid Draft already randomized
+*which* seat goes first via `array_rand()`, but never touched the
+underlying seating itself, so neighbor relationships stayed fixed
+regardless). `'team'`/`'closed_team'` are unaffected -- their own seating
+is already derived from `partner_user_id` (see "Open Team Play"/"Closed
+Team Play" below), not `$userIds`' own order, so shuffling would only
+break the adjacent/across-the-table seating those formats require.
+
 **Data model** -- `draft_matches` (one row per match: `pool_source`,
 `pool_card_ids` -- the shared up-to-48-card pool, `status`
 `'drafting'`/`'deck_building'`/`'completed'`, `current_round`,
