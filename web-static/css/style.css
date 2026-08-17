@@ -676,7 +676,8 @@ body.game-page {
    against the bottom edge of the card thumbnails, which reads as a
    layout mistake rather than intentional spacing. */
 #quick-draft-pick-submit-button,
-#draft-deck-selection-actions {
+#draft-deck-selection-actions,
+#initial-card-pass-submit-button {
     margin-top: 0.5rem;
 }
 

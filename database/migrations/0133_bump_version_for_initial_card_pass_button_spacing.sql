@@ -1,0 +1,15 @@
+-- No schema change: on Closed Team Play's "Pass 2 cards to your teammate"
+-- screen, the "Pass cards" button (#initial-card-pass-submit-button) sat
+-- flush against the bottom edge of the card-selection grid above it
+-- (#initial-card-pass-fields), reading as a layout mistake rather than
+-- intentional spacing. Added it to the existing
+-- #quick-draft-pick-submit-button/#draft-deck-selection-actions
+-- margin-top: 0.5rem rule in style.css, which already covers this exact
+-- same "button directly follows a card grid" spacing case.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0132 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.25.8' WHERE id = 1;
