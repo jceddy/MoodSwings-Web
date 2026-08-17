@@ -1556,6 +1556,57 @@ too, proportional to the smaller card width.
       change to either the cutoff count or the opponent selection, the
       same dynamic-relabeling pattern Quick/Winston/Grid Draft's own pool
       pickers already use.
+    - **Tiered Rotisserie Draft's own drafting phase** (`#tiered-rotisserie-
+      draft-panel` > `#tiered-rotisserie-draft-drafting`,
+      `renderTieredRotisserieDraftDrafting()`, shown while
+      `state.tiered_rotisserie_draft.status` is `'drafting'`) -- issue
+      #361's own generalization of Rotisserie Draft's panel immediately
+      above into several tiers drafted one after another, reusing nearly
+      everything about it unchanged (same card-thumbnail pool grid, same
+      "Draft" action-button-in-`openCardDetail()`-overlay click flow, same
+      open-information `#tiered-rotisserie-draft-drafted-so-far`/
+      `#tiered-rotisserie-draft-other-players-drafted`/
+      `#tiered-rotisserie-draft-teams-drafted` lists) -- the one new piece
+      is `#tiered-rotisserie-draft-tiers`, a stepper-style `<ol>` above the
+      pool showing every configured tier's own name
+      (`tieredRotisserieDraftTierDisplayName()` -- the rarity name
+      Title-Cased for `'rarity'` mode, or "Tier N" for `'custom'` mode's
+      unlabeled ones) and pick count, each `<li>` classed
+      `.tiered-rotisserie-draft-tier-step-{completed,current,upcoming}`
+      (`drafting.tiers[i].status`, `style.css`) so a player can see at a
+      glance which tiers are done, active, or still ahead without that
+      state being scattered only through the title text. The title
+      (`#tiered-rotisserie-draft-drafting-title`) reads "{tier name} — pick
+      N of M" using `drafting.picks_made_this_tier`/
+      `drafting.total_picks_needed_this_tier` -- scoped to the CURRENT
+      tier only, unlike base Rotisserie Draft's own whole-match
+      `picks_made`/`total_picks_needed` (`drafting.total_picks_made`/
+      `drafting.total_picks_needed` carry the whole-match equivalents,
+      unused by the title itself but available for a future overall
+      progress indicator). `#tiered-rotisserie-draft-pool` likewise
+      renders only `drafting.pool_cards` -- the CURRENT tier's own
+      remaining face-up pool, never a prior tier's now-discarded
+      remainder or a later tier's not-yet-active one. The New Game
+      dialog's own `#new-game-tiered-rotisserie-draft-fields` starts with
+      a `#new-game-tiered-rotisserie-draft-mode` select (`'rarity'` or
+      `'custom'`, `updateTieredRotisserieDraftModeVisibility()`): `'rarity'`
+      just shows a fixed description of the reference scheme (Mythic/
+      Rare/Uncommon/Common, no further fields needed); `'custom'` reveals
+      `#new-game-tiered-rotisserie-draft-tier-count` (2-4) plus up to 4
+      static per-tier blocks (`#new-game-tiered-rotisserie-draft-tier-1`
+      through `-4`, `updateTieredRotisserieDraftTierCountVisibility()`
+      shows/hides exactly as many as the count selects), each with its
+      own cutoff-count number input and a pool-source select restricted
+      to `'custom'`/`'saved_deck'` (a file-upload/paste-textarea pair or a
+      saved-decklist picker respectively, same
+      `updateTieredRotisserieDraftTierPoolSourceVisibility(n)` toggle
+      pattern as every other draft type's own pool-source fields) -- since
+      a custom-tiered match can have up to 4 different saved decks in
+      play across its tiers at once, each tier's own resolved
+      `saved_decklist_id` travels with that tier's own object in the
+      `tiered_rotisserie_draft_tiers` array sent to `POST /games`, rather
+      than through the single shared `saved_decklist_id` param every
+      other draft type's own pool source reuses.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
