@@ -125,7 +125,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -179,6 +179,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             rotisserie_draft_pool_source: rotisserieDraftPoolSource,
             rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
             rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
+            // Only meaningful for deck_type 'tiered_rotisserie_draft' -- see
+            // "Tiered Rotisserie Draft" in web-static/README.md.
+            tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
+            tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
         }),
     });
 }
@@ -373,6 +377,13 @@ function submitGridDraftPick(gameId, axis, index) {
 
 function submitRotisserieDraftPick(gameId, cardId) {
     return apiRequest('/games/draft/rotisserie-pick', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, card_id: cardId }),
+    });
+}
+
+function submitTieredRotisserieDraftPick(gameId, cardId) {
+    return apiRequest('/games/draft/tiered-rotisserie-pick', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, card_id: cardId }),
     });
@@ -682,6 +693,8 @@ const DECK_TYPE_LABELS = {
     quick_draft: 'Quick Draft',
     winston_draft: 'Winston Draft',
     grid_draft: 'Grid Draft',
+    rotisserie_draft: 'Rotisserie Draft',
+    tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
     one_of_each: 'One of Each Card',
 };
 

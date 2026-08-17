@@ -925,6 +925,29 @@ if ($path === '/games' && $method === 'POST') {
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
     // 14 matches createGame()'s own ROTISSERIE_DRAFT_DEFAULT_CUTOFF, same as $winsNeeded's literal 3 above matching its own default.
     $rotisserieDraftCutoffCount = isset($body['rotisserie_draft_cutoff_count']) ? (int) $body['rotisserie_draft_cutoff_count'] : 14;
+    // Only meaningful (and required) for deck_type 'tiered_rotisserie_draft' -- see createGame()'s own docblock.
+    $tieredRotisserieDraftMode = isset($body['tiered_rotisserie_draft_mode']) ? (string) $body['tiered_rotisserie_draft_mode'] : null;
+    // Only meaningful when $tieredRotisserieDraftMode is 'custom' -- each
+    // element's own pool_source/custom_pool_text/saved_decklist_id/
+    // cutoff_count keys are read straight through to createGame() as-is,
+    // the same shape it itself expects (see
+    // buildTieredRotisserieDraftCustomTierPools()'s own docblock);
+    // whatever a request actually sends for each field is cast the same
+    // way its single-tier analogs above are, individual tier validation
+    // (pool source, cutoff count) happening entirely inside createGame() itself.
+    $tieredRotisserieDraftTiers = null;
+    if (is_array($body['tiered_rotisserie_draft_tiers'] ?? null)) {
+        $tieredRotisserieDraftTiers = array_map(static function ($tier): array {
+            $tier = (array) $tier;
+
+            return [
+                'pool_source' => (string) ($tier['pool_source'] ?? ''),
+                'custom_pool_text' => isset($tier['custom_pool_text']) ? (string) $tier['custom_pool_text'] : null,
+                'saved_decklist_id' => isset($tier['saved_decklist_id']) ? (int) $tier['saved_decklist_id'] : null,
+                'cutoff_count' => (int) ($tier['cutoff_count'] ?? 0),
+            ];
+        }, $body['tiered_rotisserie_draft_tiers']);
+    }
 
     try {
         $gameId = $games->createGame(
@@ -950,6 +973,8 @@ if ($path === '/games' && $method === 'POST') {
             $rotisserieDraftPoolSource,
             $rotisserieDraftCustomPoolText,
             $rotisserieDraftCutoffCount,
+            $tieredRotisserieDraftMode,
+            $tieredRotisserieDraftTiers,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1567,6 +1592,25 @@ if ($path === '/games/draft/rotisserie-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitRotisserieDraftPick($gameId, (int) $currentUser['id'], $cardId);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/tiered-rotisserie-pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardId = (int) ($body['card_id'] ?? 0);
+
+    // Tiered Rotisserie Draft's own picks are keyed by user_id, not
+    // game_player_id, same as base Rotisserie Draft's own
+    // /games/draft/rotisserie-pick immediately above.
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitTieredRotisserieDraftPick($gameId, (int) $currentUser['id'], $cardId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

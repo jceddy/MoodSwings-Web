@@ -1325,12 +1325,12 @@
     }
 
     // Mirrors GameService::isSharedDeckType() -- every deck_type except
-    // custom_duel and the four draft-based ones puts the whole table on
+    // custom_duel and the five draft-based ones puts the whole table on
     // one shared deck rather than giving each player their own, so those
-    // five are the only deck_types with no single "the deck" for
+    // six are the only deck_types with no single "the deck" for
     // openSharedDeckView() (issue #197) to show.
     function isSharedDeckType(deckType) {
-        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'].includes(deckType);
+        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(deckType);
     }
 
     // Plain-language explanation shown under the New Game dialog's own
@@ -1348,6 +1348,7 @@
         winston_draft: '2-4 players each draft their own deck from a shared pool (45/70/90 cards for 2/3/4 players) by taking or passing on 3 growing face-down piles, in turn order rotating through every seat. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game -- a player who ends up short of 12 cards is dropped from the match rather than ending it for everyone else.',
         grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/96 cards for 2/3/4 players) over 6 rounds (4 for exactly 4 players, so each player picks first exactly once): each round, cards are dealt into a 3x3 grid (4x4 for exactly 4 players), and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         rotisserie_draft: '2-4 players draft one card at a time from a shared, fully face-up pool -- no packs, piles, or grid, just the whole pool laid out at once. A snake-style turn order (choosable cutoff of 13-20 cards per player, default 14) continues until every player has picked that many; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
+        tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1626,6 +1627,7 @@
         document.getElementById('new-game-winston-draft-fields').hidden = deckType !== 'winston_draft';
         document.getElementById('new-game-grid-draft-fields').hidden = deckType !== 'grid_draft';
         document.getElementById('new-game-rotisserie-draft-fields').hidden = deckType !== 'rotisserie_draft';
+        document.getElementById('new-game-tiered-rotisserie-draft-fields').hidden = deckType !== 'tiered_rotisserie_draft';
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
@@ -1641,7 +1643,47 @@
         if (deckType === 'rotisserie_draft') {
             updateRotisserieDraftPoolSourceVisibility();
         }
+        if (deckType === 'tiered_rotisserie_draft') {
+            updateTieredRotisserieDraftModeVisibility();
+        }
         updateBotDecklistFieldsVisibility();
+    }
+
+    // Tiered Rotisserie Draft's own mode toggle (rarity vs custom) -- shows
+    // the fixed-scheme description for 'rarity', or the tier-count +
+    // per-tier fields for 'custom' (see updateTieredRotisserieDraftTierCountVisibility()).
+    function updateTieredRotisserieDraftModeVisibility() {
+        const mode = document.getElementById('new-game-tiered-rotisserie-draft-mode').value;
+        document.getElementById('new-game-tiered-rotisserie-draft-rarity-description').hidden = mode !== 'rarity';
+        document.getElementById('new-game-tiered-rotisserie-draft-custom-fields').hidden = mode !== 'custom';
+        if (mode === 'custom') {
+            updateTieredRotisserieDraftTierCountVisibility();
+        }
+    }
+
+    // Shows exactly as many of the 4 static tier blocks as
+    // #new-game-tiered-rotisserie-draft-tier-count currently says (2-4),
+    // and refreshes each visible tier's own pool-source fields.
+    function updateTieredRotisserieDraftTierCountVisibility() {
+        const tierCount = Number(document.getElementById('new-game-tiered-rotisserie-draft-tier-count').value);
+        [1, 2, 3, 4].forEach((n) => {
+            document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n).hidden = n > tierCount;
+            if (n <= tierCount) {
+                updateTieredRotisserieDraftTierPoolSourceVisibility(n);
+            }
+        });
+    }
+
+    // Shows the custom-pool file/textarea fields or the saved-deck select
+    // for tier $n, mirroring updateRotisserieDraftPoolSourceVisibility()'s
+    // own pattern one level up -- a tier's pool source is always either
+    // 'custom' or 'saved_deck' (no built-in random/structure/jceddy's-collection
+    // options, see GameService::buildTieredRotisserieDraftCustomTierPools()'s
+    // own docblock), so there's no description text to update here.
+    function updateTieredRotisserieDraftTierPoolSourceVisibility(n) {
+        const poolSource = document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-pool-source').value;
+        document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-custom-pool-fields').hidden = poolSource !== 'custom';
+        document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-saved-deck-fields').hidden = poolSource !== 'saved_deck';
     }
 
     // Shows the custom-pool file/textarea fields only for the 'custom'
@@ -1717,7 +1759,7 @@
     // exempt from this same rule below.
     function isDeckTypeAvailableForFormat(deckType, format) {
         if (format === 'draft') {
-            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft';
+            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft';
         }
         switch (deckType) {
             case 'custom': return format !== 'duel';
@@ -1726,6 +1768,7 @@
             case 'winston_draft': return format === 'closed_team' || format === 'team';
             case 'grid_draft': return format === 'closed_team' || format === 'team';
             case 'rotisserie_draft': return format === 'closed_team' || format === 'team';
+            case 'tiered_rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2364,6 +2407,21 @@
     // same option-label refresh a checked-opponent/format change already
     // triggers via updateOpponentSelectionLimit().
     document.getElementById('new-game-rotisserie-draft-cutoff-count').addEventListener('input', updateDraftPoolSourceOptionLabels);
+    document.getElementById('new-game-tiered-rotisserie-draft-mode').addEventListener('change', updateTieredRotisserieDraftModeVisibility);
+    document.getElementById('new-game-tiered-rotisserie-draft-tier-count').addEventListener('change', updateTieredRotisserieDraftTierCountVisibility);
+    [1, 2, 3, 4].forEach((n) => {
+        document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-pool-source')
+            .addEventListener('change', () => updateTieredRotisserieDraftTierPoolSourceVisibility(n));
+        document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-custom-pool-file')
+            .addEventListener('change', async (event) => {
+                const file = event.target.files[0];
+                if (!file) {
+                    return;
+                }
+
+                document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-custom-pool-text').value = await file.text();
+            });
+    });
 
     document.getElementById('new-game-quick-draft-custom-pool-file').addEventListener('change', async (event) => {
         const file = event.target.files[0];
@@ -2539,6 +2597,8 @@
         await populateSavedDecklistSelect(document.getElementById('new-game-winston-draft-saved-decklist'), 'Choose a saved deck');
         await populateSavedDecklistSelect(document.getElementById('new-game-grid-draft-saved-decklist'), 'Choose a saved deck');
         await populateSavedDecklistSelect(document.getElementById('new-game-rotisserie-draft-saved-decklist'), 'Choose a saved deck');
+        await Promise.all([1, 2, 3, 4].map((n) =>
+            populateSavedDecklistSelect(document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-saved-decklist'), 'Choose a saved deck')));
         newGameDialog.showModal();
     });
 
@@ -2601,6 +2661,33 @@
         const rotisserieDraftCutoffCount = deckType === 'rotisserie_draft'
             ? Number(document.getElementById('new-game-rotisserie-draft-cutoff-count').value) || undefined
             : undefined;
+        const tieredRotisserieDraftMode = deckType === 'tiered_rotisserie_draft'
+            ? document.getElementById('new-game-tiered-rotisserie-draft-mode').value
+            : undefined;
+        // Each tier's own pool_source/custom_pool_text/saved_decklist_id/
+        // cutoff_count is read straight from that tier's own fields (1-4,
+        // however many #new-game-tiered-rotisserie-draft-tier-count says)
+        // -- unlike every other draft type's own single pool source, a
+        // tier's saved decklist id (if any) travels WITH it here rather
+        // than through the shared $savedDecklistId param above, since a
+        // custom-tiered match can have up to 4 different saved decks in
+        // play at once.
+        const tieredRotisserieDraftTiers = tieredRotisserieDraftMode === 'custom'
+            ? Array.from({ length: Number(document.getElementById('new-game-tiered-rotisserie-draft-tier-count').value) }, (_, i) => {
+                const n = i + 1;
+                const poolSource = document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-pool-source').value;
+                return {
+                    pool_source: poolSource,
+                    custom_pool_text: poolSource === 'custom'
+                        ? document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-custom-pool-text').value
+                        : undefined,
+                    saved_decklist_id: poolSource === 'saved_deck'
+                        ? Number(document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-saved-decklist').value) || undefined
+                        : undefined,
+                    cutoff_count: Number(document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-cutoff').value) || undefined,
+                };
+            })
+            : undefined;
         // A single param shared by deck_type 'custom' and any of the four
         // draft pool sources being 'saved_deck' (issue #290) -- only one
         // of these five is ever active per submission, so whichever
@@ -2646,6 +2733,8 @@
             rotisserieDraftPoolSource,
             rotisserieDraftCustomPoolText,
             rotisserieDraftCutoffCount,
+            tieredRotisserieDraftMode,
+            tieredRotisserieDraftTiers,
         );
 
         if (!ok) {
@@ -3555,7 +3644,8 @@
             : state.game.deck_type === 'winston_draft' ? state.winston_draft
                 : state.game.deck_type === 'grid_draft' ? state.grid_draft
                     : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
-                        : null;
+                        : state.game.deck_type === 'tiered_rotisserie_draft' ? state.tiered_rotisserie_draft
+                            : null;
         return Boolean(draftState) && draftState.status === 'deck_building';
     }
 
@@ -3971,7 +4061,7 @@
         // a pending decision is known (nothing can freeze a still-waiting
         // draft the same way, so there's nothing to gate here yet).
         const canResignWhileWaiting = state.game.status === 'waiting'
-            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'].includes(state.game.deck_type);
+            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(state.game.deck_type);
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = isReadOnlyView()
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
@@ -4217,15 +4307,17 @@
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('grid-draft-panel').hidden = true;
                 document.getElementById('rotisserie-draft-panel').hidden = true;
+                document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft') {
+            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
                 const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
                         : state.game.deck_type === 'grid_draft' ? state.grid_draft
-                            : state.rotisserie_draft;
+                            : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
+                                : state.tiered_rotisserie_draft;
                 document.getElementById('board-round-status').textContent =
                     draftState.status === 'drafting' ? 'Drafting your deck.' : 'Building your deck.';
                 renderDraftPanel(state);
@@ -4250,6 +4342,7 @@
                 document.getElementById('winston-draft-panel').hidden = true;
                 document.getElementById('grid-draft-panel').hidden = true;
                 document.getElementById('rotisserie-draft-panel').hidden = true;
+                document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
                 document.getElementById('draft-deck-building').hidden = true;
                 autoStartGameIfReady(true);
             }
@@ -4262,6 +4355,7 @@
         document.getElementById('winston-draft-panel').hidden = true;
         document.getElementById('grid-draft-panel').hidden = true;
         document.getElementById('rotisserie-draft-panel').hidden = true;
+        document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
         document.getElementById('draft-deck-building').hidden = true;
         inProgressArea.hidden = false;
 
@@ -4756,7 +4850,7 @@
     function renderDraftMatchScoreline(state) {
         const el = document.getElementById('draft-match-scoreline');
         const nextGameButton = document.getElementById('draft-match-next-game-button');
-        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft;
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft;
         if (!draftState) {
             el.hidden = true;
             nextGameButton.hidden = true;
@@ -5354,6 +5448,110 @@
         await refreshBoard();
     }
 
+    // A rarity label ('mythic'/'rare'/'uncommon'/'common') Title-Cased for
+    // display -- 'custom' mode's own tiers have no label at all (null),
+    // shown as "Tier N" (1-based) instead using the tier's own array index.
+    function tieredRotisserieDraftTierDisplayName(tier, index) {
+        return tier.label ? tier.label.charAt(0).toUpperCase() + tier.label.slice(1) : 'Tier ' + (index + 1);
+    }
+
+    // Tiered Rotisserie Draft's own analog of renderRotisserieDraftDrafting()
+    // immediately above -- identical in every respect (open information,
+    // same drafted_so_far/other_players/teams shape) except for the tier
+    // stepper up top (#tiered-rotisserie-draft-tiers) showing every
+    // configured tier's own name and status (completed/current/upcoming),
+    // and the pool/progress figures being scoped to the CURRENT tier only
+    // (drafting.pool_cards is that tier's own remaining face-up pool, not
+    // the whole match's) -- see GameService::tieredRotisserieDraftDraftingStateFor()'s
+    // own docblock.
+    function renderTieredRotisserieDraftDrafting(drafting) {
+        document.getElementById('tiered-rotisserie-draft-drafting-title').textContent =
+            'Tiered Rotisserie Draft — ' + tieredRotisserieDraftTierDisplayName(drafting.tiers[drafting.current_tier_index], drafting.current_tier_index)
+            + ' — pick ' + (drafting.picks_made_this_tier + 1) + ' of ' + drafting.total_picks_needed_this_tier;
+        document.getElementById('tiered-rotisserie-draft-drafting-status').textContent = drafting.is_your_turn
+            ? 'Your turn -- choose a card from the current tier\'s pool.'
+            : 'Waiting for ' + (drafting.current_turn_username || 'your opponent') + "'s turn.";
+
+        const tiersContainer = document.getElementById('tiered-rotisserie-draft-tiers');
+        tiersContainer.innerHTML = '';
+        drafting.tiers.forEach((tier, index) => {
+            const li = document.createElement('li');
+            li.className = 'tiered-rotisserie-draft-tier-step tiered-rotisserie-draft-tier-step-' + tier.status;
+            li.textContent = tieredRotisserieDraftTierDisplayName(tier, index) + ' (' + tier.cutoff_count + ' picks)';
+            tiersContainer.appendChild(li);
+        });
+
+        const poolContainer = document.getElementById('tiered-rotisserie-draft-pool');
+        poolContainer.innerHTML = '';
+        poolContainer.className = 'draft-pool-cards';
+        drafting.pool_cards.slice().sort(compareDraftPoolCards).forEach((card) => {
+            poolContainer.appendChild(buildCardThumb(card, {
+                onClick: () => openCardDetail(card, null, null, drafting.is_your_turn
+                    ? { label: 'Draft', onClick: () => submitTieredRotisserieDraftAction(card.card_id) }
+                    : null),
+            }));
+        });
+
+        const showDraftedSoFar = !drafting.teams_drafted_so_far;
+        document.getElementById('tiered-rotisserie-draft-drafted-so-far-heading').hidden = !showDraftedSoFar;
+        document.getElementById('tiered-rotisserie-draft-drafted-so-far').hidden = !showDraftedSoFar;
+        if (showDraftedSoFar) {
+            renderList(document.getElementById('tiered-rotisserie-draft-drafted-so-far'), { hidden: true }, drafting.drafted_so_far, (card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                return li;
+            });
+        }
+
+        const otherPlayersContainer = document.getElementById('tiered-rotisserie-draft-other-players-drafted');
+        const teamsContainer = document.getElementById('tiered-rotisserie-draft-teams-drafted');
+        otherPlayersContainer.innerHTML = '';
+        otherPlayersContainer.hidden = !!drafting.teams_drafted_so_far;
+        (drafting.other_players_drafted_so_far || []).forEach((other) => {
+            const heading = document.createElement('h4');
+            heading.textContent = other.username + "'s drafted so far";
+            otherPlayersContainer.appendChild(heading);
+
+            const list = document.createElement('ul');
+            other.drafted_so_far.forEach((card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                list.appendChild(li);
+            });
+            otherPlayersContainer.appendChild(list);
+        });
+
+        teamsContainer.hidden = !drafting.teams_drafted_so_far;
+        teamsContainer.innerHTML = '';
+        (drafting.teams_drafted_so_far || []).forEach((team) => {
+            const heading = document.createElement('h4');
+            heading.textContent = (team.is_your_team ? 'Your team' : 'Opposing team') + "'s drafted so far ("
+                + team.member_usernames.join(' & ') + ')';
+            teamsContainer.appendChild(heading);
+
+            const list = document.createElement('ul');
+            list.className = 'team-drafted-cards-list';
+            team.drafted_so_far.forEach((card) => {
+                const li = document.createElement('li');
+                li.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
+                list.appendChild(li);
+            });
+            teamsContainer.appendChild(list);
+        });
+    }
+
+    async function submitTieredRotisserieDraftAction(cardId) {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await submitTieredRotisserieDraftPick(currentGameId, cardId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not submit that pick.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    }
+
     // Converts a multiset of card_ids (e.g. deck_card_ids, which may
     // legally contain duplicates -- a jceddys_75 or custom pool can draft
     // more than one copy of the same card) into a Set of *indices* into
@@ -5639,6 +5837,7 @@
             document.getElementById('winston-draft-panel').hidden = true;
             document.getElementById('grid-draft-panel').hidden = true;
             document.getElementById('rotisserie-draft-panel').hidden = true;
+            document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
             document.getElementById('quick-draft-drafting').hidden = qd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = qd.status !== 'deck_building';
 
@@ -5653,6 +5852,7 @@
             document.getElementById('quick-draft-panel').hidden = true;
             document.getElementById('grid-draft-panel').hidden = true;
             document.getElementById('rotisserie-draft-panel').hidden = true;
+            document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
             document.getElementById('winston-draft-drafting').hidden = wd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = wd.status !== 'deck_building';
 
@@ -5667,6 +5867,7 @@
             document.getElementById('quick-draft-panel').hidden = true;
             document.getElementById('winston-draft-panel').hidden = true;
             document.getElementById('rotisserie-draft-panel').hidden = true;
+            document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
             document.getElementById('grid-draft-drafting').hidden = gd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = gd.status !== 'deck_building';
 
@@ -5675,12 +5876,13 @@
             } else if (gd.status === 'deck_building') {
                 renderDraftDeckBuilding(gd.deck_building);
             }
-        } else {
+        } else if (state.game.deck_type === 'rotisserie_draft') {
             const rd = state.rotisserie_draft;
             document.getElementById('rotisserie-draft-panel').hidden = false;
             document.getElementById('quick-draft-panel').hidden = true;
             document.getElementById('winston-draft-panel').hidden = true;
             document.getElementById('grid-draft-panel').hidden = true;
+            document.getElementById('tiered-rotisserie-draft-panel').hidden = true;
             document.getElementById('rotisserie-draft-drafting').hidden = rd.status !== 'drafting';
             document.getElementById('draft-deck-building').hidden = rd.status !== 'deck_building';
 
@@ -5688,6 +5890,21 @@
                 renderRotisserieDraftDrafting(rd.drafting);
             } else if (rd.status === 'deck_building') {
                 renderDraftDeckBuilding(rd.deck_building);
+            }
+        } else {
+            const trd = state.tiered_rotisserie_draft;
+            document.getElementById('tiered-rotisserie-draft-panel').hidden = false;
+            document.getElementById('quick-draft-panel').hidden = true;
+            document.getElementById('winston-draft-panel').hidden = true;
+            document.getElementById('grid-draft-panel').hidden = true;
+            document.getElementById('rotisserie-draft-panel').hidden = true;
+            document.getElementById('tiered-rotisserie-draft-drafting').hidden = trd.status !== 'drafting';
+            document.getElementById('draft-deck-building').hidden = trd.status !== 'deck_building';
+
+            if (trd.status === 'drafting') {
+                renderTieredRotisserieDraftDrafting(trd.drafting);
+            } else if (trd.status === 'deck_building') {
+                renderDraftDeckBuilding(trd.deck_building);
             }
         }
     }

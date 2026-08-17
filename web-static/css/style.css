@@ -558,6 +558,8 @@ body.game-page {
 #grid-draft-other-players-drafted ul,
 #rotisserie-draft-drafted-so-far,
 #rotisserie-draft-other-players-drafted ul,
+#tiered-rotisserie-draft-drafted-so-far,
+#tiered-rotisserie-draft-other-players-drafted ul,
 #deck-view-cards,
 #deck-view-sideboard-cards,
 #shared-deck-cards,
@@ -579,6 +581,8 @@ body.game-page {
 #grid-draft-other-players-drafted ul li,
 #rotisserie-draft-drafted-so-far li,
 #rotisserie-draft-other-players-drafted ul li,
+#tiered-rotisserie-draft-drafted-so-far li,
+#tiered-rotisserie-draft-other-players-drafted ul li,
 .in-play-zone__list li,
 .spectator-final-hand ul li,
 .team-drafted-cards-list li {
@@ -592,6 +596,47 @@ body.game-page {
    it. */
 .spectator-final-hand {
     margin-bottom: 1rem;
+}
+
+/* Tiered Rotisserie Draft's own tier stepper (#tiered-rotisserie-draft-tiers,
+   see renderTieredRotisserieDraftDrafting() in game.js) -- a horizontal
+   row of every configured tier's own name/cutoff, so a player can see at a
+   glance which tiers are done, which is active, and which are still ahead,
+   without that state being scattered only through the title text above the
+   pool. The New Game dialog's own per-tier config blocks
+   (.new-game-tiered-rotisserie-draft-tier) get a bit of visual separation
+   too, since up to 4 of them stack vertically in the same form. */
+#tiered-rotisserie-draft-tiers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    list-style: none;
+    padding: 0;
+}
+
+.tiered-rotisserie-draft-tier-step {
+    padding: 0.25rem 0.6rem;
+    border-radius: 999px;
+    border: 1px solid var(--border-color, #999);
+    opacity: 0.6;
+}
+
+.tiered-rotisserie-draft-tier-step-current {
+    opacity: 1;
+    font-weight: bold;
+    border-width: 2px;
+}
+
+.tiered-rotisserie-draft-tier-step-completed {
+    opacity: 0.8;
+    text-decoration: line-through;
+}
+
+.new-game-tiered-rotisserie-draft-tier {
+    border: 1px solid var(--border-color, #999);
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    margin: 0.5rem 0;
 }
 
 /* Grid Draft's own grid (3x3 for 2-3 players, 4x4 for exactly 4 -- see

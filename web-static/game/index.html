@@ -201,6 +201,19 @@
                 </div>
             </div>
 
+            <div id="tiered-rotisserie-draft-panel" hidden>
+                <div id="tiered-rotisserie-draft-drafting" hidden>
+                    <h3 id="tiered-rotisserie-draft-drafting-title"></h3>
+                    <ol id="tiered-rotisserie-draft-tiers"></ol>
+                    <p id="tiered-rotisserie-draft-drafting-status"></p>
+                    <div id="tiered-rotisserie-draft-pool"></div>
+                    <h4 id="tiered-rotisserie-draft-drafted-so-far-heading">Drafted so far</h4>
+                    <ul id="tiered-rotisserie-draft-drafted-so-far"></ul>
+                    <div id="tiered-rotisserie-draft-other-players-drafted"></div>
+                    <div id="tiered-rotisserie-draft-teams-drafted" hidden></div>
+                </div>
+            </div>
+
             <div id="draft-deck-building" hidden>
                 <h3 id="draft-deck-building-title"></h3>
                 <p id="draft-deck-building-status"></p>
@@ -407,6 +420,7 @@
                     <option value="winston_draft">Winston Draft</option>
                     <option value="grid_draft">Grid Draft</option>
                     <option value="rotisserie_draft">Rotisserie Draft</option>
+                    <option value="tiered_rotisserie_draft">Tiered Rotisserie Draft</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -615,6 +629,132 @@
                     <label>Saved deck
                         <select id="new-game-rotisserie-draft-saved-decklist"></select>
                     </label>
+                </div>
+            </div>
+
+            <div id="new-game-tiered-rotisserie-draft-fields" hidden>
+                <label class="new-game-field">Tiering
+                    <select id="new-game-tiered-rotisserie-draft-mode">
+                        <option value="rarity">Rarity tiers (fixed)</option>
+                        <option value="custom">Custom tiers</option>
+                    </select>
+                </label>
+
+                <p id="new-game-tiered-rotisserie-draft-rarity-description" hidden>4 tiers, one per rarity in order: Mythic (each player picks 1 of 2x that many laid out), Rare (2 of 4x), Uncommon (4 of 8x), Common (8 of 16x) -- a 15-card pool per player to build a 12-card deck from.</p>
+
+                <div id="new-game-tiered-rotisserie-draft-custom-fields" hidden>
+                    <label class="new-game-field">Number of tiers
+                        <select id="new-game-tiered-rotisserie-draft-tier-count">
+                            <option value="2">2</option>
+                            <option value="3">3</option>
+                            <option value="4">4</option>
+                        </select>
+                    </label>
+                    <p>Each tier's own cutoff counts must sum to at least 12 (the deck-building minimum).</p>
+
+                    <div id="new-game-tiered-rotisserie-draft-tier-1" class="new-game-tiered-rotisserie-draft-tier">
+                        <h4>Tier 1</h4>
+                        <label class="new-game-field">Cutoff count (cards each player picks from this tier)
+                            <input type="number" id="new-game-tiered-rotisserie-draft-tier-1-cutoff" min="1" value="4">
+                        </label>
+                        <label>Pool source
+                            <select id="new-game-tiered-rotisserie-draft-tier-1-pool-source">
+                                <option value="custom">Custom pool</option>
+                                <option value="saved_deck">My saved deck</option>
+                            </select>
+                        </label>
+                        <div id="new-game-tiered-rotisserie-draft-tier-1-custom-pool-fields">
+                            <label>Upload a pool file
+                                <input type="file" id="new-game-tiered-rotisserie-draft-tier-1-custom-pool-file" accept=".txt,text/plain">
+                            </label>
+                            <label>Or paste the pool (one card per line, an optional leading count, at least players &times; cutoff cards)
+                                <textarea id="new-game-tiered-rotisserie-draft-tier-1-custom-pool-text" class="decklist-textarea" rows="6"></textarea>
+                            </label>
+                        </div>
+                        <div id="new-game-tiered-rotisserie-draft-tier-1-saved-deck-fields" hidden>
+                            <label>Saved deck
+                                <select id="new-game-tiered-rotisserie-draft-tier-1-saved-decklist"></select>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="new-game-tiered-rotisserie-draft-tier-2" class="new-game-tiered-rotisserie-draft-tier">
+                        <h4>Tier 2</h4>
+                        <label class="new-game-field">Cutoff count (cards each player picks from this tier)
+                            <input type="number" id="new-game-tiered-rotisserie-draft-tier-2-cutoff" min="1" value="4">
+                        </label>
+                        <label>Pool source
+                            <select id="new-game-tiered-rotisserie-draft-tier-2-pool-source">
+                                <option value="custom">Custom pool</option>
+                                <option value="saved_deck">My saved deck</option>
+                            </select>
+                        </label>
+                        <div id="new-game-tiered-rotisserie-draft-tier-2-custom-pool-fields">
+                            <label>Upload a pool file
+                                <input type="file" id="new-game-tiered-rotisserie-draft-tier-2-custom-pool-file" accept=".txt,text/plain">
+                            </label>
+                            <label>Or paste the pool (one card per line, an optional leading count, at least players &times; cutoff cards)
+                                <textarea id="new-game-tiered-rotisserie-draft-tier-2-custom-pool-text" class="decklist-textarea" rows="6"></textarea>
+                            </label>
+                        </div>
+                        <div id="new-game-tiered-rotisserie-draft-tier-2-saved-deck-fields" hidden>
+                            <label>Saved deck
+                                <select id="new-game-tiered-rotisserie-draft-tier-2-saved-decklist"></select>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="new-game-tiered-rotisserie-draft-tier-3" class="new-game-tiered-rotisserie-draft-tier">
+                        <h4>Tier 3</h4>
+                        <label class="new-game-field">Cutoff count (cards each player picks from this tier)
+                            <input type="number" id="new-game-tiered-rotisserie-draft-tier-3-cutoff" min="1" value="4">
+                        </label>
+                        <label>Pool source
+                            <select id="new-game-tiered-rotisserie-draft-tier-3-pool-source">
+                                <option value="custom">Custom pool</option>
+                                <option value="saved_deck">My saved deck</option>
+                            </select>
+                        </label>
+                        <div id="new-game-tiered-rotisserie-draft-tier-3-custom-pool-fields">
+                            <label>Upload a pool file
+                                <input type="file" id="new-game-tiered-rotisserie-draft-tier-3-custom-pool-file" accept=".txt,text/plain">
+                            </label>
+                            <label>Or paste the pool (one card per line, an optional leading count, at least players &times; cutoff cards)
+                                <textarea id="new-game-tiered-rotisserie-draft-tier-3-custom-pool-text" class="decklist-textarea" rows="6"></textarea>
+                            </label>
+                        </div>
+                        <div id="new-game-tiered-rotisserie-draft-tier-3-saved-deck-fields" hidden>
+                            <label>Saved deck
+                                <select id="new-game-tiered-rotisserie-draft-tier-3-saved-decklist"></select>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="new-game-tiered-rotisserie-draft-tier-4" class="new-game-tiered-rotisserie-draft-tier">
+                        <h4>Tier 4</h4>
+                        <label class="new-game-field">Cutoff count (cards each player picks from this tier)
+                            <input type="number" id="new-game-tiered-rotisserie-draft-tier-4-cutoff" min="1" value="4">
+                        </label>
+                        <label>Pool source
+                            <select id="new-game-tiered-rotisserie-draft-tier-4-pool-source">
+                                <option value="custom">Custom pool</option>
+                                <option value="saved_deck">My saved deck</option>
+                            </select>
+                        </label>
+                        <div id="new-game-tiered-rotisserie-draft-tier-4-custom-pool-fields">
+                            <label>Upload a pool file
+                                <input type="file" id="new-game-tiered-rotisserie-draft-tier-4-custom-pool-file" accept=".txt,text/plain">
+                            </label>
+                            <label>Or paste the pool (one card per line, an optional leading count, at least players &times; cutoff cards)
+                                <textarea id="new-game-tiered-rotisserie-draft-tier-4-custom-pool-text" class="decklist-textarea" rows="6"></textarea>
+                            </label>
+                        </div>
+                        <div id="new-game-tiered-rotisserie-draft-tier-4-saved-deck-fields" hidden>
+                            <label>Saved deck
+                                <select id="new-game-tiered-rotisserie-draft-tier-4-saved-decklist"></select>
+                            </label>
+                        </div>
+                    </div>
                 </div>
             </div>
 

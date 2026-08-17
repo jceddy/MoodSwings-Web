@@ -416,6 +416,51 @@ final class GameService
     private const ROTISSERIE_DRAFT_MIN_DECK_SIZE = 12;
 
     /**
+     * Tiered Rotisserie Draft (issue #361's own generalization of base
+     * Rotisserie Draft immediately above): N rounds ("tiers"), each
+     * drafting from its own distinct sub-pool with its own per-player
+     * pick count, before the next tier begins -- pick order snakes
+     * CONTINUOUSLY across ALL tiers (does not reset to seat 0 at the
+     * start of each new tier), reusing rotisserieDraftPickUserId()
+     * completely unchanged, fed an ever-incrementing GLOBAL pick_index
+     * (see tieredRotisserieDraftTierIndexFor()). Two selectable tiering
+     * modes -- see buildTieredRotisserieDraftTierPools()'s own docblock
+     * and "Tiered Rotisserie Draft" in php-app/README.md for the full
+     * mechanic:
+     *   - 'rarity': the fixed reference scheme (4 tiers, Mythic/Rare/
+     *     Uncommon/Common, see TIERED_ROTISSERIE_DRAFT_RARITY_TIERS).
+     *   - 'custom': the creator configures TIERED_ROTISSERIE_DRAFT_MIN_TIERS..
+     *     TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS tiers themselves, each
+     *     with its own pool and cutoff count, the cutoffs summing to at
+     *     least ROTISSERIE_DRAFT_MIN_DECK_SIZE.
+     * Both modes share the same fixed ROTISSERIE_DRAFT_MIN_DECK_SIZE
+     * deck-build floor as base Rotisserie Draft.
+     */
+    private const TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS = 2;
+
+    /** @see TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS's own docblock. */
+    private const TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS = 4;
+
+    /**
+     * The rarity tiering mode's own fully-specified reference scheme
+     * (issue #361, confirmed by the maintainer): one tier per rarity, in
+     * draft order, each tier's own layout size exactly DOUBLE what it
+     * actually distributes that tier (cutoff_count picks per player) --
+     * see tieredRotisserieDraftRarityLayout()'s own docblock for the
+     * per-rarity supply-math confirmation against the real catalog (only
+     * the common tier, at 3-4 players, ever actually needs the "up to 2
+     * copies of one card" duplicate allowance that math confirmed).
+     *
+     * @var array<int, array{label: string, cutoff_count: int}>
+     */
+    private const TIERED_ROTISSERIE_DRAFT_RARITY_TIERS = [
+        ['label' => 'mythic', 'cutoff_count' => 1],
+        ['label' => 'rare', 'cutoff_count' => 2],
+        ['label' => 'uncommon', 'cutoff_count' => 4],
+        ['label' => 'common', 'cutoff_count' => 8],
+    ];
+
+    /**
      * The minimum pool size for a $cutoffCount-card cutoff and
      * $playerCount seated players -- every player picking exactly
      * $cutoffCount cards from a shared, never-refilled pool needs at
@@ -651,6 +696,23 @@ final class GameService
      *        ROTISSERIE_DRAFT_MAX_CUTOFF (13-20), defaulting to
      *        ROTISSERIE_DRAFT_DEFAULT_CUTOFF (14). Fixed for the whole
      *        match once chosen, the same shape as $winsNeeded.
+     * @param ?string $tieredRotisserieDraftMode only meaningful (and
+     *        required) when $deckType is 'tiered_rotisserie_draft' --
+     *        'rarity' (the fixed reference scheme, no further fields
+     *        needed) or 'custom' (see $tieredRotisserieDraftTiers). See
+     *        buildTieredRotisserieDraftTierPools()'s own docblock and
+     *        "Tiered Rotisserie Draft" in php-app/README.md.
+     * @param ?array<int, array{pool_source: string, custom_pool_text: ?string, saved_decklist_id: ?int, cutoff_count: int}> $tieredRotisserieDraftTiers
+     *        only meaningful (and required) when $tieredRotisserieDraftMode
+     *        is 'custom' -- TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS..
+     *        TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS (2-4) tiers, each its
+     *        own pool_source ('custom' or 'saved_deck' -- the same two
+     *        options $rotisserieDraftPoolSource's own 'custom'/'saved_deck'
+     *        cases use, just restricted to those two here) plus that pool
+     *        source's own custom_pool_text/saved_decklist_id, and its own
+     *        cutoff_count (how many cards each player picks from THAT
+     *        tier specifically). The tiers' own cutoff_counts must sum to
+     *        at least ROTISSERIE_DRAFT_MIN_DECK_SIZE.
      * @param ?int $savedDecklistId one of $createdByUserId's own saved decklists
      *        (issue #92) to source cards from instead of freshly-pasted/uploaded
      *        text -- meaningful when $deckType is 'custom' (an alternative to
@@ -720,15 +782,17 @@ final class GameService
         ?string $rotisserieDraftPoolSource = null,
         ?string $rotisserieDraftCustomPoolText = null,
         int $rotisserieDraftCutoffCount = self::ROTISSERIE_DRAFT_DEFAULT_CUTOFF,
+        ?string $tieredRotisserieDraftMode = null,
+        ?array $tieredRotisserieDraftTiers = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
         if (self::isDuelShapedFormat($format)) {
-            // Quick Draft, Grid Draft, Winston Draft, and Rotisserie Draft
-            // all support 3-4 players now (issue #189) -- 'duel' itself
-            // stays locked to exactly 2.
-            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft'], true)) {
+            // Quick Draft, Grid Draft, Winston Draft, Rotisserie Draft, and
+            // Tiered Rotisserie Draft all support 3-4 players now (issue
+            // #189) -- 'duel' itself stays locked to exactly 2.
+            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
                 if (count($userIds) < 2 || count($userIds) > 4) {
                     throw new GameStateException("A {$deckType} game must have 2-4 players");
                 }
@@ -741,6 +805,26 @@ final class GameService
                 'Rotisserie Draft\'s cutoff count must be between ' . self::ROTISSERIE_DRAFT_MIN_CUTOFF
                 . ' and ' . self::ROTISSERIE_DRAFT_MAX_CUTOFF
             );
+        }
+        if ($deckType === 'tiered_rotisserie_draft') {
+            if (!in_array($tieredRotisserieDraftMode, ['rarity', 'custom'], true)) {
+                throw new GameStateException('Tiered Rotisserie Draft requires a "rarity" or "custom" tiering mode');
+            }
+            if ($tieredRotisserieDraftMode === 'custom') {
+                $tierCount = count($tieredRotisserieDraftTiers ?? []);
+                if ($tierCount < self::TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS || $tierCount > self::TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS) {
+                    throw new GameStateException(
+                        'Custom-tiered Rotisserie Draft requires between ' . self::TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS
+                        . ' and ' . self::TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS . ' tiers'
+                    );
+                }
+                $cutoffSum = array_sum(array_map(static fn (array $tier): int => (int) ($tier['cutoff_count'] ?? 0), $tieredRotisserieDraftTiers));
+                if ($cutoffSum < self::ROTISSERIE_DRAFT_MIN_DECK_SIZE) {
+                    throw new GameStateException(
+                        "Custom-tiered Rotisserie Draft's tier cutoff counts must sum to at least " . self::ROTISSERIE_DRAFT_MIN_DECK_SIZE
+                    );
+                }
+            }
         }
         if (self::isTeamFormat($format)) {
             if (count($userIds) !== self::TEAM_PLAYER_COUNT) {
@@ -786,8 +870,8 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
-        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true)) {
-            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft" deck types');
+        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
+            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft" deck types');
         }
         // Team Play/Closed Team Play (issue #362) may also draft: each of
         // the 4 players still drafts and builds their own deck
@@ -802,7 +886,7 @@ final class GameService
         // gridDraftDraftingStateFor()'s/draftDeckBuildingStateFor()'s own
         // `team_drafted_cards` field. Closed Team Play stays fully private
         // between teammates instead, exactly like Stage 1 left it.
-        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
+        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
             throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, Team Play, or Closed Team Play");
         }
 
@@ -830,6 +914,17 @@ final class GameService
             $duelEvenColorDistributionRarities = $rules->evenColorDistributionRarities;
         }
 
+        // Built once here (buildTieredRotisserieDraftTierPools() draws
+        // randomly for 'rarity' mode, so it must not be called twice) --
+        // $draftPoolCardIds below just flattens it into the same "whole
+        // pool, informational only" shape draft_matches.pool_card_ids
+        // already holds for every other draft deck_type; the actual live
+        // per-tier state lives in draft_tiered_rotisserie_state.tiers
+        // instead (see initializeTieredRotisserieDraft()).
+        $tieredRotisserieDraftTierPools = $deckType === 'tiered_rotisserie_draft'
+            ? $this->buildTieredRotisserieDraftTierPools((string) $tieredRotisserieDraftMode, $tieredRotisserieDraftTiers, $createdByUserId, count($userIds))
+            : null;
+
         // Built (and, for a 'custom' pool, fully validated) before the
         // transaction starts, same rationale as parseCustomDecklist()/
         // resolveDuelDeckRules() above -- a bad pool should fail loudly
@@ -839,6 +934,7 @@ final class GameService
             'winston_draft' => $winstonDraftPoolSource,
             'grid_draft' => $gridDraftPoolSource,
             'rotisserie_draft' => $rotisserieDraftPoolSource,
+            'tiered_rotisserie_draft' => $tieredRotisserieDraftMode,
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
@@ -846,6 +942,7 @@ final class GameService
             'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount),
+            'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
             default => null,
         };
 
@@ -952,7 +1049,7 @@ final class GameService
                 $insertMatchPlayer = $pdo->prepare(
                     'INSERT INTO draft_match_players (draft_match_id, user_id, drafted_card_ids) VALUES (:match_id, :user_id, :drafted_card_ids)'
                 );
-                $initialDraftedCardIds = in_array($deckType, ['winston_draft', 'grid_draft', 'rotisserie_draft'], true) ? json_encode([]) : null;
+                $initialDraftedCardIds = in_array($deckType, ['winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) ? json_encode([]) : null;
                 foreach ($seatedUserIds as $userId) {
                     $insertMatchPlayer->execute([
                         'match_id' => $draftMatchId,
@@ -969,6 +1066,8 @@ final class GameService
                     $this->initializeGridDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
                 } elseif ($deckType === 'rotisserie_draft') {
                     $this->initializeRotisserieDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds), $rotisserieDraftCutoffCount);
+                } elseif ($deckType === 'tiered_rotisserie_draft') {
+                    $this->initializeTieredRotisserieDraft($gameId, $draftMatchId, $tieredRotisserieDraftTierPools, array_values($seatedUserIds), (string) $tieredRotisserieDraftMode);
                 }
             }
 
@@ -1212,7 +1311,7 @@ final class GameService
      */
     private static function isSharedDeckType(string $deckType): bool
     {
-        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true);
+        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true);
     }
 
     /**
@@ -1497,7 +1596,7 @@ final class GameService
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
-        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true)
+        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)
             ? $this->requireDraftDecksSubmitted($gameId, $playerIds)
             : [];
 
@@ -1525,11 +1624,11 @@ final class GameService
             // formats support that ISN'T one shared/identical pool --
             // see BoardStateRepository::load()'s identical check.
             if (self::isDuelShapedFormat($game['format'])
-                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true)) {
+                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
                 foreach ($playerIds as $playerId) {
                     $playerCardIds = match ($game['deck_type']) {
                         'custom_duel' => $customDuelDeckCardIds[$playerId],
-                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft' => $draftDeckCardIds[$playerId],
+                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft' => $draftDeckCardIds[$playerId],
                         default => $this->deckCardIdsFor($game),
                     };
                     shuffle($playerCardIds);
@@ -1820,7 +1919,7 @@ final class GameService
     {
         $this->withGameLock($gameId, function () use ($gameId, $userId, $playFirst): void {
             $game = $this->fetchGame($gameId);
-            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true) || $game['draft_match_id'] === null) {
+            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
                 throw new GameStateException("Game {$gameId} is not a draft match game");
             }
             $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
@@ -1922,6 +2021,11 @@ final class GameService
             // immediately above -- Rotisserie Draft's own per-player deck
             // lives on draft_match_players.deck_card_ids too.
             'rotisserie_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "rotisserie_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
+            // Same reasoning as 'quick_draft'/'winston_draft'/'grid_draft'/
+            // 'rotisserie_draft' immediately above -- Tiered Rotisserie
+            // Draft's own per-player deck lives on
+            // draft_match_players.deck_card_ids too.
+            'tiered_rotisserie_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "tiered_rotisserie_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
             default => range(1, self::TOTAL_CARDS), // 'one_of_each'
         };
     }
@@ -2387,6 +2491,151 @@ final class GameService
     }
 
     /**
+     * Tiered Rotisserie Draft's own tier pools (issue #361's
+     * generalization of base Rotisserie Draft) -- dispatches to whichever
+     * of the two tiering modes $mode selects, both returning the same
+     * shape: an ordered list of tiers, each
+     * {label: ?string, cutoff_count: int, pool_card_ids: int[]}, fully
+     * resolved up front (unlike base Rotisserie Draft's single pool,
+     * nothing here is dealt lazily as a tier is reached -- every tier's
+     * own layout is built once, at creation time, and stored whole in
+     * draft_tiered_rotisserie_state.tiers).
+     *
+     * @param ?array<int, array{pool_source: string, custom_pool_text: ?string, saved_decklist_id: ?int, cutoff_count: int}> $customTiers
+     *        only meaningful when $mode is 'custom' -- see
+     *        buildTieredRotisserieDraftCustomTierPools()'s own docblock.
+     * @return array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}>
+     */
+    private function buildTieredRotisserieDraftTierPools(string $mode, ?array $customTiers, int $requestingUserId, int $playerCount): array
+    {
+        return match ($mode) {
+            'rarity' => $this->buildTieredRotisserieDraftRarityTierPools($playerCount),
+            'custom' => $this->buildTieredRotisserieDraftCustomTierPools($customTiers ?? [], $requestingUserId, $playerCount),
+            default => throw new GameStateException('Tiered Rotisserie Draft requires a "rarity" or "custom" tiering mode'),
+        };
+    }
+
+    /**
+     * The rarity tiering mode's own 4 tiers (TIERED_ROTISSERIE_DRAFT_RARITY_TIERS),
+     * each tier's own layout built via tieredRotisserieDraftRarityLayout().
+     *
+     * @return array<int, array{label: string, cutoff_count: int, pool_card_ids: int[]}>
+     */
+    private function buildTieredRotisserieDraftRarityTierPools(int $playerCount): array
+    {
+        return array_map(function (array $tier) use ($playerCount): array {
+            $layoutSize = 2 * $playerCount * $tier['cutoff_count'];
+
+            return [
+                'label' => $tier['label'],
+                'cutoff_count' => $tier['cutoff_count'],
+                'pool_card_ids' => $this->tieredRotisserieDraftRarityLayout($tier['label'], $layoutSize),
+            ];
+        }, self::TIERED_ROTISSERIE_DRAFT_RARITY_TIERS);
+    }
+
+    /**
+     * $layoutSize card ids of catalog rarity $rarity, chosen randomly --
+     * distinct catalog cards wherever the catalog has enough of that
+     * rarity, otherwise laying out every distinct card of that rarity
+     * once and filling the remaining shortfall with a second copy of a
+     * random subset of them (never a 3rd copy of any single card,
+     * matching the rarity scheme's own "up to 2 copies of any one card"
+     * allowance -- see TIERED_ROTISSERIE_DRAFT_RARITY_TIERS's own
+     * docblock). Confirmed against the real catalog (133 cards: 15
+     * mythic/30 rare/40 uncommon/48 common) at the worst case, 4 players:
+     * mythic needs 8 (of 15), rare 16 (of 30), uncommon 32 (of 40) --
+     * comfortable margins, never needing a 2nd copy of anything -- while
+     * common needs 64 (of 48 distinct), short by 16, covered by doubling
+     * 16 of the 48 commons once each; at 3 players the common tier is an
+     * exact zero-margin fit (48 needed, 48 available); at 2 players
+     * there's plenty of slack (32 of 48). See "Tiered Rotisserie Draft"
+     * in php-app/README.md for the full supply-math table.
+     *
+     * @return int[]
+     */
+    private function tieredRotisserieDraftRarityLayout(string $rarity, int $layoutSize): array
+    {
+        $rowsById = $this->loadCardCatalog()['rowsById'];
+        $distinctIds = array_keys(array_filter($rowsById, static fn (array $row): bool => $row['rarity'] === $rarity));
+
+        if ($layoutSize <= count($distinctIds)) {
+            $keys = (array) array_rand($distinctIds, $layoutSize);
+
+            return array_map(static fn ($key) => $distinctIds[$key], $keys);
+        }
+
+        $shortfall = $layoutSize - count($distinctIds);
+        if ($shortfall > count($distinctIds)) {
+            throw new GameStateException(
+                "Not enough {$rarity} cards in the catalog to lay out {$layoutSize}, even allowing up to 2 copies of each"
+            );
+        }
+
+        $doubledFrom = $distinctIds;
+        shuffle($doubledFrom);
+
+        return [...$distinctIds, ...array_slice($doubledFrom, 0, $shortfall)];
+    }
+
+    /**
+     * The custom tiering mode's own creator-configured tiers (issue #361,
+     * confirmed by the maintainer) -- $tiers.count() is validated
+     * (TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS..
+     * TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS, cutoffs summing to at
+     * least ROTISSERIE_DRAFT_MIN_DECK_SIZE) by createGame() itself before
+     * this is ever called, the same "validate before building" order
+     * parseCustomDecklist()/resolveDuelDeckRules() already establish.
+     * Each tier's own pool is sourced from EITHER a saved decklist or a
+     * pasted custom list -- the same 'custom'/'saved_deck' pool sources
+     * buildDraftPool() already offers, just restricted to those two (no
+     * built-in random/structure/jceddy's-collection sources for a custom
+     * tier -- the creator supplies every tier's own pool explicitly) --
+     * and must contain at least $playerCount * that tier's own
+     * cutoff_count cards, the same per-tier floor base Rotisserie Draft's
+     * own rotisserieDraftMinPoolSize() enforces for its single pool, laid
+     * out in full rather than truncated (truncateToTarget: false), same
+     * "a floor, not an exact target" convention.
+     *
+     * @param array<int, array{pool_source: string, custom_pool_text: ?string, saved_decklist_id: ?int, cutoff_count: int}> $tiers
+     * @return array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}>
+     */
+    private function buildTieredRotisserieDraftCustomTierPools(array $tiers, int $requestingUserId, int $playerCount): array
+    {
+        return array_map(function (array $tier) use ($requestingUserId, $playerCount): array {
+            $poolSource = (string) ($tier['pool_source'] ?? '');
+            if (!in_array($poolSource, ['custom', 'saved_deck'], true)) {
+                throw new GameStateException('Each custom Tiered Rotisserie Draft tier\'s pool source must be "custom" or "saved_deck"');
+            }
+
+            $cutoffCount = (int) ($tier['cutoff_count'] ?? 0);
+            if ($cutoffCount < 1) {
+                throw new GameStateException('Each custom Tiered Rotisserie Draft tier requires a cutoff count of at least 1');
+            }
+
+            $minPoolSize = $playerCount * $cutoffCount;
+            $cardIds = $this->buildDraftPool(
+                $poolSource,
+                $tier['custom_pool_text'] ?? null,
+                isset($tier['saved_decklist_id']) ? (int) $tier['saved_decklist_id'] : null,
+                $requestingUserId,
+                $minPoolSize,
+                $minPoolSize,
+                truncateToTarget: false,
+            );
+
+            if (count($cardIds) < $minPoolSize) {
+                throw new GameStateException(
+                    'One of the custom Tiered Rotisserie Draft tiers\' pool has only ' . count($cardIds)
+                    . " cards, but {$playerCount} players and a {$cutoffCount}-card cutoff requires at least {$minPoolSize}"
+                );
+            }
+
+            return ['label' => null, 'cutoff_count' => $cutoffCount, 'pool_card_ids' => array_values($cardIds)];
+        }, $tiers);
+    }
+
+    /**
      * Subtracts $toRemove from $cardIds as MULTISETS: removes exactly one
      * matching instance per element of $toRemove, not every instance --
      * array_diff()/array_intersect() are unsafe for this because Quick
@@ -2841,7 +3090,7 @@ final class GameService
     public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
     {
         $game = $this->fetchGame($gameId);
-        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true) || $game['draft_match_id'] === null) {
+        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
             throw new GameStateException("Game {$gameId} is not a draft game");
         }
         $draftMatchId = (int) $game['draft_match_id'];
@@ -2850,6 +3099,12 @@ final class GameService
             'winston_draft' => self::WINSTON_MIN_DECK_SIZE,
             'grid_draft' => self::GRID_DRAFT_MIN_DECK_SIZE,
             'rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
+            // Both Tiered Rotisserie Draft modes share base Rotisserie
+            // Draft's own fixed floor -- 'rarity' mode's own 15-card pool
+            // (1+2+4+8) always clears it, and 'custom' mode's own tier
+            // cutoffs are validated (createGame()) to sum to at least
+            // this same floor already.
+            'tiered_rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
         };
         $maxDeckSize = null;
         $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
@@ -3691,6 +3946,184 @@ final class GameService
     }
 
     /**
+     * Given the whole match's own tiers (each with a fixed cutoff_count,
+     * unchanged for the whole match) and player count, which tier a
+     * GLOBAL $pickIndex falls within -- the cumulative sum of each
+     * earlier tier's own total picks (cutoff_count * $playerCount) marks
+     * where one tier's picks end and the next begins; returns
+     * count($tiers) once $pickIndex has reached the very last tier's own
+     * cumulative total, meaning the whole draft is complete. Deliberately
+     * NOT cached as its own stored column (see draft_tiered_rotisserie_state's
+     * own migration comment) -- cheap to recompute (at most 4 tiers) and
+     * one less piece of state that could drift out of sync with
+     * pick_index itself.
+     *
+     * @param array<int, array{cutoff_count: int}> $tiers
+     */
+    private static function tieredRotisserieDraftTierIndexFor(array $tiers, int $playerCount, int $pickIndex): int
+    {
+        $cumulative = 0;
+        foreach ($tiers as $index => $tier) {
+            $cumulative += $tier['cutoff_count'] * $playerCount;
+            if ($pickIndex < $cumulative) {
+                return $index;
+            }
+        }
+
+        return count($tiers);
+    }
+
+    /**
+     * @param array<int, array{cutoff_count: int}> $tiers
+     */
+    private static function tieredRotisserieDraftTotalPicksNeeded(array $tiers, int $playerCount): int
+    {
+        return array_sum(array_map(static fn (array $tier): int => $tier['cutoff_count'] * $playerCount, $tiers));
+    }
+
+    /**
+     * Tiered Rotisserie Draft's own init (issue #361's generalization of
+     * initializeRotisserieDraft() immediately above) -- $tierPools is
+     * already fully resolved (buildTieredRotisserieDraftTierPools()), so
+     * this just shuffles each tier's own layout in place (same "don't
+     * reveal anything about pool order" rationale as base Rotisserie
+     * Draft's own shuffle -- only matters for the 'custom' mode's pasted/
+     * saved-deck pools, which could otherwise arrive in a suggestive
+     * order; the 'rarity' mode's own tieredRotisserieDraftRarityLayout()
+     * already draws randomly) and picks a random $starterSeatOffset the
+     * same way initializeRotisserieDraft() does, for the same reason
+     * (rotisserieDraftPickUserId()'s own docblock) -- reused here
+     * completely unchanged, fed pick_index 0 for the very first pick.
+     *
+     * @param array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}> $tierPools
+     */
+    private function initializeTieredRotisserieDraft(int $gameId, int $draftMatchId, array $tierPools, array $userIds, string $mode): void
+    {
+        foreach ($tierPools as &$tier) {
+            shuffle($tier['pool_card_ids']);
+        }
+        unset($tier);
+
+        $starterSeatOffset = random_int(0, count($userIds) - 1);
+        $firstPickerUserId = self::rotisserieDraftPickUserId($userIds, 0, $starterSeatOffset);
+
+        Connection::get()->prepare(
+            'INSERT INTO draft_tiered_rotisserie_state
+                (draft_match_id, tiering_mode, tiers, starter_seat_offset, pick_index, current_turn_user_id)
+             VALUES (:match_id, :mode, :tiers, :starter_seat_offset, 0, :first_picker)'
+        )->execute([
+            'match_id' => $draftMatchId,
+            'mode' => $mode,
+            'tiers' => json_encode(array_values($tierPools)),
+            'starter_seat_offset' => $starterSeatOffset,
+            'first_picker' => $firstPickerUserId,
+        ]);
+
+        $this->notifyDraftUsersItsYourTurn($gameId, [$firstPickerUserId], "Game #{$gameId}'s Tiered Rotisserie Draft is ready for your pick.", 'draft-pick');
+    }
+
+    /**
+     * A single card pick from whichever tier is currently active (see
+     * tieredRotisserieDraftTierIndexFor()) -- otherwise identical to
+     * submitRotisserieDraftPick() immediately above: remove $cardId from
+     * that tier's own pool_card_ids, record it, advance the whole match's
+     * global pick_index by one, and let rotisserieDraftPickUserId() (fed
+     * that same never-reset-per-tier pick_index) resolve whose turn is
+     * next -- including straight across a tier boundary, with no
+     * special-casing needed there any more than base Rotisserie Draft
+     * needs any for an odd cutoff_count ending mid-double-round.
+     *
+     * @return array{card_id: int, pick_index: int, turn_advanced: bool, draft_completed: bool}
+     */
+    public function submitTieredRotisserieDraftPick(int $gameId, int $userId, int $cardId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'tiered_rotisserie_draft' || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a Tiered Rotisserie Draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+
+        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $cardId): array {
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if ($match['status'] !== 'drafting') {
+                throw new GameStateException('This match is not currently drafting');
+            }
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            $playerCount = count($userIds);
+
+            $pdo = Connection::get();
+            $stateStmt = $pdo->prepare('SELECT * FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+            $stateStmt->execute(['id' => $draftMatchId]);
+            $state = $stateStmt->fetch();
+            if ($state === false) {
+                throw new GameStateException("No Tiered Rotisserie Draft state for match {$draftMatchId}");
+            }
+            if ((int) $state['current_turn_user_id'] !== $userId) {
+                throw new GameStateException("It's not your turn to draft");
+            }
+
+            $tiers = json_decode((string) $state['tiers'], true);
+            $pickIndex = (int) $state['pick_index'];
+            $tierIndex = self::tieredRotisserieDraftTierIndexFor($tiers, $playerCount, $pickIndex);
+
+            $pool = array_map(intval(...), $tiers[$tierIndex]['pool_card_ids']);
+            $poolKey = array_search($cardId, $pool, true);
+            if ($poolKey === false) {
+                throw new GameStateException("Card {$cardId} is not available in the current tier's pool");
+            }
+            unset($pool[$poolKey]);
+            $tiers[$tierIndex]['pool_card_ids'] = array_values($pool);
+
+            $this->appendDraftedCardIds($draftMatchId, $userId, [$cardId]);
+
+            $pickIndex++;
+            $totalPicksNeeded = self::tieredRotisserieDraftTotalPicksNeeded($tiers, $playerCount);
+
+            if ($pickIndex >= $totalPicksNeeded) {
+                // The draft is complete -- whatever's left in any tier's
+                // own pool is simply discarded, never reshuffled back in,
+                // same "remainder discarded" precedent as base Rotisserie
+                // Draft's own leftover pool cards.
+                $pdo->prepare('DELETE FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
+                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+                $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
+
+                return [
+                    'card_id' => $cardId,
+                    'pick_index' => $pickIndex,
+                    'turn_advanced' => false,
+                    'draft_completed' => true,
+                ];
+            }
+
+            $nextTurnUserId = self::rotisserieDraftPickUserId($userIds, $pickIndex, (int) $state['starter_seat_offset']);
+
+            $pdo->prepare(
+                'UPDATE draft_tiered_rotisserie_state SET tiers = :tiers, pick_index = :pick_index, current_turn_user_id = :next_turn WHERE draft_match_id = :match_id'
+            )->execute([
+                'tiers' => json_encode($tiers),
+                'pick_index' => $pickIndex,
+                'next_turn' => $nextTurnUserId,
+                'match_id' => $draftMatchId,
+            ]);
+
+            $this->notifyDraftUsersItsYourTurn($gameId, [$nextTurnUserId], "Game #{$gameId}'s Tiered Rotisserie Draft is ready for your pick.", 'draft-pick');
+
+            return [
+                'card_id' => $cardId,
+                'pick_index' => $pickIndex,
+                'turn_advanced' => true,
+                'draft_completed' => false,
+            ];
+        });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
+    }
+
+    /**
      * playMood()/pass()/respondToDecision() each load a BoardState, mutate
      * it in memory, and save it back across one or more separate SQL
      * transactions (see e.g. respondToDecision()'s own sequential
@@ -4184,7 +4617,7 @@ final class GameService
 
             if (
                 $game['status'] === 'waiting'
-                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft'], true)
+                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)
                 && $game['draft_match_id'] !== null
             ) {
                 return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id'], $game['format']);
@@ -8028,6 +8461,9 @@ final class GameService
             'rotisserie_draft' => Connection::get()->prepare(
                 'SELECT current_turn_user_id FROM draft_rotisserie_state WHERE draft_match_id = :id'
             ),
+            'tiered_rotisserie_draft' => Connection::get()->prepare(
+                'SELECT current_turn_user_id FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id'
+            ),
             default => null,
         };
         if ($turnStmt === null) {
@@ -9176,6 +9612,180 @@ final class GameService
         ];
     }
 
+    /**
+     * getState()'s own 'tiered_rotisserie_draft' field builder --
+     * structurally the same match-level scoreline/next_game_id shape as
+     * rotisserieDraftStateFor() immediately above, dispatching to
+     * tieredRotisserieDraftDraftingStateFor() below once drafting.
+     *
+     * @param array<string, mixed> $game
+     */
+    private function tieredRotisserieDraftStateFor(array $game, int $viewerUserId): array
+    {
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $playersStmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, dmp.wins, dmp.drafted_card_ids, dmp.deck_card_ids, dmp.previous_deck_card_ids, u.username
+             FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
+        );
+        $playersStmt->execute(['id' => $draftMatchId]);
+        $playersByUser = [];
+        foreach ($playersStmt->fetchAll() as $row) {
+            $playersByUser[(int) $row['user_id']] = $row;
+        }
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $match['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE draft_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        $state = [
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            'status' => $match['status'],
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
+            'next_game_id' => $nextGameId,
+            'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
+            'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$uid]['wins'] ?? 0),
+                'is_you' => $uid === $viewerUserId,
+            ], $userIds),
+            'drafting' => null,
+            'deck_building' => null,
+        ];
+
+        $teamIdByUserId = $this->openTeamPlayTeamIdByUserId((int) $game['id'], $game['format']);
+
+        if ($match['status'] === 'drafting') {
+            $state['drafting'] = $this->tieredRotisserieDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser, $teamIdByUserId);
+        } elseif ($match['status'] === 'deck_building') {
+            $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $playersByUser,
+                $viewerUserId,
+                array_values(array_diff($userIds, [$viewerUserId])),
+                self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
+                null,
+                $this->openTeamPlayTeammateUserId((int) $game['id'], $game['format'], $viewerUserId),
+            );
+        }
+
+        return $state;
+    }
+
+    /**
+     * getState()'s own view of Tiered Rotisserie Draft's current
+     * tier/pool/turn state for $viewerUserId -- structurally
+     * rotisserieDraftDraftingStateFor()'s own shape, generalized to
+     * whichever tier is currently active (tieredRotisserieDraftTierIndexFor()):
+     * 'pool_cards' is that CURRENT tier's own remaining face-up pool
+     * only (a prior tier's own now-discarded remainder, and a later
+     * tier's own not-yet-revealed pool, are neither shown), while
+     * 'tiers' gives the frontend the whole match's own tier-by-tier
+     * progress overview (label/cutoff_count/status) to render as a
+     * stepper -- 'drafted_so_far'/etc. stay whole-match totals (a single
+     * running drafted_card_ids list spans every tier already, same as
+     * base Rotisserie Draft's own semantics carrying unchanged).
+     *
+     * @param int[] $userIds the match's user ids (any count 2-4), in seat order
+     * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
+     * @param array<int, int> $teamIdByUserId user_id => team_id (openTeamPlayTeamIdByUserId()) -- empty outside Open Team Play
+     */
+    private function tieredRotisserieDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser, array $teamIdByUserId = []): array
+    {
+        $stateStmt = Connection::get()->prepare('SELECT * FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $tieredState = $stateStmt->fetch();
+
+        $playerCount = count($userIds);
+        $tiers = json_decode((string) $tieredState['tiers'], true);
+        $pickIndex = (int) $tieredState['pick_index'];
+        $currentTierIndex = self::tieredRotisserieDraftTierIndexFor($tiers, $playerCount, $pickIndex);
+        $currentTier = $tiers[$currentTierIndex];
+
+        $picksBeforeCurrentTier = 0;
+        for ($i = 0; $i < $currentTierIndex; $i++) {
+            $picksBeforeCurrentTier += $tiers[$i]['cutoff_count'] * $playerCount;
+        }
+
+        $draftedCardIdsFor = fn (int $userId): array => ($playersByUser[$userId]['drafted_card_ids'] ?? null) !== null
+            ? array_map(intval(...), json_decode((string) $playersByUser[$userId]['drafted_card_ids'], true))
+            : [];
+
+        $currentTurnUserId = (int) $tieredState['current_turn_user_id'];
+        $otherUserIds = array_values(array_diff($userIds, [$viewerUserId]));
+        $opponentUserId = $otherUserIds[0] ?? null;
+
+        $teamsDraftedSoFar = null;
+        if ($teamIdByUserId !== []) {
+            $userIdsByTeam = [];
+            foreach ($userIds as $uid) {
+                $userIdsByTeam[$teamIdByUserId[$uid] ?? -1][] = $uid;
+            }
+            ksort($userIdsByTeam);
+
+            $teamsDraftedSoFar = array_map(function (array $teamUserIds) use ($teamIdByUserId, $viewerUserId, $playersByUser, $draftedCardIdsFor): array {
+                $teamCardIds = [];
+                foreach ($teamUserIds as $uid) {
+                    $teamCardIds = [...$teamCardIds, ...$draftedCardIdsFor($uid)];
+                }
+
+                return [
+                    'team_id' => $teamIdByUserId[$teamUserIds[0]],
+                    'is_your_team' => in_array($viewerUserId, $teamUserIds, true),
+                    'member_usernames' => array_map(fn (int $uid) => $playersByUser[$uid]['username'] ?? null, $teamUserIds),
+                    'drafted_so_far' => $this->serializeCatalogCards($teamCardIds),
+                ];
+            }, array_values($userIdsByTeam));
+        }
+
+        return [
+            'is_your_turn' => $currentTurnUserId === $viewerUserId,
+            'current_turn_username' => $playersByUser[$currentTurnUserId]['username'] ?? null,
+            'current_tier_index' => $currentTierIndex,
+            'current_tier_label' => $currentTier['label'],
+            'tiers' => array_map(fn (int $index, array $tier): array => [
+                'label' => $tier['label'],
+                'cutoff_count' => $tier['cutoff_count'],
+                'status' => $index < $currentTierIndex ? 'completed' : ($index === $currentTierIndex ? 'current' : 'upcoming'),
+            ], array_keys($tiers), $tiers),
+            'cutoff_count' => (int) $currentTier['cutoff_count'],
+            'picks_made_this_tier' => $pickIndex - $picksBeforeCurrentTier,
+            'total_picks_needed_this_tier' => (int) $currentTier['cutoff_count'] * $playerCount,
+            'total_picks_made' => $pickIndex,
+            'total_picks_needed' => self::tieredRotisserieDraftTotalPicksNeeded($tiers, $playerCount),
+            'pool_cards' => $this->serializeCatalogCards(array_map(intval(...), $currentTier['pool_card_ids'])),
+            'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
+            'opponent_drafted_so_far' => $opponentUserId !== null
+                ? $this->serializeCatalogCards($draftedCardIdsFor($opponentUserId))
+                : [],
+            'other_players_drafted_so_far' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($uid)),
+            ], $otherUserIds),
+            'teams_drafted_so_far' => $teamsDraftedSoFar,
+        ];
+    }
+
     /** @return array<string, mixed> */
     public function getState(int $gameId, int $viewerUserId): array
     {
@@ -9422,6 +10032,10 @@ final class GameService
             // Rotisserie Draft's (issue #361) own analog of 'quick_draft'
             // immediately above -- see rotisserieDraftStateFor().
             'rotisserie_draft' => null,
+            // Tiered Rotisserie Draft's (issue #361) own analog of
+            // 'quick_draft' immediately above -- see
+            // tieredRotisserieDraftStateFor().
+            'tiered_rotisserie_draft' => null,
         ];
 
         if ($viewerGamePlayerId !== null) {
@@ -9440,6 +10054,8 @@ final class GameService
                 $response['grid_draft'] = $this->gridDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'rotisserie_draft' && $game['draft_match_id'] !== null) {
                 $response['rotisserie_draft'] = $this->rotisserieDraftStateFor($game, $viewerUserId);
+            } elseif ($game['deck_type'] === 'tiered_rotisserie_draft' && $game['draft_match_id'] !== null) {
+                $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
             }
         }
 
@@ -10207,6 +10823,7 @@ final class GameService
             'winston_draft' => null,
             'grid_draft' => null,
             'rotisserie_draft' => null,
+            'tiered_rotisserie_draft' => null,
         ];
     }
 

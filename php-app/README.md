@@ -2822,6 +2822,127 @@ same shared shape the other variants use, called with
 team (`teams_drafted_so_far`) rather than per player when `format: 'team'`,
 reusing the same team-grouping helpers.
 
+### Tiered Rotisserie Draft
+
+Issue #361's own generalization of base Rotisserie Draft immediately above:
+N rounds ("tiers"), each drafting from its own distinct sub-pool with its
+own per-player pick count, before the next tier begins, rather than a
+single pool/cutoff for the whole match. Ships as its own `deck_type`,
+`'tiered_rotisserie_draft'`, with a `tiering_mode` field (`'rarity'` or
+`'custom'`) selecting between two schemes -- the same
+`quick_draft_pool_source`-style pattern of one deck_type selecting among
+several sourcing schemes, rather than two entirely separate deck_types.
+Otherwise reuses base Rotisserie Draft's infrastructure and match shape
+unchanged: same `draft` format/best-of-three structure, same
+`draftDeckBuildingStateFor()`/`submitDraftDeck()` deck-building step
+afterward, same 2-4 players and `draft`/`team`/`closed_team` format
+support.
+
+**Pick order -- continuous across tier boundaries.** The single most
+important design point: pick order snakes CONTINUOUSLY across ALL tiers,
+never resetting to seat 0 when a new tier begins. This is achieved by
+reusing `rotisserieDraftPickUserId($userIds, $pickIndex, $starterSeatOffset)`
+completely unchanged, fed an ever-incrementing GLOBAL `pick_index` that
+keeps counting across the whole match rather than resetting per tier --
+the exact same function base Rotisserie Draft itself uses for its own
+single pool. Tier boundaries are purely a bookkeeping concern layered on
+top (`tieredRotisserieDraftTierIndexFor()`): given each tier's own fixed
+`cutoff_count`, the cumulative sum of `cutoff_count * $playerCount` across
+tiers 0..N marks where tier N's own picks end and tier N+1's begin, and
+the draft is complete once `pick_index` reaches the sum across every
+configured tier. A tier boundary landing mid-double-round needs no
+special-casing, for the same reason base Rotisserie Draft's own odd
+`cutoff_count` doesn't (see `rotisserieDraftPickUserId()`'s own docblock)
+-- it's just another point in one continuous pick sequence.
+
+**Two tiering modes** (`buildTieredRotisserieDraftTierPools()`):
+
+- **`'rarity'`** (`TIERED_ROTISSERIE_DRAFT_RARITY_TIERS`) -- the fixed
+  reference scheme, confirmed by the maintainer: 4 tiers, one per rarity
+  in order Mythic → Rare → Uncommon → Common, cutoffs 1/2/4/8 picks per
+  player. Every tier's own layout size is exactly DOUBLE what it actually
+  distributes that tier (`layout = 2 * playerCount * cutoff_count`) --
+  mythic 2N, rare 4N, uncommon 8N, common 16N. Each player ends up with a
+  15-card pool (1+2+4+8) to build a 12-card deck from.
+  `tieredRotisserieDraftRarityLayout()` draws that many DISTINCT cards of
+  the tier's own rarity where the catalog has enough, otherwise laying
+  out every distinct card of that rarity once and filling the shortfall
+  with a second copy of a random subset (never a 3rd copy of any single
+  card) -- confirmed against the real catalog (133 cards: 15 mythic/30
+  rare/40 uncommon/48 common) at the worst case, 4 players: mythic needs
+  8 (of 15), rare 16 (of 30), uncommon 32 (of 40) -- comfortable margins,
+  never needing a 2nd copy -- while common needs 64 (of 48 distinct),
+  short by 16, covered by doubling 16 of the 48 commons once each; at 3
+  players the common tier is an exact zero-margin fit (48 needed, 48
+  available); at 2 players there's plenty of slack (32 of 48).
+- **`'custom'`** (`buildTieredRotisserieDraftCustomTierPools()`) -- the
+  creator configures `TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS`..
+  `TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS` (2-4) tiers themselves, each
+  with its own pool -- sourced from *either* a saved decklist or a pasted
+  custom list, the same `'custom'`/`'saved_deck'` pool sources
+  `buildDraftPool()` already offers, just restricted to those two (no
+  built-in random/structure/jceddy's-collection sources for a custom tier
+  -- the creator supplies every tier's own pool explicitly) -- and its own
+  pick cutoff count, independently configurable per tier. Each tier's own
+  pool must be at least `playerCount * that tier's own cutoff_count` cards
+  (the same floor base Rotisserie Draft's own custom pool enforces, just
+  computed per tier), and the configured tiers' own cutoffs must sum to at
+  least `ROTISSERIE_DRAFT_MIN_DECK_SIZE` (12) -- validated by `createGame()`
+  itself before any pool building starts, the same "validate before
+  building" order `parseCustomDecklist()`/`resolveDuelDeckRules()` already
+  establish. A single tier would just be base Rotisserie Draft, hence the
+  2-tier minimum.
+
+**State** -- `draft_tiered_rotisserie_state` (migration `0135`) holds the
+whole match's mechanic in one row: `tiering_mode`, `tiers` (a JSON array,
+ordered the same as they're drafted -- each element
+`{label, cutoff_count, pool_card_ids}`: `label` names which rarity a
+`'rarity'`-mode tier is, `null` for `'custom'` mode; `pool_card_ids` holds
+every card STILL available to pick in that tier specifically, shrinking as
+picks happen, exactly like `draft_rotisserie_state`'s own `pool_card_ids`
+just scoped per tier -- resolved and stored for every configured tier up
+front at creation time, not dealt lazily as each tier is reached),
+`starter_seat_offset`/`pick_index`/`current_turn_user_id` (mirroring
+`draft_rotisserie_state`'s own columns exactly). Which tier is currently
+active is deliberately NOT its own stored column -- it's derived on
+demand from `pick_index` and each tier's own `cutoff_count`
+(`tieredRotisserieDraftTierIndexFor()`), one less piece of mutable state
+that could drift out of sync with `pick_index` itself.
+`initializeTieredRotisserieDraft()` shuffles each tier's own layout in
+place and inserts this row at `pick_index = 0`.
+`submitTieredRotisserieDraftPick()` validates the caller is the current
+picker and the chosen card is still in the CURRENTLY ACTIVE tier's own
+pool (derived from the pre-pick `pick_index`), removes it from that
+tier's own `pool_card_ids`, appends it to the picker's `drafted_card_ids`
+(the same shared column every draft variant uses, spanning the whole
+match across every tier), and either advances `pick_index`/
+`current_turn_user_id` to the next pick or, once every tier's own picks
+are exhausted, deletes the `draft_tiered_rotisserie_state` row outright
+and transitions the match to `deck_building`.
+
+**Deck-building** reuses `ROTISSERIE_DRAFT_MIN_DECK_SIZE` (12) as the
+minimum for both tiering modes -- `'rarity'` mode's own 15-card pool
+always clears it, and `'custom'` mode's own tier cutoffs are already
+validated to sum to at least this same floor.
+
+**State exposure** -- `getState()`'s `tiered_rotisserie_draft` field
+mirrors `rotisserie_draft`'s own shape (`tieredRotisserieDraftStateFor()`),
+with `drafting` (`tieredRotisserieDraftDraftingStateFor()`) generalizing
+`rotisserieDraftDraftingStateFor()`'s own fields to the current tier:
+`current_tier_index`/`current_tier_label` name which tier is active,
+`tiers` gives every configured tier's own `label`/`cutoff_count`/`status`
+(`'completed'`/`'current'`/`'upcoming'`) for a stepper-style progress UI,
+`cutoff_count`/`picks_made_this_tier`/`total_picks_needed_this_tier` scope
+the same progress figures base Rotisserie Draft shows to the CURRENT tier
+only, `total_picks_made`/`total_picks_needed` give the whole match's own
+progress (the global `pick_index` and its total across every tier), and
+`pool_cards` is the current tier's own remaining face-up pool only (never
+a prior tier's now-discarded remainder, nor a later tier's not-yet-active
+pool). `drafted_so_far`/`opponent_drafted_so_far`/
+`other_players_drafted_so_far`/`teams_drafted_so_far` stay whole-match
+totals, unchanged in shape from base Rotisserie Draft -- a single running
+`drafted_card_ids` list already spans every tier.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next
