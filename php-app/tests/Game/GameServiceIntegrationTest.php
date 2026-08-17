@@ -14995,10 +14995,20 @@ final class GameServiceIntegrationTest extends TestCase
         // shuffled $seatedUserIds, so $seatOrder[$seat] is exactly the
         // seat sequence's own user id.
         $seatOrder = $this->fetchDraftMatchSeatOrder($draftMatchId);
+
+        // initializeRotisserieDraft() also picks a random
+        // starter_seat_offset (migration 0134) that rotates every pick's
+        // seat index by a fixed amount for this match -- read it back and
+        // subtract it out below so the asserted sequence stays the
+        // confirmed shape regardless of which physical seat it happened
+        // to start at this run.
+        $starterSeatOffset = (int) $this->fetchRotisserieState($draftMatchId)['starter_seat_offset'];
+
         $actualSeatSequence = [];
         for ($i = 0; $i < count($expectedSeatSequence); $i++) {
             $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
-            $actualSeatSequence[] = array_search($currentTurnUserId, $seatOrder, true);
+            $seatIndex = array_search($currentTurnUserId, $seatOrder, true);
+            $actualSeatSequence[] = ($seatIndex - $starterSeatOffset + $playerCount) % $playerCount;
 
             $pool = json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true);
             $this->games->submitRotisserieDraftPick($gameId, $currentTurnUserId, (int) $pool[0]);
@@ -15127,6 +15137,51 @@ final class GameServiceIntegrationTest extends TestCase
             rotisserieDraftCutoffCount: 13,
         );
         self::assertNull($this->games->getState($draftGameId, $userIds[0])['rotisserie_draft']['drafting']['teams_drafted_so_far']);
+    }
+
+    /**
+     * A real bug, caught live: seatOrderForTeamGame()/
+     * seatOrderForClosedTeamGame() deliberately seat the creator at a
+     * fixed seat 0 (so partners sit adjacent/across the table, unlike
+     * plain 'draft' format's own shuffledSeatOrder()) -- but
+     * rotisserieDraftPickUserId($userIds, 0) always resolves to
+     * $userIds[0], so before migration 0134's starter_seat_offset, the
+     * creator picked first in literally every 'team'/'closed_team'
+     * Rotisserie Draft match, no exceptions. Mirrors
+     * testCreateGameDraftFormatVariesSeatOrderAcrossGames()'s own
+     * "run N trials, assert more than one distinct outcome" pattern for
+     * the same class of regression.
+     *
+     * @dataProvider teamRotisserieDraftFormatProvider
+     */
+    public function testCreateGameTeamRotisserieDraftVariesFirstPickerAcrossGames(string $format): void
+    {
+        $userIds = $this->insertUsers('rotteamfirst-' . uniqid() . '-', 4);
+        $firstPickersSeen = [];
+
+        for ($i = 0; $i < 20; $i++) {
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: $format,
+                deckType: 'rotisserie_draft',
+                partnerUserId: $userIds[1],
+                rotisserieDraftPoolSource: 'random_48',
+                rotisserieDraftCutoffCount: 13,
+            );
+            $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+            $firstPickersSeen[] = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+        }
+
+        self::assertGreaterThan(1, count(array_unique($firstPickersSeen)), "{$format} Rotisserie Draft should not deterministically give the creator (or any other single player) first pick every time");
+    }
+
+    public static function teamRotisserieDraftFormatProvider(): array
+    {
+        return [
+            'Open Team Play' => ['team'],
+            'Closed Team Play' => ['closed_team'],
+        ];
     }
 
     /**
