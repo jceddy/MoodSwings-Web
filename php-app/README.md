@@ -2753,13 +2753,30 @@ this, since the draft simply stops generating further picks once
 `pick_index` reaches `$cutoffCount * $playerCount`, whatever position that
 falls at within the in-progress double-round.
 
+`rotisserieDraftPickUserId()` also takes a `$starterSeatOffset` (migration
+`0134`), added to every resulting seat index before the `$userIds` lookup --
+a fix for a real bug, caught live: `$pickIndex = 0` always resolves to
+`$userIds[0]` for the very first pick, which is fine for plain `'draft'`
+format (`shuffledSeatOrder()` already randomizes seat 0 there), but
+`'team'`/`'closed_team'` deliberately seat the creator at a *fixed* seat 0
+instead (so partners sit adjacent/across the table -- see
+`seatOrderForTeamGame()`/`seatOrderForClosedTeamGame()`), so before this
+fix the creator picked first in literally every Team Play/Closed Team Play
+Rotisserie Draft match, no exceptions. `$starterSeatOffset` is chosen once,
+uniformly at random, in `initializeRotisserieDraft()`, and rotates which
+physical seat plays the role of "seat 0" for pick-order purposes only --
+same trick `array_rand($userIds)` already gives Quick/Winston/Grid Draft,
+without touching the actual seating/team assignment or disturbing the
+snake shape/neighbor relationships (a cyclic rotation preserves both).
+
 **State** -- `draft_rotisserie_state` (migration `0125`) holds the whole
 match's mechanic in one row: `pool_card_ids` (a JSON array, the shrinking
 face-up pool -- cards are removed from it as they're picked, never
-re-added), `cutoff_count`, `pick_index` (the 0-based global counter --
-simultaneously the single source of truth for whose turn it is, via
-`rotisserieDraftPickUserId()`, and for whether the draft is complete, via
-comparison against `cutoff_count * $playerCount`), and
+re-added), `cutoff_count`, `starter_seat_offset` (migration `0134`, see
+above -- fixed for the whole match), `pick_index` (the 0-based global
+counter -- simultaneously the single source of truth for whose turn it is,
+via `rotisserieDraftPickUserId()`, and for whether the draft is complete,
+via comparison against `cutoff_count * $playerCount`), and
 `current_turn_user_id` (a cached/derived value kept in sync on every pick,
 so turn-lookup queries don't need to recompute the pick-order formula).
 `initializeRotisserieDraft()` shuffles the pool once and inserts this row

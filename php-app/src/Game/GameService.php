@@ -466,8 +466,22 @@ final class GameService
      * $cutoffCount * count($userIds) -- which naturally lands mid-double-round
      * whenever $cutoffCount is odd (13/15/17/19), ending right after that
      * double-round's own round A with no special-casing needed either.
+     *
+     * $starterSeatOffset (migration 0134) rotates every resulting seat
+     * index by a fixed amount, chosen once per match -- see
+     * initializeRotisserieDraft()/submitRotisserieDraftPick(). $userIds
+     * itself is always in fixed seat order (creator first for
+     * 'team'/'closed_team', since seatOrderForTeamGame()/
+     * seatOrderForClosedTeamGame() deliberately never shuffle it, unlike
+     * plain 'draft' format's own shuffledSeatOrder()), so without this
+     * offset $pickIndex 0 would always resolve to $userIds[0] -- the
+     * creator, every single team-format match. A cyclic rotation
+     * preserves the snake shape and every seat's neighbor relationships
+     * exactly as they are; it only relabels which physical seat plays the
+     * role of "seat 0" for pick-order purposes, the same trick
+     * array_rand($userIds) already achieves for Quick/Winston/Grid Draft.
      */
-    private static function rotisserieDraftPickUserId(array $userIds, int $pickIndex): int
+    private static function rotisserieDraftPickUserId(array $userIds, int $pickIndex, int $starterSeatOffset = 0): int
     {
         $playerCount = count($userIds);
         $doubleRoundSize = 2 * $playerCount;
@@ -479,7 +493,7 @@ final class GameService
             ? ($starterSeatIndex + $withinDoubleRound) % $playerCount
             : ($starterSeatIndex + ($playerCount - 1 - ($withinDoubleRound - $playerCount))) % $playerCount;
 
-        return $userIds[$seatIndex];
+        return $userIds[($seatIndex + $starterSeatOffset) % $playerCount];
     }
 
     /**
@@ -1138,6 +1152,14 @@ final class GameService
      * this same seated order, so neighbor relationships -- and, for
      * Rotisserie Draft, who picks first at all -- are now genuinely random
      * per match rather than fixed by opponent-selection order.
+     *
+     * This function is only ever called for plain 'draft' format, though
+     * (see createGame()'s own $seatedUserIds match/default below) --
+     * 'team'/'closed_team' still seat the creator at a fixed seat 0, so
+     * Rotisserie Draft's own "always $userIds[0] picks first" trap still
+     * applied to THOSE formats even after this fix, just via a different
+     * path; see rotisserieDraftPickUserId()'s own $starterSeatOffset
+     * parameter and migration 0134 for the follow-up fix.
      *
      * @param int[] $userIds
      * @return int[]
@@ -3543,16 +3565,21 @@ final class GameService
     private function initializeRotisserieDraft(int $gameId, int $draftMatchId, array $poolCardIds, array $userIds, int $cutoffCount): void
     {
         shuffle($poolCardIds);
-        $firstPickerUserId = self::rotisserieDraftPickUserId($userIds, 0);
+        // See rotisserieDraftPickUserId()'s own docblock and migration
+        // 0134 -- without this, $userIds[0] (always the creator for
+        // 'team'/'closed_team' format) would pick first in every match.
+        $starterSeatOffset = random_int(0, count($userIds) - 1);
+        $firstPickerUserId = self::rotisserieDraftPickUserId($userIds, 0, $starterSeatOffset);
 
         Connection::get()->prepare(
             'INSERT INTO draft_rotisserie_state
-                (draft_match_id, pool_card_ids, cutoff_count, pick_index, current_turn_user_id)
-             VALUES (:match_id, :pool, :cutoff, 0, :first_picker)'
+                (draft_match_id, pool_card_ids, cutoff_count, starter_seat_offset, pick_index, current_turn_user_id)
+             VALUES (:match_id, :pool, :cutoff, :starter_seat_offset, 0, :first_picker)'
         )->execute([
             'match_id' => $draftMatchId,
             'pool' => json_encode(array_values($poolCardIds)),
             'cutoff' => $cutoffCount,
+            'starter_seat_offset' => $starterSeatOffset,
             'first_picker' => $firstPickerUserId,
         ]);
 
@@ -3637,7 +3664,7 @@ final class GameService
                 ];
             }
 
-            $nextTurnUserId = self::rotisserieDraftPickUserId($userIds, $pickIndex);
+            $nextTurnUserId = self::rotisserieDraftPickUserId($userIds, $pickIndex, (int) $state['starter_seat_offset']);
 
             $pdo->prepare(
                 'UPDATE draft_rotisserie_state SET pool_card_ids = :pool, pick_index = :pick_index, current_turn_user_id = :next_turn WHERE draft_match_id = :match_id'
