@@ -4989,6 +4989,30 @@ final class GameService
                 }
             }
 
+            if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
+                // A production bug caught live: Passion's target_mood_id
+                // used to only ever get checked by resolveScoringDecisionBonus()
+                // when this round's whole decision chain finished (or,
+                // worse, whenever a later getState() call recomputed
+                // serializeScoringPreview() -- see that method's docblock)
+                // -- never right here. For the round's LAST outstanding
+                // decision that's the same moment, but for any earlier one
+                // (this round has more than one Enthusiasm/Passion mood in
+                // play) a bad target got silently persisted as "resolved"
+                // with nothing to catch it until much later. Once that
+                // happened, every subsequent getState() call for the game
+                // re-threw the same InvalidChoiceException uncaught,
+                // permanently: "Could not load this game." with no way
+                // back in. Reusing resolveScoringDecisionBonus() here
+                // (its return value is discarded -- only the validation it
+                // performs matters) guarantees whatever gets persisted
+                // below is still valid whenever it's recomputed later, the
+                // same "reject before ever writing this row" principle the
+                // two checks above already follow.
+                $effectKey = $decisionRow['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
+                $this->resolveScoringDecisionBonus($this->boardStates->load($gameId), (int) $batchRow['played_card_id'], $effectKey, new PlayerChoices($choices));
+            }
+
             $pdo = Connection::get();
             $pdo->beginTransaction();
 
@@ -6830,7 +6854,24 @@ final class GameService
             $cardId = (int) $row['played_card_id'];
             $effectKey = $row['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
             $answer = new PlayerChoices((array) json_decode((string) $row['answer'], true));
-            $bonuses[$cardId] = $this->resolveScoringDecisionBonus($state, $cardId, $effectKey, $answer);
+            try {
+                $bonuses[$cardId] = $this->resolveScoringDecisionBonus($state, $cardId, $effectKey, $answer);
+            } catch (InvalidChoiceException $e) {
+                // Defensive only -- respondToDecision() now runs this same
+                // validation before ever persisting an answer as resolved
+                // (see its own docblock comment), so a fresh answer can't
+                // reach this state anymore. This only guards against
+                // already-corrupted rows written before that fix existed:
+                // without it, a single bad legacy answer would throw here
+                // uncaught, permanently breaking getState() for the whole
+                // game (this is recomputed fresh on every call -- see this
+                // method's own docblock) -- "Could not load this game."
+                // forever, with no way for the game to ever recover on its
+                // own. Falling back to a declined-bonus (0) instead lets
+                // the round -- and every future page load -- keep going.
+                error_log("resolvedScoringDecisionBonuses(): treating card {$cardId}'s already-resolved {$effectKey} answer as declined -- " . $e->getMessage());
+                $bonuses[$cardId] = 0;
+            }
         }
 
         return $bonuses;
