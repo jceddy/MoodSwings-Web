@@ -12033,6 +12033,42 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A real bug, caught live: a 'standard' 3-4 player game's own
+     * "continue without them" resignation (resignGame()'s own
+     * skipTurnForResignedPlayer() path immediately above) leaves the
+     * game itself 'in_progress' -- correctly, since everyone else keeps
+     * playing -- but that meant it kept showing in the RESIGNING
+     * player's own main lobby list forever too, with nothing left for
+     * them to ever do there (a resigned player can never take another
+     * turn or win, see advanceTurn()'s active-player filtering). Fixed
+     * by excluding a game the caller has personally resigned from
+     * (game_players.resigned_at) from listGamesForUser(), moving it to
+     * listPastGamesForUser() instead -- regardless of the game's own
+     * overall status, which (unlike every other format/player-count
+     * resignation, already caught by the status-based check alone) stays
+     * 'in_progress' here. Every OTHER still-active player's own lobby
+     * view is untouched -- this is scoped per-viewer, not per-game.
+     */
+    public function testResigningFromAThreePlayerStandardGameMovesItToYourOwnPastGamesOnly(): void
+    {
+        ['gameId' => $gameId, 'p2' => $p2, 'u1' => $u1, 'u2' => $u2, 'u3' => $u3] = $this->buildThreePlayerFixture();
+
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u2), 'id'));
+
+        $this->games->resignGame($gameId, $p2);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status'], 'the game itself is still being played by u1/u3');
+        self::assertSame([], array_column($this->games->listGamesForUser($u2), 'id'), 'no longer in the resigned player\'s own main lobby list');
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u1), 'id'), 'still very much active for a player who has NOT resigned');
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u3), 'id'), 'true for every other still-active player');
+
+        $pastSummary = $this->games->listPastGamesForUser($u2)[0];
+        self::assertSame($gameId, $pastSummary['id']);
+        self::assertSame('in_progress', $pastSummary['status'], 'the summary itself still reports the game\'s real, ongoing status');
+        self::assertSame([], array_column($this->games->listPastGamesForUser($u1), 'id'), 'not moved to Past games for anyone who hasn\'t resigned');
+    }
+
+    /**
      * "All of that player's cards leave play" -- only the 3-4 player
      * 'standard' "continue without them" path needs this, since that's the
      * only resignation outcome where the board keeps being played on by
