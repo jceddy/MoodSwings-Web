@@ -1,0 +1,16 @@
+-- No schema change: resigning from a 3-4 player 'standard' format game left
+-- games.status as 'in_progress' (the game continues for the survivors via
+-- resignGame()'s own skipTurnForResignedPlayer() path), so the resigning
+-- player's own main game lobby kept showing the game forever -- only
+-- games.status was checked, and it never became 'completed'/'abandoned'
+-- for them. listGamesForUser()/listPastGamesForUser() now also key off the
+-- per-player game_players.resigned_at marker, so a resigned player's own
+-- lobby view moves the game to their Past games list immediately, while
+-- every other still-active player's own lobby view is unaffected.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0133 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.26.1' WHERE id = 1;

@@ -4989,6 +4989,30 @@ final class GameService
                 }
             }
 
+            if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
+                // A production bug caught live: Passion's target_mood_id
+                // used to only ever get checked by resolveScoringDecisionBonus()
+                // when this round's whole decision chain finished (or,
+                // worse, whenever a later getState() call recomputed
+                // serializeScoringPreview() -- see that method's docblock)
+                // -- never right here. For the round's LAST outstanding
+                // decision that's the same moment, but for any earlier one
+                // (this round has more than one Enthusiasm/Passion mood in
+                // play) a bad target got silently persisted as "resolved"
+                // with nothing to catch it until much later. Once that
+                // happened, every subsequent getState() call for the game
+                // re-threw the same InvalidChoiceException uncaught,
+                // permanently: "Could not load this game." with no way
+                // back in. Reusing resolveScoringDecisionBonus() here
+                // (its return value is discarded -- only the validation it
+                // performs matters) guarantees whatever gets persisted
+                // below is still valid whenever it's recomputed later, the
+                // same "reject before ever writing this row" principle the
+                // two checks above already follow.
+                $effectKey = $decisionRow['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
+                $this->resolveScoringDecisionBonus($this->boardStates->load($gameId), (int) $batchRow['played_card_id'], $effectKey, new PlayerChoices($choices));
+            }
+
             $pdo = Connection::get();
             $pdo->beginTransaction();
 
@@ -6830,7 +6854,24 @@ final class GameService
             $cardId = (int) $row['played_card_id'];
             $effectKey = $row['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
             $answer = new PlayerChoices((array) json_decode((string) $row['answer'], true));
-            $bonuses[$cardId] = $this->resolveScoringDecisionBonus($state, $cardId, $effectKey, $answer);
+            try {
+                $bonuses[$cardId] = $this->resolveScoringDecisionBonus($state, $cardId, $effectKey, $answer);
+            } catch (InvalidChoiceException $e) {
+                // Defensive only -- respondToDecision() now runs this same
+                // validation before ever persisting an answer as resolved
+                // (see its own docblock comment), so a fresh answer can't
+                // reach this state anymore. This only guards against
+                // already-corrupted rows written before that fix existed:
+                // without it, a single bad legacy answer would throw here
+                // uncaught, permanently breaking getState() for the whole
+                // game (this is recomputed fresh on every call -- see this
+                // method's own docblock) -- "Could not load this game."
+                // forever, with no way for the game to ever recover on its
+                // own. Falling back to a declined-bonus (0) instead lets
+                // the round -- and every future page load -- keep going.
+                error_log("resolvedScoringDecisionBonuses(): treating card {$cardId}'s already-resolved {$effectKey} answer as declined -- " . $e->getMessage());
+                $bonuses[$cardId] = 0;
+            }
         }
 
         return $bonuses;
@@ -7867,11 +7908,24 @@ final class GameService
         // is. Within each of those two tiers, most-recently-active first
         // (last_move_at, falling back to started_at, then created_at for a
         // game nothing has happened in yet).
+        //
+        // gp.resigned_at IS NULL excludes a game THIS caller has personally
+        // resigned from but that's still 'in_progress' for everyone else --
+        // only ever possible for 'standard' format's own 3-4 player
+        // "continue without them" resignation (resignGame()'s own
+        // skipTurnForResignedPlayer() path; every other format/player-count
+        // combination completes the whole game outright on resignation,
+        // already caught by the status check above). Once resigned, a
+        // player can never take another turn in that game (see
+        // advanceTurn()'s active-player filtering) or win it, so from
+        // their own perspective it's just as much history as a completed
+        // game -- listPastGamesForUser() picks it up via the same column.
         $gameIdsStmt = $pdo->prepare(
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
+               AND gp.resigned_at IS NULL
                AND (g.status NOT IN ('completed', 'abandoned') OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
              ORDER BY
                  (g.status IN ('waiting', 'in_progress')) DESC,
@@ -7886,16 +7940,24 @@ final class GameService
 
     /**
      * The complement of listGamesForUser() above: every 'completed' or
-     * 'abandoned' game NOT still tied to an in-progress draft match -- see
-     * that method's own docblock for exactly where the line falls (and
+     * 'abandoned' game NOT still tied to an in-progress draft match (see
+     * that method's own docblock for exactly where the line falls, and
      * why an 'abandoned' game never actually hits that carve-out in
-     * practice). Sorted most-recently-completed first, the natural order
-     * for a "past games" archive (as opposed to listGamesForUser()'s own
-     * actionability-first ordering, which has no reason to apply once
+     * practice), PLUS any game this caller has personally resigned from
+     * (gp.resigned_at IS NOT NULL) regardless of the game's own overall
+     * status -- the complement of listGamesForUser()'s own identical
+     * gp.resigned_at exclusion, for the one case (a 'standard' format 3-4
+     * player game the caller resigned from but that's still 'in_progress'
+     * for everyone else) where that status alone wouldn't already have
+     * routed it here. Sorted most-recently-completed first, the natural
+     * order for a "past games" archive (as opposed to listGamesForUser()'s
+     * own actionability-first ordering, which has no reason to apply once
      * nothing here is actionable at all). An 'abandoned' game never gets
      * its own completed_at set (only the draft_matches row it belonged to
-     * does -- see abandonDraftMatch()), so it naturally sorts by
-     * last_move_at instead, same as it would anywhere else in the app.
+     * does -- see abandonDraftMatch()), and a resigned-but-still-
+     * 'in_progress' game never gets one at all until everyone else
+     * finishes it, so both naturally sort by last_move_at instead, same
+     * as they would anywhere else in the app.
      *
      * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
      */
@@ -7908,8 +7970,13 @@ final class GameService
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
-               AND g.status IN ('completed', 'abandoned')
-               AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+               AND (
+                 gp.resigned_at IS NOT NULL
+                 OR (
+                   g.status IN ('completed', 'abandoned')
+                   AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+                 )
+               )
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
         );
         $gameIdsStmt->execute(['user_id' => $userId]);

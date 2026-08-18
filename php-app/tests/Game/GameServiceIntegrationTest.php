@@ -7329,6 +7329,113 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A bug caught live in production: with more than one Enthusiasm/
+     * Passion mood in play, an invalid Passion target submitted for a
+     * NON-final scoring decision this round used to get silently persisted
+     * as "resolved" -- resolveScoringDecisionBonus()'s own validation only
+     * ever ran later, once the round's whole decision chain finished (or,
+     * worse, on a later getState() call recomputing the live
+     * scoring_preview -- see serializeScoringPreview()). Once a bad answer
+     * like that was written, every subsequent getState() call for the
+     * whole game re-threw the same InvalidChoiceException uncaught,
+     * permanently: "Could not load this game." with no way back in, since
+     * nothing ever re-asked for a corrected answer. respondToDecision()
+     * now runs this same validation before ever writing the row, so the
+     * bad answer is rejected right here instead, attributed to whoever
+     * actually submitted it -- see testPassionRejectsAnInvalidTargetMood
+     * above for the pre-existing single-decision case this generalizes.
+     */
+    public function testRespondToDecisionRejectsAnInvalidPassionTargetEvenWhenNotTheRoundsLastDecision(): void
+    {
+        $u1 = $this->insertUser('multidecision1');
+        $u2 = $this->insertUser('multidecision2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // p1's Passion -- asked first (turn order starts with p1)
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, p1's OWN mood -- invalid Passion target
+        $this->insertGameCard($gameId, 116, 'in_play', $p2); // p2's Enthusiasm -- asked second/last
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+
+        // p1 submits an invalid target (their own mood) for Passion, NOT the
+        // round's last outstanding decision (p2's Enthusiasm is still open).
+        $this->expectException(InvalidChoiceException::class);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 8]);
+    }
+
+    /**
+     * A safety net for whatever already-corrupted rows existed before the
+     * fix above shipped (or any other way a bad answer might ever end up
+     * persisted): resolvedScoringDecisionBonuses() is recomputed fresh on
+     * every single getState() call while a round's scoring decision is
+     * outstanding, so previously it would throw the exact same
+     * InvalidChoiceException on every subsequent load, forever, for a
+     * game already carrying one. Treating an already-resolved-but-invalid
+     * answer as a decline (0 bonus) instead means the game can still be
+     * loaded and finished even if a bad answer somehow made it into the
+     * database.
+     */
+    public function testGetStateTreatsAnAlreadyCorruptedPassionAnswerAsDeclinedInsteadOfThrowing(): void
+    {
+        $u1 = $this->insertUser('corrupted1');
+        $u2 = $this->insertUser('corrupted2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // p1's Passion -- asked first (turn order starts with p1)
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, base value 3 -- p1's own, not a valid Passion target
+        $enthusiasmId = $this->insertGameCard($gameId, 116, 'in_play', $p2); // p2's Enthusiasm -- still outstanding below
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $result = $this->games->pass($gameId, $p2);
+        self::assertTrue($result['pending_decision'] ?? false, 'Passion\'s own scoring decision is now outstanding');
+
+        // Bypasses respondToDecision() entirely -- simulating a row that
+        // was already corrupted (e.g. written before this fix existed)
+        // rather than exercising the now-fixed submission path.
+        $batchId = (int) $this->pdo->query(
+            "SELECT id FROM game_pending_decision_batches WHERE game_round_id = {$roundId} AND resolved_at IS NULL ORDER BY id DESC LIMIT 1"
+        )->fetchColumn();
+        $this->pdo->prepare(
+            "UPDATE game_pending_decisions SET answer = :answer, resolved_at = NOW() WHERE batch_id = :batch_id"
+        )->execute(['answer' => json_encode(['target_mood_id' => 8]), 'batch_id' => $batchId]);
+        $this->pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
+            ->execute(['id' => $batchId]);
+
+        // Mirrors what respondToDecision() itself would have done next, had
+        // it not been bypassed above: queue p2's own still-outstanding
+        // Enthusiasm decision, so a decision is genuinely active while
+        // getState() recomputes the round's scoring_preview below -- that
+        // recompute is exactly what used to throw uncaught on the
+        // now-corrupted Passion row (see serializeScoringPreview()).
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        (new \ReflectionMethod($this->games, 'writeScoringDecisionBatch'))
+            ->invoke($this->games, $gameId, $roundId, $state, ['cardId' => $enthusiasmId, 'ownerId' => $p2, 'effectKey' => 'enthusiasm']);
+
+        $newState = $this->games->getState($gameId, $u1);
+        self::assertSame([$p1 => 3, $p2 => 0], $newState['round']['scoring_preview']['scores'], 'the corrupted Passion answer reads as declined (0 bonus), not a crash -- p1 keeps just Passion(0) + Dignity(3)');
+    }
+
+    /**
      * The whole point of this feature: Sneakiness swaps its owner's final
      * score with a chosen opponent's *without touching the opponent's own
      * total*, so p1's own post-swap score (p2's original total) is
@@ -12030,6 +12137,42 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage("not player {$p2}'s turn");
         $this->games->pass($gameId, $p2);
+    }
+
+    /**
+     * A real bug, caught live: a 'standard' 3-4 player game's own
+     * "continue without them" resignation (resignGame()'s own
+     * skipTurnForResignedPlayer() path immediately above) leaves the
+     * game itself 'in_progress' -- correctly, since everyone else keeps
+     * playing -- but that meant it kept showing in the RESIGNING
+     * player's own main lobby list forever too, with nothing left for
+     * them to ever do there (a resigned player can never take another
+     * turn or win, see advanceTurn()'s active-player filtering). Fixed
+     * by excluding a game the caller has personally resigned from
+     * (game_players.resigned_at) from listGamesForUser(), moving it to
+     * listPastGamesForUser() instead -- regardless of the game's own
+     * overall status, which (unlike every other format/player-count
+     * resignation, already caught by the status-based check alone) stays
+     * 'in_progress' here. Every OTHER still-active player's own lobby
+     * view is untouched -- this is scoped per-viewer, not per-game.
+     */
+    public function testResigningFromAThreePlayerStandardGameMovesItToYourOwnPastGamesOnly(): void
+    {
+        ['gameId' => $gameId, 'p2' => $p2, 'u1' => $u1, 'u2' => $u2, 'u3' => $u3] = $this->buildThreePlayerFixture();
+
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u2), 'id'));
+
+        $this->games->resignGame($gameId, $p2);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status'], 'the game itself is still being played by u1/u3');
+        self::assertSame([], array_column($this->games->listGamesForUser($u2), 'id'), 'no longer in the resigned player\'s own main lobby list');
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u1), 'id'), 'still very much active for a player who has NOT resigned');
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u3), 'id'), 'true for every other still-active player');
+
+        $pastSummary = $this->games->listPastGamesForUser($u2)[0];
+        self::assertSame($gameId, $pastSummary['id']);
+        self::assertSame('in_progress', $pastSummary['status'], 'the summary itself still reports the game\'s real, ongoing status');
+        self::assertSame([], array_column($this->games->listPastGamesForUser($u1), 'id'), 'not moved to Past games for anyone who hasn\'t resigned');
     }
 
     /**

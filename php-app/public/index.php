@@ -60,6 +60,20 @@ use MoodSwings\Stats\CardStatsService;
 
 header('Content-Type: application/json');
 
+// Without this, an uncaught Throwable from any route (there's no per-route
+// try/catch for anything unexpected, only for specific, anticipated
+// exceptions like GameStateException) falls through to PHP's own fatal
+// error output -- plain text/HTML, not JSON. apiRequest() in app.js can't
+// parse that as JSON, so the caller (e.g. game.js's refreshBoard()) falls
+// back to a generic, undiagnosable "Could not load this game." with no
+// trace of what actually happened. This turns that into a proper JSON 500
+// and logs the real exception server-side so it's actually diagnosable.
+set_exception_handler(static function (Throwable $e): void {
+    error_log('Unhandled exception: ' . $e);
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'message' => 'Something went wrong. Please try again.']);
+});
+
 // __route is set by public/.htaccess when the app is deployed under a
 // subfolder (e.g. /app on shared hosting), so routing works regardless of
 // where the front controller is mounted.

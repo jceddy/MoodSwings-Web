@@ -1,0 +1,35 @@
+-- No schema change: this is the actual root cause behind the "Could not
+-- load this game." production bug -- a game with more than one
+-- Enthusiasm/Passion mood in play in the same round could have Passion's
+-- target_mood_id validated too late. resolveScoringDecisionBonus()'s own
+-- check (target must still be an in-play mood owned by someone else) only
+-- ever ran once the round's WHOLE decision chain finished, or later, on
+-- any subsequent getState() call recomputing the live scoring_preview
+-- (serializeScoringPreview()) -- never at the moment a non-final decision
+-- was actually answered. An invalid Passion target submitted for a
+-- decision that wasn't the round's last one got silently persisted as
+-- "resolved" with nothing to catch it. From then on, every single
+-- getState() call for that game re-threw the same InvalidChoiceException
+-- uncaught (index.php had no catch-all for it either, see migration
+-- 0137), permanently: "Could not load this game." with no way back in,
+-- since nothing ever re-asked for a corrected answer.
+--
+-- Two changes: (1) GameService::respondToDecision() now runs this exact
+-- same validation itself, before ever persisting an Enthusiasm/Passion
+-- answer as resolved -- a bad answer is rejected right there and
+-- attributed to whoever actually submitted it, the same "reject before
+-- ever writing this row" principle already used for a missing required
+-- answer and for the after-scoring reorder decision. (2)
+-- resolvedScoringDecisionBonuses() now treats an already-resolved-but-
+-- invalid answer as a decline (0 bonus) instead of throwing, as a safety
+-- net for whatever rows were already corrupted by this bug before the
+-- fix existed (or any other way a bad answer might ever end up
+-- persisted) -- so a game already carrying one can still be loaded and
+-- finished instead of being permanently stuck.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0137 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.26.3' WHERE id = 1;
