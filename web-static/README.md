@@ -369,9 +369,19 @@ too, proportional to the smaller card width.
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to
-  `/game/`. Links to `register.html` and `forgot-password.html`.
+  `/game/`. Links to `register.html`, `forgot-password.html`, and
+  `resend-verification.html`.
 - `register.html` — Registration form. On success, shows a message to check
   email for the verification link (login is blocked until verified).
+- `resend-verification.html` — Takes an email address and calls
+  `POST /app/resend-verification`; always shows the same generic success
+  message (enumeration-resistant, same reasoning as `forgot-password.html`)
+  regardless of whether the address is registered, already verified, or
+  rate-limited. Exists so a user whose 24-hour verification link expired
+  (or who never received/misplaced the original email) isn't locked out of
+  their own unverified account forever -- also linked from `/verify-email`'s
+  own expired/invalid-token failure page (`php-app/README.md`'s
+  `respondHtml()`), not just from the login page.
 - `forgot-password.html` — Takes an email address and calls
   `POST /app/forgot-password`; always shows the same generic success
   message (enumeration-resistant, same reasoning as resending a

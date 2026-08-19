@@ -10,6 +10,7 @@
 
     form.hidden = false;
     document.getElementById('login-forgot-password-link').hidden = false;
+    document.getElementById('login-resend-verification-link').hidden = false;
     document.getElementById('login-register-link').hidden = false;
 
     form.addEventListener('submit', async (event) => {

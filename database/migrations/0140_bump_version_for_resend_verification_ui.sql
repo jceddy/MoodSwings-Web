@@ -1,0 +1,18 @@
+-- No schema change: POST /resend-verification already existed server-side
+-- (it's fully implemented and rate-limited in AuthService::
+-- resendVerificationEmail()) but nothing in the frontend ever called it --
+-- a user whose 24-hour verification link expired, or who never received/
+-- misplaced the original email, had no way back into their own account.
+-- Adds resend-verification.html/js (mirroring forgot-password.html/js),
+-- a persistent "Didn't get your verification email?" link on the login
+-- page next to "Forgot password?", and points /verify-email's own
+-- expired/invalid-token failure page at it too (respondHtml() gained
+-- optional $linkTo/$linkText params for this, instead of its previous
+-- hardcoded "Back to login" -> "/").
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0139 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.27.0' WHERE id = 1;
