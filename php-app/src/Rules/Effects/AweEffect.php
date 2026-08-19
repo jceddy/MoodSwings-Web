@@ -32,6 +32,6 @@ final class AweEffect extends AbstractMoodEffect
             throw new InvalidChoiceException("Player {$chosenPlayerId} is not a valid player");
         }
 
-        $state->markSkipScoringThisRound($chosenPlayerId);
+        $state->markSkipScoringThisRound($cardId, $playerId, $chosenPlayerId);
     }
 }

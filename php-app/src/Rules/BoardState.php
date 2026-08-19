@@ -103,6 +103,23 @@ final class BoardState
     /** The player Awe chose to go first next round -- only meaningful when $skipScoringThisRound is true. See $skipScoringThisRound's own docblock. */
     private ?int $skipScoringFirstPlayerId = null;
 
+    /**
+     * The Awe card whose play set $skipScoringThisRound, and whoever
+     * played it -- only meaningful when $skipScoringThisRound is true.
+     * Purely for GameService::scoringEffectEntries()'s own "How scoring
+     * will be affected" display entry to attribute credit by (a bug
+     * caught live: that entry used to be built by scanning moodsInPlay()
+     * for the same per-card tag $skipScoringThisRound itself replaced,
+     * so it silently stopped appearing the instant Awe left play -- the
+     * same failure mode this whole round-level approach exists to fix
+     * for the underlying skip itself). Neither the skip nor the
+     * first-player choice depend on these two -- they're display-only.
+     */
+    private ?int $skipScoringSourceCardId = null;
+
+    /** See $skipScoringSourceCardId's own docblock. */
+    private ?int $skipScoringOwnerId = null;
+
     /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
     private array $pendingEffectState = [];
 
@@ -926,6 +943,8 @@ final class BoardState
         bool $discardedThisRound = false,
         bool $skipScoringThisRound = false,
         ?int $skipScoringFirstPlayerId = null,
+        ?int $skipScoringSourceCardId = null,
+        ?int $skipScoringOwnerId = null,
     ): void {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
@@ -934,6 +953,8 @@ final class BoardState
         $this->discardedThisRound = $discardedThisRound;
         $this->skipScoringThisRound = $skipScoringThisRound;
         $this->skipScoringFirstPlayerId = $skipScoringFirstPlayerId;
+        $this->skipScoringSourceCardId = $skipScoringSourceCardId;
+        $this->skipScoringOwnerId = $skipScoringOwnerId;
     }
 
     /** Vulnerability: whether any card has been put into the discard pile so far this round -- see moveHandToDiscard()/moveInPlayToDiscard(). */
@@ -954,15 +975,32 @@ final class BoardState
         return $this->skipScoringFirstPlayerId;
     }
 
+    /** Only meaningful when skipScoringThisRound() is true. See $skipScoringSourceCardId's own docblock. */
+    public function skipScoringSourceCardId(): ?int
+    {
+        return $this->skipScoringSourceCardId;
+    }
+
+    /** Only meaningful when skipScoringThisRound() is true. See $skipScoringSourceCardId's own docblock. */
+    public function skipScoringOwnerId(): ?int
+    {
+        return $this->skipScoringOwnerId;
+    }
+
     /**
      * Awe: "After playing this mood, there is no scoring this round...
      * you choose which player goes first next round." Called from
      * AweEffect::afterPlaying() -- see $skipScoringThisRound's own
      * docblock for why this is tracked here rather than as per-card
      * effectState the way Honor's own similarly-named ability is.
+     * $cardId/$ownerId are Awe's own card and whoever played it, purely
+     * for GameService::scoringEffectEntries()'s own display entry -- see
+     * $skipScoringSourceCardId's own docblock.
      */
-    public function markSkipScoringThisRound(int $firstPlayerId): void
+    public function markSkipScoringThisRound(int $cardId, int $ownerId, int $firstPlayerId): void
     {
+        $this->skipScoringSourceCardId = $cardId;
+        $this->skipScoringOwnerId = $ownerId;
         $this->skipScoringThisRound = true;
         $this->skipScoringFirstPlayerId = $firstPlayerId;
     }
