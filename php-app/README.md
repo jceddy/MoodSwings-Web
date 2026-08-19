@@ -328,8 +328,18 @@ before the round's winner is determined rather than after
 entirely this round" marker paired with a one-time (as opposed to
 Honor's perpetual) first-player override for next round only (Awe —
 `GameService::hasSkipScoringMarker()`/`skipScoringAndAdvance()`, and
-`BoardState::firstPlayerOverride()`'s `oneTimeFirstPlayerOverride` key),
-and an unconditional "the round's winner is awarded an extra win" tag
+`BoardState::firstPlayerOverride()`). Unlike every other effectState tag
+in this list, Awe's own pair isn't card-scoped at all — it's tracked as
+round-level state (`game_rounds.skip_scoring`/
+`skip_scoring_first_player_game_player_id`, see `BoardState::
+$skipScoringThisRound`'s own docblock), since the choice is already
+locked in the instant Awe resolves ("after playing," not "while in
+play" like Honor's), so it has to survive Awe itself leaving play before
+the round it was played in finishes scoring. The legacy per-card
+`oneTimeFirstPlayerOverride`/`skipScoringThisRound` effectState keys are
+still read as a fallback, purely for backward compatibility with a game
+whose Awe resolved before this round-level tracking existed. There's
+also an unconditional "the round's winner is awarded an extra win" tag
 that doubles `game_rounds.wins_awarded` regardless of who plays it or
 who wins (Corruption — `GameService::consumeExtraWinMarker()`). A
 separate, reusable "was this mood played this round" tag

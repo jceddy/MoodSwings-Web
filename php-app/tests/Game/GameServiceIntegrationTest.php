@@ -4836,6 +4836,62 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A bug caught live: Awe's own effect triggers "after playing" -- its
+     * choice of who goes first next round is already fully locked in the
+     * instant it resolves, unlike Honor's genuinely "while in play"
+     * ability of the same shape. Previously this was tracked as
+     * effectState tagged on Awe's own card, so if Awe left play (stolen,
+     * discarded, etc.) before the round it was played in actually
+     * finished scoring, its own tag silently vanished along with it --
+     * the round scored normally instead of being skipped, and no one went
+     * first next round on purpose. Awe itself is discarded directly here
+     * (bypassing any specific removal card) to isolate the one thing that
+     * matters: does the choice survive Awe no longer being in play by the
+     * time the round finishes, across a real load()/save() round trip.
+     */
+    public function testAweStillSkipsScoringAndSetsNextRoundsFirstPlayerEvenIfAweLeavesPlayFirst(): void
+    {
+        $u1 = $this->insertUser('aweleaves1');
+        $u2 = $this->insertUser('aweleaves2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p2]);
+
+        // Awe leaves play before the round it was played in finishes
+        // scoring -- exactly the scenario the bug report described,
+        // simulated directly rather than via any one specific removal
+        // card, since the fix has nothing to do with how it leaves.
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = :id")
+            ->execute(['id' => $aweId]);
+
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored'], 'scoring is still skipped even though Awe is no longer in play');
+        self::assertFalse($result['game_completed']);
+
+        $round1Stmt = $this->pdo->prepare('SELECT status, winner_game_player_id FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $round1Stmt->execute(['game_id' => $gameId]);
+        $round1 = $round1Stmt->fetch();
+        self::assertSame('scored', $round1['status']);
+        self::assertNull($round1['winner_game_player_id'], 'no winner -- Awe\'s "no one wins or loses this round" still applies');
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['first_game_player_id'], 'Awe\'s own choice of who goes first still applies');
+    }
+
+    /**
      * Bashfulness's after-scoring hook has to survive a real load()/save()
      * round trip: it's tagged when played, then resolved once the round's
      * winner is known, moving itself to the bottom of the deck and

@@ -83,6 +83,26 @@ final class BoardState
     /** Vulnerability: "this mood's value is 7 if a card was put into the discard pile this round." A single round-wide flag rather than anything card-specific, since it has to reflect any discard by any player -- see moveHandToDiscard()/moveInPlayToDiscard() and discardedThisRound(). */
     private bool $discardedThisRound = false;
 
+    /**
+     * Awe: "After playing this mood, there is no scoring this round... you
+     * choose which player goes first next round." A round-wide flag rather
+     * than per-card effectState (like $discardedThisRound above), for the
+     * same underlying reason but a subtler one: this triggers *after
+     * playing* Awe, a one-time choice that's already fully locked in the
+     * instant it resolves -- unlike Honor's similarly-named but genuinely
+     * "while in play" firstPlayerOverride tag (see moodsInPlay-scoped
+     * effectState below), Awe's own choice was never conditional on Awe
+     * itself staying in play. Tagging it on Awe's own card meant it
+     * silently vanished if Awe left play (stolen, discarded, etc.) before
+     * the round it was played in actually finished scoring -- see
+     * markSkipScoringThisRound()/GameService::hasSkipScoringMarker()/
+     * skipScoringAndAdvance().
+     */
+    private bool $skipScoringThisRound = false;
+
+    /** The player Awe chose to go first next round -- only meaningful when $skipScoringThisRound is true. See $skipScoringThisRound's own docblock. */
+    private ?int $skipScoringFirstPlayerId = null;
+
     /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
     private array $pendingEffectState = [];
 
@@ -898,19 +918,53 @@ final class BoardState
     }
 
     /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int, requiresSourceInPlay?: bool}> $playGrants */
-    public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId, ?int $currentRoundNumber = null, bool $discardedThisRound = false): void
-    {
+    public function restoreTurnState(
+        ?int $currentPlayerId,
+        array $playGrants,
+        ?int $roundFirstPlayerId,
+        ?int $currentRoundNumber = null,
+        bool $discardedThisRound = false,
+        bool $skipScoringThisRound = false,
+        ?int $skipScoringFirstPlayerId = null,
+    ): void {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
         $this->roundFirstPlayerId = $roundFirstPlayerId;
         $this->currentRoundNumber = $currentRoundNumber;
         $this->discardedThisRound = $discardedThisRound;
+        $this->skipScoringThisRound = $skipScoringThisRound;
+        $this->skipScoringFirstPlayerId = $skipScoringFirstPlayerId;
     }
 
     /** Vulnerability: whether any card has been put into the discard pile so far this round -- see moveHandToDiscard()/moveInPlayToDiscard(). */
     public function discardedThisRound(): bool
     {
         return $this->discardedThisRound;
+    }
+
+    /** Awe's own afterPlaying() trigger -- see $skipScoringThisRound's own docblock. */
+    public function skipScoringThisRound(): bool
+    {
+        return $this->skipScoringThisRound;
+    }
+
+    /** Only meaningful when skipScoringThisRound() is true. See $skipScoringFirstPlayerId's own docblock. */
+    public function skipScoringFirstPlayerId(): ?int
+    {
+        return $this->skipScoringFirstPlayerId;
+    }
+
+    /**
+     * Awe: "After playing this mood, there is no scoring this round...
+     * you choose which player goes first next round." Called from
+     * AweEffect::afterPlaying() -- see $skipScoringThisRound's own
+     * docblock for why this is tracked here rather than as per-card
+     * effectState the way Honor's own similarly-named ability is.
+     */
+    public function markSkipScoringThisRound(int $firstPlayerId): void
+    {
+        $this->skipScoringThisRound = true;
+        $this->skipScoringFirstPlayerId = $firstPlayerId;
     }
 
     // --- suppression ---
@@ -1404,23 +1458,27 @@ final class BoardState
     }
 
     /**
-     * Whoever should go first *next* round, per a currently-in-play mood
-     * that overrides the normal "round winner goes first" rule. Two
-     * distinct effectState keys feed this, since they have different
-     * lifetimes: Honor's 'firstPlayerOverride' is perpetual -- "while in
-     * play, the chosen player goes first each round" -- so it's simply
-     * never cleared, and is automatically self-correcting if Honor later
-     * leaves play, with nothing separate to clean up. Awe's
-     * 'oneTimeFirstPlayerOverride' only covers the round immediately after
-     * it's played ("you choose which player goes first next round"), so
-     * GameService::skipScoringAndAdvance() explicitly clears it once
-     * consumed -- otherwise Awe staying in play would keep overriding
-     * every future round too, which its text doesn't support. GameService
-     * checks this when starting a new round; the first override found
-     * wins (no defined tie-break if both happen to be in play at once).
+     * Whoever should go first *next* round, overriding the normal "round
+     * winner goes first" rule. Two sources feed this, with different
+     * lifetimes: Awe's own $skipScoringFirstPlayerId (see its own
+     * docblock) is checked first -- it's a one-time choice, already fully
+     * locked in the instant Awe resolves, so it takes priority regardless
+     * of whether Awe itself is even still in play. Honor's per-card
+     * 'firstPlayerOverride' is perpetual instead -- "while in play, the
+     * chosen player goes first each round" -- so it's simply never
+     * cleared, and is automatically self-correcting if Honor later leaves
+     * play, with nothing separate to clean up. The legacy per-card
+     * 'oneTimeFirstPlayerOverride' key is still checked too (lowest
+     * priority), purely for backward compatibility with a game whose Awe
+     * resolved before $skipScoringFirstPlayerId existed and is still
+     * sitting on a still-in-play Awe card.
      */
     public function firstPlayerOverride(): ?int
     {
+        if ($this->skipScoringFirstPlayerId !== null) {
+            return $this->skipScoringFirstPlayerId;
+        }
+
         foreach ($this->moodsInPlay as $mood) {
             if (array_key_exists('firstPlayerOverride', $mood->effectState)) {
                 return $mood->effectState['firstPlayerOverride'];

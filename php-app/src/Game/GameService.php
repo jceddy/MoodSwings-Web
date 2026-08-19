@@ -1971,7 +1971,7 @@ final class GameService
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
             $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+            $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
 
             $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'draft_match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $state);
         });
@@ -4186,7 +4186,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -5172,7 +5172,7 @@ final class GameService
                     // Already inside this method's own transaction, so this
                     // just writes rows -- no nested beginTransaction().
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                    $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
                     $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -5298,7 +5298,7 @@ final class GameService
                 $freshGrants = $this->computeFreshGrants($freshState, $firstPlayerId, 1);
                 $this->logFreshGrants($gameId, (int) $round['id'], $firstPlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $freshState);
-                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound());
+                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId());
             }
 
             return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => !$allSubmitted];
@@ -5501,7 +5501,7 @@ final class GameService
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
             $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
         }
 
         $pdo->prepare("UPDATE game_rounds SET {$column} = :chosen WHERE id = :round_id")
@@ -5546,7 +5546,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
 
         Connection::get()->prepare('UPDATE game_rounds SET first_game_player_id = :chosen WHERE id = :round_id')
             ->execute(['chosen' => $chosenGamePlayerId, 'round_id' => $roundId]);
@@ -5594,7 +5594,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $overridePlayerId, 1);
         $this->logFreshGrants($gameId, $roundId, $overridePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
 
         $pdo = Connection::get();
 
@@ -5774,7 +5774,7 @@ final class GameService
         $this->boardStates->save($gameId, $state);
 
         if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
 
             return ['round_scored' => false, 'game_completed' => false];
         }
@@ -5827,7 +5827,7 @@ final class GameService
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -5861,7 +5861,7 @@ final class GameService
 
         if ($currentPlayerId === $turn1) {
             if ($turn2 === null) {
-                $this->freezeRoundForTeamDecision($roundId);
+                $this->freezeRoundForTeamDecision($roundId, $state);
 
                 return ['round_scored' => false, 'game_completed' => false];
             }
@@ -5902,7 +5902,7 @@ final class GameService
         $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
         $this->logFreshGrants($gameId, $roundId, $playerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId());
     }
 
     /**
@@ -5945,11 +5945,16 @@ final class GameService
         ];
     }
 
-    private function freezeRoundForTeamDecision(int $roundId): void
+    private function freezeRoundForTeamDecision(int $roundId, BoardState $state): void
     {
         Connection::get()->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = NULL, plays_remaining = 0, pending_play_grants = :grants WHERE id = :round_id'
-        )->execute(['grants' => json_encode([]), 'round_id' => $roundId]);
+            'UPDATE game_rounds SET current_turn_game_player_id = NULL, plays_remaining = 0, pending_play_grants = :grants, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id WHERE id = :round_id'
+        )->execute([
+            'grants' => json_encode([]),
+            'skip_scoring' => $state->skipScoringThisRound() ? 1 : 0,
+            'skip_scoring_first_player_id' => $state->skipScoringFirstPlayerId(),
+            'round_id' => $roundId,
+        ]);
     }
 
     /** @return int the OTHER of $teamId's two members (the one that isn't $knownMemberGamePlayerId) */
@@ -7505,6 +7510,13 @@ final class GameService
 
     private function hasSkipScoringMarker(BoardState $state): bool
     {
+        if ($state->skipScoringThisRound()) {
+            return true;
+        }
+
+        // Legacy per-card marker, kept purely for backward compatibility
+        // with a game whose Awe resolved before this round-level tracking
+        // existed -- see BoardState::$skipScoringThisRound's own docblock.
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->effectState($mood->cardId, 'skipScoringThisRound')) {
                 return true;
@@ -7662,11 +7674,16 @@ final class GameService
      * round... You choose which player goes first next round." No scores
      * are recorded, no one draws a card, there's no Hurt Feelings, and win
      * totals are untouched -- the round is simply marked scored with no
-     * winner and play moves on. Awe's 'oneTimeFirstPlayerOverride'
-     * effectState key (see BoardState::firstPlayerOverride()) picks who
-     * goes first; unlike Honor's perpetual override, it's explicitly
-     * cleared here alongside skipScoringThisRound once consumed, since
-     * Awe's choice only covers this one transition.
+     * winner and play moves on. BoardState::firstPlayerOverride() picks
+     * who goes first, checking $skipScoringFirstPlayerId first (see its
+     * own docblock) -- nothing needs to explicitly clear that round-level
+     * state here, since the round it belongs to is about to become
+     * 'scored' and BoardStateRepository::load() only ever reads the
+     * latest 'in_progress' one; the fresh round created below simply
+     * starts with it unset. The per-card clearing loop just below is
+     * legacy cleanup only, for a game whose Awe resolved before this
+     * round-level tracking existed -- see BoardState::
+     * $skipScoringThisRound's own docblock.
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
@@ -12246,7 +12263,7 @@ final class GameService
      * a Duplicity repeat) would re-notify the player already mid-turn for
      * no reason.
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound): void
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId): void
     {
         $pdo = Connection::get();
 
@@ -12256,13 +12273,15 @@ final class GameService
         $previousPlayerId = $previousPlayerId !== false ? (int) $previousPlayerId : null;
 
         $stmt = $pdo->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id WHERE id = :round_id'
         );
         $stmt->execute([
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
             'pending_play_grants' => json_encode($playGrants),
             'discarded_this_round' => $discardedThisRound ? 1 : 0,
+            'skip_scoring' => $skipScoringThisRound ? 1 : 0,
+            'skip_scoring_first_player_id' => $skipScoringFirstPlayerId,
             'round_id' => $roundId,
         ]);
 
