@@ -3422,7 +3422,8 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 107, new PlayerChoices(['target_player_id' => 3]));
 
         self::assertSame(3, $state->firstPlayerOverride());
-        self::assertTrue($state->effectState(107, 'skipScoringThisRound'));
+        self::assertTrue($state->skipScoringThisRound());
+        self::assertSame(3, $state->skipScoringFirstPlayerId());
     }
 
     public function testAweRejectsAnInvalidPlayer(): void

@@ -13,14 +13,15 @@ use MoodSwings\Rules\PlayerChoices;
  * Awe: "After playing this mood, there is no scoring this round. No one
  * wins or loses this round. You choose which player goes first next
  * round. (No one draws a card or gets Hurt Feelings for this round, and
- * after-scoring effects don't happen.)" Sets the well-known
- * 'skipScoringThisRound' marker -- see
- * GameService::hasSkipScoringMarker()/skipScoringAndAdvance() -- alongside
- * 'oneTimeFirstPlayerOverride' (see BoardState::firstPlayerOverride()) to
- * record who goes first. This is a distinct key from Honor's
- * 'firstPlayerOverride', since Awe's choice only covers the very next
- * round rather than persisting for as long as it stays in play --
- * skipScoringAndAdvance() clears it once consumed.
+ * after-scoring effects don't happen.)" Marks the round via
+ * BoardState::markSkipScoringThisRound() -- see
+ * GameService::hasSkipScoringMarker()/skipScoringAndAdvance() and that
+ * method's own docblock for why this is round-level state rather than
+ * effectState tagged on Awe's own card: this choice is already fully
+ * locked in the instant Awe resolves (an "after playing" trigger, not a
+ * "while in play" ability like Honor's own similarly-named
+ * firstPlayerOverride), so it needs to survive Awe itself leaving play
+ * before the round it was played in actually finishes scoring.
  */
 final class AweEffect extends AbstractMoodEffect
 {
@@ -31,7 +32,6 @@ final class AweEffect extends AbstractMoodEffect
             throw new InvalidChoiceException("Player {$chosenPlayerId} is not a valid player");
         }
 
-        $state->setEffectState($cardId, 'oneTimeFirstPlayerOverride', $chosenPlayerId);
-        $state->setEffectState($cardId, 'skipScoringThisRound', true);
+        $state->markSkipScoringThisRound($cardId, $playerId, $chosenPlayerId);
     }
 }

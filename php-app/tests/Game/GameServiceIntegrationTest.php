@@ -3226,7 +3226,7 @@ final class GameServiceIntegrationTest extends TestCase
         $corruptionId = $this->insertGameCard($gameId, 60, 'in_play', $p2); // Corruption
         $enthusiasmId = $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm
         $passionId = $this->insertGameCard($gameId, 97, 'in_play', $p2); // Passion
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $setEffectState = function (int $cardId, array $effectState): void {
             $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
@@ -3234,8 +3234,13 @@ final class GameServiceIntegrationTest extends TestCase
         };
         $setEffectState($blissId, ['blissColor' => 'red']);
         $setEffectState($sneakinessId, ['swapScoreWithPlayerId' => $p2]);
-        $setEffectState($aweId, ['skipScoringThisRound' => true, 'oneTimeFirstPlayerOverride' => $p2]);
         $setEffectState($corruptionId, ['awardsExtraWin' => true]);
+        // Awe's own skip-scoring/first-player choice is round-level state,
+        // not per-card effectState -- see BoardState::$skipScoringThisRound's
+        // own docblock -- so it's set here rather than via $setEffectState().
+        $this->pdo->prepare(
+            'UPDATE game_rounds SET skip_scoring = 1, skip_scoring_first_player_game_player_id = :first_player, skip_scoring_source_card_id = :card_id, skip_scoring_owner_game_player_id = :owner_id WHERE id = :round_id'
+        )->execute(['first_player' => $p2, 'card_id' => $aweId, 'owner_id' => $p2, 'round_id' => $roundId]);
 
         $effects = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
         $byCardId = [];
@@ -3259,6 +3264,49 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('scoringfx1 may score their highest-valued mood an extra time (Enthusiasm).', $byCardId[$enthusiasmId]['description']);
 
         self::assertStringContainsString("scoringfx2 may score one of an opponent's moods as their own (Passion).", $byCardId[$passionId]['description']);
+    }
+
+    /**
+     * A bug caught live: the "How scoring will be affected" section's own
+     * Awe entry used to be built by scanning moodsInPlay() for the same
+     * per-card 'skipScoringThisRound' tag the underlying skip-scoring
+     * mechanism itself used to rely on -- once that moved to round-level
+     * state (so the actual skip survives Awe leaving play), this entry
+     * silently stopped appearing at all, since the per-card tag it
+     * checked was never written anymore. Confirms the entry now reads
+     * from the same round-level state the mechanism does, so it stays
+     * visible for the rest of the round even after Awe itself is gone.
+     */
+    public function testGetStateStillExposesAweScoringEffectEvenAfterAweLeavesPlay(): void
+    {
+        $u1 = $this->insertUser('awescoringfx1');
+        $u2 = $this->insertUser('awescoringfx2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p2]);
+
+        $beforeLeaving = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
+        self::assertCount(1, $beforeLeaving);
+        self::assertStringContainsString("awescoringfx1's Awe means this round won't be scored", $beforeLeaving[0]['description']);
+
+        // Awe leaves play before the round finishes scoring.
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = :id")
+            ->execute(['id' => $aweId]);
+
+        $afterLeaving = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
+        self::assertCount(1, $afterLeaving, 'the entry survives Awe itself leaving play');
+        self::assertStringContainsString("awescoringfx1's Awe means this round won't be scored", $afterLeaving[0]['description']);
     }
 
     public function testGetStateOmitsCorruptionFromScoringEffectsWhenItDidNotChooseTheDoubleWinMode(): void
@@ -4833,6 +4881,62 @@ final class GameServiceIntegrationTest extends TestCase
 
         $events = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertStringContainsString('awe2 goes first next round', $events[0]['description']);
+    }
+
+    /**
+     * A bug caught live: Awe's own effect triggers "after playing" -- its
+     * choice of who goes first next round is already fully locked in the
+     * instant it resolves, unlike Honor's genuinely "while in play"
+     * ability of the same shape. Previously this was tracked as
+     * effectState tagged on Awe's own card, so if Awe left play (stolen,
+     * discarded, etc.) before the round it was played in actually
+     * finished scoring, its own tag silently vanished along with it --
+     * the round scored normally instead of being skipped, and no one went
+     * first next round on purpose. Awe itself is discarded directly here
+     * (bypassing any specific removal card) to isolate the one thing that
+     * matters: does the choice survive Awe no longer being in play by the
+     * time the round finishes, across a real load()/save() round trip.
+     */
+    public function testAweStillSkipsScoringAndSetsNextRoundsFirstPlayerEvenIfAweLeavesPlayFirst(): void
+    {
+        $u1 = $this->insertUser('aweleaves1');
+        $u2 = $this->insertUser('aweleaves2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p2]);
+
+        // Awe leaves play before the round it was played in finishes
+        // scoring -- exactly the scenario the bug report described,
+        // simulated directly rather than via any one specific removal
+        // card, since the fix has nothing to do with how it leaves.
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = :id")
+            ->execute(['id' => $aweId]);
+
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored'], 'scoring is still skipped even though Awe is no longer in play');
+        self::assertFalse($result['game_completed']);
+
+        $round1Stmt = $this->pdo->prepare('SELECT status, winner_game_player_id FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $round1Stmt->execute(['game_id' => $gameId]);
+        $round1 = $round1Stmt->fetch();
+        self::assertSame('scored', $round1['status']);
+        self::assertNull($round1['winner_game_player_id'], 'no winner -- Awe\'s "no one wins or loses this round" still applies');
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['first_game_player_id'], 'Awe\'s own choice of who goes first still applies');
     }
 
     /**
