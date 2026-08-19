@@ -71,6 +71,10 @@ function requestPasswordReset(email) {
     return apiRequest('/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
 }
 
+function resendVerificationEmail(email) {
+    return apiRequest('/resend-verification', { method: 'POST', body: JSON.stringify({ email }) });
+}
+
 function resetPassword(token, password) {
     return apiRequest('/reset-password', { method: 'POST', body: JSON.stringify({ token, password }) });
 }

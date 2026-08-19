@@ -104,9 +104,15 @@ function respond(int $status, array $body): never
  * Only used by /verify-email: unlike every other route, that one is meant
  * to be opened directly from an emailed link by a human, not called by our
  * own JS, so it renders a page instead of JSON. $redirectTo is an absolute
- * site path (e.g. "/"); when set, the page redirects there automatically.
+ * site path (e.g. "/"); when set, the page redirects there automatically
+ * and the manual link below it points there too ("Continue to login"),
+ * taking precedence over $linkTo/$linkText. Without a redirect, $linkTo/
+ * $linkText customize the manual link instead (e.g. the expired-token
+ * failure page below points at resend-verification.html rather than the
+ * default "Back to login" -> "/", since a token that expired without
+ * ever being used means there's nothing to log into yet).
  */
-function respondHtml(int $status, string $title, string $heading, string $message, ?string $redirectTo = null): never
+function respondHtml(int $status, string $title, string $heading, string $message, ?string $redirectTo = null, ?string $linkTo = null, string $linkText = 'Back to login'): never
 {
     header('Content-Type: text/html; charset=utf-8', true);
     http_response_code($status);
@@ -116,7 +122,7 @@ function respondHtml(int $status, string $title, string $heading, string $messag
         : '';
     $link = $redirectTo !== null
         ? sprintf('<p><a href="%s">Continue to login</a></p>', htmlspecialchars($redirectTo, ENT_QUOTES))
-        : '<p><a href="/">Back to login</a></p>';
+        : sprintf('<p><a href="%s">%s</a></p>', htmlspecialchars($linkTo ?? '/', ENT_QUOTES), htmlspecialchars($linkText, ENT_QUOTES));
 
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
         . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
@@ -382,7 +388,15 @@ if ($path === '/verify-email' && $method === 'GET') {
             '/'
         );
     } catch (InvalidVerificationTokenException $e) {
-        respondHtml(400, 'Verification failed - MoodSwings-Web', 'Verification failed', $e->getMessage());
+        respondHtml(
+            400,
+            'Verification failed - MoodSwings-Web',
+            'Verification failed',
+            $e->getMessage(),
+            null,
+            '/resend-verification.html',
+            'Get a new verification email'
+        );
     }
 }
 
