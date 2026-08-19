@@ -1,0 +1,21 @@
+-- No schema change: game log entries for a card that reacts to another
+-- play with Scorn's own suppression ability (e.g. "Alice played Harmony
+-- ... (scorn suppress target: 5032)") printed the raw game_cards.id
+-- instead of the suppressed mood's name. describeChoiceEntry() resolves
+-- an id-valued choice key to a card name purely by naming convention --
+-- every other one ends in '_mood_id(s)'/'_card_id(s)' -- but
+-- 'scorn_suppress_target' (CardChoiceSchema::REACTIONS['scorn']) is the
+-- one key in the whole schema that doesn't follow it, so it silently fell
+-- through to the generic "print the raw value" fallback. Special-cased
+-- 'scorn_suppress_target' alongside that naming-convention check so it
+-- resolves to the card's name too, e.g. "(scorn suppress target:
+-- Scorn)" -- this also retroactively fixes every already-logged event
+-- carrying this key, not just future ones, since it's a read-time
+-- rendering fix.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0138 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.26.4' WHERE id = 1;

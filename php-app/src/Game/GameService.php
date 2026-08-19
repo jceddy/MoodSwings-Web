@@ -11388,7 +11388,17 @@ final class GameService
         if ((str_contains($key, 'mood_ids') || str_contains($key, 'card_ids')) && is_array($value)) {
             return $label . ': ' . implode(', ', array_map(fn ($id) => $cardNames[(int) $id] ?? 'a card', $value));
         }
-        if (str_contains($key, 'mood_id') || str_contains($key, 'card_id')) {
+        if (str_contains($key, 'mood_id') || str_contains($key, 'card_id') || $key === 'scorn_suppress_target') {
+            // Scorn's own reaction key (CardChoiceSchema::REACTIONS['scorn'])
+            // is the one id-valued key in the whole schema that breaks this
+            // method's own "purely by naming convention" contract above --
+            // it's just 'scorn_suppress_target', with no '_mood_id' suffix
+            // -- so it silently fell through to the raw-id-printing branch
+            // below instead, the same class of bug the 'player_ids'
+            // special-case above already exists to prevent. Special-cased
+            // here (rather than renaming the key everywhere) so this also
+            // fixes every ALREADY-logged event carrying the old key, not
+            // just new ones.
             return $label . ': ' . ($cardNames[(int) $value] ?? 'a card');
         }
         if ($value === true) {

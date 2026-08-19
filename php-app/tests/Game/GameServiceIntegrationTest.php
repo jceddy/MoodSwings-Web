@@ -5768,6 +5768,44 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($state->isSuppressed($scornId));
     }
 
+    /**
+     * A bug caught live: 'scorn_suppress_target' is the one id-valued
+     * choice key in the whole schema that doesn't follow describeChoices()'s
+     * own "every id-valued key ends in _mood_id(s)/_card_id(s)" naming
+     * convention -- it silently fell through to the generic fallback,
+     * printing the raw game_cards.id instead of resolving it to the
+     * suppressed mood's own name, e.g. "(scorn suppress target: 5007)"
+     * instead of "(scorn suppress target: Scorn)".
+     */
+    public function testScornSuppressTargetLogEntryNamesTheCardNotItsRawId(): void
+    {
+        $u1 = $this->insertUser('scornlog1');
+        $u2 = $this->insertUser('scornlog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play needed to also play Scorn this turn
+        $scornId = $this->insertGameCard($gameId, 24, 'hand', $p1); // Scorn, value 2, white
+        $courageId = $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white -- played next round to trigger the reaction
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $charityId, []);
+        $this->games->playMood($gameId, $p1, $scornId, ['target_mood_id' => $charityId]);
+        $this->games->pass($gameId, $p2);
+        $this->games->playMood($gameId, $p1, $courageId, ['scorn_suppress_target' => $scornId]);
+
+        $description = $this->games->getState($gameId, $u1)['recent_events'][0]['description'];
+        self::assertStringContainsString('scorn suppress target: Scorn', $description);
+        self::assertStringNotContainsString((string) $scornId, $description);
+    }
+
     public function testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
     {
         $u1 = $this->insertUser('comp1');
@@ -7326,6 +7364,45 @@ final class GameServiceIntegrationTest extends TestCase
 
         $afterSecond = $this->games->respondToDecision($gameId, $p2, []); // decline -- no valid opponent mood to take anyway
         self::assertTrue($afterSecond['round_scored']);
+    }
+
+    /**
+     * The flip side of testRespondToDecisionRejectsAnInvalidPassionTargetEvenWhenNotTheRoundsLastDecision()
+     * below -- a genuinely VALID Passion target, submitted for a non-final
+     * decision (the same player also owns Enthusiasm, still outstanding
+     * after this one resolves), must still be accepted, not rejected as a
+     * false positive by the new synchronous validation.
+     */
+    public function testRespondToDecisionAcceptsAValidPassionTargetEvenWhenNotTheRoundsLastDecision(): void
+    {
+        $u1 = $this->insertUser('validmulti1');
+        $u2 = $this->insertUser('validmulti2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // p1's Passion -- asked first
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // p1's Enthusiasm -- same owner, asked second/last
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3 -- a valid Passion target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+
+        $firstDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('passion_score_opponent_mood', $firstDecision['decision_type']);
+
+        $afterFirst = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $dignityId]);
+        self::assertTrue($afterFirst['pending_decision'] ?? false, 'Enthusiasm\'s own decision is still outstanding');
+
+        $secondDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('enthusiasm_extra_score', $secondDecision['decision_type']);
     }
 
     /**
