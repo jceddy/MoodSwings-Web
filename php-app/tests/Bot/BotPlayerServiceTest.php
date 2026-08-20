@@ -835,6 +835,59 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(76, $action['card_id']);
     }
 
+    // -- Harmony (confirmed by the maintainer) -----------------------------
+
+    /**
+     * Harmony's own extra play is restricted to a card FROM the discard
+     * pile -- with the pile completely empty, that grant accomplishes
+     * nothing, so Harmony (id 123, value 2) is deprioritized behind
+     * Apathy (id 55, value 4, plain filler) -- "avoid playing it until
+     * there are cards in the discard pile to play" per the maintainer.
+     */
+    public function testChooseActionDeprioritizesHarmonyWhenTheDiscardPileIsEmpty(): void
+    {
+        $state = $this->boardState(hands: [1 => [123, 55]]);
+
+        $action = $this->bot->chooseAction($state, [123, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * The instant the discard pile has even one card in it, Harmony
+     * reverts to its ordinary EARLY_PRIORITY_EFFECT_KEYS boosted
+     * treatment -- its own value (2) plus EARLY_PRIORITY_BONUS (10)
+     * comfortably outranks Apathy's plain value (4).
+     */
+    public function testChooseActionPrioritizesHarmonyWhenTheDiscardPileHasACard(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [123, 55]],
+            discard: [8],
+        );
+
+        $action = $this->bot->chooseAction($state, [123, 55], 1);
+
+        self::assertSame(123, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Harmony is still played -- deprioritized
+     * WHEN, never skipped outright.
+     */
+    public function testChooseActionStillPlaysHarmonyWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [123]]);
+
+        $action = $this->bot->chooseAction($state, [123], 1);
+
+        self::assertSame(123, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();
