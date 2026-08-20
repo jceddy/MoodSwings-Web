@@ -912,9 +912,20 @@ Passion (likewise, since their "you may" option recurs every round), and
 Sneakiness/Awe/Corruption (only for as long as their one-time
 round-scoped `effectState` tag stays set — `swapScoreWithPlayerId`/
 `skipScoringThisRound`/`awardsExtraWin` — since `applyScoreSwaps()`/
-`skipScoringAndAdvance()`/`consumeExtraWinMarker()` each clear their own
-tag once the round it covers actually scores, so a stale Sneakiness from
-three rounds ago never lingers here). None of this is hidden information
+`consumeExtraWinMarker()` each clear their own tag once the round it
+covers actually scores, so a stale Sneakiness from three rounds ago never
+lingers here). A bug caught live, reported by a user: playing Sneakiness
+or Corruption in the SAME round as Awe used to leave that tag stuck
+forever, since `applyScoreSwaps()`/`consumeExtraWinMarker()` only ever
+run inside `finishScoringAndAdvance()`, and Awe's own skip-scoring path
+(`skipScoringAndAdvance()`) bypasses that method entirely — the round
+never actually scores, so neither one-time tag ever got the chance to
+fire *or* clear, leaving it to keep showing here indefinitely and then
+genuinely misfire on whatever LATER round finally did score normally.
+`skipScoringAndAdvance()` now clears both tags itself, alongside its own
+Awe-specific ones, matching "no one wins or loses this round" — if
+there's no scoring, there's nothing left for either effect to modify.
+None of this is hidden information
 — an in-play card and the choice it was played with are both already
 public — so every viewer sees the same list. The `effect_key` lookup goes
 through `BoardState::effectiveCardId()`, mirroring `RoundScorer::score()`'s

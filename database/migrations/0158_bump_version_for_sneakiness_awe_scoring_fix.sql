@@ -1,0 +1,22 @@
+-- Bug fix reported live by a user: playing Sneakiness and Awe in the
+-- SAME round left Sneakiness's own 'swapScoreWithPlayerId' effectState
+-- tag (and Corruption's own 'awardsExtraWin', the same shape) sitting on
+-- the card forever afterward. Both tags are normally cleared by
+-- applyScoreSwaps()/consumeExtraWinMarker() the instant they're actually
+-- applied, but those only ever run inside finishScoringAndAdvance() --
+-- Awe's own skip-scoring path (skipScoringAndAdvance()) bypasses that
+-- method entirely, since Sneakiness's/Corruption's own printed text is
+-- explicitly THIS round's own one-time effect and there IS no scoring
+-- this round for either to hook into. Sneakiness/Corruption commonly
+-- stay in play well past the round they were played in, so the stale tag
+-- used to keep showing in "How scoring will be affected" for every later
+-- round too, and -- far worse than a display bug -- would actually fire
+-- for real (silently swapping/doubling that unrelated round's own
+-- outcome) the next time scoring genuinely happened.
+-- skipScoringAndAdvance() now clears both tags itself, alongside its own
+-- Awe-specific ones.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0157 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.14' WHERE id = 1;
