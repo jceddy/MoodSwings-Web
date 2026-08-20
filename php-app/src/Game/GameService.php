@@ -4434,17 +4434,28 @@ final class GameService
 
             $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
             if ($currentTurnGamePlayerId === null) {
-                // Frozen round -- Closed Team Play only, round 1's blind
-                // pregame card pass (see pendingInitialCardPass()) hasn't
-                // resolved yet. (An open turn_order/draw_recipient team
-                // decision is already handled unconditionally at the top
-                // of this loop, before $round was even loaded -- reaching
-                // here with $currentTurnGamePlayerId still null and no
-                // resolvable team decision left just means the card pass,
-                // if any, is itself waiting on a real player.)
+                // Frozen round -- one of two mutually-exclusive states,
+                // neither ever overlapping the other for the same game:
+                // Closed Team Play's own round 1 blind pregame card pass
+                // (the match's FIRST game only -- see
+                // pendingInitialCardPass()), or a best-of-three draft
+                // match's own "who goes first" freeze (round 1 of game
+                // 2/3 specifically -- see setPlayFirstNextMatchGame()).
+                // (An open turn_order/draw_recipient team decision is
+                // already handled unconditionally at the top of this
+                // loop, before $round was even loaded -- reaching here
+                // with $currentTurnGamePlayerId still null and neither of
+                // these two resolving anything just means whichever one
+                // actually applies is itself waiting on a real player.)
                 $cardPassResult = $this->advanceBotInitialCardPass($gameId, $round, $botGamePlayerIds);
                 if ($cardPassResult !== null) {
                     $lastResult = $cardPassResult;
+                    continue;
+                }
+
+                $firstPlayerResult = $this->advanceBotFirstPlayerDecision($gameId, $round, $botGamePlayerIds);
+                if ($firstPlayerResult !== null) {
+                    $lastResult = $firstPlayerResult;
                     continue;
                 }
 
@@ -4520,6 +4531,68 @@ final class GameService
         $cardIds = $this->bots->chooseInitialCardPass($this->boardStates->load($gameId), $botGamePlayerId);
 
         return $this->submitInitialCardPass($gameId, $botGamePlayerId, $cardIds);
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own helper for the "who goes first" freeze
+     * setPlayFirstNextMatchGame() resolves -- games 2/3 of a best-of-three
+     * draft match only (round 1 of THAT game, not the match's very first
+     * game), a genuinely separate frozen-round state from
+     * advanceBotInitialCardPass() immediately above (Closed Team Play's
+     * own blind pregame pass, round 1 of the match's FIRST game) -- the
+     * two never overlap for the same game, but both are tried here
+     * unconditionally for the same reason advanceBotTeamDecision() is
+     * tried unconditionally at the top of the loop: cheap to check, and
+     * "waiting on a real player either way" already covers whichever one
+     * doesn't apply. Left unhandled entirely until this method existed --
+     * a bot-seated draft match's own game 2/3 would otherwise deadlock
+     * forever the instant the previous game's LOSER happened to be a bot,
+     * exactly the "no round exists yet to drive" class of bug issue #360
+     * already fixed once for Team Play's own frozen states (see
+     * advanceAutomatedTurns()'s own top-of-loop comment).
+     *
+     * Bot policy: never opts to go first itself ($playFirst = false) --
+     * the same passive outcome as never answering at all
+     * (resolveFirstPlayerId()'s own placeholder: the previous game's
+     * winner goes first again), deliberately arbitrary and deterministic,
+     * matching chooseTeamDecisionProposal()'s own "legal, not strategic"
+     * precedent for a decision with no clear strategic bias either way.
+     *
+     * @param int[] $botGamePlayerIds
+     * @return array<string, mixed>|null
+     */
+    private function advanceBotFirstPlayerDecision(int $gameId, array $round, array $botGamePlayerIds): ?array
+    {
+        if ($botGamePlayerIds === [] || (int) $round['round_number'] !== 1) {
+            return null;
+        }
+
+        $game = $this->fetchGame($gameId);
+        $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+        if ($game['draft_match_id'] === null || $matchGameNumber === null || $matchGameNumber <= 1) {
+            return null;
+        }
+
+        $seatsStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
+        $seatsStmt->execute(['game_id' => $gameId]);
+        $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+        $previousLoserUserId = $previousWinnerUserId !== null
+            ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
+            : null;
+        if ($previousLoserUserId === null) {
+            return null; // shouldn't happen once $matchGameNumber > 1 -- see previousMatchGameWinnerUserId()'s own docblock
+        }
+
+        $loserGamePlayerId = $this->gamePlayerIdFor($gameId, $previousLoserUserId);
+        if ($loserGamePlayerId === null || !in_array($loserGamePlayerId, $botGamePlayerIds, true)) {
+            return null; // the previous game's loser is a real player -- wait for them
+        }
+
+        $this->setPlayFirstNextMatchGame($gameId, $previousLoserUserId, false);
+
+        return ['first_player_choice_user_id' => $previousWinnerUserId];
     }
 
     /**

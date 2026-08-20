@@ -1188,6 +1188,71 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertFalse($this->cardIsInHand($gameId, 4, $botUserId), "Chivalry should have rotated away from the bot's own hand");
     }
 
+    /**
+     * Issue #359 exposed a real deadlock, reported live: a best-of-three
+     * draft match's own "who goes first" freeze (setPlayFirstNextMatchGame(),
+     * game 2/3's own round 1 -- see that method's own docblock) had no
+     * bot handling at all until advanceBotFirstPlayerDecision() existed.
+     * Before then, if the PREVIOUS game's loser happened to be a bot,
+     * nothing would ever answer the decision and the round stayed frozen
+     * forever -- advanceAutomatedTurns()'s own frozen-round branch only
+     * ever tried advanceBotInitialCardPass() (a different, mutually
+     * exclusive freeze), so this one just fell straight through to
+     * "waiting on a real player" every single time.
+     *
+     * Built directly via raw SQL rather than playing an entire Quick
+     * Draft match out end to end (GameServiceIntegrationTest's own
+     * buildQuickDraftMatchAtGameTwoStart() does exactly that, but only
+     * for two humans) -- advanceBotFirstPlayerDecision() only ever reads
+     * games/game_players/game_rounds, so a real drafted pool/deck is
+     * unnecessary; a stub draft_matches row satisfies games.draft_match_id's
+     * own FK without needing draft_match_players at all.
+     */
+    public function testBotAutomaticallyDecidesWhoGoesFirstWhenItLostThePreviousGame(): void
+    {
+        $humanUserId = $this->insertUser('human6');
+        $botUserId = $this->insertBotUser('bot5');
+
+        $draftMatchStmt = $this->pdo->prepare(
+            "INSERT INTO draft_matches (created_by_user_id, pool_source, pool_card_ids, status) VALUES (:creator, 'random_48', '[]', 'completed')"
+        );
+        $draftMatchStmt->execute(['creator' => $humanUserId]);
+        $draftMatchId = (int) $this->pdo->lastInsertId();
+
+        // Game 1: already completed -- the bot lost.
+        $game1Id = $this->insertGame('draft', 'quick_draft', $humanUserId);
+        $this->pdo->prepare("UPDATE games SET draft_match_id = :match_id, match_game_number = 1, status = 'completed' WHERE id = :game_id")
+            ->execute(['match_id' => $draftMatchId, 'game_id' => $game1Id]);
+        $humanGame1PlayerId = $this->insertGamePlayer($game1Id, $humanUserId, 0);
+        $this->insertGamePlayer($game1Id, $botUserId, 1);
+        $this->pdo->prepare('UPDATE games SET winner_game_player_id = :winner WHERE id = :game_id')
+            ->execute(['winner' => $humanGame1PlayerId, 'game_id' => $game1Id]);
+
+        // Game 2: in progress, round 1 frozen awaiting the loser's (the
+        // bot's) decision -- first_game_player_id already holds
+        // resolveFirstPlayerId()'s own placeholder (the previous
+        // winner), current_turn_game_player_id stays NULL until the
+        // decision resolves, same shape startGame() itself leaves it in.
+        $game2Id = $this->insertGame('draft', 'quick_draft', $humanUserId);
+        $this->pdo->prepare("UPDATE games SET draft_match_id = :match_id, match_game_number = 2, status = 'in_progress' WHERE id = :game_id")
+            ->execute(['match_id' => $draftMatchId, 'game_id' => $game2Id]);
+        $humanGame2PlayerId = $this->insertGamePlayer($game2Id, $humanUserId, 0);
+        $botGame2PlayerId = $this->insertGamePlayer($game2Id, $botUserId, 1);
+        $this->pdo->prepare(
+            "INSERT INTO game_rounds (game_id, round_number, first_game_player_id, current_turn_game_player_id, plays_remaining, status)
+             VALUES (:game_id, 1, :first_player, NULL, 1, 'in_progress')"
+        )->execute(['game_id' => $game2Id, 'first_player' => $humanGame2PlayerId]);
+        $this->insertGameCard($game2Id, 8, 'hand', $humanGame2PlayerId);
+        $this->insertGameCard($game2Id, 3, 'hand', $botGame2PlayerId);
+
+        $result = $this->games->advanceAutomatedTurns($game2Id);
+
+        self::assertNotNull($result, 'the bot should have automatically resolved the frozen "who goes first" decision instead of deadlocking');
+        $round = $this->fetchRound($game2Id);
+        self::assertNotNull($round['current_turn_game_player_id'], 'the round should have unfrozen');
+        self::assertSame($humanGame2PlayerId, (int) $round['current_turn_game_player_id'], 'the previous winner (human) should go first again -- the bot never opts to go first itself');
+    }
+
     // -- helpers ------------------------------------------------------
 
     private function cardIsInPlay(int $gameId, int $catalogCardId): bool

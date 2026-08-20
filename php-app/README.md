@@ -5223,6 +5223,28 @@ entirely BEFORE any `BoardState`/round exists for a game:
   all-bot-except-the-creator draft still advances on nothing more than
   the creator's own client periodically checking in.
 
+  **`advanceBotFirstPlayerDecision()`** -- a follow-up fix, caught live
+  ("Waiting for BotAlice to decide who goes first..."): a best-of-three
+  draft match's own "who goes first" freeze (`setPlayFirstNextMatchGame()`,
+  game 2/3's own round 1 -- see that method's own docblock) is a
+  DIFFERENT frozen-round state from Closed Team Play's own blind pregame
+  card pass above (`current_turn_game_player_id` null either way, but
+  never both at once for the same game), and had no bot handling
+  whatsoever until this existed -- if the PREVIOUS game's loser happened
+  to be a bot, the round just stayed frozen forever, since
+  `advanceAutomatedTurns()`'s own frozen-round branch only ever tried
+  `advanceBotInitialCardPass()`. Tried right alongside it (both cost
+  nothing extra when they don't apply): finds the previous game's own
+  winner/loser the same way `firstPlayerDecisionStateFor()`/
+  `setPlayFirstNextMatchGame()` themselves do, and, if the loser's own
+  seat in THIS game belongs to a bot, calls `setPlayFirstNextMatchGame()`
+  with `$playFirst = false` -- the bot never opts to go first itself,
+  the same passive outcome as never answering at all
+  (`resolveFirstPlayerId()`'s own placeholder: the previous winner goes
+  first again), deliberately arbitrary and deterministic like
+  `chooseTeamDecisionProposal()`'s own precedent, since there's no clear
+  strategic bias toward going first or second here.
+
 **Picking a legal move: `MoodSwings\Bot\BotChoiceResolver`.** A
 server-side equivalent of `web-static/js/game.js`'s own `fieldOptions()`/
 `matchesCardFilter()`/`matchesPlayerFilter()` -- enumerates the legal
