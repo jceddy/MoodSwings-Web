@@ -5378,6 +5378,60 @@ since it already holds that dependency):
   probabilistic middle band run many trials and assert the observed rate
   falls within a generous statistical tolerance, rather than asserting
   an exact outcome.
+
+  **Rationalization** (confirmed by the maintainer) gets its own
+  bespoke, two-part policy, since "you may choose one: refresh your own
+  hand, or rotate hands with the table" (`CardChoiceSchema`'s own
+  `mode: ['refresh', 'rotate']` plus a `direction` field that only means
+  anything once `mode` is `'rotate'`) can't be reduced to a single
+  optional-field decision the way `shouldAttemptValueBoostDiscard()`'s
+  own single boolean can -- leaving it unfilled (the generic optional-
+  field default) is a pure no-op, strictly worse than either real
+  option, so `buildChoicesForCard()` special-cases `effectKey ===
+  'rationalization'` to `rationalizationChoices()` entirely, bypassing
+  the generic per-field `CardChoiceSchema` loop for this one card:
+  - `rationalizationLowValueHand(BoardState $state, int $cardId, int
+    $botGamePlayerId): bool` -- `'refresh'` whenever the bot's own
+    remaining hand (every OTHER card still in hand once Rationalization
+    itself is played -- it's still sitting in hand at the point this
+    runs) averages `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE` (2, roughly
+    the real catalog's own overall average base value) or below --
+    including an empty remaining hand, which counts as trivially "low"
+    (refreshing nothing is free). Checked first: always safe (nothing is
+    ever given away), regardless of what any neighbor's hand looks like.
+  - Otherwise, `rationalizationStealDirection(BoardState $state, int
+    $botGamePlayerId): ?string` -- `'rotate'` toward whichever seat
+    neighbor currently holds at least
+    `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` (3) more cards than the
+    bot's own current hand, so the bot ends up with that larger hand
+    once hands actually rotate. `'rotate'` moves EVERY seated player's
+    hand to their own neighbor in ONE shared direction (`RationalizationEffect`'s
+    own docblock), not a private trade with a single opponent, so the
+    neighbor the bot actually RECEIVES FROM under direction `$d` is
+    whichever one sits on the OPPOSITE side -- `activeNeighbor()`'s own
+    "`'left'` is index+1" rule means a neighbor at the bot's own
+    `'right'` is the one whose OWN `'left'` pass lands on the bot, and
+    vice versa. Whichever of the two neighbors qualifies AND holds the
+    larger hand wins if both do; `null` (falls through to `'refresh'`
+    below) if neither does, which a heads-up duel's own single shared
+    "neighbor" either direction resolves to always agrees with itself
+    on.
+  - Otherwise, still `'refresh'` -- the strictly safer of the two once
+    neither trigger applies, since it never gives anything away to an
+    opponent the way an unwarranted `'rotate'` would.
+
+  `chooseAction()`'s own highest-printed-value sort additionally treats
+  Rationalization specially via `sortPriorityValue()`: rather than
+  leading with it purely because of its own unremarkable printed value
+  (3), it's demoted to `PHP_INT_MIN` -- guaranteed last -- UNLESS
+  `rationalizationLowValueHand()` or `rationalizationStealDirection()`
+  already says it's worth playing right now (same two checks
+  `rationalizationChoices()` itself makes, just used here to decide
+  WHETHER/WHEN rather than HOW) -- "save it to play last" per the
+  maintainer, so a mediocre Rationalization never displaces a
+  genuinely useful play, but it's still never skipped outright: once
+  it's the only legal candidate left (or a trigger fires), it's played
+  the same as anything else, always committing to a real mode.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's

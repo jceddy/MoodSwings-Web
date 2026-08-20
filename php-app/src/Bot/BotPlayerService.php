@@ -15,17 +15,24 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with two deliberate exceptions:
- * shouldAttemptValueBoostDiscard() below, a scoring-aware, partly
- * probabilistic policy for Dignity/Embarrassment/Cheer/Delight's own
- * "you may discard a card to boost this mood's value" choice; and the
- * draft-pick family (chooseDraftCard()/chooseWinstonAction()/
+ * field-filling policy this builds on -- with three deliberate
+ * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
+ * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
+ * own "you may discard a card to boost this mood's value" choice; the
+ * draft-pick family (chooseDraftCards()/chooseWinstonAction()/
  * chooseGridLine()/chooseDraftDeck(), issue #359) below, which reads
  * externally-curated data (CardCatalog's own draft_priority_score/
  * synergy partners, see migration 0143) plus CardStatsService's deck
  * win rate instead of just a card's own printed value -- there's no
  * BoardState yet during drafting for the "highest printed value" bias
- * every other method here uses to even read from.
+ * every other method here uses to even read from; and
+ * rationalizationChoices()/sortPriorityValue() (confirmed by the
+ * maintainer), which both decide WHICH of Rationalization's two optional
+ * modes to commit to (never leaving it unchosen -- a no-op play the way
+ * every other unforced-optional-field card here would default to) and
+ * deprioritize playing it at all except when doing so pays off (a weak
+ * remaining hand, or an overstuffed seat neighbor worth taking cards
+ * from), rather than leading with it purely by printed value.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -84,7 +91,7 @@ final class BotPlayerService
     {
         usort(
             $playableCardIds,
-            fn (int $a, int $b) => $this->baseValue($state, $b) <=> $this->baseValue($state, $a),
+            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId),
         );
 
         foreach ($playableCardIds as $cardId) {
@@ -210,6 +217,31 @@ final class BotPlayerService
     private function baseValue(BoardState $state, int $cardId): int
     {
         return $state->catalogRow($state->effectiveCardId($cardId))['baseValue'];
+    }
+
+    /**
+     * chooseAction()'s own sort key -- ordinarily just baseValue(), except
+     * for Rationalization: rather than always leading with it purely
+     * because of its own printed value (3, unremarkable on its own),
+     * it's deliberately held back to the BOTTOM of the candidate order
+     * (PHP_INT_MIN, guaranteed lower than any real baseValue()) unless
+     * rationalizationHasAGoodReasonToPlayNow() says otherwise -- "save it
+     * to play last" per the maintainer, so it only actually gets chosen
+     * ahead of something else once nothing higher-value is left to play,
+     * UNLESS refreshing a weak hand or stealing an overstuffed neighbor's
+     * hand is worth doing right away. Never a reason to skip playing it
+     * outright, only to deprioritize WHEN -- buildChoicesForCard()'s own
+     * rationalizationChoices() always commits to a mode regardless of
+     * this ordering.
+     */
+    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId): int
+    {
+        $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
+            return PHP_INT_MIN;
+        }
+
+        return $this->baseValue($state, $cardId);
     }
 
     /**
@@ -442,6 +474,11 @@ final class BotPlayerService
     private function buildChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+
+        if ($effectKey === 'rationalization') {
+            return $this->rationalizationChoices($state, $cardId, $botGamePlayerId);
+        }
+
         $choices = [];
 
         foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
@@ -474,6 +511,133 @@ final class BotPlayerService
         }
 
         return $choices;
+    }
+
+    /**
+     * A remaining hand this weak or weaker (average base value, not
+     * counting $cardId itself -- Rationalization is still sitting in
+     * hand at the point this is evaluated, see chooseAction()'s own
+     * pre-play $state) is worth gambling on a fresh draw over. Roughly
+     * the real catalog's own overall average base value (~2.3), rounded
+     * down -- a hand at or below that is no better than what a random
+     * draw would typically look like anyway, so there's little to lose.
+     * An empty remaining hand (Rationalization was the bot's only card)
+     * also counts as "low" (average of an empty set is defined as 0
+     * here), which is exactly right: refreshing an empty hand is free.
+     */
+    private const RATIONALIZATION_LOW_VALUE_HAND_AVERAGE = 2;
+
+    /**
+     * How many MORE cards a seat neighbor needs over the bot's own
+     * current hand size before 'rotate' toward them is worth it --
+     * below this, giving away the bot's own whole hand (rotate moves
+     * EVERY seated player's hand, not just a private trade with one
+     * opponent -- see RationalizationEffect's own docblock) isn't
+     * clearly a net gain once the bot's own cards are considered lost
+     * too.
+     */
+    private const RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE = 3;
+
+    /**
+     * Rationalization's own "which mode, if any" policy (confirmed by
+     * the maintainer) -- separate from the generic per-field
+     * CardChoiceSchema loop above, since its two fields are
+     * interdependent ('direction' only means anything once 'mode' is
+     * 'rotate') and the choice between them needs real board state, not
+     * just "first legal option". "You may choose one" is never left
+     * unchosen here -- doing nothing at all (BotChoiceResolver's own
+     * default for an unforced optional field) is strictly worse than
+     * either real option, so this always commits to one:
+     * - 'refresh' (bottom the whole hand, then redraw that many) once
+     *   the bot's own remaining hand is weak enough to gamble on a
+     *   fresh draw (rationalizationLowValueHand()) -- checked first,
+     *   since it's always safe (nothing is ever given away to an
+     *   opponent) regardless of what any neighbor's hand size looks
+     *   like.
+     * - Otherwise 'rotate' toward whichever neighbor
+     *   rationalizationStealDirection() finds currently overstuffed
+     *   enough to be worth taking their hand at the cost of the bot's
+     *   own.
+     * - Otherwise, still 'refresh' -- the strictly safer default of the
+     *   two whenever neither trigger applies (sortPriorityValue() is
+     *   what keeps the bot from reaching for this card at all in that
+     *   case, not this method; once it IS being played, refresh never
+     *   costs the bot anything an unwarranted rotate could).
+     *
+     * @return array{mode: string}|array{mode: string, direction: string}
+     */
+    private function rationalizationChoices(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        if ($this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)) {
+            return ['mode' => 'refresh'];
+        }
+
+        $direction = $this->rationalizationStealDirection($state, $botGamePlayerId);
+        if ($direction !== null) {
+            return ['mode' => 'rotate', 'direction' => $direction];
+        }
+
+        return ['mode' => 'refresh'];
+    }
+
+    /** @see RATIONALIZATION_LOW_VALUE_HAND_AVERAGE */
+    private function rationalizationLowValueHand(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    {
+        $remainingHand = array_values(array_diff($state->hand($botGamePlayerId), [$cardId]));
+        if ($remainingHand === []) {
+            return true;
+        }
+
+        $total = array_sum(array_map(fn (int $handCardId) => $this->baseValue($state, $handCardId), $remainingHand));
+
+        return $total / count($remainingHand) <= self::RATIONALIZATION_LOW_VALUE_HAND_AVERAGE;
+    }
+
+    /**
+     * Which direction, if any, would rotate an overstuffed seat
+     * neighbor's hand onto the bot -- 'rotate' passes every seated
+     * player's hand to their own neighbor in ONE shared direction (not
+     * a private trade with a single opponent), so the neighbor whose
+     * hand the bot actually RECEIVES under direction $d is whichever one
+     * would give TO the bot under $d, i.e. the neighbor on the OPPOSITE
+     * side (see activeNeighbor()'s own "left is index+1" docblock: if a
+     * neighbor sits at the bot's own 'right', direction 'left' is what
+     * makes THAT neighbor's own 'left' pass land on the bot, and vice
+     * versa). Returns whichever of the two qualifies (at least
+     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE more cards than the
+     * bot's own current hand) and holds the larger hand, if both do; null
+     * if neither seat neighbor currently qualifies (a heads-up duel has
+     * only one "neighbor" either direction resolves to the same single
+     * opponent, so both checks simply agree there).
+     */
+    private function rationalizationStealDirection(BoardState $state, int $botGamePlayerId): ?string
+    {
+        $ownHandSize = count($state->hand($botGamePlayerId));
+
+        $bestDirection = null;
+        $bestGiverHandSize = -1;
+        foreach (['left', 'right'] as $direction) {
+            $giverDirection = $direction === 'left' ? 'right' : 'left';
+            $giverId = $state->activeNeighbor($botGamePlayerId, $giverDirection);
+            if ($giverId === null) {
+                continue;
+            }
+
+            $giverHandSize = count($state->hand($giverId));
+            if ($giverHandSize >= $ownHandSize + self::RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE && $giverHandSize > $bestGiverHandSize) {
+                $bestDirection = $direction;
+                $bestGiverHandSize = $giverHandSize;
+            }
+        }
+
+        return $bestDirection;
+    }
+
+    /** @see sortPriorityValue()'s own docblock for how this is used. */
+    private function rationalizationHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    {
+        return $this->rationalizationLowValueHand($state, $cardId, $botGamePlayerId)
+            || $this->rationalizationStealDirection($state, $botGamePlayerId) !== null;
     }
 
     /**

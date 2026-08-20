@@ -137,12 +137,13 @@ final class BotGameplayIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
-    private function insertGameCard(int $gameId, int $cardId, string $zone, ?int $owner = null): int
+    /** $deckPosition only matters for zone='deck' -- BoardStateRepository::load() orders each deck by it (0 = top), and two rows sharing the same position (including the column's own NULL default) silently collide, so any test dealing out more than one deck card must give each of them its own distinct position -- see GameServiceIntegrationTest's own identical helper. */
+    private function insertGameCard(int $gameId, int $cardId, string $zone, ?int $owner = null, ?int $deckPosition = null): int
     {
         $stmt = $this->pdo->prepare(
-            'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id) VALUES (:game_id, :card_id, :zone, :owner)'
+            'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id, deck_position) VALUES (:game_id, :card_id, :zone, :owner, :deck_position)'
         );
-        $stmt->execute(['game_id' => $gameId, 'card_id' => $cardId, 'zone' => $zone, 'owner' => $owner]);
+        $stmt->execute(['game_id' => $gameId, 'card_id' => $cardId, 'zone' => $zone, 'owner' => $owner, 'deck_position' => $deckPosition]);
 
         return (int) $this->pdo->lastInsertId();
     }
@@ -1097,6 +1098,94 @@ final class BotGameplayIntegrationTest extends TestCase
         $stats = $this->games->lifetimeStatsFor($u1);
         self::assertSame(0, $stats['game_wins']);
         self::assertSame(0, $stats['game_losses']);
+    }
+
+    /**
+     * End-to-end coverage of BotPlayerService::rationalizationChoices()
+     * (see BotPlayerServiceTest for the policy itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> playMood() ->
+     * RationalizationEffect request lifecycle -- Rationalization's own
+     * two fields (`mode`/`direction`) are both optional and
+     * interdependent, exactly the shape most likely to slip through
+     * BotChoiceResolver's own generic per-field machinery with a
+     * validation mismatch even though BotPlayerServiceTest's own
+     * isolated checks pass, the same class of bug
+     * testBotDiscardsToDelightWithFourOrMoreSpareCards() above already
+     * caught once for a different card. Fear/Fickleness (both base value
+     * 0) make the bot's own remaining hand unambiguously "low value", so
+     * 'refresh' is the only legal outcome here.
+     */
+    public function testBotRefreshesItsHandWithRationalizationWhenItsRemainingHandIsWeak(): void
+    {
+        $u1 = $this->insertUser('human3');
+        $botUserId = $this->insertBotUser('bot3');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 49, 'hand', $botPlayerId); // Rationalization, base value 3
+        $this->insertGameCard($gameId, 38, 'hand', $botPlayerId); // Fear, value 0
+        $this->insertGameCard($gameId, 39, 'hand', $botPlayerId); // Fickleness, value 0
+        // A real shared deck to actually draw the refreshed cards from --
+        // refreshHand() bottoms the old hand then draws that many, so
+        // without at least 2 cards here the draw would come up short.
+        $this->insertGameCard($gameId, 5, 'deck', deckPosition: 0);
+        $this->insertGameCard($gameId, 6, 'deck', deckPosition: 1);
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 49));
+        self::assertFalse($this->cardIsInHand($gameId, 38, $botUserId), 'Fear should have been bottomed, not kept');
+        self::assertFalse($this->cardIsInHand($gameId, 39, $botUserId), 'Fickleness should have been bottomed, not kept');
+        self::assertTrue($this->cardIsInHand($gameId, 5, $botUserId), 'the bot should have drawn a fresh card off the deck');
+        self::assertTrue($this->cardIsInHand($gameId, 6, $botUserId), 'the bot should have drawn a fresh card off the deck');
+    }
+
+    /**
+     * The 'rotate' half of the same coverage -- 3 seated players (bot at
+     * seat 0, so seat 1 sits at its own LEFT and seat 2 at its own
+     * RIGHT, per BoardState::activeNeighbor()'s "left is index+1" rule),
+     * with the bot's own remaining hand (Chivalry, value 3) deliberately
+     * NOT weak, so 'refresh' isn't the outcome -- only the left
+     * neighbor's own 5-card hand (3 more than the bot's own 2) makes
+     * 'rotate' worth it. Confirms both the DIRECTION resolves correctly
+     * end to end (a neighbor at the bot's own left is reached via
+     * direction 'right' -- see rationalizationStealDirection()'s own
+     * docblock) and that the bot's own hand actually ends up holding
+     * that neighbor's original cards once RationalizationEffect
+     * resolves for real.
+     */
+    public function testBotRotatesHandsWithRationalizationTowardAnOverstuffedNeighbor(): void
+    {
+        $u1 = $this->insertUser('human4');
+        $u2 = $this->insertUser('human5');
+        $botUserId = $this->insertBotUser('bot4');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 0);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 1);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 2);
+
+        $this->insertGameCard($gameId, 49, 'hand', $botPlayerId); // Rationalization, base value 3
+        $this->insertGameCard($gameId, 4, 'hand', $botPlayerId); // Chivalry, value 3 -- keeps the remaining hand from reading as "low value"
+        // Seat 1 (the bot's own left neighbor) holds 5 cards against the
+        // bot's own 2 -- exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE
+        // (3) worth of edge.
+        $overstuffedHand = [38, 39, 20, 7, 3];
+        foreach ($overstuffedHand as $cardId) {
+            $this->insertGameCard($gameId, $cardId, 'hand', $p1);
+        }
+        $this->insertGameCard($gameId, 8, 'hand', $p2);
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 49));
+        foreach ($overstuffedHand as $cardId) {
+            self::assertTrue($this->cardIsInHand($gameId, $cardId, $botUserId), "card {$cardId} from the overstuffed neighbor's own hand should have rotated onto the bot");
+        }
+        self::assertFalse($this->cardIsInHand($gameId, 4, $botUserId), "Chivalry should have rotated away from the bot's own hand");
     }
 
     // -- helpers ------------------------------------------------------

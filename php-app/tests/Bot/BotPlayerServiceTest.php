@@ -545,4 +545,133 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame([801, 802], $deck);
     }
+
+    // -- Rationalization -------------------------------------------------
+
+    /** Card 49 = Rationalization (base value 3, blue, rare). */
+    public function testChooseActionRefreshesWhenRationalizationIsTheOnlyCardInHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [49]]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'refresh'], $action['choices']);
+    }
+
+    /** Fear (38) and Fickleness (39) are both base value 0 -- a remaining hand this weak (average 0) is always worth refreshing over. */
+    public function testChooseActionRefreshesWhenTheRemainingHandIsWeak(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 38, 39]]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'refresh'], $action['choices']);
+    }
+
+    /**
+     * Chivalry (4, base value 3) keeps the remaining hand's own average
+     * (3) above RATIONALIZATION_LOW_VALUE_HAND_AVERAGE, and with no other
+     * seated player holding any cards at all there's no overstuffed
+     * neighbor to steal from either -- neither trigger applies, so
+     * Rationalization (also value 3) is deliberately passed over in favor
+     * of Chivalry despite the tie on printed value, proving
+     * sortPriorityValue()'s own "save it to play last" demotion actually
+     * changes which card gets chosen, not just which mode it uses once
+     * played.
+     */
+    public function testChooseActionSavesRationalizationForLastWhenNeitherTriggerApplies(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 4]]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(4, $action['card_id']);
+    }
+
+    /**
+     * Still played (and still commits to a mode) once it's the only
+     * legal candidate left, even with neither trigger active -- the
+     * demotion only ever changes ORDER, never whether Rationalization is
+     * worth playing at all.
+     */
+    public function testChooseActionStillPlaysRationalizationAloneEvenWithoutATrigger(): void
+    {
+        $state = $this->boardState(hands: [1 => [49, 4]]);
+
+        $action = $this->bot->chooseAction($state, [49], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'refresh'], $action['choices']);
+    }
+
+    /**
+     * Player order is [1, 2, 3] (boardState()'s own fixed seating), so
+     * player 2 sits at the bot's (1) own LEFT and player 3 at its RIGHT
+     * (activeNeighbor()'s "left is index+1" rule). Player 2 here holds 5
+     * cards against the bot's own 2 (Rationalization + Chivalry) --
+     * RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) worth of edge --
+     * which 'rotate' toward 'right' is what actually routes player 2's
+     * own hand onto the bot (see rationalizationStealDirection()'s own
+     * docblock for why the direction is the OPPOSITE side from where the
+     * giving neighbor sits). This also proves Rationalization gets
+     * PRIORITIZED (chosen over Chivalry, which alone would otherwise tie
+     * it on printed value) once a trigger is actually live, not just
+     * "eventually played last".
+     */
+    public function testChooseActionRotatesTowardAnOverstuffedLeftHandNeighbor(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 4],
+            2 => [38, 39, 20, 7, 3],
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'right'], $action['choices']);
+    }
+
+    /** Mirror of the left-neighbor case above -- player 3 (the bot's own RIGHT neighbor) overstuffed instead, resolved via 'left'. */
+    public function testChooseActionRotatesTowardAnOverstuffedRightHandNeighbor(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 4],
+            3 => [38, 39, 20, 7, 3],
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
+    }
+
+    /** When both neighbors qualify, the direction that routes the LARGER of the two hands onto the bot wins. */
+    public function testChooseActionPrefersTheLargerOverstuffedNeighborWhenBothQualify(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 4],
+            2 => [38, 39, 20, 7, 3], // 5 cards -- qualifies, would resolve via 'right'
+            3 => [38, 39, 20, 7, 3, 8, 9], // 7 cards -- qualifies too, and bigger; resolves via 'left'
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(49, $action['card_id']);
+        self::assertSame(['mode' => 'rotate', 'direction' => 'left'], $action['choices']);
+    }
+
+    /** Exactly RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE (3) more cards is enough to qualify -- 2 more is not. */
+    public function testChooseActionDoesNotRotateForAnUnderstuffedNeighbor(): void
+    {
+        $state = $this->boardState(hands: [
+            1 => [49, 4],
+            2 => [38, 39, 20, 7], // only 2 more than the bot's own 2 -- short of the 3-card threshold
+        ]);
+
+        $action = $this->bot->chooseAction($state, [49, 4], 1);
+
+        self::assertSame(4, $action['card_id'], 'no trigger applies, so Rationalization should still be saved for last');
+    }
 }
