@@ -556,16 +556,18 @@ final class BotPlayerServiceTest extends TestCase
      * With no opponent holding any card at all, targeting anyone would
      * be a pure no-op (IntimidationEffect's own pendingDecisionsFor()
      * silently skips an empty-handed target), so Intimidation is
-     * deprioritized behind Pacifism (id 20, value 1, plain filler) --
-     * "other plays should be prioritized above it" per the maintainer.
+     * deprioritized behind Spite (id 76, value 1, plain filler -- not
+     * Pacifism, which is no longer a neutral filler itself now that it
+     * has its own bespoke targeting policy) -- "other plays should be
+     * prioritized above it" per the maintainer.
      */
     public function testChooseActionDeprioritizesIntimidationWhenNoOpponentHasACard(): void
     {
-        $state = $this->boardState(hands: [1 => [67, 20]]);
+        $state = $this->boardState(hands: [1 => [67, 76]]);
 
-        $action = $this->bot->chooseAction($state, [67, 20], 1);
+        $action = $this->bot->chooseAction($state, [67, 76], 1);
 
-        self::assertSame(20, $action['card_id']);
+        self::assertSame(76, $action['card_id']);
     }
 
     /**
@@ -609,7 +611,9 @@ final class BotPlayerServiceTest extends TestCase
      * here, the same distinction Cynicism's own recipient search already
      * draws. Player 2 (the bot's own teammate) has a card; player 3 (the
      * only actual opponent) has none -- no valid target exists, so
-     * Intimidation is deprioritized behind Pacifism.
+     * Intimidation is deprioritized behind Spite (id 76, value 1, plain
+     * filler -- see testChooseActionDeprioritizesIntimidationWhenNoOpponentHasACard()'s
+     * own docblock for why not Pacifism).
      */
     public function testChooseActionDoesNotCountATeammatesHandAsAValidIntimidationTarget(): void
     {
@@ -617,13 +621,13 @@ final class BotPlayerServiceTest extends TestCase
             $this->sampleCatalog(),
             DefaultEffectRegistry::build(),
             [1, 2, 3],
-            hands: [1 => [67, 20], 2 => [8]],
+            hands: [1 => [67, 76], 2 => [8]],
             teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
         );
 
-        $action = $this->bot->chooseAction($state, [67, 20], 1);
+        $action = $this->bot->chooseAction($state, [67, 76], 1);
 
-        self::assertSame(20, $action['card_id']);
+        self::assertSame(76, $action['card_id']);
     }
 
     /**
@@ -643,20 +647,21 @@ final class BotPlayerServiceTest extends TestCase
 
     /**
      * With no opponent holding any card at all, Paranoia is
-     * deprioritized behind Pacifism (id 20, value 1, plain filler) --
-     * "other plays should be prioritized above it" per the maintainer.
-     * Unlike Intimidation, targeting an untargetable player here
-     * wouldn't just be a no-op -- ParanoiaEffect::afterPlaying() throws
-     * against an empty hand -- so this also avoids an outright illegal
-     * play.
+     * deprioritized behind Spite (id 76, value 1, plain filler -- see
+     * testChooseActionDeprioritizesIntimidationWhenNoOpponentHasACard()'s
+     * own docblock for why not Pacifism) -- "other plays should be
+     * prioritized above it" per the maintainer. Unlike Intimidation,
+     * targeting an untargetable player here wouldn't just be a no-op --
+     * ParanoiaEffect::afterPlaying() throws against an empty hand -- so
+     * this also avoids an outright illegal play.
      */
     public function testChooseActionDeprioritizesParanoiaWhenNoOpponentHasACard(): void
     {
-        $state = $this->boardState(hands: [1 => [71, 20]]);
+        $state = $this->boardState(hands: [1 => [71, 76]]);
 
-        $action = $this->bot->chooseAction($state, [71, 20], 1);
+        $action = $this->bot->chooseAction($state, [71, 76], 1);
 
-        self::assertSame(20, $action['card_id']);
+        self::assertSame(76, $action['card_id']);
     }
 
     /**
@@ -697,7 +702,9 @@ final class BotPlayerServiceTest extends TestCase
      * the maintainer means neither the bot itself nor a teammate. Player
      * 2 (the bot's own teammate) has a card; player 3 (the only actual
      * opponent) has none -- no valid target exists, so Paranoia is
-     * deprioritized behind Pacifism.
+     * deprioritized behind Spite (id 76, value 1, plain filler -- see
+     * testChooseActionDeprioritizesIntimidationWhenNoOpponentHasACard()'s
+     * own docblock for why not Pacifism).
      */
     public function testChooseActionDoesNotCountATeammatesHandAsAValidParanoiaTarget(): void
     {
@@ -705,13 +712,127 @@ final class BotPlayerServiceTest extends TestCase
             $this->sampleCatalog(),
             DefaultEffectRegistry::build(),
             [1, 2, 3],
-            hands: [1 => [71, 20], 2 => [8]],
+            hands: [1 => [71, 76], 2 => [8]],
             teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
         );
 
-        $action = $this->bot->chooseAction($state, [71, 20], 1);
+        $action = $this->bot->chooseAction($state, [71, 76], 1);
+
+        self::assertSame(76, $action['card_id']);
+    }
+
+    /**
+     * Pacifism's own "always suppress an opponent's mood" policy
+     * (confirmed by the maintainer): player 2 has Dignity (id 8, value
+     * 3) in play, the only legal, non-teammate target.
+     */
+    public function testChooseActionTargetsAnOpponentsMoodWhenPlayingPacifism(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [8]]);
+        $state->moveHandToInPlay(2, 8);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
 
         self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [8]], $action['choices']);
+    }
+
+    /**
+     * "One mood from each of two opponents, when possible" per the
+     * maintainer: player 2 has Dignity (id 8, value 3) in play and
+     * player 3 has Discipline (id 9, value 6) -- CardChoiceSchema's own
+     * `distinct_owners` constraint already forbids two from the same
+     * player, so filling both target slots here means one from each.
+     * Sorted highest-value first (player 3's own Discipline, then player
+     * 2's own Dignity), proving "the highest point opponent cards should
+     * be targeted" holds across different opponents too, not just within
+     * one opponent's own moods (see the next test for that half).
+     */
+    public function testChooseActionTargetsOneMoodFromEachOfTwoOpponentsWhenPlayingPacifism(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [8], 3 => [9]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(3, 9);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [9, 8]], $action['choices']);
+    }
+
+    /**
+     * When a single opponent has multiple moods in play, Pacifism only
+     * ever suppresses that opponent's own HIGHEST-value one (per the
+     * maintainer) -- CardChoiceSchema's own `distinct_owners` constraint
+     * forbids taking both anyway, so Discipline (id 9, value 6) beats
+     * Dignity (id 8, value 3), both owned by player 2.
+     */
+    public function testChooseActionTargetsTheHighestValueMoodWhenOneOpponentHasSeveral(): void
+    {
+        $state = $this->boardState(hands: [1 => [20], 2 => [8, 9]]);
+        $state->moveHandToInPlay(2, 8);
+        $state->moveHandToInPlay(2, 9);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [9]], $action['choices']);
+    }
+
+    /**
+     * With no non-teammate opponent holding any mood in play at all,
+     * suppressing nothing would be the only outcome, so Pacifism is
+     * deprioritized behind Spite (id 76, value 1, plain filler) --
+     * "other plays should be prioritized above it" per the maintainer.
+     */
+    public function testChooseActionDeprioritizesPacifismWhenNoOpponentHasAMoodInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [20, 76]]);
+
+        $action = $this->bot->chooseAction($state, [20, 76], 1);
+
+        self::assertSame(76, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Pacifism is still played --
+     * deprioritized WHEN, never skipped outright. No opponent has a
+     * mood in play, so its own optional field stays unfilled.
+     */
+    public function testChooseActionStillPlaysPacifismUnfilledWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [20]]);
+
+        $action = $this->bot->chooseAction($state, [20], 1);
+
+        self::assertSame(20, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * A teammate's mood in play doesn't count as a valid target, even
+     * though Pacifism's own CardChoiceSchema field is scope 'any' (its
+     * printed text says "choose up to two players" with no restriction
+     * against the acting player or a teammate) -- "an opponent" per the
+     * maintainer means neither. Player 2 (the bot's own teammate) has
+     * Dignity in play; player 3 (the only actual opponent) has no mood
+     * at all -- no valid target exists, so Pacifism is deprioritized
+     * behind Spite.
+     */
+    public function testChooseActionDoesNotCountATeammatesMoodAsAValidPacifismTarget(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [20, 76], 2 => [8]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 8);
+
+        $action = $this->bot->chooseAction($state, [20, 76], 1);
+
+        self::assertSame(76, $action['card_id']);
     }
 
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void

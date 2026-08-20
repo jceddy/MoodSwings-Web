@@ -1313,6 +1313,43 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::pacifismTargetMoodIds()
+     * (see BotPlayerServiceTest for the policy itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> playMood() ->
+     * PacifismEffect::afterPlaying() request lifecycle -- the human
+     * opponent has two moods in play (Discipline, value 6, and Dignity,
+     * value 3), so the bot's own optional target_mood_ids field gets
+     * volunteered for with the human's own single HIGHEST-value mood
+     * (Discipline), leaving Dignity untouched.
+     */
+    public function testBotSuppressesTheHumanOpponentsHighestValueMoodWhenPlayingPacifism(): void
+    {
+        $u1 = $this->insertUser('human15');
+        $botUserId = $this->insertBotUser('bot13');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 20, 'hand', $botPlayerId); // Pacifism
+        $this->insertGameCard($gameId, 9, 'in_play', $p1); // human's own Discipline, value 6 -- the suppression target
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // human's own Dignity, value 3 -- should stay unsuppressed
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 20));
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $byCatalogId = [];
+        foreach ($inPlay as $mood) {
+            $byCatalogId[$mood['catalog_card_id']] = $mood;
+        }
+
+        self::assertTrue($byCatalogId[9]['is_suppressed'] ?? null, 'Discipline (the higher-value mood) should be suppressed by Pacifism');
+        self::assertFalse($byCatalogId[8]['is_suppressed'] ?? true, 'Dignity should NOT be suppressed -- Pacifism only took the one higher-value target');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::cynicismHasAGoodReasonToPlayNow()/
      * cynicismChoices() (see BotPlayerServiceTest for the policy itself
      * in isolation) through the FULL advanceAutomatedTurns() -> playMood()

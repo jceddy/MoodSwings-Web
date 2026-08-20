@@ -5227,7 +5227,33 @@ entirely BEFORE any `BoardState`/round exists for a game:
   hasn't submitted; or already started by a concurrent request) --
   a bot-seated draft has no browser polling on the bot's own behalf to
   do what the frontend's own `autoStartGameIfReady()` does for a human's
-  client, so this is that function's server-side analog. `draftMatchBotUserIds(int
+  client, so this is that function's server-side analog.
+
+  **Open Team Play only** (confirmed by the maintainer):
+  `awaitingHumanTeammatesDraftDeck(int $gameId, int $draftMatchId,
+  string $format, int $botUserId): bool` gates that same `'deck_building'`
+  submission a step further -- a bot whose own `openTeamPlayTeammateUserId()`
+  is a HUMAN who hasn't submitted a deck yet is skipped over for now
+  (left with `deck_card_ids` still `NULL`, exactly like a bot already
+  handled or a human still drafting), rather than submitted immediately.
+  Without this, a bot would always beat its own human teammate to
+  deck-building -- `advanceBotDraftTurn()` runs the instant drafting
+  ends, long before any human could realistically act -- quietly
+  claiming cards from its own drafted pool before the human has had any
+  real chance to see what their own teammate ends up keeping. See
+  `submitDraftDeck()`'s own docblock for why submission ORDER actually
+  matters between two teammates: the second submitter's own pickable
+  pool is trimmed by whatever the first submitter's already-chosen deck
+  claims out of the team's shared pool, so submitting first is a real
+  advantage worth leaving to the human. A teammate who is ALSO a bot
+  never blocks this (two bots waiting on each other would deadlock
+  forever), and neither does a teammate -- human or bot -- who has
+  ALREADY submitted; `openTeamPlayTeammateUserId()` itself already
+  returns `null` for every format other than `'team'`, so this never
+  applies outside Open Team Play. Once the human's own deck lands
+  (`submitDraftDeck()` followed by the route's own `advanceAutomatedTurns()`
+  call, same as every other draft route), the very next
+  `advanceBotDraftTurn()` call finds the bot free to submit. `draftMatchBotUserIds(int
   $draftMatchId): array` (queried against `draft_match_players` joined
   to `users.is_bot`, since draft state throughout this file is keyed by
   `user_id`, not `game_players.id` -- see `submitQuickDraftPick()`'s own

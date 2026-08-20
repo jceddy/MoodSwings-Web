@@ -63,6 +63,12 @@ final class BotDraftGameplayIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE draft_tiered_rotisserie_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
+        $pdo->exec('TRUNCATE TABLE game_events');
+        $pdo->exec('TRUNCATE TABLE game_initial_card_passes');
+        $pdo->exec('TRUNCATE TABLE game_team_decisions');
+        $pdo->exec('TRUNCATE TABLE game_pending_decisions');
+        $pdo->exec('TRUNCATE TABLE game_pending_decision_batches');
+        $pdo->exec('TRUNCATE TABLE game_round_scores');
         $pdo->exec('TRUNCATE TABLE game_cards');
         $pdo->exec('TRUNCATE TABLE game_rounds');
         $pdo->exec('TRUNCATE TABLE game_players');
@@ -192,6 +198,91 @@ final class BotDraftGameplayIntegrationTest extends TestCase
         $this->games->submitDraftDeck($gameId, $human, $humanDrafted);
         $this->games->advanceAutomatedTurns($gameId);
 
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * Open Team Play (confirmed by the maintainer): a bot whose own
+     * teammate is a human should wait for that human to submit their own
+     * deck first, rather than always beating them to it the instant
+     * drafting ends -- see GameService::awaitingHumanTeammatesDraftDeck()'s
+     * own docblock for why submission order matters here. Team 1 pairs
+     * the human with a bot (partnerUserId); team 2 is two MORE bots
+     * (bot2/bot3), included specifically to prove this gating is about a
+     * HUMAN teammate, not "any teammate" -- bot2/bot3 submit their own
+     * decks immediately once drafting ends, with no human anywhere on
+     * their own team to wait for, while the human's own partner keeps
+     * its deck_card_ids NULL until the human submits theirs.
+     *
+     * A homogeneous custom pool (Charity only, not 'random_48') is used
+     * deliberately -- the final assertion below needs the game to
+     * actually reach 'in_progress' (proving the bot's own deferred
+     * submission genuinely unblocks, not just that deck_card_ids got
+     * set), and advanceAutomatedTurns() keeps driving real automated
+     * turns for the game's 3 seated bots in that same call once it
+     * starts. A random pool risks drafting a card whose own pending-
+     * decision handling isn't otherwise exercised by 3 bots playing
+     * unattended for many turns in a row -- an unrelated concern this
+     * test has no interest in; a single simple, heavily-tested card
+     * keeps the whole match deterministic and safe.
+     */
+    public function testBotWaitsForItsHumanTeammateToSubmitADeckFirstInOpenTeamPlay(): void
+    {
+        $human = $this->insertUser('human2');
+        $bot = $this->insertBotUser('bot4');
+        $bot2 = $this->insertBotUser('bot5');
+        $bot3 = $this->insertBotUser('bot6');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot, $bot2, $bot3],
+            format: 'team',
+            deckType: 'rotisserie_draft',
+            partnerUserId: $bot,
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: "100 Charity\n",
+            rotisserieDraftCutoffCount: 13,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 100; $i++) {
+            $stateStmt = $this->pdo->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+            $stateStmt->execute(['id' => $draftMatchId]);
+            $state = $stateStmt->fetch();
+
+            if ($state === false) {
+                break; // drafting itself has finished -- only deck submission/game start left
+            }
+
+            if ((int) $state['current_turn_user_id'] === $human) {
+                $pool = array_map(intval(...), json_decode((string) $state['pool_card_ids'], true));
+                $this->games->submitRotisserieDraftPick($gameId, $human, $pool[0]);
+            }
+
+            $this->games->advanceAutomatedTurns($gameId);
+        }
+
+        $deckCardIdsFor = function (int $userId) use ($draftMatchId): ?string {
+            $stmt = $this->pdo->prepare('SELECT deck_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+            $stmt->execute(['id' => $draftMatchId, 'user_id' => $userId]);
+
+            return $stmt->fetchColumn() ?: null;
+        };
+
+        self::assertNotNull($deckCardIdsFor($bot2), "bot2's own deck should be submitted immediately -- its own teammate (bot3) isn't human");
+        self::assertNotNull($deckCardIdsFor($bot3), "bot3's own deck should be submitted immediately -- its own teammate (bot2) isn't human");
+        self::assertNull($deckCardIdsFor($bot), "the human's own bot partner should still be waiting -- the human hasn't submitted a deck yet");
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+
+        $humanDraftedStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $humanDraftedStmt->execute(['id' => $draftMatchId, 'user_id' => $human]);
+        $humanDrafted = array_map(intval(...), json_decode((string) $humanDraftedStmt->fetchColumn(), true));
+
+        $this->games->submitDraftDeck($gameId, $human, $humanDrafted);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        self::assertNotNull($deckCardIdsFor($bot), "the bot partner should submit its own deck now that its human teammate has submitted theirs");
         self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
     }
 

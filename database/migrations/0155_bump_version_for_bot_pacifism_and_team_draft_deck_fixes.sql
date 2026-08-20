@@ -1,0 +1,27 @@
+-- Two practice-bot fixes:
+--
+-- 1. Practice bots previously always left Pacifism's own optional
+-- target_mood_ids field unfilled, since it wasn't in
+-- ALWAYS_FILLED_OPTIONAL_FIELDS or EARLY_PRIORITY_EFFECT_KEYS' own
+-- choice-building special cases -- Pacifism was always played with no
+-- mood suppressed at all, accomplishing nothing. BotPlayerService now
+-- always suppresses up to two non-teammate opponents' own highest-value
+-- in-play moods (pacifismTargetMoodIds(), preferring one mood from each
+-- of two different opponents over two from a single opponent whenever
+-- possible), and deprioritizes Pacifism (the same PHP_INT_MIN treatment
+-- Rationalization/Cynicism/Intimidation/Paranoia get) whenever no
+-- non-teammate opponent has any mood in play at all, so other plays get
+-- prioritized above it instead.
+--
+-- 2. Open Team Play: a bot whose own teammate is a human who hasn't yet
+-- submitted their own draft deck now waits for that human to submit
+-- first, rather than always beating them to it the instant drafting
+-- ends (awaitingHumanTeammatesDraftDeck()) -- submission order matters
+-- in Open Team Play, since the second submitter's own pickable pool is
+-- trimmed by whatever the first submitter's deck already claims from
+-- the team's shared pool.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0154 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.11' WHERE id = 1;

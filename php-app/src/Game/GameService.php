@@ -4694,7 +4694,7 @@ final class GameService
         $match = $this->fetchDraftMatch($draftMatchId);
 
         if ($match['status'] === 'deck_building') {
-            $result = $this->advanceBotDraftDeck($gameId, $draftMatchId, $botUserIds, $game['deck_type']);
+            $result = $this->advanceBotDraftDeck($gameId, $draftMatchId, $botUserIds, $game['deck_type'], $game['format']);
             if ($result !== null) {
                 return $result;
             }
@@ -5003,8 +5003,17 @@ final class GameService
      * just re-submitting the exact same chooseDraftDeck() result all
      * over again (deterministic -- same drafted pool in, same trimmed
      * deck out), never asked to sideboard differently.
+     *
+     * Open Team Play only (confirmed by the maintainer): a bot whose own
+     * teammate is a human who hasn't submitted a deck yet is skipped over
+     * here -- see awaitingHumanTeammatesDraftDeck()'s own docblock for
+     * why -- leaving that bot's own deck_card_ids NULL and moving on to
+     * the next candidate bot instead, the same "one action, let the loop
+     * call back around" shape as skipping a bot that already has a deck
+     * in. Doesn't apply to any other format, since
+     * openTeamPlayTeammateUserId() itself already returns null there.
      */
-    private function advanceBotDraftDeck(int $gameId, int $draftMatchId, array $botUserIds, string $deckType): ?array
+    private function advanceBotDraftDeck(int $gameId, int $draftMatchId, array $botUserIds, string $deckType, string $format): ?array
     {
         $placeholders = implode(',', array_fill(0, count($botUserIds), '?'));
         $stmt = Connection::get()->prepare(
@@ -5017,17 +5026,55 @@ final class GameService
                 continue; // this bot already has a deck submitted for this game
             }
 
+            $botUserId = (int) $row['user_id'];
+            if ($this->awaitingHumanTeammatesDraftDeck($gameId, $draftMatchId, $format, $botUserId)) {
+                continue; // wait for the human teammate to submit their own deck first
+            }
+
             $draftedCardIds = array_map(intval(...), json_decode((string) $row['drafted_card_ids'], true));
             $minDeckSize = self::draftMinDeckSizeFor($deckType);
             $deckCardIds = $this->bots->chooseDraftDeck($draftedCardIds, $minDeckSize, $this->draftBotScoringData());
 
-            $botUserId = (int) $row['user_id'];
             $this->submitDraftDeck($gameId, $botUserId, $deckCardIds);
 
             return ['bot_action' => 'draft_deck', 'user_id' => $botUserId];
         }
 
-        return null; // every seated bot already has a deck in -- only humans left to wait on, if any
+        return null; // every seated bot already has a deck in -- only humans (or a waited-on teammate) left, if any
+    }
+
+    /**
+     * Open Team Play only (issue #362; confirmed by the maintainer):
+     * whether $botUserId should hold off submitting its own draft deck
+     * because its own teammate is a HUMAN who hasn't submitted theirs
+     * yet. advanceBotDraftDeck() runs the instant drafting ends, long
+     * before any human could realistically act -- without this, a bot
+     * would always beat its own human teammate to deck-building, quietly
+     * claiming cards from its own drafted pool before the human has had
+     * any real chance to see what their teammate ends up keeping. See
+     * submitDraftDeck()'s own docblock for why submission ORDER actually
+     * matters between two teammates: the second submitter's own pickable
+     * pool is trimmed by whatever the first submitter's already-chosen
+     * deck claims out of the team's shared pool, so submitting first is
+     * a real advantage worth leaving to the human. A teammate who is
+     * ALSO a bot never blocks this (two bots waiting on each other would
+     * deadlock forever), and neither does a teammate -- human or bot --
+     * who has ALREADY submitted.
+     */
+    private function awaitingHumanTeammatesDraftDeck(int $gameId, int $draftMatchId, string $format, int $botUserId): bool
+    {
+        $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $format, $botUserId);
+        if ($teammateUserId === null) {
+            return false;
+        }
+
+        $stmt = Connection::get()->prepare(
+            'SELECT dmp.deck_card_ids, u.is_bot FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :match_id AND dmp.user_id = :user_id'
+        );
+        $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $teammateUserId]);
+        $teammate = $stmt->fetch();
+
+        return $teammate !== false && !(bool) $teammate['is_bot'] && $teammate['deck_card_ids'] === null;
     }
 
     /**
