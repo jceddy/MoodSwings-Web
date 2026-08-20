@@ -5349,14 +5349,51 @@ since it already holds that dependency):
   Fury ("each player chooses one of their highest value moods and puts
   it into the discard pile" -- every player, including whoever plays
   it, via `RequiresOpponentDecision`, so `CardChoiceSchema` has no entry
-  for it at all) is the one card on this list today: only worth playing
-  if at least one OPPONENT's own highest-value mood is worth MORE than
-  the bot's own highest-value mood (a player with no moods in play
-  counts as `-1`, matching `FuryEffect`'s own sentinel) -- otherwise
-  it's a pure loss, trading the bot's own best mood for something equal
-  or worse. Everything not on this list defaults to "always worth
-  playing," the unconditional "yes" every effect already got before
-  this method existed.
+  for it at all) is worth playing only if at least one OPPONENT's own
+  highest-value mood is worth MORE than the bot's own highest-value mood
+  (a player with no moods in play counts as `-1`, matching `FuryEffect`'s
+  own sentinel) -- otherwise it's a pure loss, trading the bot's own
+  best mood for something equal or worse.
+
+  Avoidance (confirmed by the maintainer) is the second card on this
+  list: unlike Fury it DOES have its own `choice_field` (a required
+  `direction`), but that field alone can't express "don't play this at
+  all" the way an unfilled optional field can, so it needs the same
+  whole-board veto Fury does on top of it.
+  `avoidanceHasAGoodReasonToPlay(BoardState $state, int
+  $botGamePlayerId): bool` -- "each seated player with at least one mood
+  in play (including whoever plays it) gives one of their own moods to
+  their neighbor in a single shared direction" is worth it either if the
+  bot's own cheapest mood to give up (`lowestMoodValueOwnedBy()`, the
+  mirror of `highestMoodValueOwnedBy()` above -- `0`, not `-1`, for a
+  player with no moods in play at all, since `AvoidanceEffect` itself
+  never even asks them for an answer, so there's genuinely nothing lost)
+  is cheap enough not to matter regardless of what comes back
+  (`AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD`, 2, the same reasoning
+  `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE` below already uses for an
+  analogous "is what I'd give up cheap enough" question), OR at least
+  one direction would route back a mood worth MORE than that
+  (`avoidanceReceivedValueFor()` -- since `AvoidanceEffect` moves every
+  giver's own mood to their neighbor IN the chosen direction, the seat
+  that gives TO the bot is the one on the OPPOSITE side, the same
+  `activeNeighbor()`-mirroring `rationalizationStealDirection()` below
+  already relies on for Rationalization's own `'rotate'`; each such
+  giver is assumed to give up their own cheapest mood too, the same
+  `lowestMoodValueOwnedBy()` reasoning applied to whichever neighbor is
+  asked). Otherwise Avoidance just trades the bot's own mood for
+  something equal or worse while also handing every OTHER seated player
+  a free swap they didn't ask for -- a pure loss (or at best a wash)
+  worth skipping. When it IS worth playing, `buildChoicesForCard()`
+  special-cases `effectKey === 'avoidance'` to
+  `avoidanceBestDirection()` rather than falling through to
+  `CardChoiceSchema`'s own generic "first option" default for a
+  required `'mode'` field (the same way `'rationalization'` is special-
+  cased below) -- whichever direction routes back the more valuable
+  mood, `'left'` winning any tie to match that same generic default.
+
+  Everything not on either card's own list above defaults to "always
+  worth playing," the unconditional "yes" every effect already got
+  before this method existed.
   `shouldAttemptValueBoostDiscard(BoardState $state, string $effectKey,
   string $fieldKey, int $cardId, int $botGamePlayerId): bool` is a
   similarly narrow, similarly whole-board policy, but decides WHETHER to

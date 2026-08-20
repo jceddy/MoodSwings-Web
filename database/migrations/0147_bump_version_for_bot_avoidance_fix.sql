@@ -1,0 +1,16 @@
+-- Fixes a real strategic gap reported live: practice bots always played
+-- Avoidance with direction defaulted to 'left' (BotChoiceResolver's own
+-- generic "first option" default for a required 'mode' field) and no
+-- whole-board veto at all -- unlike Fury, Avoidance forces EVERY seated
+-- player with a mood in play to give one away, including whoever plays
+-- it, so playing it blind could trade away the bot's own best mood for
+-- nothing. BotPlayerService::isWorthPlaying() now also vetoes Avoidance
+-- unless the bot's own cheapest mood to give up is low-value enough not
+-- to matter, or at least one direction would route back something worth
+-- more than that -- and buildChoicesForCard() now special-cases
+-- 'avoidance' to actually pick the more profitable direction instead of
+-- always defaulting to 'left'. No schema change of its own -- this
+-- migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0146 already did for their own
+-- schema-less changes.
+UPDATE schema_version SET version = '1.28.3' WHERE id = 1;
