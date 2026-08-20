@@ -4884,6 +4884,77 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A bug caught live, reported by a user: playing Sneakiness and Awe in
+     * the SAME round used to leave Sneakiness's own 'swapScoreWithPlayerId'
+     * effectState tag sitting on the card forever afterward. That tag is
+     * normally cleared by applyScoreSwaps() the instant it's actually
+     * applied -- but Awe skipping the round it was played in means
+     * scoreRoundAndAdvance() takes the skipScoringAndAdvance() branch
+     * instead, which never calls applyScoreSwaps() at all (Sneakiness's
+     * own text is "THIS round, after scoring" -- there IS no scoring this
+     * round for it to hook into). Sneakiness commonly stays in play well
+     * past the round it was played in, so the stale tag used to keep
+     * showing up in "How scoring will be affected" (scoring_effects) for
+     * every later round too, AND -- the real bug, not just a display
+     * glitch -- actually fire for real the next time scoring genuinely
+     * happens, silently swapping that unrelated later round's own outcome.
+     * skipScoringAndAdvance() now clears the tag itself, the same way it
+     * already cleared Awe's own round-level markers.
+     */
+    public function testSneakinessDoesNotSwapAFutureRoundsScoreWhenItsOwnRoundWasSkippedByAwe(): void
+    {
+        $u1 = $this->insertUser('sneakawe1');
+        $u2 = $this->insertUser('sneakawe2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $sneakinessId = $this->insertGameCard($gameId, 51, 'hand', $p1); // Sneakiness, value 5
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p2); // Awe, value 4
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // vanilla common, value 4 -- round 2
+        $indifferenceId = $this->insertGameCard($gameId, 44, 'hand', $p2); // vanilla common, value 4 -- round 2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Round 1: p1 plays Sneakiness (tagging a swap with p2), then p2
+        // plays Awe (skipping round 1's own scoring entirely).
+        $this->games->playMood($gameId, $p1, $sneakinessId, ['opponent_player_id' => $p2]);
+        $this->games->playMood($gameId, $p2, $aweId, ['target_player_id' => $p1]);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']); // Awe's own choice
+
+        // The stale tag used to still show up here, describing a swap that
+        // will never actually happen.
+        $effects = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
+        self::assertSame([], $effects, 'Sneakiness\'s own one-time swap should not still be pending after Awe skipped its round');
+
+        // Round 2 scores for real -- Sneakiness (5) and Awe (4) are both
+        // still in play from round 1, plus each player's fresh round-2
+        // card.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $result = $this->games->playMood($gameId, $p2, $indifferenceId, []);
+
+        self::assertTrue($result['round_scored']);
+
+        $scoresStmt = $this->pdo->prepare(
+            "SELECT s.game_player_id, s.score FROM game_round_scores s JOIN game_rounds r ON r.id = s.game_round_id
+             WHERE r.game_id = :game_id AND r.round_number = 2"
+        );
+        $scoresStmt->execute(['game_id' => $gameId]);
+        $scores = array_column($scoresStmt->fetchAll(), 'score', 'game_player_id');
+
+        self::assertSame(9, (int) $scores[$p1], 'p1: Sneakiness (5) + Complacency (4) -- NOT swapped with p2');
+        self::assertSame(8, (int) $scores[$p2], 'p2: Awe (4) + Indifference (4) -- NOT swapped with p1');
+    }
+
+    /**
      * A bug caught live: Awe's own effect triggers "after playing" -- its
      * choice of who goes first next round is already fully locked in the
      * instant it resolves, unlike Honor's genuinely "while in play"

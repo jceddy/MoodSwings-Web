@@ -8360,10 +8360,31 @@ final class GameService
      * state here, since the round it belongs to is about to become
      * 'scored' and BoardStateRepository::load() only ever reads the
      * latest 'in_progress' one; the fresh round created below simply
-     * starts with it unset. The per-card clearing loop just below is
-     * legacy cleanup only, for a game whose Awe resolved before this
-     * round-level tracking existed -- see BoardState::
+     * starts with it unset. The `skipScoringThisRound`/
+     * `oneTimeFirstPlayerOverride` half of the per-card clearing loop just
+     * below is legacy cleanup only, for a game whose Awe resolved before
+     * this round-level tracking existed -- see BoardState::
      * $skipScoringThisRound's own docblock.
+     *
+     * The `swapScoreWithPlayerId`/`awardsExtraWin` half is NOT legacy,
+     * though -- a real bug, reported live: Sneakiness's "this round, after
+     * scoring, swap your score..." and Corruption's "the winner of the
+     * CURRENT round wins two..." are both explicitly THIS round's own
+     * one-time effects, normally cleared by applyScoreSwaps()/
+     * consumeExtraWinMarker() the moment they're actually applied -- but
+     * neither of those ever runs on this (skipped-scoring) path, since
+     * this method entirely bypasses finishScoringAndAdvance(), where both
+     * live. Playing Sneakiness/Corruption in the SAME round as Awe used to
+     * leave their own tag sitting on the card indefinitely (both cards
+     * commonly stay in play well past the round they were played), so
+     * they'd keep showing in "How scoring will be affected"
+     * (scoringEffectEntries()) forever after -- and, far worse than a
+     * cosmetic display bug, actually fire for real on whatever LATER round
+     * eventually does score normally, silently swapping/doubling that
+     * unrelated round's own outcome. Clearing both tags here matches "no
+     * one wins or loses this round" at face value: if there's no scoring,
+     * there's nothing for either effect to modify, so neither should
+     * survive to ambush a round it was never meant to touch.
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
@@ -8378,6 +8399,12 @@ final class GameService
             if ($state->effectState($mood->cardId, 'skipScoringThisRound')) {
                 $state->clearEffectState($mood->cardId, 'skipScoringThisRound');
                 $state->clearEffectState($mood->cardId, 'oneTimeFirstPlayerOverride');
+            }
+            if ($state->effectState($mood->cardId, 'swapScoreWithPlayerId') !== null) {
+                $state->clearEffectState($mood->cardId, 'swapScoreWithPlayerId');
+            }
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $state->clearEffectState($mood->cardId, 'awardsExtraWin');
             }
         }
 

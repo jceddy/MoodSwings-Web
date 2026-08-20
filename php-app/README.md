@@ -912,9 +912,20 @@ Passion (likewise, since their "you may" option recurs every round), and
 Sneakiness/Awe/Corruption (only for as long as their one-time
 round-scoped `effectState` tag stays set — `swapScoreWithPlayerId`/
 `skipScoringThisRound`/`awardsExtraWin` — since `applyScoreSwaps()`/
-`skipScoringAndAdvance()`/`consumeExtraWinMarker()` each clear their own
-tag once the round it covers actually scores, so a stale Sneakiness from
-three rounds ago never lingers here). None of this is hidden information
+`consumeExtraWinMarker()` each clear their own tag once the round it
+covers actually scores, so a stale Sneakiness from three rounds ago never
+lingers here). A bug caught live, reported by a user: playing Sneakiness
+or Corruption in the SAME round as Awe used to leave that tag stuck
+forever, since `applyScoreSwaps()`/`consumeExtraWinMarker()` only ever
+run inside `finishScoringAndAdvance()`, and Awe's own skip-scoring path
+(`skipScoringAndAdvance()`) bypasses that method entirely — the round
+never actually scores, so neither one-time tag ever got the chance to
+fire *or* clear, leaving it to keep showing here indefinitely and then
+genuinely misfire on whatever LATER round finally did score normally.
+`skipScoringAndAdvance()` now clears both tags itself, alongside its own
+Awe-specific ones, matching "no one wins or loses this round" — if
+there's no scoring, there's nothing left for either effect to modify.
+None of this is hidden information
 — an in-play card and the choice it was played with are both already
 public — so every viewer sees the same list. The `effect_key` lookup goes
 through `BoardState::effectiveCardId()`, mirroring `RoundScorer::score()`'s
@@ -5682,6 +5693,33 @@ since it already holds that dependency):
   never forces a discard the way Suspicion does -- so once a valid target
   exists it reverts to plain `baseValue()`, no boost, just no longer
   vetoed.
+
+  **Creativity** (confirmed by the maintainer) gets its own targeting
+  exception via `creativityBestCopyTargetId()`: `buildChoicesForCard()`
+  special-cases `effectKey === 'creativity'` to it instead of falling
+  through to `CardChoiceSchema`'s generic per-field loop (which, since
+  `copy_card_id` is optional and not in `ALWAYS_FILLED_OPTIONAL_FIELDS`,
+  would otherwise always leave Creativity unfilled -- just a blank blue
+  card worth 0). Generally the highest-value mood currently in play,
+  regardless of owner -- unlike Intimidation/Paranoia/Pacifism, there's
+  no opponent-only restriction here (`CardChoiceSchema`'s own field is
+  scope `'any'` with no `excludes_teammate`), so copying the bot's own
+  best mood is just as valid a pick as copying an opponent's. "Generally"
+  because it deliberately skips any candidate whose own printed ability
+  has a "to play" cost (Bliss, Envy, Exhilaration, Guile, Neurosis,
+  Regret, Self-Loathing) -- `MoodPlayService::playMood()` pays a
+  Creativity-copy's cost against the COPIED card's own
+  `canPayToPlayCost()`, not Creativity's (always payable, since
+  Creativity has no printed cost of its own), so picking one of these
+  without knowing whether the bot could actually pay it risks turning a
+  legal Creativity play into an illegal one. Resolved through
+  `effectiveCardId()` throughout (both the to-play-cost check and the
+  live `valueOf()` comparison), so copying a Creativity that's itself
+  already copying something targets -- and is scored as -- whatever THAT
+  card actually is, never blank Creativity. `null` (leaving
+  `copy_card_id` unfilled, the same default as before this policy
+  existed) only when nothing is in play yet, or every in-play mood has a
+  to-play cost.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
