@@ -4802,6 +4802,23 @@ final class GameService
      * shared deck itself runs out -- see submitWinstonDraftPick()'s own
      * take/pass branches) always passes outright rather than asking
      * BotPlayerService to score an empty list.
+     *
+     * `chooseWinstonAction()`'s own docblock already documents that a
+     * 'pass' it returns isn't always legal to actually act on, and that
+     * downgrading an illegal one to 'take' is this method's job, not
+     * its -- this is that downgrade. Once the shared deck itself is
+     * empty, `submitWinstonDraftPick()`'s own pile-3-decline branch only
+     * fires its "mandatory" deck draw `if ($deck !== [])`; with an empty
+     * deck that draw silently does nothing, so passing every remaining
+     * pile this turn (this one plus whichever of pile_2/pile_3 haven't
+     * been reached yet, none of which can ever grow again once the deck
+     * that feeds them is empty) would end the bot's whole turn with
+     * ZERO cards despite a real, takeable pile having been available --
+     * reported live. So once the deck reads empty, a 'pass' on THIS pile
+     * only stands if at least one LATER pile (current+1..3) still has a
+     * card of its own to fall back on; otherwise this is the bot's last
+     * chance this turn and 'take' is forced instead, regardless of what
+     * `chooseWinstonAction()` itself said the pile was worth.
      */
     private function advanceBotWinstonDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
     {
@@ -4826,7 +4843,34 @@ final class GameService
         $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentPlayerUserId);
         $action = $this->bots->chooseWinstonAction($pileCardIds, $draftedSoFar, $this->draftBotScoringData());
 
+        if ($action === 'pass' && $this->winstonDraftPassWouldForfeitTheWholeTurn($state, $currentPileNumber)) {
+            $action = 'take';
+        }
+
         return $this->submitWinstonDraftPick($gameId, $currentPlayerUserId, $action);
+    }
+
+    /**
+     * @see advanceBotWinstonDraftPick()'s own docblock -- true only when
+     * the shared deck is already empty (so pile 3's own "mandatory" draw
+     * would come up empty too) AND every later pile this turn could
+     * still reach (current+1..3) is itself already empty, meaning no
+     * remaining decision this turn could still produce a card.
+     */
+    private function winstonDraftPassWouldForfeitTheWholeTurn(array $winstonState, int $currentPileNumber): bool
+    {
+        $deck = json_decode((string) $winstonState['remaining_deck_card_ids'], true);
+        if ($deck !== []) {
+            return false;
+        }
+
+        for ($laterPileNumber = $currentPileNumber + 1; $laterPileNumber <= 3; $laterPileNumber++) {
+            if (json_decode((string) $winstonState["pile_{$laterPileNumber}_card_ids"], true) !== []) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

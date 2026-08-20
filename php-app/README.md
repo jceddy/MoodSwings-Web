@@ -5165,7 +5165,26 @@ entirely BEFORE any `BoardState`/round exists for a game:
   own best card beats the catalog-wide average `draft_priority_score`
   (computed from the data itself, not a hardcoded cutoff) -- a pile only
   ever grows as it's passed, so this never discards a merely-small pile,
-  only one that's genuinely not worth having yet.
+  only one that's genuinely not worth having yet. It only ever answers
+  the pure "is this pile good enough" question, though -- it has no view
+  of the shared deck or the OTHER piles, so it can't tell whether a
+  'pass' here is actually safe to act on right now. That's
+  `GameService::advanceBotWinstonDraftPick()`'s own job (confirmed by
+  the maintainer, a real bug reported live): once the shared deck itself
+  reads empty, `submitWinstonDraftPick()`'s own pile-3-decline branch
+  only fires its "mandatory" deck draw `if ($deck !== [])`, so with an
+  empty deck that draw silently does nothing -- a bot that blindly
+  followed `chooseWinstonAction()` through every remaining pile this
+  turn (none of which can ever grow again once the deck feeding them is
+  dry) could end its whole turn with zero cards despite a real, takeable
+  pile having been sitting right there. So whenever the deck is already
+  empty, `winstonDraftPassWouldForfeitTheWholeTurn()` checks whether any
+  LATER pile this turn (current+1..3) still has a card of its own to
+  fall back on; if none do, this is the bot's last chance and 'take' is
+  forced instead, regardless of what `chooseWinstonAction()` said the
+  pile was worth. An empty CURRENT pile is unaffected by any of this --
+  there's nothing to take either way, so it always just passes (see
+  `advanceBotWinstonDraftPick()`'s own docblock).
   `chooseGridLine(array $candidateLines, ...): array{axis, index}` picks
   Grid Draft's own row/column by highest TOTAL score across a line's
   non-null cells (not an average -- a longer line of decent cards

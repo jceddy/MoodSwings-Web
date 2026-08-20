@@ -272,6 +272,51 @@ final class BotDraftGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * A real bug reported live: with the shared deck already empty,
+     * declining pile 3 gets nothing back (submitWinstonDraftPick()'s own
+     * "mandatory" deck draw only fires `if ($deck !== [])`) -- so if this
+     * is also the bot's last remaining pile this turn (pile_1/pile_2
+     * already empty themselves, having been taken earlier while the deck
+     * was already dry), a bot that just follows chooseWinstonAction()'s
+     * own plain "is this pile good enough" scoring could pass on its
+     * only real chance and end the turn with literally zero cards.
+     * Altruism (id 1, draft_priority_score 1) sits well below the
+     * catalog's own average, so chooseWinstonAction() would naturally
+     * say 'pass' here on its own -- advanceBotWinstonDraftPick()'s own
+     * winstonDraftPassWouldForfeitTheWholeTurn() guard is what forces
+     * 'take' instead.
+     */
+    public function testWinstonDraftBotTakesItsLastChanceRatherThanForfeitingTheWholeTurn(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->pdo->prepare(
+            "UPDATE draft_winston_state SET current_player_user_id = :bot, current_pile_number = 3,
+                remaining_deck_card_ids = '[]', pile_1_card_ids = '[]', pile_2_card_ids = '[]', pile_3_card_ids = '[1]'
+             WHERE draft_match_id = :match_id"
+        )->execute(['bot' => $bot, 'match_id' => $draftMatchId]);
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $draftedStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $draftedStmt->execute(['id' => $draftMatchId, 'user_id' => $bot]);
+        $botDrafted = array_map(intval(...), json_decode((string) $draftedStmt->fetchColumn(), true));
+
+        self::assertContains(1, $botDrafted, "the bot should have taken pile 3 rather than forfeiting its only remaining chance this turn");
+    }
+
+    /**
      * Issue #359 exposed a pre-existing gap: recordMatchCompletionStats()
      * (lifetime match_wins/match_losses, issue #106) had no containsBot
      * check of its own -- harmless before this issue, since a draft
