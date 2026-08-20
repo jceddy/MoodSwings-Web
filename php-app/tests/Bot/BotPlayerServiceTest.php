@@ -852,6 +852,72 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['given_card_id' => 8], $answer);
     }
 
+    // -- Disillusionment (confirmed by the maintainer) --------------------
+
+    private function disillusionmentColorField(int $playerId): array
+    {
+        return [
+            'key' => "chosen_color_{$playerId}",
+            'type' => 'mode',
+            'options' => ['white', 'blue', 'black', 'red', 'green'],
+            'required' => false,
+        ];
+    }
+
+    public function testChooseDecisionAnswerPicksTheFirstSafeColorForDisillusionment(): void
+    {
+        $state = $this->boardState(hands: [1 => [8]]); // Dignity, white
+        $state->moveHandToInPlay(1, 8);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        // white is unsafe (the bot's own mood) -- blue is next in options order
+        self::assertSame(['chosen_color_1' => 'blue'], $answer);
+    }
+
+    public function testChooseDecisionAnswerIgnoresAnOpponentsColorForDisillusionment(): void
+    {
+        $state = $this->boardState(hands: [1 => [8], 2 => [27]]); // bot: Dignity (white), opponent: Ambivalence (blue)
+        $state->moveHandToInPlay(1, 8);
+        $state->moveHandToInPlay(2, 27);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        // the opponent's blue mood is no reason to avoid blue -- only the
+        // bot's own white mood is unsafe here
+        self::assertSame(['chosen_color_1' => 'blue'], $answer);
+    }
+
+    public function testChooseDecisionAnswerAvoidsATeammatesColorForDisillusionment(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [2 => [8]], // teammate's Dignity, white
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 8);
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        // white is unsafe (a teammate's mood, even though the bot itself
+        // has none) -- blue is next in options order
+        self::assertSame(['chosen_color_1' => 'blue'], $answer);
+    }
+
+    public function testChooseDecisionAnswerDeclinesDisillusionmentWhenEveryColorIsUnsafe(): void
+    {
+        $state = $this->boardState(hands: [1 => [8, 27, 55, 80, 107]]); // one mood of each color, all the bot's own
+        foreach ([8, 27, 55, 80, 107] as $cardId) {
+            $state->moveHandToInPlay(1, $cardId);
+        }
+
+        $answer = $this->bot->chooseDecisionAnswer($state, $this->disillusionmentColorField(1), 1, 'disillusionment_choose_color');
+
+        self::assertSame([], $answer);
+    }
+
     // -- Team Play (issue #360) ------------------------------------------
 
     public function testChooseTeamDecisionProposalAlwaysPicksTheFirstCandidate(): void

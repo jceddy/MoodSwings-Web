@@ -4427,7 +4427,7 @@ final class GameService
                 }
 
                 $field = json_decode((string) $decision['field'], true);
-                $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId);
+                $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type']);
                 $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
                 continue;
             }
