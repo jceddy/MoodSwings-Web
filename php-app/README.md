@@ -5555,6 +5555,37 @@ since it already holds that dependency):
   need to be the one that does it) -- "fine to play Cynicism for no
   extra value" per the maintainer. Like Rationalization, this only ever
   deprioritizes WHEN, never skips it outright.
+
+  An addendum (confirmed by the maintainer) widens the last branch
+  above into its own third, round-score-independent condition: Cynicism
+  is ALSO a fine first play whenever no other currently playable card
+  offers a 3+-point swing on its own (`anotherPlayableCardOffersASufficientSwing()`
+  again) AND no other currently playable card interacts with an
+  opponent's hand at all
+  (`anotherPlayableCardInteractsWithOpponentsHand()` -- `compulsion`/
+  `intimidation`/`suspicion` specifically, not
+  `EARLY_PRIORITY_EFFECT_KEYS`' own extra-play entries) -- unlike the
+  round-deciding branch, this one doesn't require Cynicism to actually
+  decide anything, just that nothing more useful is on offer right now.
+
+  `EARLY_PRIORITY_EFFECT_KEYS` (the same addendum) is a flat priority
+  bonus (`EARLY_PRIORITY_BONUS`, 10 -- comfortably above the catalog's
+  own ~6-point printed-value ceiling, so a listed card always outranks
+  an unlisted one regardless of either one's own printed value, while
+  still ranking sensibly AMONG themselves by that value) added in
+  `sortPriorityValue()` for every card that steals from an opponent's
+  hand (Compulsion, Intimidation), forces one or more OTHER players to
+  discard from their own hand (Suspicion), or grants the acting player
+  an extra play -- unconditionally (Charity, Duplicity, Idealism,
+  Validation, Ambition, Bravado, Fear, Nostalgia, Gluttony, Insecurity,
+  Angst, Harmony, Grief, Thrill, Joy), conditionally on the next play
+  meeting some restriction (Benevolence, Eagerness, Friendliness,
+  Kindness, Pride, Intimidation's own restriction to the one card just
+  taken), or as an ongoing while-in-play grant rather than a one-time
+  one (Hope, Grace, Stubbornness). Generosity is deliberately excluded:
+  it grants its own extra play to a chosen OPPONENT, not the acting
+  player, so boosting it would help whoever's targeted instead of the
+  bot itself.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's

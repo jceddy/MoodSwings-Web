@@ -638,6 +638,40 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * EARLY_PRIORITY_EFFECT_KEYS' own flat priority bonus (see
+     * BotPlayerServiceTest for the policy itself in isolation), proven
+     * end to end through the FULL advanceAutomatedTurns() ->
+     * chooseAction() -> playMood() -> CharityEffect::afterPlaying()
+     * request lifecycle: Charity (id 3, value 1, grants an extra play)
+     * gets played BEFORE Apathy (id 55, value 4, no ability of its own)
+     * despite its own much lower printed value, and because Charity's
+     * own extra play keeps the SAME turn going, Apathy gets played too
+     * in this one advanceAutomatedTurns() call -- the turn only passes
+     * back to the human once both are in play.
+     */
+    public function testBotPlaysAnExtraPlayCardBeforeAHigherValueCardAndUsesTheExtraPlay(): void
+    {
+        $u1 = $this->insertUser('human8');
+        $botUserId = $this->insertBotUser('bot8');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 3, 'hand', $botPlayerId); // Charity, value 1 -- grants an extra play
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId); // Apathy, value 4 -- no ability
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 3), 'Charity should have been played');
+        self::assertTrue($this->cardIsInPlay($gameId, 55), "Apathy should also have been played, using Charity's own extra play");
+
+        $round = $this->fetchRound($gameId);
+        self::assertSame($p1, (int) $round['current_turn_game_player_id'], 'the turn should only pass back to the human once both plays are spent');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::shouldAttemptValueBoostDiscard()
      * (see BotPlayerServiceTest for the policy itself in isolation) through
      * the FULL advanceAutomatedTurns() -> playMood() request lifecycle --
@@ -663,12 +697,14 @@ final class BotGameplayIntegrationTest extends TestCase
         $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
 
         // Every other card is deliberately LOWER value than Delight's own
-        // 3, so chooseAction()'s own highest-printed-value ordering picks
-        // Delight first, same as any other card in this hand would only
-        // ever be chosen instead if it were worth more.
+        // 3, and none of them are in EARLY_PRIORITY_EFFECT_KEYS (unlike
+        // Charity/Benevolence, which would otherwise now outrank Delight
+        // outright as top-level plays of their own regardless of their
+        // own printed value), so chooseAction()'s own highest-printed-
+        // value ordering picks Delight first.
         $this->insertGameCard($gameId, 111, 'hand', $botPlayerId); // Delight, base value 3
-        $this->insertGameCard($gameId, 3, 'hand', $botPlayerId); // Charity, value 1 -- the only eligible discard
-        $this->insertGameCard($gameId, 2, 'hand', $botPlayerId); // Benevolence, value 2 -- not eligible
+        $this->insertGameCard($gameId, 20, 'hand', $botPlayerId); // Pacifism, value 1 -- the only eligible discard
+        $this->insertGameCard($gameId, 23, 'hand', $botPlayerId); // Repentance, value 2 -- not eligible
         $this->insertGameCard($gameId, 28, 'hand', $botPlayerId); // Anxiety, value 2 -- not eligible
         $this->insertGameCard($gameId, 36, 'hand', $botPlayerId); // Doubt, value 2 -- not eligible
         $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too, see testBotPlaysItsHighestValuePlayableCardOnItsOwnTurn()
@@ -687,10 +723,10 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertNotNull($delight, 'Delight should be in play');
         self::assertSame(5, $delight['value'], "Delight's value should be boosted to 5");
 
-        self::assertFalse($this->cardIsInHand($gameId, 3), 'Charity should have been discarded, not left in hand');
-        $stmt = $this->pdo->prepare("SELECT 1 FROM game_cards WHERE game_id = :game_id AND card_id = 3 AND zone = 'discard'");
+        self::assertFalse($this->cardIsInHand($gameId, 20), 'Pacifism should have been discarded, not left in hand');
+        $stmt = $this->pdo->prepare("SELECT 1 FROM game_cards WHERE game_id = :game_id AND card_id = 20 AND zone = 'discard'");
         $stmt->execute(['game_id' => $gameId]);
-        self::assertNotFalse($stmt->fetchColumn(), 'Charity should be in the discard pile');
+        self::assertNotFalse($stmt->fetchColumn(), 'Pacifism should be in the discard pile');
     }
 
     public function testBotPassesWhenItHasNothingPlayable(): void
@@ -1111,7 +1147,7 @@ final class BotGameplayIntegrationTest extends TestCase
      * validation mismatch even though BotPlayerServiceTest's own
      * isolated checks pass, the same class of bug
      * testBotDiscardsToDelightWithFourOrMoreSpareCards() above already
-     * caught once for a different card. Fear/Fickleness (both base value
+     * caught once for a different card. Hate/Fickleness (both base value
      * 0) make the bot's own remaining hand unambiguously "low value", so
      * 'refresh' is the only legal outcome here.
      */
@@ -1124,7 +1160,10 @@ final class BotGameplayIntegrationTest extends TestCase
         $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
 
         $this->insertGameCard($gameId, 49, 'hand', $botPlayerId); // Rationalization, base value 3
-        $this->insertGameCard($gameId, 38, 'hand', $botPlayerId); // Fear, value 0
+        // Hate/Fickleness (not Fear -- see EARLY_PRIORITY_EFFECT_KEYS,
+        // which would otherwise outrank Rationalization here regardless
+        // of its own weak-hand trigger, defeating the point of this test)
+        $this->insertGameCard($gameId, 66, 'hand', $botPlayerId); // Hate, value 0
         $this->insertGameCard($gameId, 39, 'hand', $botPlayerId); // Fickleness, value 0
         // A real shared deck to actually draw the refreshed cards from --
         // refreshHand() bottoms the old hand then draws that many, so
@@ -1137,7 +1176,7 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
 
         self::assertTrue($this->cardIsInPlay($gameId, 49));
-        self::assertFalse($this->cardIsInHand($gameId, 38, $botUserId), 'Fear should have been bottomed, not kept');
+        self::assertFalse($this->cardIsInHand($gameId, 66, $botUserId), 'Hate should have been bottomed, not kept');
         self::assertFalse($this->cardIsInHand($gameId, 39, $botUserId), 'Fickleness should have been bottomed, not kept');
         self::assertTrue($this->cardIsInHand($gameId, 5, $botUserId), 'the bot should have drawn a fresh card off the deck');
         self::assertTrue($this->cardIsInHand($gameId, 6, $botUserId), 'the bot should have drawn a fresh card off the deck');

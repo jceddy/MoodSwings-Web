@@ -398,16 +398,17 @@ final class BotPlayerServiceTest extends TestCase
      * its own plain printed value (3, unboosted) would be the deciding
      * difference between the bot's own score and the rival's (Cruelty,
      * id 61, value 3, in play for player 2 puts their total at 3 against
-     * the bot's own 0), and nothing ELSE playable (Charity, id 3, value
-     * 1) offers as big a swing on its own -- "fine to play Cynicism for
-     * no extra value" per the maintainer.
+     * the bot's own 0), and nothing ELSE playable (Pacifism, id 20,
+     * value 1, no EARLY_PRIORITY_EFFECT_KEYS bonus of its own) offers as
+     * big a swing on its own -- "fine to play Cynicism for no extra
+     * value" per the maintainer.
      */
     public function testChooseActionPlaysCynicismUnboostedWhenItDecidesTheRound(): void
     {
-        $state = $this->boardState(hands: [1 => [62, 3], 2 => [61]]);
+        $state = $this->boardState(hands: [1 => [62, 20], 2 => [61]]);
         $state->moveHandToInPlay(2, 61);
 
-        $action = $this->bot->chooseAction($state, [62, 3], 1);
+        $action = $this->bot->chooseAction($state, [62, 20], 1);
 
         self::assertSame(62, $action['card_id']);
         self::assertSame([], $action['choices']);
@@ -434,6 +435,56 @@ final class BotPlayerServiceTest extends TestCase
         $action = $this->bot->chooseAction($state, [62, 8], 1);
 
         self::assertSame(8, $action['card_id']);
+    }
+
+    /**
+     * The addendum to the Cynicism policy above (confirmed by the
+     * maintainer): with no round-deciding swing available at all (both
+     * players start at 0) and no cheap discard-pile card either,
+     * Cynicism is STILL a fine first play -- Pacifism (id 20, value 1)
+     * offers neither a 3+-point swing nor any hand interaction of its
+     * own, so nothing better is on offer, and Cynicism's own plain
+     * printed value (3) wins over it.
+     */
+    public function testChooseActionPlaysCynicismAsAFineFirstPlayWithNoBetterAlternative(): void
+    {
+        $state = $this->boardState(hands: [1 => [62, 20]]);
+
+        $action = $this->bot->chooseAction($state, [62, 20], 1);
+
+        self::assertSame(62, $action['card_id']);
+    }
+
+    /**
+     * EARLY_PRIORITY_EFFECT_KEYS' own flat bonus (confirmed by the
+     * maintainer, the same Cynicism addendum): Charity (id 3, value 1,
+     * grants the acting player an extra play) outranks Apathy (id 55,
+     * value 4, no ability of its own) despite its own much lower printed
+     * value -- an extra play is worth leading with regardless of either
+     * card's own printed value.
+     */
+    public function testChooseActionPrioritizesAnExtraPlayCardOverAHigherPlainValueCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [3, 55]]);
+
+        $action = $this->bot->chooseAction($state, [3, 55], 1);
+
+        self::assertSame(3, $action['card_id']);
+    }
+
+    /**
+     * The same EARLY_PRIORITY_EFFECT_KEYS bonus, this time for its
+     * hand-interaction half rather than its extra-play half: Suspicion
+     * (id 78, value 3, forces one or more opponents to discard from
+     * their own hand) outranks Apathy (id 55, value 4) the same way.
+     */
+    public function testChooseActionPrioritizesAHandInteractionCardOverAHigherPlainValueCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [78, 55]]);
+
+        $action = $this->bot->chooseAction($state, [78, 55], 1);
+
+        self::assertSame(78, $action['card_id']);
     }
 
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
