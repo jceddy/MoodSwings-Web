@@ -3508,7 +3508,11 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
 
         self::assertTrue($state->isInPlay(5));
-        self::assertSame(['action' => 'discard', 'condition' => 'always'], $state->effectState(5, 'afterScoring'));
+        // 'playerId' is folded into every 'afterScoring' onUseEffectState
+        // payload now (see the identical Insecurity test above), even
+        // though Gluttony's own 'discard' action has no use for it --
+        // harmless, and simpler than special-casing which action gets it.
+        self::assertSame(['action' => 'discard', 'condition' => 'always', 'playerId' => 1], $state->effectState(5, 'afterScoring'));
     }
 
     public function testGluttonyLeavesNoTagWhenTheExtraPlayGoesUnused(): void
@@ -3529,7 +3533,16 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 45, new PlayerChoices([]));
         $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
 
-        self::assertSame(['action' => 'return_to_hand', 'condition' => 'always'], $state->effectState(5, 'afterScoring'));
+        // 'playerId' (the player who actually played Complacency via
+        // Insecurity's own grant) is folded in by MoodPlayService itself
+        // -- InsecurityEffect only ever knows who played INSECURITY, not
+        // necessarily who ends up spending the resulting extra play, so
+        // it can't set this itself. See GameService::applyAfterScoringHooks()'s
+        // own use of it: without it, the card would return to whoever
+        // CURRENTLY owns it once scoring resolves, which can differ from
+        // who actually played it if something like Chaos reassigned
+        // ownership in between -- a real bug reported live.
+        self::assertSame(['action' => 'return_to_hand', 'condition' => 'always', 'playerId' => 1], $state->effectState(5, 'afterScoring'));
     }
 
     public function testPatienceValueIs1WhenPlayedThisRound(): void

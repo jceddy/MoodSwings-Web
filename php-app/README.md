@@ -6109,6 +6109,40 @@ scoring (taken via Betrayal)."), so the player doesn't need to already
 know every card's printed rules text to make an informed choice between
 same-named or unfamiliar cards.
 
+Insecurity's own `return_to_hand` self-tag (unlike Gluttony's `discard`,
+Bashfulness's `bottom_and_draw`, or Recklessness's own) had a real bug,
+reported live: "put THAT MOOD into YOUR hand" means the hand of whoever
+actually played it via Insecurity's granted extra play -- a specific
+player, fixed the moment the grant is consumed -- not whoever happens to
+own the tagged card BY THE TIME scoring resolves. Those two normally
+coincide (a player can only ever play a card from their own hand in the
+first place), but diverge the instant something ELSE reassigns the
+tagged card's own ownership in between, most visibly Chaos ("shuffle all
+moods together... deal those moods out... to each player"): the previous
+`moveInPlayToHand($cardId)` call always resolved against `ownerOf($cardId)`
+*at scoring time*, so a mood Chaos handed to a different player after
+Insecurity tagged it would return to THAT player's hand instead of back
+to whoever actually played it -- silently rewarding the wrong side of the
+table. `MoodPlayService::playMood()` now folds a `'playerId'` key (the
+consuming player -- known for certain right there, unlike
+`InsecurityEffect::afterPlaying()` itself, which only ever knows who
+played INSECURITY, not necessarily who later spends the resulting extra
+play, even though those are the same player in every game today) into
+any `'afterScoring'` `onUseEffectState` payload that doesn't already
+carry one -- harmless for Gluttony's own `discard` action, which has no
+use for it either way. `applyAfterScoringHooks()`'s own `return_to_hand`
+branch now calls `moveInPlayToPlayersHand($cardId, $afterScoring['playerId']
+?? $ownerId)` (the same "take a mood directly into a specific player's
+hand regardless of who currently owns it" primitive Regret's own cost
+already uses) instead of `moveInPlayToHand()`, falling back to the
+current owner only for a hypothetical future self-tag that never records
+one. `afterScoringEffectDescription()`'s own order-decision text is
+updated to match: it only ever names a specific OTHER player ("Returns to
+Alice's hand after scoring.") once the recorded `playerId` actually
+differs from the tagged card's current owner -- the common case, where
+nothing reassigned it, still just reads "Returns to your hand after
+scoring." exactly as before.
+
 The pause is skipped outright, however, on whichever round actually
 finishes the game (`wins_needed` reached) -- there's no next round for a
 chosen order to ever matter to, so asking would just stall the game's
