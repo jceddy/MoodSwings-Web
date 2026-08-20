@@ -626,6 +626,94 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(20, $action['card_id']);
     }
 
+    /**
+     * Paranoia's own "always target an opponent" policy (confirmed by
+     * the maintainer, the identical policy to Intimidation): player 2
+     * has a card in hand, so it's the only legal, non-teammate target.
+     */
+    public function testChooseActionTargetsAnOpponentWithACardWhenPlayingParanoia(): void
+    {
+        $state = $this->boardState(hands: [1 => [71], 2 => [8]]);
+
+        $action = $this->bot->chooseAction($state, [71], 1);
+
+        self::assertSame(71, $action['card_id']);
+        self::assertSame(['target_player_id' => 2], $action['choices']);
+    }
+
+    /**
+     * With no opponent holding any card at all, Paranoia is
+     * deprioritized behind Pacifism (id 20, value 1, plain filler) --
+     * "other plays should be prioritized above it" per the maintainer.
+     * Unlike Intimidation, targeting an untargetable player here
+     * wouldn't just be a no-op -- ParanoiaEffect::afterPlaying() throws
+     * against an empty hand -- so this also avoids an outright illegal
+     * play.
+     */
+    public function testChooseActionDeprioritizesParanoiaWhenNoOpponentHasACard(): void
+    {
+        $state = $this->boardState(hands: [1 => [71, 20]]);
+
+        $action = $this->bot->chooseAction($state, [71, 20], 1);
+
+        self::assertSame(20, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Paranoia is still played --
+     * deprioritized WHEN, never skipped outright. No opponent has a
+     * card, so its own optional field stays unfilled.
+     */
+    public function testChooseActionStillPlaysParanoiaUnfilledWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [71]]);
+
+        $action = $this->bot->chooseAction($state, [71], 1);
+
+        self::assertSame(71, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Player 2 (seated first) has an empty hand; player 3 has a card.
+     * The bot skips past the empty-handed seat to target player 3 --
+     * targeting player 2 here would be an outright illegal play, not
+     * just a wasted one.
+     */
+    public function testChooseActionSkipsAnEmptyHandedOpponentToTargetOneWithACardWithParanoia(): void
+    {
+        $state = $this->boardState(hands: [1 => [71], 3 => [8]]);
+
+        $action = $this->bot->chooseAction($state, [71], 1);
+
+        self::assertSame(71, $action['card_id']);
+        self::assertSame(['target_player_id' => 3], $action['choices']);
+    }
+
+    /**
+     * A teammate with a card in hand doesn't count as a valid target,
+     * even though Paranoia's own CardChoiceSchema field is scope 'any'
+     * (its printed text allows self-targeting too) -- "an opponent" per
+     * the maintainer means neither the bot itself nor a teammate. Player
+     * 2 (the bot's own teammate) has a card; player 3 (the only actual
+     * opponent) has none -- no valid target exists, so Paranoia is
+     * deprioritized behind Pacifism.
+     */
+    public function testChooseActionDoesNotCountATeammatesHandAsAValidParanoiaTarget(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [71, 20], 2 => [8]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+
+        $action = $this->bot->chooseAction($state, [71, 20], 1);
+
+        self::assertSame(20, $action['card_id']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();

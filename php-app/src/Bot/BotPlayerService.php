@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with eight deliberate
+ * field-filling policy this builds on -- with nine deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -56,7 +56,9 @@ use MoodSwings\Rules\RoundScorer;
  * teammate opponent with a card in hand when playing Intimidation, and
  * deprioritizes it (the same PHP_INT_MIN treatment as Rationalization/
  * Cynicism) whenever no such opponent currently exists -- see that
- * method's own docblock.
+ * method's own docblock; and paranoiaTargetPlayerId()/sortPriorityValue()
+ * once more (confirmed by the maintainer, the identical policy), doing
+ * the exact same thing for Paranoia -- see that method's own docblock.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -415,6 +417,21 @@ final class BotPlayerService
      * -- no separate "how good is this target" scoring the way Cynicism
      * needs, since ANY opponent with a card in hand makes Intimidation
      * worth its usual priority.
+     *
+     * Paranoia (confirmed by the maintainer, the same policy as
+     * Intimidation) gets the identical PHP_INT_MIN treatment whenever
+     * paranoiaTargetPlayerId() returns null -- unlike Intimidation,
+     * though, ParanoiaEffect::afterPlaying() doesn't quietly no-op
+     * against an untargetable player, it throws (a required
+     * $state->hand($targetPlayerId) !== [] precondition), so this
+     * doesn't just avoid a wasted play, it avoids an illegal one --
+     * paranoiaTargetPlayerId() itself is what keeps buildChoicesForCard()
+     * from ever handing that exception a bad candidate in the first
+     * place. Paranoia isn't in EARLY_PRIORITY_EFFECT_KEYS (it bottoms
+     * the taken card, never gaining the acting player's own hand a card
+     * the way Compulsion/Intimidation do, and never forces a discard the
+     * way Suspicion does), so it's back to plain baseValue() once a
+     * valid target exists -- no boost, just no longer vetoed.
      */
     private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
     {
@@ -426,6 +443,9 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'intimidation' && $this->intimidationTargetPlayerId($state, $botGamePlayerId) === null) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'paranoia' && $this->paranoiaTargetPlayerId($state, $botGamePlayerId) === null) {
             return PHP_INT_MIN;
         }
 
@@ -731,6 +751,12 @@ final class BotPlayerService
 
         if ($effectKey === 'intimidation') {
             $targetPlayerId = $this->intimidationTargetPlayerId($state, $botGamePlayerId);
+
+            return $targetPlayerId !== null ? ['target_player_id' => $targetPlayerId] : [];
+        }
+
+        if ($effectKey === 'paranoia') {
+            $targetPlayerId = $this->paranoiaTargetPlayerId($state, $botGamePlayerId);
 
             return $targetPlayerId !== null ? ['target_player_id' => $targetPlayerId] : [];
         }
@@ -1245,6 +1271,31 @@ final class BotPlayerService
      * so, WHO to actually target.
      */
     private function intimidationTargetPlayerId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId
+                && !$state->isTeammate($botGamePlayerId, $playerId)
+                && $state->hand($playerId) !== []) {
+                return $playerId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Paranoia's own "who to target" policy (confirmed by the
+     * maintainer) -- identical in shape to intimidationTargetPlayerId()
+     * above: the first active, non-teammate opponent who currently has
+     * at least one card in hand, or null if none do. Deliberately
+     * excludes both the acting player itself and any teammate --
+     * CardChoiceSchema's own field is scope 'any' (Paranoia's printed
+     * text allows self-targeting, unlike Intimidation's "another
+     * player"), so BotChoiceResolver's own generic default would happily
+     * let the bot target itself, but "an opponent" per the maintainer
+     * means neither the bot nor a teammate.
+     */
+    private function paranoiaTargetPlayerId(BoardState $state, int $botGamePlayerId): ?int
     {
         foreach ($state->activePlayerOrder() as $playerId) {
             if ($playerId !== $botGamePlayerId

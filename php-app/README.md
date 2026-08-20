@@ -5631,6 +5631,31 @@ since it already holds that dependency):
   boosted treatment above, with no separate "how good is this target"
   scoring needed, since any qualifying opponent makes it worth its usual
   priority.
+
+  **Paranoia** (confirmed by the maintainer, the same policy as
+  Intimidation) gets the identical treatment via its own
+  `paranoiaTargetPlayerId()`: `buildChoicesForCard()` special-cases
+  `effectKey === 'paranoia'` to it instead of falling through to
+  `CardChoiceSchema`'s generic per-field loop, and it returns the first
+  active, non-teammate opponent who currently has at least one card in
+  hand, or `null` if none do. `CardChoiceSchema`'s own `'paranoia'` field
+  is scope `'any'` (Paranoia's printed text allows targeting yourself,
+  unlike Intimidation's "another player"), so `BotChoiceResolver`'s own
+  generic default would happily let the bot target itself -- excluding
+  both the acting player and any teammate is deliberate, "an opponent"
+  per the maintainer means neither. Unlike `IntimidationEffect`, which
+  quietly no-ops against an empty-handed target,
+  `ParanoiaEffect::afterPlaying()` throws
+  (`$state->hand($targetPlayerId) !== []` is a hard precondition), so
+  `paranoiaTargetPlayerId()` here isn't just avoiding a wasted play, it's
+  avoiding an illegal one. `sortPriorityValue()` demotes Paranoia to
+  `PHP_INT_MIN` the same way whenever `paranoiaTargetPlayerId()` returns
+  `null`. Paranoia is deliberately absent from `EARLY_PRIORITY_EFFECT_KEYS`
+  above, though -- it bottoms the target's card rather than gaining the
+  acting player's own hand a card the way Compulsion/Intimidation do, and
+  never forces a discard the way Suspicion does -- so once a valid target
+  exists it reverts to plain `baseValue()`, no boost, just no longer
+  vetoed.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's

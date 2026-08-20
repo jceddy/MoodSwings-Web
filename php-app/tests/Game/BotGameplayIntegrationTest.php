@@ -1261,6 +1261,58 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::paranoiaTargetPlayerId()
+     * (see BotPlayerServiceTest for the policy itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> playMood() ->
+     * ParanoiaEffect::afterPlaying() request lifecycle -- unlike
+     * Intimidation, Paranoia resolves entirely within afterPlaying()
+     * itself (no pending decision), and throws outright against an
+     * untargetable player, so this also proves paranoiaTargetPlayerId()
+     * never hands it a bad candidate. The human keeps TWO cards
+     * (Dignity/Charity) rather than one, deliberately -- with only one,
+     * Paranoia's own random reveal would bottom their ENTIRE hand,
+     * triggering the (real, separate) auto-pass-on-empty-hand feature
+     * and handing the bot a second, legitimate play with its own
+     * freshly-drawn card, which would make this test about that
+     * interaction instead of Paranoia's own targeting. Which of the two
+     * cards gets revealed is genuinely random, so this only asserts on
+     * what's true either way: exactly one left the human's hand for the
+     * bottom of the deck, one remains, and the bot drew its own card.
+     */
+    public function testBotTargetsTheHumanOpponentWhenPlayingParanoia(): void
+    {
+        $u1 = $this->insertUser('human13');
+        $botUserId = $this->insertBotUser('bot11');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 71, 'hand', $botPlayerId); // Paranoia
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // Dignity
+        $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- one of these two is the reveal target
+        $this->insertGameCard($gameId, 5, 'deck', deckPosition: 0); // the bot's own draw
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 71));
+
+        $humanHandCount = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND owner_game_player_id = :p1 AND zone = 'hand'"
+        );
+        $humanHandCount->execute(['game_id' => $gameId, 'p1' => $p1]);
+        self::assertSame(1, (int) $humanHandCount->fetchColumn(), 'exactly one of the human\'s two cards should remain in hand');
+
+        $bottomedCount = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_cards WHERE game_id = :game_id AND card_id IN (8, 3) AND zone = 'deck'"
+        );
+        $bottomedCount->execute(['game_id' => $gameId]);
+        self::assertSame(1, (int) $bottomedCount->fetchColumn(), 'exactly one of Dignity/Charity should have been bottomed');
+
+        self::assertTrue($this->cardIsInHand($gameId, 5, $botUserId), 'the bot should have drawn a fresh card');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::cynicismHasAGoodReasonToPlayNow()/
      * cynicismChoices() (see BotPlayerServiceTest for the policy itself
      * in isolation) through the FULL advanceAutomatedTurns() -> playMood()
