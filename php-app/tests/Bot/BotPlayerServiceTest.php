@@ -231,6 +231,116 @@ final class BotPlayerServiceTest extends TestCase
         self::assertNull($this->bot->chooseAction($state, [91], 1));
     }
 
+    /**
+     * Avoidance (id 29, value 3) is vetoed when the bot's own cheapest
+     * mood to give up (Discipline, id 9, value 6, is the ONLY mood in
+     * play, so it's also the lowest) is worth more than
+     * AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD (2) and neither neighbor's own
+     * lowest mood (both empty here) beats it -- a pure loss.
+     */
+    public function testChooseActionSkipsAvoidanceAndPassesWhenNoGoodReasonToPlayIt(): void
+    {
+        $state = $this->boardState(hands: [1 => [29, 9]]);
+        $state->moveHandToInPlay(1, 9);
+
+        self::assertNull($this->bot->chooseAction($state, [29], 1));
+    }
+
+    /**
+     * The bot's own cheapest mood to give up (Charity, id 3, value 1) is
+     * low-value enough (<= AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD) to be worth
+     * risking regardless of what comes back, so Avoidance is worth
+     * playing even though neither neighbor has anything to offer.
+     */
+    public function testChooseActionPlaysAvoidanceWhenItsOwnCheapestMoodIsLowValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [29, 3]]);
+        $state->moveHandToInPlay(1, 3);
+
+        $action = $this->bot->chooseAction($state, [29], 1);
+
+        self::assertSame(29, $action['card_id']);
+    }
+
+    /**
+     * A player with no moods in play at all has nothing to give up
+     * (lowestMoodValueOwnedBy()'s own 0 sentinel), which trivially
+     * qualifies as "low-value enough" -- Avoidance is worth playing even
+     * with nothing at all on the board yet.
+     */
+    public function testChooseActionPlaysAvoidanceWhenTheBotHasNoMoodsInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [29]]);
+
+        $action = $this->bot->chooseAction($state, [29], 1);
+
+        self::assertSame(29, $action['card_id']);
+    }
+
+    /**
+     * The bot's own cheapest mood (Curiosity, id 33, value 3) is too
+     * valuable to risk for nothing on its own, but under direction
+     * 'right' the giver who'd pass TO player 1 is player 2
+     * (activeNeighbor(1, 'left') === 2, so the giver on the OPPOSITE
+     * side -- avoidanceReceivedValueFor()'s own mapping), who has Chaos
+     * (id 85, value 6) as their own lowest (only) mood -- worth MORE
+     * than what the bot gives up. That's a genuinely profitable trade,
+     * so Avoidance is worth playing, and 'right' is the direction chosen.
+     */
+    public function testChooseActionPlaysAvoidanceAndPicksTheProfitableDirection(): void
+    {
+        $state = $this->boardState(hands: [1 => [29, 33], 2 => [85]]);
+        $state->moveHandToInPlay(1, 33);
+        $state->moveHandToInPlay(2, 85);
+
+        $action = $this->bot->chooseAction($state, [29], 1);
+
+        self::assertSame(29, $action['card_id']);
+        self::assertSame(['direction' => 'right'], $action['choices']);
+    }
+
+    /**
+     * The mirror case: under direction 'left' the giver who'd pass TO
+     * player 1 is player 3 (the OPPOSITE side from the 'right' case
+     * above), who has the more valuable mood to offer this time (Chaos,
+     * id 85, value 6) instead of player 2 (Charity, id 3, value 1), so
+     * 'left' is the profitable direction now.
+     */
+    public function testChooseActionPicksLeftWhenThatsTheProfitableDirection(): void
+    {
+        $state = $this->boardState(hands: [1 => [29, 33], 2 => [3], 3 => [85]]);
+        $state->moveHandToInPlay(1, 33);
+        $state->moveHandToInPlay(2, 3);
+        $state->moveHandToInPlay(3, 85);
+
+        $action = $this->bot->chooseAction($state, [29], 1);
+
+        self::assertSame(29, $action['card_id']);
+        self::assertSame(['direction' => 'left'], $action['choices']);
+    }
+
+    /**
+     * Both directions would receive the exact same value -- 'left' wins
+     * the tie, matching BotChoiceResolver's own "first option" default
+     * for every other required mode field (avoidanceBestDirection()'s
+     * own docblock).
+     */
+    public function testChooseActionPicksLeftOnATiedDirectionValue(): void
+    {
+        // Own cheapest mood (Charity, value 1) is low-value enough on its
+        // own to guarantee Avoidance is worth playing regardless of the
+        // tie below -- isolating the tie-break to just direction choice.
+        $state = $this->boardState(hands: [1 => [29, 3], 2 => [85], 3 => [27]]);
+        $state->moveHandToInPlay(1, 3); // Charity, value 1
+        $state->moveHandToInPlay(2, 85); // Chaos, value 6
+        $state->moveHandToInPlay(3, 27); // Ambivalence, value 6
+
+        $action = $this->bot->chooseAction($state, [29], 1);
+
+        self::assertSame(29, $action['card_id']);
+        self::assertSame(['direction' => 'left'], $action['choices']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();

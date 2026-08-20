@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with three deliberate
+ * field-filling policy this builds on -- with four deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -115,20 +115,26 @@ final class BotPlayerService
      * printed-value ordering -- unlike BotChoiceResolver's own field-
      * shape-driven policy (which only ever decides HOW to fill a
      * choice_field), these look at the whole-board CONSEQUENCE of an
-     * effect that has no choice_field of its own for the acting player
-     * to fill at all, so there's no field-level hook to veto it through
-     * (Fury's own "each player chooses..." decisions are all
-     * RequiresOpponentDecision, resolved after the card is already
+     * effect no single choice_field value could capture on its own: for
+     * Fury, there's no play-time choice_field to hang a veto on at all
+     * (its own "each player chooses..." decisions are all
+     * RequiresOpponentDecision, resolved only after the card is already
      * played -- see CardChoiceSchema's own docblock for why an effect
-     * like that carries no play-time choice_fields). Keyed by effect
-     * key; everything not listed here is always worth playing (the
-     * default, unconditional "yes" every other effect already got
-     * before this method existed).
+     * like that carries no play-time choice_fields); for Avoidance
+     * (confirmed by the maintainer), there IS a play-time field
+     * ('direction', required -- see avoidanceBestDirection() below for
+     * how that one gets chosen), but "is this worth playing AT ALL"
+     * depends on every seated player's own moods, not just which
+     * direction ends up picked, so it needs the same whole-board view
+     * Fury's veto does. Keyed by effect key; everything not listed here
+     * is always worth playing (the default, unconditional "yes" every
+     * other effect already got before this method existed).
      */
     private function isWorthPlaying(BoardState $state, string $effectKey, int $botGamePlayerId): bool
     {
         return match ($effectKey) {
             'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
+            'avoidance' => $this->avoidanceHasAGoodReasonToPlay($state, $botGamePlayerId),
             default => true,
         };
     }
@@ -167,6 +173,121 @@ final class BotPlayerService
         }
 
         return $highestValue;
+    }
+
+    /**
+     * The value of whichever of $playerId's own moods AvoidanceEffect's
+     * own required-'own'-scope give decision would pick for them --
+     * BotChoiceResolver's own "own scope required field" policy always
+     * picks the LOWEST-value legal candidate (minimize what's given up),
+     * so this is what $playerId (bot or human -- the same rational
+     * "give up the least" assumption either way, since there's no way to
+     * know a human's actual answer in advance) is expected to actually
+     * give if a direction routes Avoidance's own forced exchange through
+     * them. 0 (not -1, unlike highestMoodValueOwnedBy()'s own "nothing
+     * to lose" sentinel above) for a player with no moods in play at
+     * all -- AvoidanceEffect itself never even asks them for an answer
+     * (moodsOwnedBy() === [] is skipped outright), so there's genuinely
+     * nothing there, the same "free" value avoidanceReceivedValueFor()
+     * below needs it to carry.
+     */
+    private function lowestMoodValueOwnedBy(BoardState $state, int $playerId): int
+    {
+        $moods = $state->moodsOwnedBy($playerId);
+        if ($moods === []) {
+            return 0;
+        }
+
+        $lowestValue = PHP_INT_MAX;
+        foreach ($moods as $mood) {
+            $lowestValue = min($lowestValue, $state->valueOf($mood->cardId));
+        }
+
+        return $lowestValue;
+    }
+
+    /**
+     * How weak the bot's own lowest-value mood needs to be before giving
+     * it away (Avoidance forces EVERY seated player with at least one
+     * mood in play to give one, including whoever plays it) is a low
+     * enough cost to be worth risking regardless of what comes back --
+     * roughly the real catalog's own overall average base value (~2.3),
+     * the same reasoning (and the same threshold) RATIONALIZATION_LOW_VALUE_HAND_AVERAGE
+     * above already uses for an analogous "is what I'd be giving up
+     * cheap enough not to matter" question.
+     */
+    private const AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD = 2;
+
+    /**
+     * Avoidance's own "is this worth playing at all" policy (confirmed
+     * by the maintainer): worth it if EITHER the bot's own cheapest mood
+     * to give up is low-value enough not to matter regardless of what
+     * comes back (AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD -- including a
+     * player with zero moods in play, who has nothing to give up at all
+     * and so trivially qualifies), OR at least one direction would
+     * receive a mood worth MORE than what the bot itself gives up
+     * (avoidanceReceivedValueFor()'s own "what that neighbor would
+     * rationally give" estimate, compared against
+     * lowestMoodValueOwnedBy() for the bot's own side of the same
+     * exchange) -- a genuinely profitable trade even if the bot's own
+     * mood isn't cheap. Otherwise Avoidance just trades the bot's own
+     * mood for something equal or worse while also handing every OTHER
+     * seated player a free swap they didn't ask for -- a pure loss (or
+     * at best a wash) worth skipping.
+     */
+    private function avoidanceHasAGoodReasonToPlay(BoardState $state, int $botGamePlayerId): bool
+    {
+        $ownGiveValue = $this->lowestMoodValueOwnedBy($state, $botGamePlayerId);
+        if ($ownGiveValue <= self::AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD) {
+            return true;
+        }
+
+        return max(
+            $this->avoidanceReceivedValueFor($state, $botGamePlayerId, 'left'),
+            $this->avoidanceReceivedValueFor($state, $botGamePlayerId, 'right'),
+        ) > $ownGiveValue;
+    }
+
+    /**
+     * Avoidance's own "which direction" policy (confirmed by the
+     * maintainer) -- unlike most required 'mode' fields (BotChoiceResolver's
+     * own "take the first option" default), which direction actually
+     * matters here, so this is special-cased in buildChoicesForCard()
+     * the same way rationalizationChoices() is. Simply whichever
+     * direction routes a more valuable mood onto the bot
+     * (avoidanceReceivedValueFor()) -- 'left' wins any tie, matching
+     * BotChoiceResolver's own "first option" default for every OTHER
+     * required mode field.
+     */
+    private function avoidanceBestDirection(BoardState $state, int $botGamePlayerId): string
+    {
+        $receivedIfLeft = $this->avoidanceReceivedValueFor($state, $botGamePlayerId, 'left');
+        $receivedIfRight = $this->avoidanceReceivedValueFor($state, $botGamePlayerId, 'right');
+
+        return $receivedIfRight > $receivedIfLeft ? 'right' : 'left';
+    }
+
+    /**
+     * The value the bot would receive if Avoidance resolved with
+     * $direction chosen -- AvoidanceEffect moves every giver's own mood
+     * to their neighbor IN $direction (giver gives to
+     * activeNeighbor(giver, $direction)), so the seat that gives TO the
+     * bot is the one on the OPPOSITE side (same "opposite side" mapping
+     * rationalizationStealDirection() above already uses for
+     * Rationalization's own 'rotate'). 0 if there's no such neighbor
+     * (fewer than 2 active players) or that neighbor currently has no
+     * moods in play at all (nothing for them to give -- AvoidanceEffect
+     * itself skips asking them).
+     */
+    private function avoidanceReceivedValueFor(BoardState $state, int $botGamePlayerId, string $direction): int
+    {
+        $giverDirection = $direction === 'left' ? 'right' : 'left';
+        $giverId = $state->activeNeighbor($botGamePlayerId, $giverDirection);
+        if ($giverId === null) {
+            return 0;
+        }
+
+        return $this->lowestMoodValueOwnedBy($state, $giverId);
     }
 
     /** @return array<string, mixed> */
@@ -477,6 +598,10 @@ final class BotPlayerService
 
         if ($effectKey === 'rationalization') {
             return $this->rationalizationChoices($state, $cardId, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'avoidance') {
+            return ['direction' => $this->avoidanceBestDirection($state, $botGamePlayerId)];
         }
 
         $choices = [];

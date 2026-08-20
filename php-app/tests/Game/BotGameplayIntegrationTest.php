@@ -1189,6 +1189,45 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::avoidanceHasAGoodReasonToPlay()/
+     * avoidanceBestDirection() (see BotPlayerServiceTest for the policy
+     * itself in isolation) through the FULL advanceAutomatedTurns() ->
+     * playMood() -> AvoidanceEffect -> resolvePendingDecisions() request
+     * lifecycle -- including the bot's own follow-up pending decision
+     * (which of its own moods to give) resolving automatically too,
+     * exactly the class of gap the two Rationalization integration tests
+     * above already exist to catch for a different card. The bot's own
+     * only mood (Charity, id 3, value 1) is cheap enough on its own
+     * (AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD) to guarantee the play
+     * regardless of direction; the human opponent has no mood in play at
+     * all, so AvoidanceEffect never even asks them for an answer
+     * (moodsOwnedBy() === [] is skipped outright) and the whole exchange
+     * resolves in this single advanceAutomatedTurns() call without
+     * waiting on a real player.
+     */
+    public function testBotPlaysAvoidanceAndGivesAwayItsOwnCheapMood(): void
+    {
+        $u1 = $this->insertUser('human7');
+        $botUserId = $this->insertBotUser('bot6');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 29, 'hand', $botPlayerId); // Avoidance, value 3
+        $charityId = $this->insertGameCard($gameId, 3, 'in_play', $botPlayerId); // Charity, value 1 -- the bot's only mood
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 29));
+
+        $ownerStmt = $this->pdo->prepare('SELECT owner_game_player_id FROM game_cards WHERE id = :id');
+        $ownerStmt->execute(['id' => $charityId]);
+        self::assertSame($p1, (int) $ownerStmt->fetchColumn(), "Charity should have been given away to the bot's only opponent");
+    }
+
+    /**
      * Issue #359 exposed a real deadlock, reported live: a best-of-three
      * draft match's own "who goes first" freeze (setPlayFirstNextMatchGame(),
      * game 2/3's own round 1 -- see that method's own docblock) had no
