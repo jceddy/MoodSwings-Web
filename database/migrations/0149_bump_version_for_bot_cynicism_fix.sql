@@ -1,0 +1,17 @@
+-- Practice bots previously always played Cynicism (if playable at all)
+-- purely for its own unremarkable printed value (3), with neither
+-- field of its own "you may give an opponent a discard-pile card to
+-- boost this mood's value" choice ever filled in. BotPlayerService now
+-- deprioritizes Cynicism (the same PHP_INT_MIN "save it for when it
+-- actually pays off" treatment Rationalization already gets) unless
+-- either a cheap discard-pile card is available to boost it for free,
+-- or playing it (even unboosted) would be the deciding difference for
+-- winning the round with nothing else on offer able to swing it as
+-- much -- confirmed by the maintainer. cynicismChoices() now also
+-- actually fills both of Cynicism's own optional fields together
+-- (they're interdependent -- CynicismEffect throws if only one is set)
+-- whenever a cheap discard-pile card and a legal recipient both exist.
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0148 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.5' WHERE id = 1;

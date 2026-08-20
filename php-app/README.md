@@ -5510,6 +5510,51 @@ since it already holds that dependency):
   genuinely useful play, but it's still never skipped outright: once
   it's the only legal candidate left (or a trigger fires), it's played
   the same as anything else, always committing to a real mode.
+- **Policy: Cynicism** (confirmed by the maintainer) -- "you may put a
+  card from the discard pile into an opponent's hand; if you do, this
+  mood's value becomes 6" (base 3, so a +3 swing). Its own two fields
+  (`discard_card_id`/`recipient_player_id`) are both optional but
+  genuinely interdependent (`CynicismEffect::afterPlaying()` throws if
+  one is set without the other), so `buildChoicesForCard()` special-cases
+  `effectKey === 'cynicism'` to `cynicismChoices()` entirely, bypassing
+  the generic per-field `CardChoiceSchema` loop the same way
+  `'rationalization'`/`'avoidance'` already are:
+  - `cynicismCheapDiscardCardId(BoardState $state): ?int` -- the
+    cheapest (lowest `baseValue()`) discard-pile card, or `null` if
+    either the pile is empty or its own cheapest card is still too
+    valuable (`CYNICISM_LOW_VALUE_DISCARD_THRESHOLD`, 2, same threshold/
+    reasoning as `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`/
+    `AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD` above) to hand an opponent for
+    free.
+  - `cynicismFirstValidRecipient(BoardState $state, int
+    $botGamePlayerId): ?int` -- the first active player who isn't the
+    acting player or their teammate (`CynicismEffect`'s own validation),
+    matching `BotChoiceResolver`'s own generic "first legal candidate"
+    default for any other `'player'`/scope `'other'` field.
+  - `cynicismChoices()` boosts (fills both fields) only when BOTH of the
+    above resolve to a real value -- empty otherwise, playing Cynicism
+    for its own plain printed value with nothing given away.
+
+  `chooseAction()`'s own highest-printed-value sort additionally
+  demotes Cynicism to `PHP_INT_MIN` via `sortPriorityValue()`, the
+  identical "save it for when it actually pays off" treatment
+  Rationalization gets above, UNLESS
+  `cynicismHasAGoodReasonToPlayNow()` says otherwise: either a cheap
+  discard-pile card and a legal recipient both exist (the same check
+  `cynicismChoices()` itself makes, just used here to decide
+  WHETHER/WHEN rather than HOW -- a near-free +3 worth taking whenever
+  it's on offer), OR playing Cynicism for its own plain printed value
+  (no boost at all) would be the deciding difference between the bot's
+  own group NOT currently having the highest score this round and
+  having it (`wouldBecomeHighestScore()`, reused here with an
+  `$unboostedValue` of 0 -- "didn't play this" vs. "played this
+  unboosted", rather than that method's usual unboosted-vs-boosted
+  comparison) AND no OTHER currently playable card already offers as
+  big a swing on its own (`anotherPlayableCardOffersASufficientSwing()`
+  -- if something else already closes the same gap, Cynicism doesn't
+  need to be the one that does it) -- "fine to play Cynicism for no
+  extra value" per the maintainer. Like Rationalization, this only ever
+  deprioritizes WHEN, never skips it outright.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's

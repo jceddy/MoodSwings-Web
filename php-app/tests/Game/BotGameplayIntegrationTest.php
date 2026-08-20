@@ -1189,6 +1189,50 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::cynicismHasAGoodReasonToPlayNow()/
+     * cynicismChoices() (see BotPlayerServiceTest for the policy itself
+     * in isolation) through the FULL advanceAutomatedTurns() -> playMood()
+     * -> CynicismEffect::afterPlaying() request lifecycle -- Cynicism's
+     * own two fields (discard_card_id/recipient_player_id) are both
+     * optional but genuinely interdependent (CynicismEffect throws if
+     * one is set without the other), exactly the shape most likely to
+     * slip through BotChoiceResolver's own generic per-field machinery
+     * with a validation mismatch even though BotPlayerServiceTest's own
+     * isolated checks pass, the same class of bug the two Rationalization
+     * integration tests above already exist to catch for a different
+     * card. Charity (id 3, value 1) sits in the discard pile, well under
+     * CYNICISM_LOW_VALUE_DISCARD_THRESHOLD, so boosting is the only
+     * legal outcome here.
+     */
+    public function testBotBoostsCynicismWithACheapDiscardPileCard(): void
+    {
+        $u1 = $this->insertUser('human10');
+        $botUserId = $this->insertBotUser('bot7');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 62, 'hand', $botPlayerId); // Cynicism, base value 3
+        $this->insertGameCard($gameId, 3, 'discard'); // Charity, value 1 -- cheap enough to give away for free
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $cynicism = null;
+        foreach ($inPlay as $mood) {
+            if ($mood['catalog_card_id'] === 62) {
+                $cynicism = $mood;
+            }
+        }
+        self::assertNotNull($cynicism, 'Cynicism should be in play');
+        self::assertSame(6, $cynicism['value'], "Cynicism's value should be boosted to 6");
+
+        self::assertTrue($this->cardIsInHand($gameId, 3, $u1), 'Charity should have moved from the discard pile into the human opponent\'s hand');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::avoidanceHasAGoodReasonToPlay()/
      * avoidanceBestDirection() (see BotPlayerServiceTest for the policy
      * itself in isolation) through the FULL advanceAutomatedTurns() ->

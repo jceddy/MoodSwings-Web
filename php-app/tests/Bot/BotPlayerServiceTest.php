@@ -341,6 +341,101 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(['direction' => 'left'], $action['choices']);
     }
 
+    /**
+     * Cynicism (id 62, value 3) is deprioritized behind a higher-value
+     * card (Apathy, id 55, value 4, no ability of its own) when neither
+     * trigger applies: no discard-pile card to give away at all, and
+     * nobody's own round score makes playing Cynicism the deciding
+     * difference (both players start at 0, and 0 is not strictly below
+     * 0).
+     */
+    public function testChooseActionDeprioritizesCynicismWithNoGoodReason(): void
+    {
+        $state = $this->boardState(hands: [1 => [62, 55]]);
+
+        $action = $this->bot->chooseAction($state, [62, 55], 1);
+
+        self::assertSame(55, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Cynicism is still played -- deprioritized
+     * WHEN, never skipped outright, the same "save it for later, but
+     * still play it eventually" treatment Rationalization gets. No
+     * discard-pile card exists to give away, so it's played unboosted.
+     */
+    public function testChooseActionStillPlaysCynicismUnboostedWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [62]]);
+
+        $action = $this->bot->chooseAction($state, [62], 1);
+
+        self::assertSame(62, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * A cheap discard-pile card (Charity, id 3, value 1, well under
+     * CYNICISM_LOW_VALUE_DISCARD_THRESHOLD) makes Cynicism worth playing
+     * right away -- boosted, since giving an opponent back a card this
+     * weak barely helps them and the +3 (6 minus Cynicism's own printed
+     * 3) is effectively free. Player 2 is the only other active player,
+     * so it's also the only legal recipient.
+     */
+    public function testChooseActionBoostsCynicismWithACheapDiscardPileCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [62], 2 => [3]]);
+        $state->moveHandToDiscard(2, 3);
+
+        $action = $this->bot->chooseAction($state, [62], 1);
+
+        self::assertSame(62, $action['card_id']);
+        self::assertSame(['discard_card_id' => 3, 'recipient_player_id' => 2], $action['choices']);
+    }
+
+    /**
+     * No cheap discard-pile card exists here, but playing Cynicism for
+     * its own plain printed value (3, unboosted) would be the deciding
+     * difference between the bot's own score and the rival's (Cruelty,
+     * id 61, value 3, in play for player 2 puts their total at 3 against
+     * the bot's own 0), and nothing ELSE playable (Charity, id 3, value
+     * 1) offers as big a swing on its own -- "fine to play Cynicism for
+     * no extra value" per the maintainer.
+     */
+    public function testChooseActionPlaysCynicismUnboostedWhenItDecidesTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [62, 3], 2 => [61]]);
+        $state->moveHandToInPlay(2, 61);
+
+        $action = $this->bot->chooseAction($state, [62, 3], 1);
+
+        self::assertSame(62, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * The same round-deciding setup as above, but this time Dignity (id
+     * 8, value 3, tied with Cynicism's own printed value) is ALSO
+     * playable -- since it already offers the same 3-point swing on its
+     * own, Cynicism doesn't need to be the one that closes the gap, so
+     * it stays deprioritized (PHP_INT_MIN) even though the round-deciding
+     * trigger itself is satisfied. Cynicism is listed FIRST in
+     * $playableCardIds specifically to prove this isn't just a tie won
+     * by array order (PHP's stable sort would otherwise favor whichever
+     * of two equal-priority candidates came first) -- Dignity wins
+     * outright because Cynicism's own priority here is genuinely lower,
+     * not merely tied and second in line.
+     */
+    public function testChooseActionKeepsCynicismDeprioritizedWhenAnotherCardAlreadyDecidesTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [62, 8], 2 => [61]]);
+        $state->moveHandToInPlay(2, 61);
+
+        $action = $this->bot->chooseAction($state, [62, 8], 1);
+
+        self::assertSame(8, $action['card_id']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();
