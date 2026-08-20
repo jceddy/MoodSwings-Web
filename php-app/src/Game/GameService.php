@@ -850,13 +850,17 @@ final class GameService
         // 'custom_duel' -- the one deck_type that DOES need per-player
         // setup, but which this call itself supplies on the bot's behalf
         // via $botDecklistText/$botSavedDecklistId below, rather than the
-        // bot ever needing to submit one itself. See botsSupportedFor()'s
-        // own docblock for why 'draft' stays excluded. Checked up front,
-        // ahead of the deck-type-specific validation/building below, so a
-        // doomed request never gets as far as e.g. parsing a decklist.
+        // bot ever needing to submit one itself. Issue #359 additionally
+        // supports every draft-based deck_type (see botsSupportedFor()'s
+        // own docblock) -- a bot seated there makes its own picks via
+        // advanceBotDraftTurn() instead of needing anything supplied here
+        // at creation time, same as every other bot-supported deck_type.
+        // Checked up front, ahead of the deck-type-specific validation/
+        // building below, so a doomed request never gets as far as e.g.
+        // parsing a decklist.
         $botUserId = $this->botUserIdAmong($userIds);
         if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft game');
         }
         if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
             throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
@@ -1103,10 +1107,25 @@ final class GameService
     private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'];
 
     /**
+     * Every draft-based deck_type -- the same 5-item list already
+     * repeated inline throughout this file's own draft methods (each
+     * predating this constant), pulled out here purely for
+     * botsSupportedFor()/advanceBotDraftTurn() (issue #359) rather than
+     * as a wholesale refactor of every existing inline copy.
+     */
+    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'];
+
+    /**
      * Whether a practice bot (issue #140) can be seated in a game with
-     * this $format/$deckType combination -- every format except 'draft',
-     * which needs a bot to make its own draft picks (BotPlayerService
-     * doesn't implement that). Team Play (issue #360) needed
+     * this $format/$deckType combination. Every draft-based deck_type
+     * (DRAFT_DECK_TYPES) is supported regardless of format -- issue
+     * #359 taught BotPlayerService/advanceBotDraftTurn() how to make a
+     * bot's own draft pick and deck-building trim for all 5, so unlike
+     * every deck_type below (which needs no per-player setup a bot
+     * can't already skip, or gets one supplied for it at creation time),
+     * a draft deck_type's bot support lives entirely in
+     * advanceAutomatedTurns()'s own new draft branch, not here or in
+     * createGame() at all. Team Play (issue #360) needed
      * advanceAutomatedTurns() to learn two new frozen-round states first
      * -- a bot answering Open/Closed Team Play's own turn-order/draw-
      * recipient propose/confirm decision (see advanceBotTeamDecision())
@@ -1134,6 +1153,22 @@ final class GameService
     private function botsSupportedFor(string $format, string $deckType): bool
     {
         if ($format === 'duel' && $deckType === 'custom_duel') {
+            return true;
+        }
+        if (in_array($format, ['draft', 'team', 'closed_team'], true) && in_array($deckType, self::DRAFT_DECK_TYPES, true)) {
+            // Issue #359: BotPlayerService now knows how to make a draft
+            // pick for every one of the 5 draft deck_types (see
+            // advanceBotDraftTurn()), independent of format -- Open/
+            // Closed Team Play's own draft support (issue #362) already
+            // drafts exactly the same way ('team'/'closed_team' only
+            // change seating/scoring, applied afterward -- see
+            // createGame()'s own comment on that), so a bot fills one of
+            // those 4 seats and drafts/builds a deck no differently than
+            // it would in plain 'draft' format; it just never gets any
+            // benefit from Open Team Play's own shared-pool deck-building
+            // widening (see chooseDraftDeck()'s own docblock -- its own
+            // drafted pool alone is always enough to clear the format's
+            // minimum deck size regardless).
             return true;
         }
 
@@ -3087,14 +3122,9 @@ final class GameService
      *
      * @param int[] $deckCardIds
      */
-    public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
+    private static function draftMinDeckSizeFor(string $deckType): int
     {
-        $game = $this->fetchGame($gameId);
-        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
-            throw new GameStateException("Game {$gameId} is not a draft game");
-        }
-        $draftMatchId = (int) $game['draft_match_id'];
-        $minDeckSize = match ($game['deck_type']) {
+        return match ($deckType) {
             'quick_draft' => self::QUICK_DRAFT_MIN_DECK_SIZE,
             'winston_draft' => self::WINSTON_MIN_DECK_SIZE,
             'grid_draft' => self::GRID_DRAFT_MIN_DECK_SIZE,
@@ -3106,6 +3136,16 @@ final class GameService
             // this same floor already.
             'tiered_rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
         };
+    }
+
+    public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
+    {
+        $game = $this->fetchGame($gameId);
+        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+        $minDeckSize = self::draftMinDeckSizeFor($game['deck_type']);
         $maxDeckSize = null;
         $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
 
@@ -4322,6 +4362,25 @@ final class GameService
 
         $lastResult = null;
         for ($i = 0; $i < self::MAX_AUTOMATED_ACTIONS_PER_REQUEST; $i++) {
+            // A still-drafting/deck-building game (issue #359) is checked
+            // even before the team decision below -- exactly the same
+            // "needs no round" reasoning: draft_matches.tiers/piles/grid/
+            // pool state predates game_rounds entirely (see
+            // submitDraftDeck()'s own docblock -- games.status stays
+            // 'waiting' and no round exists until startGame() actually
+            // deals the match), so currentRound() below would just throw
+            // and break every single time for a game still drafting,
+            // with no later branch ever getting a chance to drive it.
+            // advanceBotDraftTurn() is always safe to try unconditionally
+            // here for the same reason advanceBotTeamDecision() already
+            // is: a no-op (null) for any game that isn't a bot-seated
+            // draft currently mid-draft/deck-building.
+            $draftResult = $this->advanceBotDraftTurn($gameId);
+            if ($draftResult !== null) {
+                $lastResult = $draftResult;
+                continue;
+            }
+
             // Team Play's own turn_order/draw_recipient decision (see
             // activeTeamDecision()) is checked FIRST, before even trying
             // to load a currently-in-progress round below -- a bug caught
@@ -4521,6 +4580,421 @@ final class GameService
         }
 
         return $this->confirmTeamDecision($gameId, $confirmerId, true);
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own draft-phase branch (issue #359) --
+     * see that method's own call site for why this has to run before
+     * currentRound() is ever loaded. Dispatches on draft_matches.status:
+     * 'drafting' hands off to whichever of the 5 per-format
+     * advanceBotXDraftPick() helpers matches $game['deck_type'], each of
+     * which reads just enough state to know whether a SEATED BOT needs
+     * to act right now and, if so, what its legal candidates are, then
+     * submits through the exact same public submitXDraftPick() method a
+     * human's own request would hit -- this method itself never mutates
+     * draft state directly, only decides whether/how to call into that
+     * same public surface. 'deck_building' submits one not-yet-submitted
+     * bot's own trimmed deck if any bot still needs one, or -- once
+     * every bot here already has one in -- tries starting the game
+     * outright (tryAutoStartDraftGame()), since a bot-seated draft has
+     * no browser polling on the bot's own behalf to do what the
+     * frontend's own autoStartGameIfReady() does for a human's client.
+     * Any other draft_matches.status (or no bots seated in this match at
+     * all) is simply nothing for a bot to do here.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function advanceBotDraftTurn(int $gameId): ?array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['status'] !== 'waiting' || $game['draft_match_id'] === null
+            || !in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true)) {
+            return null;
+        }
+
+        $draftMatchId = (int) $game['draft_match_id'];
+        $botUserIds = $this->draftMatchBotUserIds($draftMatchId);
+        if ($botUserIds === []) {
+            return null;
+        }
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+
+        if ($match['status'] === 'deck_building') {
+            $result = $this->advanceBotDraftDeck($gameId, $draftMatchId, $botUserIds, $game['deck_type']);
+            if ($result !== null) {
+                return $result;
+            }
+
+            $this->tryAutoStartDraftGame($gameId);
+
+            return null;
+        }
+
+        if ($match['status'] !== 'drafting') {
+            return null; // match already completed/abandoned -- nothing left for a bot to do
+        }
+
+        return match ($game['deck_type']) {
+            'quick_draft' => $this->advanceBotQuickDraftPick($gameId, $draftMatchId, $match, $botUserIds),
+            'winston_draft' => $this->advanceBotWinstonDraftPick($gameId, $draftMatchId, $botUserIds),
+            'grid_draft' => $this->advanceBotGridDraftPick($gameId, $draftMatchId, $botUserIds),
+            'rotisserie_draft' => $this->advanceBotRotisserieDraftPick($gameId, $draftMatchId, $botUserIds),
+            'tiered_rotisserie_draft' => $this->advanceBotTieredRotisserieDraftPick($gameId, $draftMatchId, $botUserIds),
+        };
+    }
+
+    /**
+     * Quick Draft's own simultaneous-per-stage bot pick -- unlike the
+     * other 4 formats below, there's no single "current turn" column to
+     * read (see submitQuickDraftPick()'s own docblock): every seated
+     * player picks independently once a stage opens, so this finds the
+     * round's own current stage first (the lowest stage number that
+     * doesn't yet have every seat's own pick recorded), then acts for
+     * the first bot that hasn't submitted ITS OWN pile+stage pick yet --
+     * one bot's pick per call, same as every other advanceBotXDraftPick()
+     * here, relying on advanceAutomatedTurns()'s own loop to keep
+     * calling back around for the rest. Mirrors submitQuickDraftPick()'s
+     * own pile-ownership seat arithmetic exactly (has to -- this decides
+     * WHICH pile a bot is even looking at before it can score anything
+     * in it).
+     */
+    private function advanceBotQuickDraftPick(int $gameId, int $draftMatchId, array $match, array $botUserIds): ?array
+    {
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $playerCount = count($userIds);
+        $roundNumber = (int) $match['current_round'];
+
+        $pdo = Connection::get();
+        $stageCountStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
+        );
+
+        $currentStage = null;
+        for ($stage = 1; $stage <= $playerCount; $stage++) {
+            $stageCountStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'stage' => $stage]);
+            if ((int) $stageCountStmt->fetchColumn() < $playerCount) {
+                $currentStage = $stage;
+                break;
+            }
+        }
+        if ($currentStage === null) {
+            return null; // every stage this round is already complete -- the round itself just hasn't advanced yet
+        }
+
+        $direction = self::quickDraftPassDirection($roundNumber);
+        $existingStmt = $pdo->prepare(
+            'SELECT id FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND pile_owner_user_id = :owner AND stage_number = :stage'
+        );
+        $drawnStmt = $pdo->prepare(
+            'SELECT drawn_card_ids FROM draft_round_picks WHERE draft_match_id = :match_id AND user_id = :owner AND round_number = :round'
+        );
+        $priorStagesStmt = $pdo->prepare(
+            'SELECT kept_card_ids FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND pile_owner_user_id = :owner AND stage_number < :stage'
+        );
+
+        foreach ($botUserIds as $botUserId) {
+            $seatIndex = array_search($botUserId, $userIds, true);
+            $pileOwnerUserId = $userIds[self::mod($seatIndex - ($currentStage - 1) * $direction, $playerCount)];
+
+            $existingStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'owner' => $pileOwnerUserId, 'stage' => $currentStage]);
+            if ($existingStmt->fetchColumn() !== false) {
+                continue; // this bot already submitted its own pick for this stage
+            }
+
+            $drawnStmt->execute(['match_id' => $draftMatchId, 'owner' => $pileOwnerUserId, 'round' => $roundNumber]);
+            $availableCardIds = array_map(intval(...), json_decode((string) $drawnStmt->fetchColumn(), true));
+
+            if ($currentStage > 1) {
+                $priorStagesStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'owner' => $pileOwnerUserId, 'stage' => $currentStage]);
+                foreach ($priorStagesStmt->fetchAll(PDO::FETCH_COLUMN) as $keptJson) {
+                    $availableCardIds = $this->multisetSubtract($availableCardIds, array_map(intval(...), json_decode((string) $keptJson, true)));
+                }
+            }
+
+            $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $botUserId);
+            $picks = $this->bots->chooseDraftCards($availableCardIds, self::QUICK_DRAFT_KEEP_PER_STAGE, $draftedSoFar, $this->draftBotScoringData());
+
+            return $this->submitQuickDraftPick($gameId, $botUserId, $roundNumber, $currentStage, $picks);
+        }
+
+        return null; // every seated bot already has its own pick in for this stage -- waiting on a human
+    }
+
+    /**
+     * Winston Draft's own bot take/pass -- draft_winston_state.current_player_user_id
+     * is a genuine single-current-turn column (unlike Quick Draft above),
+     * so this is a plain "is it a bot's turn" check against the single
+     * currently active pile. An empty active pile (possible once the
+     * shared deck itself runs out -- see submitWinstonDraftPick()'s own
+     * take/pass branches) always passes outright rather than asking
+     * BotPlayerService to score an empty list.
+     */
+    private function advanceBotWinstonDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_winston_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentPlayerUserId = (int) $state['current_player_user_id'];
+        if (!in_array($currentPlayerUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $currentPileNumber = (int) $state['current_pile_number'];
+        $pileCardIds = array_map(intval(...), json_decode((string) $state["pile_{$currentPileNumber}_card_ids"], true));
+        if ($pileCardIds === []) {
+            return $this->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentPlayerUserId);
+        $action = $this->bots->chooseWinstonAction($pileCardIds, $draftedSoFar, $this->draftBotScoringData());
+
+        return $this->submitWinstonDraftPick($gameId, $currentPlayerUserId, $action);
+    }
+
+    /**
+     * Grid Draft's own bot row/column pick -- draft_grid_state.current_turn_user_id
+     * is a single-current-turn column, same shape as Winston Draft
+     * above. Builds every currently legal line (at least 1 non-null
+     * cell, same requirement submitGridDraftPick() itself enforces) the
+     * same way a human's own frontend grid would show them, before
+     * handing the whole set to BotPlayerService::chooseGridLine().
+     */
+    private function advanceBotGridDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentTurnUserId = (int) $state['current_turn_user_id'];
+        if (!in_array($currentTurnUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $gridSize = self::gridDraftGridSize(count($userIds));
+        $grid = json_decode((string) $state['grid_card_ids'], true);
+
+        $candidateLines = [];
+        foreach (['row', 'column'] as $axis) {
+            for ($index = 0; $index < $gridSize; $index++) {
+                $cardIds = [];
+                foreach ($this->gridDraftLineCells($axis, $index, $gridSize) as $cell) {
+                    if ($grid[$cell] !== null) {
+                        $cardIds[] = (int) $grid[$cell];
+                    }
+                }
+                if ($cardIds !== []) {
+                    $candidateLines[] = ['axis' => $axis, 'index' => $index, 'cardIds' => $cardIds];
+                }
+            }
+        }
+        if ($candidateLines === []) {
+            return null; // shouldn't happen -- the round would already have advanced
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentTurnUserId);
+        $line = $this->bots->chooseGridLine($candidateLines, $draftedSoFar, $this->draftBotScoringData());
+
+        return $this->submitGridDraftPick($gameId, $currentTurnUserId, $line['axis'], $line['index']);
+    }
+
+    /**
+     * Rotisserie Draft's own bot pick -- draft_rotisserie_state.current_turn_user_id
+     * is a single-current-turn column, same shape as Winston/Grid Draft
+     * above; the whole shared pool is always legal.
+     */
+    private function advanceBotRotisserieDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentTurnUserId = (int) $state['current_turn_user_id'];
+        if (!in_array($currentTurnUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $pool = array_map(intval(...), json_decode((string) $state['pool_card_ids'], true));
+        if ($pool === []) {
+            return null; // shouldn't happen -- the draft would already be complete
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentTurnUserId);
+        $cardIds = $this->bots->chooseDraftCards($pool, 1, $draftedSoFar, $this->draftBotScoringData());
+
+        return $this->submitRotisserieDraftPick($gameId, $currentTurnUserId, $cardIds[0]);
+    }
+
+    /**
+     * Tiered Rotisserie Draft's own bot pick -- draft_tiered_rotisserie_state.current_turn_user_id
+     * is a single-current-turn column, same shape as base Rotisserie
+     * Draft above; only the CURRENT tier's own pool_card_ids (see
+     * tieredRotisserieDraftTierIndexFor()) is legal, exactly as
+     * submitTieredRotisserieDraftPick() itself enforces.
+     */
+    private function advanceBotTieredRotisserieDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentTurnUserId = (int) $state['current_turn_user_id'];
+        if (!in_array($currentTurnUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $tiers = json_decode((string) $state['tiers'], true);
+        $tierIndex = self::tieredRotisserieDraftTierIndexFor($tiers, count($userIds), (int) $state['pick_index']);
+        $pool = array_map(intval(...), $tiers[$tierIndex]['pool_card_ids']);
+        if ($pool === []) {
+            return null; // shouldn't happen -- the draft would already be complete
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentTurnUserId);
+        $cardIds = $this->bots->chooseDraftCards($pool, 1, $draftedSoFar, $this->draftBotScoringData());
+
+        return $this->submitTieredRotisserieDraftPick($gameId, $currentTurnUserId, $cardIds[0]);
+    }
+
+    /**
+     * Submits a not-yet-submitted seated bot's own deck once drafting has
+     * finished (draft_matches.status 'deck_building') -- chooseDraftDeck()'s
+     * trim-to-$minDeckSize policy against that bot's own drafted_card_ids
+     * alone (never Open Team Play's own wider shared-pool option -- see
+     * botsSupportedFor()'s own docblock for why that's fine: a bot's
+     * personal pool always already clears the floor on its own). Acts
+     * for at most one bot per call, same "one action, let the loop call
+     * back around" convention as every advanceBotXDraftPick() above.
+     * Deliberately unconditional on which game of a best-of-three match
+     * this is -- deck_card_ids is reset to NULL for every game after the
+     * first (advanceDraftMatch()), so a returning bot here is really
+     * just re-submitting the exact same chooseDraftDeck() result all
+     * over again (deterministic -- same drafted pool in, same trimmed
+     * deck out), never asked to sideboard differently.
+     */
+    private function advanceBotDraftDeck(int $gameId, int $draftMatchId, array $botUserIds, string $deckType): ?array
+    {
+        $placeholders = implode(',', array_fill(0, count($botUserIds), '?'));
+        $stmt = Connection::get()->prepare(
+            "SELECT user_id, drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = ? AND user_id IN ({$placeholders})"
+        );
+        $stmt->execute([$draftMatchId, ...$botUserIds]);
+
+        foreach ($stmt->fetchAll() as $row) {
+            if ($row['deck_card_ids'] !== null) {
+                continue; // this bot already has a deck submitted for this game
+            }
+
+            $draftedCardIds = array_map(intval(...), json_decode((string) $row['drafted_card_ids'], true));
+            $minDeckSize = self::draftMinDeckSizeFor($deckType);
+            $deckCardIds = $this->bots->chooseDraftDeck($draftedCardIds, $minDeckSize, $this->draftBotScoringData());
+
+            $botUserId = (int) $row['user_id'];
+            $this->submitDraftDeck($gameId, $botUserId, $deckCardIds);
+
+            return ['bot_action' => 'draft_deck', 'user_id' => $botUserId];
+        }
+
+        return null; // every seated bot already has a deck in -- only humans left to wait on, if any
+    }
+
+    /**
+     * Draft's own analog of the frontend's autoStartGameIfReady() (issue
+     * #359) -- a bot-seated draft has no browser polling on the bot's
+     * own behalf to notice "every seat now has a submitted deck" and
+     * fire startGame() the way a human's own client does. Silently does
+     * nothing if the game isn't actually ready yet (some human still
+     * hasn't submitted) or has already been started by a concurrent
+     * request -- startGame() itself is the single source of truth for
+     * both checks, so this just lets its own GameStateException fall
+     * through unused, the same tolerance the frontend's own version
+     * documents ("the next regular poll picks up whatever the real
+     * state is").
+     */
+    private function tryAutoStartDraftGame(int $gameId): void
+    {
+        try {
+            $this->startGame($gameId);
+        } catch (GameStateException) {
+            // Not ready yet (a human still hasn't submitted), or already
+            // started by a concurrent request -- either way, nothing
+            // more to do here.
+        }
+    }
+
+    /**
+     * @return int[] every draft_match_players.user_id in $draftMatchId
+     *     who's a practice bot (users.is_bot) -- draft state throughout
+     *     this file is keyed by user_id, not game_players.id (see
+     *     submitQuickDraftPick()'s own docblock for why), so this can't
+     *     reuse botGamePlayerIds() above.
+     */
+    private function draftMatchBotUserIds(int $draftMatchId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT dmp.user_id FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id AND u.is_bot = 1'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * @return int[] $userId's own drafted_card_ids for $draftMatchId so
+     *     far -- NULL (never yet written) for two different reasons
+     *     depending on format: Winston/Grid/(Tiered) Rotisserie Draft
+     *     accumulate incrementally (appendDraftedCardIds()), so NULL only
+     *     means literally zero picks made yet; Quick Draft's own column
+     *     stays NULL for the WHOLE draft until finalizeQuickDraft() writes
+     *     it all at once at the very end (its own per-pick state lives in
+     *     draft_pile_stage_picks instead -- see submitQuickDraftPick()'s
+     *     own docblock), so mid-draft this always reads as "nothing yet"
+     *     there regardless of how many picks a Quick Draft bot has
+     *     actually made. Either way, "nothing yet" is the right answer
+     *     for a caller scoring what to pick NEXT -- there's no synergy
+     *     bonus to apply for a mythic that isn't reflected here yet.
+     */
+    private function draftedCardIdsFor(int $draftMatchId, int $userId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+        );
+        $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+        $raw = $stmt->fetchColumn();
+
+        return $raw !== false && $raw !== null ? array_map(intval(...), json_decode((string) $raw, true)) : [];
+    }
+
+    /**
+     * BotPlayerService's own draft-pick scoring inputs (issue #359),
+     * bundled once per advanceBotDraftTurn() call rather than re-queried
+     * by every individual draftCardScore() call within it -- see
+     * BotPlayerService::chooseDraftCards()'s own docblock for the shape.
+     *
+     * @return array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>}
+     */
+    private function draftBotScoringData(): array
+    {
+        return [
+            'rowsById' => $this->loadCardCatalog()['rowsById'],
+            'synergyPartnersByMythicId' => CardCatalog::loadSynergyPartnersByMythicId(),
+            'deckWinRatesByCardId' => $this->cardStats->deckWinRatesByCardId(),
+        ];
     }
 
     /**
@@ -6087,13 +6561,35 @@ final class GameService
      * finalizeWinstonDraft()'s under-12-cards auto-loss branch, which
      * completes the match without game 1 ever completing (see the
      * migration's own comment on why that still counts here even though
-     * recordGameCompletionStats() never ran for it).
+     * recordGameCompletionStats() never ran for it). Skips entirely if
+     * any seated player is a practice bot (issue #359 -- draft matches
+     * couldn't have one at all until then, the same "excluded from
+     * lifetime/card stats" rule recordGameCompletionStats() already
+     * applies elsewhere), via the same containsBot pattern -- a bot never
+     * has a session to view its own (nonexistent) stats page through
+     * regardless, so this is purely about not leaving stray
+     * user_lifetime_stats rows behind for one.
      */
     private function recordMatchCompletionStats(int $draftMatchId, int $winnerUserId): void
     {
-        $stmt = Connection::get()->prepare('SELECT user_id FROM draft_match_players WHERE draft_match_id = :match_id');
+        $stmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, u.is_bot FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :match_id'
+        );
         $stmt->execute(['match_id' => $draftMatchId]);
-        $userIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $players = $stmt->fetchAll();
+
+        $containsBot = false;
+        foreach ($players as $player) {
+            if ((bool) $player['is_bot']) {
+                $containsBot = true;
+                break;
+            }
+        }
+        if ($containsBot) {
+            return;
+        }
+
+        $userIds = array_map(static fn (array $player): int => (int) $player['user_id'], $players);
 
         $this->bumpLifetimeStats([$winnerUserId], 'match_wins');
         $this->bumpLifetimeStats(array_diff($userIds, [$winnerUserId]), 'match_losses');

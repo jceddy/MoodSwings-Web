@@ -15,10 +15,17 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with one deliberate exception:
+ * field-filling policy this builds on -- with two deliberate exceptions:
  * shouldAttemptValueBoostDiscard() below, a scoring-aware, partly
  * probabilistic policy for Dignity/Embarrassment/Cheer/Delight's own
- * "you may discard a card to boost this mood's value" choice.
+ * "you may discard a card to boost this mood's value" choice; and the
+ * draft-pick family (chooseDraftCard()/chooseWinstonAction()/
+ * chooseGridLine()/chooseDraftDeck(), issue #359) below, which reads
+ * externally-curated data (CardCatalog's own draft_priority_score/
+ * synergy partners, see migration 0143) plus CardStatsService's deck
+ * win rate instead of just a card's own printed value -- there's no
+ * BoardState yet during drafting for the "highest printed value" bias
+ * every other method here uses to even read from.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -203,6 +210,232 @@ final class BotPlayerService
     private function baseValue(BoardState $state, int $cardId): int
     {
         return $state->catalogRow($state->effectiveCardId($cardId))['baseValue'];
+    }
+
+    /**
+     * Issue #359's own draft practice bots' pick-priority bonus for a
+     * card that partners one of the 5 build-around mythics (see
+     * CardCatalog::loadSynergyPartnersByMythicId()'s own docblock) the
+     * bot has already drafted -- large enough (roughly the very top
+     * draft_priority_score tier) that a partner reliably beats an
+     * unrelated card of similar raw quality, without letting a
+     * genuinely weak filler card (draft_priority_score 1) leapfrog a
+     * strong generic card it isn't even close to (e.g. Paranoia's own
+     * 20). Stacks once per already-drafted mythic a card partners --
+     * rare in practice, since most draft formats only ever award a
+     * single mythic total, but a card that supports two drafted
+     * build-arounds really is better than one that supports only one.
+     */
+    private const SYNERGY_PARTNER_BONUS = 40.0;
+
+    /**
+     * The fewest recorded deck appearances (CardStatsService::
+     * deckWinRatesByCardId()) before a card's own win rate is trusted
+     * enough to even nudge a draft pick -- below this, a small sample
+     * could read 100% or 0% off a single game, noise indistinguishable
+     * from signal.
+     */
+    private const MIN_DECK_STATS_SAMPLE = 10;
+
+    /**
+     * Win rate's own max contribution to a draft candidate's score --
+     * kept comfortably under 1.0 (the smallest gap between two distinct
+     * draft_priority_score tiers, e.g. 1 vs 2) so it can only ever break
+     * a tie between cards that already landed on the exact same rank +
+     * synergy score, never override the curated ranking/synergy data
+     * itself.
+     */
+    private const DECK_WIN_RATE_WEIGHT = 0.9;
+
+    /**
+     * A draft candidate's own pick priority for issue #359's practice
+     * bots, combining the three signals confirmed by the maintainer:
+     * CardCatalog's own curated draft_priority_score is the primary,
+     * always-present signal; SYNERGY_PARTNER_BONUS is added once for
+     * every already-drafted mythic (from $draftedCardIds) $cardId
+     * partners with; and the card's own recorded CardStatsService deck
+     * win rate nudges the score by up to DECK_WIN_RATE_WEIGHT, but only
+     * once it has at least MIN_DECK_STATS_SAMPLE games on record --
+     * purely a tiebreaker among cards the curated data alone can't
+     * separate, never something that outranks it.
+     *
+     * @param int[] $draftedCardIds every card the bot has already
+     *     drafted this match (checked for synergy partnerships, not
+     *     re-scored itself)
+     * @param array<int, array{draftPriorityScore: int}> $catalogRowsById
+     * @param array<int, int[]> $synergyPartnersByMythicId mythic card id
+     *     => that mythic's own partner card ids
+     * @param array<int, array{times_in_deck: int, deck_win_rate: ?float}> $deckWinRatesByCardId
+     */
+    private function draftCardScore(
+        int $cardId,
+        array $draftedCardIds,
+        array $catalogRowsById,
+        array $synergyPartnersByMythicId,
+        array $deckWinRatesByCardId,
+    ): float {
+        $score = (float) ($catalogRowsById[$cardId]['draftPriorityScore'] ?? 1);
+
+        foreach ($draftedCardIds as $draftedCardId) {
+            if (in_array($cardId, $synergyPartnersByMythicId[$draftedCardId] ?? [], true)) {
+                $score += self::SYNERGY_PARTNER_BONUS;
+            }
+        }
+
+        $stats = $deckWinRatesByCardId[$cardId] ?? null;
+        if ($stats !== null && $stats['deck_win_rate'] !== null && $stats['times_in_deck'] >= self::MIN_DECK_STATS_SAMPLE) {
+            $score += $stats['deck_win_rate'] * self::DECK_WIN_RATE_WEIGHT;
+        }
+
+        return $score;
+    }
+
+    /**
+     * The $count highest-draftCardScore() candidates in $candidateCardIds
+     * -- Quick Draft's per-stage pile (QUICK_DRAFT_KEEP_PER_STAGE > 1),
+     * Rotisserie/Tiered Rotisserie Draft's shared pool ($count always 1
+     * there), all shaped identically for this purpose: a flat list of
+     * legal card ids to pick $count of. $candidateCardIds always has at
+     * least $count entries (every caller already confirmed that much
+     * legal supply exists before calling this).
+     *
+     * @param int[] $candidateCardIds
+     * @param int[] $draftedCardIds
+     * @param array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     * @return int[] exactly $count card ids
+     */
+    public function chooseDraftCards(array $candidateCardIds, int $count, array $draftedCardIds, array $draftScoringData): array
+    {
+        usort($candidateCardIds, fn (int $a, int $b) => $this->draftCardScore(
+            $b,
+            $draftedCardIds,
+            $draftScoringData['rowsById'],
+            $draftScoringData['synergyPartnersByMythicId'],
+            $draftScoringData['deckWinRatesByCardId'],
+        ) <=> $this->draftCardScore(
+            $a,
+            $draftedCardIds,
+            $draftScoringData['rowsById'],
+            $draftScoringData['synergyPartnersByMythicId'],
+            $draftScoringData['deckWinRatesByCardId'],
+        ));
+
+        return array_slice($candidateCardIds, 0, $count);
+    }
+
+    /**
+     * Winston Draft's own take/pass decision (submitWinstonDraftPick())
+     * on the single currently active pile -- 'take' if the pile's own
+     * best card scores above the catalog-wide average draft_priority_score
+     * (computed from $draftScoringData itself rather than a hardcoded
+     * cutoff, so this stays sensible if the underlying ranking data is
+     * ever rebalanced), 'pass' otherwise. A pile only ever grows as it's
+     * passed, so this never throws away a pile that's merely small --
+     * only one whose cards genuinely aren't worth having yet. Whether
+     * 'pass' is even legal right now (Winston Draft forces a take once
+     * there's nowhere left to pass to) is GameService's own call, not
+     * this method's -- it always answers the pure "is this pile good
+     * enough" question and lets the caller downgrade an illegal 'pass'
+     * to 'take' itself.
+     *
+     * @param int[] $pileCardIds never empty
+     * @param int[] $draftedCardIds
+     * @param array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     */
+    public function chooseWinstonAction(array $pileCardIds, array $draftedCardIds, array $draftScoringData): string
+    {
+        $rowsById = $draftScoringData['rowsById'];
+        $averageScore = array_sum(array_map(
+            static fn (array $row): int => $row['draftPriorityScore'],
+            $rowsById,
+        )) / count($rowsById);
+
+        $bestPileScore = max(array_map(
+            fn (int $cardId) => $this->draftCardScore(
+                $cardId,
+                $draftedCardIds,
+                $rowsById,
+                $draftScoringData['synergyPartnersByMythicId'],
+                $draftScoringData['deckWinRatesByCardId'],
+            ),
+            $pileCardIds,
+        ));
+
+        return $bestPileScore > $averageScore ? 'take' : 'pass';
+    }
+
+    /**
+     * Grid Draft's own row/column choice (submitGridDraftPick()) -- the
+     * candidate line with the highest TOTAL draftCardScore() across its
+     * own non-null cells (a null cell, already taken earlier in the
+     * round, contributes nothing), rather than an average -- a longer
+     * line of decent cards is worth more than a single great one, the
+     * same "every card in the line comes with it" shape a human drafter
+     * actually gets.
+     *
+     * @param array<int, array{axis: string, index: int, cardIds: int[]}> $candidateLines
+     *     every legal row/column (at least one non-null cell); $cardIds
+     *     already excludes null cells
+     * @param int[] $draftedCardIds
+     * @param array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     * @return array{axis: string, index: int}
+     */
+    public function chooseGridLine(array $candidateLines, array $draftedCardIds, array $draftScoringData): array
+    {
+        $lineScore = function (array $line) use ($draftedCardIds, $draftScoringData): float {
+            return array_sum(array_map(
+                fn (int $cardId) => $this->draftCardScore(
+                    $cardId,
+                    $draftedCardIds,
+                    $draftScoringData['rowsById'],
+                    $draftScoringData['synergyPartnersByMythicId'],
+                    $draftScoringData['deckWinRatesByCardId'],
+                ),
+                $line['cardIds'],
+            ));
+        };
+
+        usort($candidateLines, fn (array $a, array $b) => $lineScore($b) <=> $lineScore($a));
+
+        return ['axis' => $candidateLines[0]['axis'], 'index' => $candidateLines[0]['index']];
+    }
+
+    /**
+     * A bot's own drafted-pool trim into a legal deck (submitDraftDeck())
+     * -- the $minDeckSize highest-draftCardScore() cards in
+     * $draftedCardIds, scored against the WHOLE final pool as its own
+     * $draftedCardIds context (so a partner card correctly gets credit
+     * for whichever mythics ended up in the same pool, exactly the
+     * synergy pairing the deck should keep together) -- or every drafted
+     * card, if there are fewer than $minDeckSize (array_slice's own
+     * "shorter than requested" behavior already handles that with no
+     * extra check needed; every real draft format's own pool ends up
+     * well above its $minDeckSize regardless). Submitted unchanged for
+     * every game of a best-of-three match -- see submitDraftDeck()'s own
+     * "no sideboarding" note for bots.
+     *
+     * @param int[] $draftedCardIds
+     * @param array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>} $draftScoringData
+     * @return int[]
+     */
+    public function chooseDraftDeck(array $draftedCardIds, int $minDeckSize, array $draftScoringData): array
+    {
+        $sorted = $draftedCardIds;
+        usort($sorted, fn (int $a, int $b) => $this->draftCardScore(
+            $b,
+            $draftedCardIds,
+            $draftScoringData['rowsById'],
+            $draftScoringData['synergyPartnersByMythicId'],
+            $draftScoringData['deckWinRatesByCardId'],
+        ) <=> $this->draftCardScore(
+            $a,
+            $draftedCardIds,
+            $draftScoringData['rowsById'],
+            $draftScoringData['synergyPartnersByMythicId'],
+            $draftScoringData['deckWinRatesByCardId'],
+        ));
+
+        return array_slice($sorted, 0, $minDeckSize);
     }
 
     /** @return ?array<string, mixed> */

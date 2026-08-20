@@ -5025,28 +5025,30 @@ populate its own bot picker -- see "New game dialog" in
 `web-static/README.md`.
 
 **Scope.** `GameService::botsSupportedFor(string $format, string
-$deckType): bool` -- every format except `draft`, and only for a
-deck_type that needs no PER-PLAYER setup of its own: `structure`,
-`power`, `jceddys_75`, `one_of_each`, and `custom`
-(`BOT_SUPPORTED_DECK_TYPES`), plus one special case: Duel with
-`custom_duel` (see "Practice bots in Duel with a custom decklist"
-below) -- `botsSupportedFor()` returns `true` for that combination
-outright, bypassing `BOT_SUPPORTED_DECK_TYPES` entirely, since a bot's
-decklist there is supplied by its creator up front rather than needing
-the bot to submit one itself the normal way. `custom` belongs in
-`BOT_SUPPORTED_DECK_TYPES` itself (not a `custom_duel`-style special
-case) despite needing a decklist at all: unlike `custom_duel`, it's a
-single TABLE-wide shared deck (`games.custom_deck_card_ids`, built once
-from the human creator's own `decklist_text`/`saved_decklist_id` before
-any seat -- bot or human -- is ever dealt from it; see
-`deckCardIdsFor()`'s `'custom'` branch) rather than a per-seat one, so a
-bot needs to do nothing whatsoever to "have" one -- exactly like
-`structure`/`power`/`jceddys_75`/`one_of_each`. `draft` stays excluded
-because it would need a bot to make its own draft picks
-(`quick_draft`/`winston_draft`/`grid_draft`), which this feature doesn't
-implement. `custom_duel` can never combine with `team`/`closed_team` at
-all (it's Duel-only, checked elsewhere), so its own special case above
-needs no team-format branch of its own. `createGame()` rejects
+$deckType): bool` -- as of issue #359, literally every `deck_type` this
+app has is bot-supported, via one of three routes: `structure`, `power`,
+`jceddys_75`, `one_of_each`, and `custom` (`BOT_SUPPORTED_DECK_TYPES`)
+need no PER-PLAYER setup of their own at all; `custom_duel` (Duel-only)
+gets its own special case (see "Practice bots in Duel with a custom
+decklist" below) since a bot's own decklist there is supplied by its
+creator up front rather than needing the bot to submit one itself the
+normal way; and every draft-based `deck_type` (`quick_draft`/
+`winston_draft`/`grid_draft`/`rotisserie_draft`/`tiered_rotisserie_draft`,
+`DRAFT_DECK_TYPES`) is supported regardless of `format` -- see "Practice
+bots in draft formats" below for how a bot makes its own picks there,
+entirely independent of this method and `createGame()` (nothing needs
+supplying up front the way `custom_duel`'s own decklist does). `custom`
+belongs in `BOT_SUPPORTED_DECK_TYPES` itself (not a `custom_duel`-style
+special case) despite needing a decklist at all: unlike `custom_duel`,
+it's a single TABLE-wide shared deck (`games.custom_deck_card_ids`,
+built once from the human creator's own
+`decklist_text`/`saved_decklist_id` before any seat -- bot or human --
+is ever dealt from it; see `deckCardIdsFor()`'s `'custom'` branch)
+rather than a per-seat one, so a bot needs to do nothing whatsoever to
+"have" one -- exactly like `structure`/`power`/`jceddys_75`/
+`one_of_each`. `custom_duel` can never combine with `team`/`closed_team`
+at all (it's Duel-only, checked elsewhere), so its own special case
+above needs no team-format branch of its own. `createGame()` rejects
 (`GameStateException`) any attempt to seat a bot outside this scope,
 checked once, up front, via `botUserIdAmong(array $userIds): ?int` (a
 single `is_bot` lookup against every id in `$userIds`, returning the
@@ -5111,6 +5113,115 @@ AND confirm (or both members' own card passes) back to back, with no
 human ever needing to act. A bot may be the creator's own partner too,
 not just seated on the opposing team -- `partnerUserId`'s own validation
 (`createGame()`) never distinguished bot from human to begin with.
+
+**Practice bots in draft formats (issue #359).** Quick/Winston/Grid/
+Rotisserie/Tiered Rotisserie Draft were originally excluded from bot
+support entirely -- unlike every deck_type above, drafting needs each
+player to make a genuine SEQUENCE of their own decisions (which card(s)
+to keep/take/pick, then how to trim the result into a deck), not
+something a human creator can just supply once up front the way
+`custom_duel`'s own bot decklist works. Two new pieces make this work,
+kept deliberately separate from `BotChoiceResolver`'s own
+`BoardState`-driven policy immediately below, since drafting happens
+entirely BEFORE any `BoardState`/round exists for a game:
+
+- **Data.** `cards.draft_priority_score` (migration `0143`) is an
+  externally-curated general draft-strength ranking across all 133
+  cards (higher = better; tiered, not a strict ordering -- several
+  cards deliberately share a score), imported the same "literal SQL"
+  way migration `0003` seeded the catalog itself, since there's no
+  runtime import path in this codebase for one card set's worth of
+  reference data. `card_synergy_partners` (same migration) is a join
+  table pairing 5 build-around mythics (Validation/Exhilaration/Bliss/
+  Duplicity/Thrill) with 14 curated non-mythic partner cards each --
+  once a bot has drafted one of the 5, its own partners score
+  `SYNERGY_PARTNER_BONUS` (40, roughly the very top draft_priority_score
+  tier) higher for the rest of the draft, stacking once per drafted
+  mythic a card partners (rare in practice -- most formats only ever
+  award one mythic total). `CardStatsService::deckWinRatesByCardId()`
+  (a lighter sibling of `allCardStats()`, skipping the set/collector-number
+  join and every per-format pick-position column a bot's own scoring has
+  no use for) supplies a small, sample-size-gated (`MIN_DECK_STATS_SAMPLE`,
+  10 games) tiebreaker on top of both -- `DECK_WIN_RATE_WEIGHT` (0.9) is
+  kept under the smallest gap between two distinct draft_priority_score
+  tiers, so it can only ever separate two candidates the curated data
+  alone left tied, never override it. All three are combined by
+  `BotPlayerService::draftCardScore()` (private -- every public method
+  below is the actual entry point) and bundled once per driving call via
+  `GameService::draftBotScoringData(): array{rowsById, synergyPartnersByMythicId,
+  deckWinRatesByCardId}` (`CardCatalog::load()`/
+  `CardCatalog::loadSynergyPartnersByMythicId()`/
+  `$cardStats->deckWinRatesByCardId()`) rather than re-queried per
+  candidate.
+- **Policy: `BotPlayerService`'s draft-pick family.**
+  `chooseDraftCards(int[] $candidateCardIds, int $count, int[]
+  $draftedCardIds, array $draftScoringData): int[]` is the shared "pick
+  the $count highest-scored of these" primitive behind THREE of the 5
+  formats' own single-card-at-a-time picks (Quick Draft's per-stage pile
+  with `$count` = `QUICK_DRAFT_KEEP_PER_STAGE`; Rotisserie/Tiered
+  Rotisserie Draft's shared pool with `$count = 1`).
+  `chooseWinstonAction(int[] $pileCardIds, ...): string` answers
+  Winston Draft's own take/pass with 'take' whenever the active pile's
+  own best card beats the catalog-wide average `draft_priority_score`
+  (computed from the data itself, not a hardcoded cutoff) -- a pile only
+  ever grows as it's passed, so this never discards a merely-small pile,
+  only one that's genuinely not worth having yet.
+  `chooseGridLine(array $candidateLines, ...): array{axis, index}` picks
+  Grid Draft's own row/column by highest TOTAL score across a line's
+  non-null cells (not an average -- a longer line of decent cards
+  legitimately beats one great card, same as what a human drafter
+  actually gets for taking it). `chooseDraftDeck(int[] $draftedCardIds,
+  int $minDeckSize, array $draftScoringData): int[]` trims a finished
+  draft down to exactly `$minDeckSize` highest-scored cards, scored
+  against the bot's own WHOLE final pool as its own `$draftedCardIds`
+  context (so a partner card correctly gets synergy credit for whatever
+  mythic ended up alongside it) -- resubmitted unchanged for every game
+  of a best-of-three match (deterministic, same pool in, same deck out;
+  no bot sideboarding).
+- **Wiring: `GameService::advanceBotDraftTurn(int $gameId): ?array`.**
+  Called unconditionally at the very top of `advanceAutomatedTurns()`'s
+  own loop, even before `advanceBotTeamDecision()` -- a still-drafting/
+  deck-building game has no `game_rounds` row at all yet (`games.status`
+  stays `'waiting'` until `startGame()` actually deals the match, well
+  after drafting AND deck-building both finish -- see
+  `submitDraftDeck()`'s own docblock), so `currentRound()` a few lines
+  down would just throw and `break` immediately for one, the same
+  deadlock class issue #360's own team-decision fix already solved for
+  a different frozen state. Dispatches on `draft_matches.status`:
+  `'drafting'` hands off to whichever of 5 `advanceBotXDraftPick()`
+  helpers matches `deck_type`, each reading just enough state to know
+  whether a seated bot needs to act (`draft_*_state.current_turn_user_id`/
+  `current_player_user_id` for Winston/Grid/Rotisserie/Tiered Rotisserie
+  -- a plain single-current-turn check; Quick Draft has no such column
+  at all -- `advanceBotQuickDraftPick()` finds the round's own current
+  STAGE first, then loops every bot seat checking `draft_pile_stage_picks`
+  for one that hasn't submitted yet, since every seated player picks
+  SIMULTANEOUSLY once a stage opens) and, if so, submitting through the
+  exact same public `submitXDraftPick()` method a human's own request
+  would hit -- this method itself never mutates draft state directly.
+  `'deck_building'` submits one not-yet-submitted bot's own trimmed deck
+  (via the ordinary `submitDraftDeck()`, `draftMinDeckSizeFor()` shared
+  with that method's own floor lookup) if any bot still needs one, or --
+  once every bot here already has one in -- calls
+  `tryAutoStartDraftGame()`, which tries `startGame()` and silently
+  swallows a `GameStateException` (not ready yet, some human still
+  hasn't submitted; or already started by a concurrent request) --
+  a bot-seated draft has no browser polling on the bot's own behalf to
+  do what the frontend's own `autoStartGameIfReady()` does for a human's
+  client, so this is that function's server-side analog. `draftMatchBotUserIds(int
+  $draftMatchId): array` (queried against `draft_match_players` joined
+  to `users.is_bot`, since draft state throughout this file is keyed by
+  `user_id`, not `game_players.id` -- see `submitQuickDraftPick()`'s own
+  docblock for why) is this feature's own analog of `botGamePlayerIds()`.
+  Every one of the 6 draft routes (`POST /games/draft/pick`,
+  `/draft/deck`, `/draft/winston-pick`, `/draft/grid-pick`,
+  `/draft/rotisserie-pick`, `/draft/tiered-rotisserie-pick`) calls
+  `advanceAutomatedTurns()` right after its own human mutation succeeds,
+  same as `POST /games/play`/`/pass`/etc. already did -- and `GET
+  /games/state`'s own existing deadlock-safety-net poll covers a draft
+  game exactly the same way it always covered everything else, so an
+  all-bot-except-the-creator draft still advances on nothing more than
+  the creator's own client periodically checking in.
 
 **Picking a legal move: `MoodSwings\Bot\BotChoiceResolver`.** A
 server-side equivalent of `web-static/js/game.js`'s own `fieldOptions()`/

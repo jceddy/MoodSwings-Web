@@ -1521,6 +1521,16 @@ if ($path === '/games/draft/pick' && $method === 'POST') {
 
     try {
         $result = $games->submitQuickDraftPick($gameId, (int) $currentUser['id'], $round, $stage, $cardIds);
+        // Practice bots (issue #359) -- if this pick handed the current
+        // stage/round to a bot (or finished the draft into deck_building
+        // for a bot to submit, or even started the game outright once
+        // every seat, bot or human, had a deck in), drive it right here.
+        // See GameService::advanceBotDraftTurn()'s own docblock; the
+        // human's own $result is left untouched either way -- unlike
+        // /games/play's identical pattern, a further bot pick never
+        // belongs in THIS response, only in whatever the human's own
+        // next poll/action sees.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1537,6 +1547,11 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
 
     try {
         $games->submitDraftDeck($gameId, (int) $currentUser['id'], $cardIds);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical
+        // comment above. This is also what starts the game outright once
+        // this was the very last seat (human or bot) to submit a deck --
+        // see GameService::tryAutoStartDraftGame().
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok']);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1579,6 +1594,8 @@ if ($path === '/games/draft/winston-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitWinstonDraftPick($gameId, (int) $currentUser['id'], $action);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1600,6 +1617,8 @@ if ($path === '/games/draft/grid-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitGridDraftPick($gameId, (int) $currentUser['id'], $axis, $index);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1620,6 +1639,8 @@ if ($path === '/games/draft/rotisserie-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitRotisserieDraftPick($gameId, (int) $currentUser['id'], $cardId);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1639,6 +1660,8 @@ if ($path === '/games/draft/tiered-rotisserie-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitTieredRotisserieDraftPick($gameId, (int) $currentUser['id'], $cardId);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
