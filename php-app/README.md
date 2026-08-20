@@ -5606,6 +5606,31 @@ since it already holds that dependency):
   it grants its own extra play to a chosen OPPONENT, not the acting
   player, so boosting it would help whoever's targeted instead of the
   bot itself.
+
+  **Intimidation** (confirmed by the maintainer) gets a further, related
+  exception: `buildChoicesForCard()` special-cases `effectKey ===
+  'intimidation'` to `intimidationTargetPlayerId()` -- the first active,
+  non-teammate opponent who currently has at least one card in hand, or
+  `null` if none do -- rather than falling through to
+  `CardChoiceSchema`'s own generic per-field loop, which would otherwise
+  leave the optional `target_player_id` field unfilled (a pure no-op
+  play) the same way every other unforced optional field defaults to.
+  Deliberately skips an empty-handed opponent in favor of one who
+  actually has a card to reveal, rather than just the first legal
+  candidate in seat order the way `BotChoiceResolver`'s own generic
+  scope-`'other'`-player default would -- `IntimidationEffect`'s own
+  `pendingDecisionsFor()` silently no-ops against an empty hand, so
+  targeting one on purpose while another qualifying opponent sits right
+  there would waste the whole play. `sortPriorityValue()` demotes
+  Intimidation to `PHP_INT_MIN` (the same treatment Rationalization/
+  Cynicism get) whenever `intimidationTargetPlayerId()` returns `null`
+  -- no non-teammate opponent has a card at all, so playing it right now
+  would accomplish nothing -- "other plays should be prioritized above
+  it" per the maintainer; the instant at least one such opponent has a
+  card, Intimidation reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS`
+  boosted treatment above, with no separate "how good is this target"
+  scoring needed, since any qualifying opponent makes it worth its usual
+  priority.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's
