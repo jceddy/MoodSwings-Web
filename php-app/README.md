@@ -5720,6 +5720,23 @@ since it already holds that dependency):
   `copy_card_id` unfilled, the same default as before this policy
   existed) only when nothing is in play yet, or every in-play mood has a
   to-play cost.
+
+  **Harmony** (confirmed by the maintainer) gets a `sortPriorityValue()`
+  deprioritization, not a targeting exception -- it has no choice_fields
+  of its own at all (`HarmonyEffect::afterPlaying()` never reads
+  `$choices`), so `buildChoicesForCard()` needs no special case for it.
+  Its own extra play is restricted to a card sourced FROM the discard
+  pile (`BoardState::grantExtraPlay()`'s own `['source' => 'discard']`),
+  so with the discard pile completely empty that grant accomplishes
+  nothing -- `sortPriorityValue()` demotes it to `PHP_INT_MIN` (the same
+  treatment Rationalization/Cynicism/Intimidation/Paranoia/Pacifism get)
+  whenever `$state->discardPile() === []`, "avoid playing it until there
+  are cards in the discard pile to play" per the maintainer. Unlike
+  those four, this needs no dedicated "any legal candidate" helper of
+  its own -- Harmony's grant carries no color/value restriction beyond
+  the discard-pile sourcing itself, so a plain non-empty check on the
+  pile is enough. The instant the pile has even one card in it, Harmony
+  reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-

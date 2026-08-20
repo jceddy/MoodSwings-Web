@@ -1350,6 +1350,70 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of sortPriorityValue()'s own Harmony policy (see
+     * BotPlayerServiceTest for the same scenario checked in isolation)
+     * through the FULL advanceAutomatedTurns() -> chooseAction() ->
+     * playMood() lifecycle. With the discard pile completely empty,
+     * Harmony's own extra-play grant (restricted to a card FROM the
+     * discard pile) would accomplish nothing, so the bot should play
+     * Apathy (value 4, plain filler) instead of Harmony (value 2) --
+     * "avoid playing it until there are cards in the discard pile to
+     * play" per the maintainer. The human keeps a card of their own
+     * (Charity) so they have a real legal play once it's their turn --
+     * with an empty hand, the (real, separate) auto-pass-on-empty-hand
+     * feature would pass for them automatically, handing the round right
+     * back to the bot for a second turn where Harmony would legitimately
+     * become its only remaining card, which would make this test about
+     * that interaction instead of Harmony's own targeting (see the
+     * Paranoia integration test above for the exact same gotcha).
+     */
+    public function testBotAvoidsPlayingHarmonyWhenTheDiscardPileIsEmpty(): void
+    {
+        $u1 = $this->insertUser('human17');
+        $botUserId = $this->insertBotUser('bot15');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 123, 'hand', $botPlayerId); // Harmony
+        $this->insertGameCard($gameId, 55, 'hand', $botPlayerId); // Apathy, plain filler
+        $this->insertGameCard($gameId, 3, 'hand', $u1); // Charity, so the human has a real turn to take next
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 55), 'the bot should have played Apathy instead');
+        self::assertTrue($this->cardIsInHand($gameId, 123, ownerUserId: $botUserId), 'Harmony should still be sitting in hand, unplayed');
+    }
+
+    /**
+     * The instant the discard pile has even one card in it, Harmony
+     * reverts to its ordinary EARLY_PRIORITY_EFFECT_KEYS boosted
+     * treatment (it's now worth playing FIRST, ahead of Apathy), and the
+     * resulting discard-sourced extra play should let the bot immediately
+     * follow up by playing that exact discard-pile card too -- proving
+     * the grant it creates is actually usable, not just that Harmony
+     * itself got picked.
+     */
+    public function testBotPlaysHarmonyThenUsesItsDiscardSourcedExtraPlay(): void
+    {
+        $u1 = $this->insertUser('human18');
+        $botUserId = $this->insertBotUser('bot16');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 123, 'hand', $botPlayerId); // Harmony
+        $this->insertGameCard($gameId, 8, 'discard'); // Dignity -- the only legal target for Harmony's own grant
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 123), 'the bot should have played Harmony');
+        self::assertTrue($this->cardIsInPlay($gameId, 8), 'the bot should have used the discard-sourced grant to play Dignity too');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::disillusionmentSafeColor()
      * (see BotPlayerServiceTest for the policy itself in isolation)
      * through the FULL advanceAutomatedTurns() -> respondToDecision() ->

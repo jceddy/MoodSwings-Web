@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with twelve deliberate
+ * field-filling policy this builds on -- with thirteen deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -76,7 +76,12 @@ use MoodSwings\Rules\RoundScorer;
  * the maintainer), which targets generally the highest-value mood
  * currently in play (any owner) when playing Creativity, skipping any
  * candidate whose own printed ability has a "to play" cost the bot might
- * not actually be able to pay -- see that method's own docblock.
+ * not actually be able to pay -- see that method's own docblock; and
+ * sortPriorityValue() once more for Harmony (confirmed by the
+ * maintainer), which deprioritizes it (the same PHP_INT_MIN treatment)
+ * whenever the discard pile is completely empty -- its own extra-play
+ * grant is restricted to a card FROM the discard pile, so with nothing
+ * there to take advantage of, playing it accomplishes nothing.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -509,6 +514,24 @@ final class BotPlayerService
      * forcing a discard, or granting the acting player an extra play --
      * so it too reverts to plain baseValue() once at least one valid
      * target exists.
+     *
+     * Harmony (confirmed by the maintainer) gets the same PHP_INT_MIN
+     * treatment whenever the discard pile is completely empty --
+     * HarmonyEffect grants a single extra play restricted to a card
+     * FROM the discard pile (BoardState::grantExtraPlay()'s own
+     * ['source' => 'discard'] restriction), so with nothing sitting
+     * there to take advantage of, the grant accomplishes nothing and
+     * Harmony's own EARLY_PRIORITY_EFFECT_KEYS boost below would be
+     * rewarding a wasted play. Unlike Intimidation/Paranoia/Pacifism
+     * above, this doesn't need a dedicated "any legal candidate"
+     * helper of its own -- Harmony's grant has no color/value
+     * restriction of its own (just the discard-pile sourcing), so a
+     * plain non-empty check is enough, and there's no choice_field to
+     * fill in either (HarmonyEffect::afterPlaying() never reads
+     * $choices at all, so buildChoicesForCard() needs no special case
+     * for it the way those three do). The instant the discard pile has
+     * even one card in it, Harmony reverts to its ordinary
+     * EARLY_PRIORITY_EFFECT_KEYS boosted treatment above.
      */
     private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
     {
@@ -526,6 +549,9 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'pacifism' && $this->pacifismTargetMoodIds($state, $botGamePlayerId) === []) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'harmony' && $state->discardPile() === []) {
             return PHP_INT_MIN;
         }
 
