@@ -411,4 +411,138 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(111, $action['card_id']);
         self::assertSame(['discard_card_id' => 3], $action['choices']);
     }
+
+    // -- Draft pick scoring (issue #359) -------------------------------------
+
+    /**
+     * A minimal, synthetic draft-scoring dataset -- none of these ids need
+     * to correspond to real catalog cards (chooseDraftCards()/
+     * chooseWinstonAction()/chooseGridLine()/chooseDraftDeck() only ever
+     * read what's passed in here, never the database), so each test below
+     * just picks whichever ids/scores make its own point clearest.
+     *
+     * @param array<int, int> $scoresById card id => draft_priority_score
+     * @param array<int, int[]> $synergyPartnersByMythicId
+     * @param array<int, array{times_in_deck: int, deck_win_rate: ?float}> $deckWinRatesByCardId
+     * @return array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>}
+     */
+    private function draftScoringData(array $scoresById, array $synergyPartnersByMythicId = [], array $deckWinRatesByCardId = []): array
+    {
+        return [
+            'rowsById' => array_map(static fn (int $score): array => ['draftPriorityScore' => $score], $scoresById),
+            'synergyPartnersByMythicId' => $synergyPartnersByMythicId,
+            'deckWinRatesByCardId' => $deckWinRatesByCardId,
+        ];
+    }
+
+    public function testChooseDraftCardsPicksTheHighestScoredCandidates(): void
+    {
+        $data = $this->draftScoringData([101 => 4, 102 => 40, 103 => 1, 104 => 16]);
+
+        $picks = $this->bot->chooseDraftCards([101, 102, 103, 104], 2, draftedCardIds: [], draftScoringData: $data);
+
+        self::assertSame([102, 104], $picks);
+    }
+
+    /**
+     * Card 201 (draft_priority_score 4) is a curated partner of mythic
+     * 999, already drafted -- SYNERGY_PARTNER_BONUS (40) pushes its
+     * effective score to 44, comfortably ahead of card 202's own higher
+     * standalone score (20), which has no synergy with anything drafted.
+     * The unrelated mythic 998 (also drafted) never enters into it --
+     * only 999's own partner list includes 201.
+     */
+    public function testChooseDraftCardsPrioritizesASynergyPartnerOfAnAlreadyDraftedMythic(): void
+    {
+        $data = $this->draftScoringData(
+            scoresById: [201 => 4, 202 => 20, 998 => 40, 999 => 16],
+            synergyPartnersByMythicId: [999 => [201, 555], 998 => [777]],
+        );
+
+        $picks = $this->bot->chooseDraftCards([201, 202], 1, draftedCardIds: [998, 999], draftScoringData: $data);
+
+        self::assertSame([201], $picks);
+    }
+
+    /**
+     * Card 302's own recorded 100% deck win rate (10 games, right at
+     * MIN_DECK_STATS_SAMPLE) only ever breaks a tie -- it and card 301
+     * share the same draft_priority_score (8), so the win-rate nudge is
+     * what separates them; it could never have been enough on its own to
+     * overtake a genuinely higher-ranked card (DECK_WIN_RATE_WEIGHT is
+     * kept well under the smallest gap between two distinct score tiers).
+     */
+    public function testChooseDraftCardsBreaksATieUsingDeckWinRateOnceSampleSizeIsMet(): void
+    {
+        $data = $this->draftScoringData(
+            scoresById: [301 => 8, 302 => 8],
+            deckWinRatesByCardId: [302 => ['times_in_deck' => 10, 'deck_win_rate' => 1.0]],
+        );
+
+        $picks = $this->bot->chooseDraftCards([301, 302], 1, draftedCardIds: [], draftScoringData: $data);
+
+        self::assertSame([302], $picks);
+    }
+
+    /** Below MIN_DECK_STATS_SAMPLE (10), an even 100% win rate is ignored entirely -- too small a sample to trust, so the tie stays a tie (first candidate wins, same as no stats data at all). */
+    public function testChooseDraftCardsIgnoresDeckWinRateBelowTheMinimumSampleSize(): void
+    {
+        $data = $this->draftScoringData(
+            scoresById: [401 => 8, 402 => 8],
+            deckWinRatesByCardId: [402 => ['times_in_deck' => 9, 'deck_win_rate' => 1.0]],
+        );
+
+        $picks = $this->bot->chooseDraftCards([401, 402], 1, draftedCardIds: [], draftScoringData: $data);
+
+        self::assertSame([401], $picks);
+    }
+
+    public function testChooseWinstonActionTakesAPileScoringAboveTheCatalogAverage(): void
+    {
+        // Catalog average is (1 + 1 + 40) / 3 ≈ 14 -- the pile's own best
+        // card (40) clears it easily.
+        $data = $this->draftScoringData([501 => 1, 502 => 1, 503 => 40]);
+
+        self::assertSame('take', $this->bot->chooseWinstonAction([503], draftedCardIds: [], draftScoringData: $data));
+    }
+
+    public function testChooseWinstonActionPassesAPileScoringBelowTheCatalogAverage(): void
+    {
+        $data = $this->draftScoringData([501 => 1, 502 => 1, 503 => 40]);
+
+        self::assertSame('pass', $this->bot->chooseWinstonAction([501], draftedCardIds: [], draftScoringData: $data));
+    }
+
+    public function testChooseGridLinePicksTheLineWithTheHighestTotalScore(): void
+    {
+        $data = $this->draftScoringData([601 => 4, 602 => 4, 603 => 1, 604 => 1, 605 => 1]);
+        $lines = [
+            ['axis' => 'row', 'index' => 0, 'cardIds' => [601, 602]], // total 8
+            ['axis' => 'column', 'index' => 0, 'cardIds' => [603, 604, 605]], // total 3, more cards but lower value
+        ];
+
+        $line = $this->bot->chooseGridLine($lines, draftedCardIds: [], draftScoringData: $data);
+
+        self::assertSame(['axis' => 'row', 'index' => 0], $line);
+    }
+
+    public function testChooseDraftDeckKeepsExactlyTheMinDeckSizeHighestScoredCards(): void
+    {
+        $data = $this->draftScoringData([701 => 1, 702 => 40, 703 => 2, 704 => 24, 705 => 1]);
+
+        $deck = $this->bot->chooseDraftDeck([701, 702, 703, 704, 705], minDeckSize: 3, draftScoringData: $data);
+
+        self::assertCount(3, $deck);
+        self::assertSame([702, 704, 703], $deck);
+    }
+
+    /** A drafted pool already smaller than minDeckSize is returned whole -- array_slice()'s own natural behavior, never padded or rejected here (submitDraftDeck() itself is what actually enforces the real floor). */
+    public function testChooseDraftDeckReturnsEverythingWhenBelowMinDeckSize(): void
+    {
+        $data = $this->draftScoringData([801 => 4, 802 => 1]);
+
+        $deck = $this->bot->chooseDraftDeck([801, 802], minDeckSize: 12, draftScoringData: $data);
+
+        self::assertSame([801, 802], $deck);
+    }
 }

@@ -2276,13 +2276,13 @@
     }
 
     // Practice bots (issue #140) -- mirrors GameService::botsSupportedFor()
-    // exactly: every format except 'draft' (no draft picks for a bot to
-    // make), and only for a deck_type that needs no per-player setup of
-    // its own. 'custom' belongs in this list despite needing a decklist
-    // at all -- it's a single table-wide shared deck (built once from the
-    // human creator's own paste/upload/saved-deck choice, same as this
-    // dialog already requires with or without a bot seated), not a
-    // per-seat one, so a bot needs nothing extra to "have" one.
+    // exactly: every non-draft deck_type that needs no per-player setup
+    // of its own, plus every draft deck_type (issue #359) regardless of
+    // format. 'custom' belongs in the non-draft list despite needing a
+    // decklist at all -- it's a single table-wide shared deck (built once
+    // from the human creator's own paste/upload/saved-deck choice, same
+    // as this dialog already requires with or without a bot seated), not
+    // a per-seat one, so a bot needs nothing extra to "have" one.
     // 'custom_duel' is its own separate special case (still not in this
     // list), since it's a genuinely per-seat decklist --
     // #new-game-bot-decklist-fields below lets the creator supply the
@@ -2294,13 +2294,19 @@
     // "populate the partner dropdown from whichever opponents are
     // checked" already treat a checked bot exactly like a checked human
     // friend, so a bot can be seated as the creator's own partner too,
-    // not just on the opposing team.
+    // not just on the opposing team. A draft deck_type needs nothing
+    // supplied here either -- unlike 'custom_duel', a bot makes its own
+    // picks live, server-side, once the game is actually created (see
+    // GameService::advanceBotDraftTurn()), so there's no equivalent
+    // "supply the bot's own X up front" field for drafting at all.
     function botsSupportedFor(format, deckType) {
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        return format !== 'draft'
-            && ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
+        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(deckType)) {
+            return true;
+        }
+        return ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
     }
 
     // Whether any practice bot checkbox is currently checked.
@@ -2379,14 +2385,14 @@
     // checkbox has to be hidden/unchecked (updateBotCheckboxAvailability())
     // BEFORE updateTeamFields() reads "which opponents are currently
     // checked" to populate the partner dropdown -- otherwise switching
-    // into a format that doesn't support bots at all (only 'draft' today,
-    // see botsSupportedFor()) while a bot was checked could leave it
-    // offered as a partner candidate for the one instant before its own
-    // checkbox gets unchecked. Team Play itself (issue #360) supports
-    // bots the same as every other non-draft format now, so this no
-    // longer applies switching INTO 'team'/'closed_team' specifically --
-    // a checked bot stays checked and genuinely is a valid partner
-    // candidate there.
+    // between two deck_types where only one supports bots (see
+    // botsSupportedFor()) while a bot was checked could leave it offered
+    // as a partner candidate for the one instant before its own checkbox
+    // gets unchecked. Every deck_type is bot-supported as of issue #359
+    // (drafting was the last holdout), so in practice this only still
+    // matters for 'custom_duel' switching away without its own bot
+    // decklist filled in -- format alone never disqualifies a bot
+    // anymore, Team Play (issue #360) included.
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);

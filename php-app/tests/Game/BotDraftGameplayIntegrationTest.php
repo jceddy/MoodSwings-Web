@@ -1,0 +1,406 @@
+<?php
+
+declare(strict_types=1);
+
+namespace MoodSwings\Tests\Game;
+
+use MoodSwings\Deck\UserDecklistService;
+use MoodSwings\Friends\FriendshipService;
+use MoodSwings\Game\BoardStateRepository;
+use MoodSwings\Game\GameService;
+use MoodSwings\Game\ReplayStateBuilder;
+use MoodSwings\Repository\FriendshipRepository;
+use MoodSwings\Repository\UserDecklistRepository;
+use MoodSwings\Repository\UserRepository;
+use MoodSwings\Rules\DefaultEffectRegistry;
+use MoodSwings\Rules\MoodPlayService;
+use MoodSwings\Rules\RoundScorer;
+use PDO;
+use PDOException;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * Issue #359: practice bots seated in a draft game. Exercises
+ * GameService::advanceBotDraftTurn() (and createGame()'s own now-relaxed
+ * bot-seating validation for draft formats) end to end, against a real
+ * database -- MoodSwings\Tests\Bot\BotPlayerServiceTest already covers the
+ * draft-pick SCORING policy itself in isolation, so these focus on the
+ * request-lifecycle wiring: does a bot's own pick/action/deck submission
+ * actually get driven for each of the 5 draft deck_types, does it stop at
+ * a real player's own turn, and does the game auto-start once every seat
+ * (bot or human) has a deck in.
+ */
+final class BotDraftGameplayIntegrationTest extends TestCase
+{
+    private PDO $pdo;
+    private GameService $games;
+
+    protected function setUp(): void
+    {
+        $host = getenv('TEST_DB_HOST') ?: '127.0.0.1';
+        $port = getenv('TEST_DB_PORT') ?: '3306';
+        $name = getenv('TEST_DB_NAME') ?: 'moodswings_test';
+        $user = getenv('TEST_DB_USER') ?: 'root';
+        $password = getenv('TEST_DB_PASSWORD') ?: '';
+
+        try {
+            $pdo = new PDO(
+                "mysql:host={$host};port={$port};dbname={$name};charset=utf8mb4",
+                $user,
+                $password,
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+            );
+        } catch (PDOException $e) {
+            self::markTestSkipped('No test MySQL database available: ' . $e->getMessage());
+        }
+
+        $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+        $pdo->exec('TRUNCATE TABLE draft_pile_stage_picks');
+        $pdo->exec('TRUNCATE TABLE draft_round_picks');
+        $pdo->exec('TRUNCATE TABLE draft_winston_state');
+        $pdo->exec('TRUNCATE TABLE draft_grid_state');
+        $pdo->exec('TRUNCATE TABLE draft_rotisserie_state');
+        $pdo->exec('TRUNCATE TABLE draft_tiered_rotisserie_state');
+        $pdo->exec('TRUNCATE TABLE draft_match_players');
+        $pdo->exec('TRUNCATE TABLE draft_matches');
+        $pdo->exec('TRUNCATE TABLE game_cards');
+        $pdo->exec('TRUNCATE TABLE game_rounds');
+        $pdo->exec('TRUNCATE TABLE game_players');
+        $pdo->exec('TRUNCATE TABLE games');
+        $pdo->exec('TRUNCATE TABLE user_lifetime_stats');
+        $pdo->exec('TRUNCATE TABLE card_stats');
+        $pdo->exec('TRUNCATE TABLE users');
+        $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+
+        putenv("DB_HOST={$host}");
+        putenv("DB_PORT={$port}");
+        putenv("DB_NAME={$name}");
+        putenv("DB_USER={$user}");
+        putenv("DB_PASSWORD={$password}");
+
+        $this->pdo = $pdo;
+
+        $registry = DefaultEffectRegistry::build();
+        $userDecklists = new UserDecklistService(
+            new UserDecklistRepository(),
+            new FriendshipService(new UserRepository(), new FriendshipRepository()),
+        );
+        $this->games = new GameService(
+            new BoardStateRepository($registry),
+            new MoodPlayService($registry),
+            new RoundScorer(),
+            $userDecklists,
+            new ReplayStateBuilder($registry),
+        );
+    }
+
+    private function insertUser(string $username): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (username, email, password_hash, email_verified_at)
+             VALUES (:username, :email, 'hash', NOW())"
+        );
+        $stmt->execute(['username' => $username, 'email' => "{$username}@example.com"]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    private function insertBotUser(string $username): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (username, email, password_hash, email_verified_at, is_bot)
+             VALUES (:username, :email, 'hash', NOW(), 1)"
+        );
+        $stmt->execute(['username' => $username, 'email' => "{$username}@example.com"]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    private function fetchGame(int $gameId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM games WHERE id = :game_id');
+        $stmt->execute(['game_id' => $gameId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * Rotisserie Draft (issue #359) exercises the "single current turn"
+     * shape (draft_rotisserie_state.current_turn_user_id) shared by
+     * Winston/Grid/Tiered Rotisserie Draft too -- driven end to end here:
+     * a human submits an arbitrary legal pick each time it's their turn,
+     * advanceAutomatedTurns() (called the same way index.php calls it
+     * after every draft route) handles every bot turn in between,
+     * including several bot picks in a row where the snake order calls
+     * for it, all the way through the whole match. Once drafting itself
+     * finishes, the SAME loop also has to submit the bot's own deck
+     * (advanceBotDraftDeck()) and, once the human submits theirs too,
+     * start the game outright (tryAutoStartDraftGame()) -- nothing here
+     * ever calls startGame() directly.
+     */
+    public function testRotisserieDraftBotCompletesAWholeDraftAndAutoStartsTheGame(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 60; $i++) {
+            $stateStmt = $this->pdo->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+            $stateStmt->execute(['id' => $draftMatchId]);
+            $state = $stateStmt->fetch();
+
+            if ($state === false) {
+                break; // drafting itself has finished -- only deck submission/game start left, both bot-driven below
+            }
+
+            if ((int) $state['current_turn_user_id'] === $human) {
+                $pool = array_map(intval(...), json_decode((string) $state['pool_card_ids'], true));
+                $this->games->submitRotisserieDraftPick($gameId, $human, $pool[0]);
+            }
+
+            $this->games->advanceAutomatedTurns($gameId);
+
+            if ($this->fetchGame($gameId)['status'] !== 'waiting') {
+                break; // the bot's own deck submission already auto-started the game
+            }
+        }
+
+        $draftedStmt = $this->pdo->prepare('SELECT drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $draftedStmt->execute(['id' => $draftMatchId, 'user_id' => $bot]);
+        $botRow = $draftedStmt->fetch();
+        self::assertCount(13, json_decode((string) $botRow['drafted_card_ids'], true));
+        self::assertNotNull($botRow['deck_card_ids'], "The bot's own deck should have been submitted automatically once drafting finished");
+
+        // The human still needs to submit their own deck -- the game can't
+        // have auto-started on the bot's deck submission alone.
+        self::assertSame('waiting', $this->fetchGame($gameId)['status']);
+
+        $humanDraftedStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $humanDraftedStmt->execute(['id' => $draftMatchId, 'user_id' => $human]);
+        $humanDrafted = array_map(intval(...), json_decode((string) $humanDraftedStmt->fetchColumn(), true));
+
+        $this->games->submitDraftDeck($gameId, $human, $humanDrafted);
+        $this->games->advanceAutomatedTurns($gameId);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status']);
+    }
+
+    /**
+     * Quick Draft's own simultaneous-per-stage picking (submitQuickDraftPick())
+     * has no single "current turn" at all -- every seated player picks
+     * independently once a stage opens, and a stage can't advance until
+     * EVERY seat's own pick for it is in. This is the one format where
+     * advanceBotQuickDraftPick() has to figure out the active stage and
+     * loop through every bot seat itself, rather than just checking one
+     * current_turn_user_id column -- proven here directly: with 1 human +
+     * 3 bots, a single advanceAutomatedTurns() call (with the human not
+     * having picked yet) should resolve all 3 bots' own stage-1 picks at
+     * once and stop there, still waiting on the human -- not advance the
+     * round, and not touch the human's own pick.
+     */
+    public function testQuickDraftBotsPickSimultaneouslyWithoutWaitingForTurnOrder(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot1 = $this->insertBotUser('bot1');
+        $bot2 = $this->insertBotUser('bot2');
+        $bot3 = $this->insertBotUser('bot3');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot1, $bot2, $bot3],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $stmt = $this->pdo->prepare(
+            'SELECT pile_owner_user_id FROM draft_pile_stage_picks WHERE draft_match_id = :id AND round_number = 1 AND stage_number = 1'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+        $pileOwnersWithAPick = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+
+        self::assertCount(3, $pileOwnersWithAPick, 'exactly the 3 bot seats should have picked stage 1 automatically');
+
+        // Confirmed by elimination: every bot picked, the human didn't,
+        // and the round is still on stage 1 (a human pick is the only
+        // thing that could complete it, with 4 seated players).
+        $matchStmt = $this->pdo->prepare('SELECT status FROM draft_matches WHERE id = :id');
+        $matchStmt->execute(['id' => $draftMatchId]);
+        self::assertSame('drafting', $matchStmt->fetchColumn());
+    }
+
+    /** Winston Draft's own single-current-turn take/pass, driven automatically whenever it lands on a bot -- proven for whichever of the two players the random starter_seat_offset actually picked. */
+    public function testWinstonDraftBotActsAutomaticallyWhenItsTurn(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $stateStmt = $this->pdo->prepare('SELECT current_player_user_id FROM draft_winston_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $startingPlayerUserId = (int) $stateStmt->fetchColumn();
+
+        $result = $this->games->advanceAutomatedTurns($gameId);
+
+        if ($startingPlayerUserId === $bot) {
+            self::assertNotNull($result, "the bot's own opening take/pass should have been driven automatically");
+        } else {
+            self::assertNull($result, "nothing should act while it's the human's own turn");
+        }
+    }
+
+    /**
+     * Issue #359 exposed a pre-existing gap: recordMatchCompletionStats()
+     * (lifetime match_wins/match_losses, issue #106) had no containsBot
+     * check of its own -- harmless before this issue, since a draft
+     * match could never have a bot seated at all, but now that one can,
+     * an unguarded version would leave a stray user_lifetime_stats row
+     * behind for the bot's own user id every time a bot-seated draft
+     * match completed. Fixed alongside the rest of this feature to match
+     * recordGameCompletionStats()'s own identical exclusion. Triggered
+     * here via Winston Draft's own under-WINSTON_MIN_DECK_SIZE(12)
+     * auto-loss finish (finalizeWinstonDraft()) -- completes the whole
+     * MATCH the instant the draft itself ends, with no actual round of
+     * the underlying card game needing to be played out first, unlike
+     * every other way a draft match can complete.
+     */
+    public function testBotSeededDraftMatchCompletionDoesNotRecordLifetimeMatchStatsForEitherPlayer(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // Human already has a full (well above the floor) drafted pool;
+        // the bot has deliberately been left short of WINSTON_MIN_DECK_SIZE
+        // (12) -- finalizeWinstonDraft() will drop it as a short player
+        // and hand the human an outright, no-games-played match win the
+        // instant the draft itself finishes below.
+        $humanCardIds = range(1, 14);
+        $botCardIds = [1, 2, 3];
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode($humanCardIds), 'match_id' => $draftMatchId, 'user_id' => $human]);
+        $this->pdo->prepare('UPDATE draft_match_players SET drafted_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id')
+            ->execute(['ids' => json_encode($botCardIds), 'match_id' => $draftMatchId, 'user_id' => $bot]);
+
+        // One final human pick that empties the shared deck and every
+        // pile simultaneously -- the exact condition submitWinstonDraftPick()
+        // itself checks to end the draft outright.
+        $this->pdo->prepare(
+            "UPDATE draft_winston_state SET current_player_user_id = :human, current_pile_number = 1,
+                remaining_deck_card_ids = '[]', pile_1_card_ids = '[15]', pile_2_card_ids = '[]', pile_3_card_ids = '[]'
+             WHERE draft_match_id = :match_id"
+        )->execute(['human' => $human, 'match_id' => $draftMatchId]);
+
+        $this->games->submitWinstonDraftPick($gameId, $human, 'take');
+
+        $matchStmt = $this->pdo->prepare('SELECT status, winner_user_id FROM draft_matches WHERE id = :id');
+        $matchStmt->execute(['id' => $draftMatchId]);
+        $match = $matchStmt->fetch();
+        self::assertSame('completed', $match['status']);
+        self::assertSame($human, (int) $match['winner_user_id']);
+
+        $statsStmt = $this->pdo->prepare('SELECT COUNT(*) FROM user_lifetime_stats WHERE user_id IN (:human, :bot)');
+        $statsStmt->execute(['human' => $human, 'bot' => $bot]);
+        self::assertSame(0, (int) $statsStmt->fetchColumn(), 'a bot-seated draft match should leave no lifetime match stats behind for either player');
+    }
+
+    /** Grid Draft's own single-current-turn row/column pick, driven automatically whenever it lands on a bot. */
+    public function testGridDraftBotActsAutomaticallyWhenItsTurn(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $stateStmt = $this->pdo->prepare('SELECT current_turn_user_id FROM draft_grid_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $startingPlayerUserId = (int) $stateStmt->fetchColumn();
+
+        $result = $this->games->advanceAutomatedTurns($gameId);
+
+        if ($startingPlayerUserId === $bot) {
+            self::assertNotNull($result, "the bot's own opening pick should have been driven automatically");
+        } else {
+            self::assertNull($result, "nothing should act while it's the human's own turn");
+        }
+    }
+
+    /**
+     * Tiered Rotisserie Draft's own single-current-turn pick, same shape
+     * as base Rotisserie Draft -- checked specifically for the
+     * current-tier scoping ('rarity' mode's first tier is always
+     * 'mythic'): whichever card a bot picks first has to come from that
+     * tier's own pool, never any other rarity's.
+     */
+    public function testTieredRotisserieDraftBotOnlyPicksFromTheCurrentTier(): void
+    {
+        $human = $this->insertUser('human1');
+        $bot = $this->insertBotUser('bot1');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'tiered_rotisserie_draft',
+            tieredRotisserieDraftMode: 'rarity',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $stateStmt = $this->pdo->prepare('SELECT current_turn_user_id FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $startingPlayerUserId = (int) $stateStmt->fetchColumn();
+
+        if ($startingPlayerUserId !== $bot) {
+            self::markTestSkipped('the random starter this run was the human, not the bot -- nothing to drive yet');
+        }
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $draftedStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $draftedStmt->execute(['id' => $draftMatchId, 'user_id' => $bot]);
+        $draftedCardIds = array_map(intval(...), json_decode((string) $draftedStmt->fetchColumn(), true));
+        self::assertCount(1, $draftedCardIds);
+
+        $rarityStmt = $this->pdo->prepare('SELECT rarity FROM cards WHERE id = :id');
+        $rarityStmt->execute(['id' => $draftedCardIds[0]]);
+        self::assertSame('mythic', $rarityStmt->fetchColumn());
+    }
+}

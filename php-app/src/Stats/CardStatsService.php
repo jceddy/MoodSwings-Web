@@ -281,6 +281,34 @@ final class CardStatsService
         return $result;
     }
 
+    /**
+     * Issue #359's own draft practice bots: a lighter-weight sibling of
+     * allCardStats() exposing just the deck-membership win-rate signal
+     * (BotPlayerService's own draft-pick tiebreaker, see its docblock) --
+     * skips the set/collector-number join and every other draft format's
+     * own pick-position columns allCardStats() also computes, neither of
+     * which a bot's own scoring needs. Only cards with a card_stats row at
+     * all are present (unlike allCardStats(), which zero-fills every
+     * catalog card) -- a bot reading this treats a missing entry the same
+     * as one explicitly reporting 0 games, since there's nothing to weigh
+     * either way.
+     *
+     * @return array<int, array{times_in_deck:int, deck_win_rate:?float}>
+     */
+    public function deckWinRatesByCardId(): array
+    {
+        $result = [];
+        foreach (Connection::get()->query('SELECT catalog_card_id, times_in_deck, times_in_won_deck FROM card_stats')->fetchAll() as $row) {
+            $timesInDeck = (int) $row['times_in_deck'];
+            $result[(int) $row['catalog_card_id']] = [
+                'times_in_deck' => $timesInDeck,
+                'deck_win_rate' => $timesInDeck > 0 ? round((int) $row['times_in_won_deck'] / $timesInDeck, 3) : null,
+            ];
+        }
+
+        return $result;
+    }
+
     /** @return array{average:?float, count:int} */
     private static function averagePick(?array $row, string $sumColumn, string $countColumn): array
     {

@@ -361,20 +361,30 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertGreaterThan(0, $gameId);
     }
 
-    public function testCreateGameStillRejectsABotInDraftFormat(): void
+    /**
+     * Issue #359: 'draft' format + every draft deck_type is now
+     * bot-supported (BotPlayerService/advanceAutomatedTurns() both learned
+     * how to drive a bot's own draft picks -- see
+     * BotDraftGameplayIntegrationTest for full-draft coverage) -- this
+     * used to be rejected outright (testCreateGameStillRejectsABotInDraftFormat,
+     * pre-issue-#359); now it's simply accepted, same as every other
+     * bot-supported format/deck_type combination.
+     */
+    public function testCreateGameNowAllowsABotInDraftFormat(): void
     {
         $human = $this->insertUser('human1');
         $bot = $this->insertBotUser('bot1');
         $u2 = $this->insertUser('human2');
 
-        $this->expectException(GameStateException::class);
-        $this->games->createGame(
+        $gameId = $this->games->createGame(
             $human,
             [$human, $bot, $u2],
             format: 'draft',
             deckType: 'quick_draft',
             quickDraftPoolSource: 'random_48',
         );
+
+        self::assertGreaterThan(0, $gameId);
     }
 
     /**
