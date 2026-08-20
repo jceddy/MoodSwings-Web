@@ -172,8 +172,25 @@ final class MoodPlayService
         // Gluttony/Insecurity tag whichever specific card ends up consuming
         // their granted extra play with effectState (e.g. "discard it after
         // scoring") -- see BoardState's 'onUseEffectState' restriction key.
+        // Insecurity's own 'afterScoring' payload additionally gets
+        // $playerId folded in here (never set by InsecurityEffect itself,
+        // which only knows who played INSECURITY, not necessarily who
+        // ends up spending the resulting extra play -- the same player in
+        // every real game today, since a turn never changes hands mid-
+        // grant, but this is still the one place that actually KNOWS for
+        // certain) so GameService::applyAfterScoringHooks() can return the
+        // card to that specific player's hand rather than whatever
+        // ownerOf() says at scoring time -- a real bug reported live:
+        // Chaos (or anything else that reassigns a mood's own owner
+        // between now and scoring) used to send the card to whoever
+        // happened to own it BY THEN instead of "your hand" as the
+        // card's own text means it -- the player who actually played it
+        // via this grant.
         if ($consumedGrant !== null && isset($consumedGrant['onUseEffectState'])) {
             foreach ($consumedGrant['onUseEffectState'] as $key => $value) {
+                if ($key === 'afterScoring' && is_array($value) && !isset($value['playerId'])) {
+                    $value['playerId'] = $playerId;
+                }
                 $state->setEffectState($cardId, $key, $value);
             }
         }

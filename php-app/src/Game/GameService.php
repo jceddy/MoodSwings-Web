@@ -7793,7 +7793,16 @@ final class GameService
                         $ownerId = $state->ownerOf($cardId);
                         match ($afterScoring['action']) {
                             'discard' => $state->moveInPlayToDiscard($cardId),
-                            'return_to_hand' => $state->moveInPlayToHand($cardId),
+                            // Insecurity's own 'playerId' (see
+                            // MoodPlayService's own onUseEffectState
+                            // handling) is the player who actually played
+                            // this card via Insecurity's granted extra
+                            // play -- not necessarily $ownerId by now, if
+                            // something like Chaos reassigned ownership
+                            // in between. Falls back to $ownerId for any
+                            // other 'return_to_hand' self-tag that never
+                            // records one.
+                            'return_to_hand' => $state->moveInPlayToPlayersHand($cardId, $afterScoring['playerId'] ?? $ownerId),
                             'bottom_and_draw' => $this->bottomOfDeckAndDraw($state, $cardId, $ownerId),
                             default => throw new GameStateException("Unknown afterScoring action '{$afterScoring['action']}'"),
                         };
@@ -7982,9 +7991,18 @@ final class GameService
 
         if ($group['self']) {
             $afterScoring = $state->effectState($group['cardId'], 'afterScoring');
+            // Insecurity's own 'playerId' (see MoodPlayService's own
+            // onUseEffectState handling) only ever needs naming here when
+            // it differs from whoever currently controls the tagged card
+            // -- e.g. Chaos reassigned ownership since it was played --
+            // the common case (nothing reassigned it) still just reads
+            // "your hand", same as before this distinction existed.
+            $returnToHandPlayerId = $afterScoring['playerId'] ?? null;
             $sentences[] = match ($afterScoring['action'] ?? null) {
                 'discard' => 'Discards after scoring.',
-                'return_to_hand' => 'Returns to your hand after scoring.',
+                'return_to_hand' => $returnToHandPlayerId !== null && $returnToHandPlayerId !== $state->ownerOf($group['cardId'])
+                    ? 'Returns to ' . ($playerNames[$returnToHandPlayerId] ?? 'its original player') . "'s hand after scoring."
+                    : 'Returns to your hand after scoring.',
                 'bottom_and_draw' => 'Goes to the bottom of your deck and you draw a new card after scoring.',
                 default => 'Resolves its own after-scoring effect.',
             };

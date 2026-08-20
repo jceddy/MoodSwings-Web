@@ -4980,6 +4980,67 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Regression test (a live bug report, with a screenshot): p1 plays
+     * Insecurity, then Complacency (no ability of its own) using the
+     * granted extra play -- MoodPlayService tags Complacency with
+     * 'playerId' => p1, the player who actually played it via that
+     * grant. Something else then reassigns Complacency's own ownership
+     * to p2 BEFORE scoring resolves (Chaos, in the reported bug --
+     * simulated here with a direct ownership swap so the test stays
+     * deterministic rather than depending on Chaos's own shuffle()).
+     * Insecurity's own card text reads "put THAT MOOD into YOUR hand" --
+     * "your" meaning whoever played it via the grant, not whoever
+     * happens to own it by the time scoring rolls around -- so
+     * Complacency must land in p1's hand, not p2's, once the round ends,
+     * even though p2 is its current owner at that point.
+     */
+    public function testInsecuritysExtraPlayReturnsToWhoeverPlayedItEvenIfOwnershipChangedSinceThen(): void
+    {
+        $u1 = $this->insertUser('insecurity1');
+        $u2 = $this->insertUser('insecurity2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $insecurityId = $this->insertGameCard($gameId, 45, 'hand', $p1); // Insecurity
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency, no ability
+        // Reassigning Complacency's own ownership to p2 (below) hands
+        // p2 its value in the round score too, so either player could
+        // plausibly end up needing a loser-draw card once scoring
+        // resolves -- both are stocked here; which one (if either)
+        // actually gets drawn isn't what this test is about.
+        $this->insertGameCard($gameId, 3, 'deck', null, 0);
+        $this->insertGameCard($gameId, 7, 'deck', null, 1);
+        $this->insertGameCard($gameId, 8, 'hand', $p2); // p2 needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $insecurityId, []);
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+
+        // Simulate Chaos (or anything else that reassigns a mood's own
+        // owner) having handed Complacency to p2 before scoring.
+        $this->pdo->prepare('UPDATE game_cards SET owner_game_player_id = :new_owner WHERE game_id = :game_id AND card_id = :card_id AND zone = \'in_play\'')
+            ->execute(['new_owner' => $p2, 'game_id' => $gameId, 'card_id' => 5]);
+
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertFalse($state->isInPlay($complacencyId));
+        self::assertContains($complacencyId, $state->hand($p1), "Complacency should return to p1's hand -- the player who actually played it via Insecurity's grant");
+        self::assertNotContains($complacencyId, $state->hand($p2), "Complacency should NOT go to p2's hand just because Chaos-like reassignment made them its owner by scoring time");
+    }
+
+    /**
      * Bashfulness's own after-scoring move (still in play, so already
      * public) belongs in the round_scored event's own history same as any
      * other zone move -- but the replacement card its owner draws right
