@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with eight deliberate
+ * field-filling policy this builds on -- with ten deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -56,6 +56,16 @@ use MoodSwings\Rules\RoundScorer;
  * teammate opponent with a card in hand when playing Intimidation, and
  * deprioritizes it (the same PHP_INT_MIN treatment as Rationalization/
  * Cynicism) whenever no such opponent currently exists -- see that
+ * method's own docblock; paranoiaTargetPlayerId()/sortPriorityValue()
+ * once more (confirmed by the maintainer, the identical policy), doing
+ * the exact same thing for Paranoia -- see that method's own docblock;
+ * and pacifismTargetMoodIds()/sortPriorityValue() once more (confirmed
+ * by the maintainer), which targets up to two non-teammate opponents'
+ * own highest-value in-play moods (preferring two different opponents
+ * over a single opponent's own two moods, which CardChoiceSchema's own
+ * distinct_owners constraint forbids anyway) when playing Pacifism, and
+ * deprioritizes it (the same PHP_INT_MIN treatment) whenever no
+ * non-teammate opponent currently has any mood in play -- see that
  * method's own docblock.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
@@ -415,6 +425,31 @@ final class BotPlayerService
      * -- no separate "how good is this target" scoring the way Cynicism
      * needs, since ANY opponent with a card in hand makes Intimidation
      * worth its usual priority.
+     *
+     * Paranoia (confirmed by the maintainer, the same policy as
+     * Intimidation) gets the identical PHP_INT_MIN treatment whenever
+     * paranoiaTargetPlayerId() returns null -- unlike Intimidation,
+     * though, ParanoiaEffect::afterPlaying() doesn't quietly no-op
+     * against an untargetable player, it throws (a required
+     * $state->hand($targetPlayerId) !== [] precondition), so this
+     * doesn't just avoid a wasted play, it avoids an illegal one --
+     * paranoiaTargetPlayerId() itself is what keeps buildChoicesForCard()
+     * from ever handing that exception a bad candidate in the first
+     * place. Paranoia isn't in EARLY_PRIORITY_EFFECT_KEYS (it bottoms
+     * the taken card, never gaining the acting player's own hand a card
+     * the way Compulsion/Intimidation do, and never forces a discard the
+     * way Suspicion does), so it's back to plain baseValue() once a
+     * valid target exists -- no boost, just no longer vetoed.
+     *
+     * Pacifism (confirmed by the maintainer, the same policy again) gets
+     * the identical PHP_INT_MIN treatment whenever
+     * pacifismTargetMoodIds() returns an empty array -- no non-teammate
+     * opponent has any mood in play at all right now, so playing it
+     * would suppress nothing. Also absent from EARLY_PRIORITY_EFFECT_KEYS
+     * -- it denies an opponent's mood rather than stealing a card,
+     * forcing a discard, or granting the acting player an extra play --
+     * so it too reverts to plain baseValue() once at least one valid
+     * target exists.
      */
     private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
     {
@@ -426,6 +461,12 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'intimidation' && $this->intimidationTargetPlayerId($state, $botGamePlayerId) === null) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'paranoia' && $this->paranoiaTargetPlayerId($state, $botGamePlayerId) === null) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'pacifism' && $this->pacifismTargetMoodIds($state, $botGamePlayerId) === []) {
             return PHP_INT_MIN;
         }
 
@@ -733,6 +774,18 @@ final class BotPlayerService
             $targetPlayerId = $this->intimidationTargetPlayerId($state, $botGamePlayerId);
 
             return $targetPlayerId !== null ? ['target_player_id' => $targetPlayerId] : [];
+        }
+
+        if ($effectKey === 'paranoia') {
+            $targetPlayerId = $this->paranoiaTargetPlayerId($state, $botGamePlayerId);
+
+            return $targetPlayerId !== null ? ['target_player_id' => $targetPlayerId] : [];
+        }
+
+        if ($effectKey === 'pacifism') {
+            $targetMoodIds = $this->pacifismTargetMoodIds($state, $botGamePlayerId);
+
+            return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
         $choices = [];
@@ -1255,5 +1308,80 @@ final class BotPlayerService
         }
 
         return null;
+    }
+
+    /**
+     * Paranoia's own "who to target" policy (confirmed by the
+     * maintainer) -- identical in shape to intimidationTargetPlayerId()
+     * above: the first active, non-teammate opponent who currently has
+     * at least one card in hand, or null if none do. Deliberately
+     * excludes both the acting player itself and any teammate --
+     * CardChoiceSchema's own field is scope 'any' (Paranoia's printed
+     * text allows self-targeting, unlike Intimidation's "another
+     * player"), so BotChoiceResolver's own generic default would happily
+     * let the bot target itself, but "an opponent" per the maintainer
+     * means neither the bot nor a teammate.
+     */
+    private function paranoiaTargetPlayerId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId
+                && !$state->isTeammate($botGamePlayerId, $playerId)
+                && $state->hand($playerId) !== []) {
+                return $playerId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Pacifism's own "who/what to suppress" policy (confirmed by the
+     * maintainer) -- up to two moods, at most one per non-teammate
+     * opponent (each opponent's own HIGHEST-value in-play mood), and
+     * preferring two DIFFERENT opponents over a single opponent's own
+     * single mood whenever at least two opponents currently have a mood
+     * in play. CardChoiceSchema's own `'distinct_owners'` constraint
+     * already forbids taking two moods from the same player, so "one
+     * mood from each of two opponents" IS simply "fill both target
+     * slots" here -- sorting every opponent's own best mood by value and
+     * taking the top two (instead of just the first two in seat order)
+     * satisfies both "prefer two opponents" and "target the
+     * highest-point opponent cards" at once, since a single very strong
+     * mood never loses out to two weak ones under this policy, but two
+     * opponents each above the third-best candidate always beats
+     * bothering only one of them. Deliberately excludes both the acting
+     * player itself and any teammate -- CardChoiceSchema's own field is
+     * scope 'any' (Pacifism's printed text says "choose up to two
+     * players" with no restriction against the acting player or a
+     * teammate), so BotChoiceResolver's own generic default would
+     * happily let the bot suppress its own or a teammate's mood, but "an
+     * opponent" per the maintainer means neither.
+     *
+     * @return int[]
+     */
+    private function pacifismTargetMoodIds(BoardState $state, int $botGamePlayerId): array
+    {
+        $bestMoodIdByOpponent = [];
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+
+            $bestMoodId = null;
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
+                    $bestMoodId = $mood->cardId;
+                }
+            }
+
+            if ($bestMoodId !== null) {
+                $bestMoodIdByOpponent[] = $bestMoodId;
+            }
+        }
+
+        usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
+
+        return array_slice($bestMoodIdByOpponent, 0, 2);
     }
 }

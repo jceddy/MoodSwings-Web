@@ -5227,7 +5227,33 @@ entirely BEFORE any `BoardState`/round exists for a game:
   hasn't submitted; or already started by a concurrent request) --
   a bot-seated draft has no browser polling on the bot's own behalf to
   do what the frontend's own `autoStartGameIfReady()` does for a human's
-  client, so this is that function's server-side analog. `draftMatchBotUserIds(int
+  client, so this is that function's server-side analog.
+
+  **Open Team Play only** (confirmed by the maintainer):
+  `awaitingHumanTeammatesDraftDeck(int $gameId, int $draftMatchId,
+  string $format, int $botUserId): bool` gates that same `'deck_building'`
+  submission a step further -- a bot whose own `openTeamPlayTeammateUserId()`
+  is a HUMAN who hasn't submitted a deck yet is skipped over for now
+  (left with `deck_card_ids` still `NULL`, exactly like a bot already
+  handled or a human still drafting), rather than submitted immediately.
+  Without this, a bot would always beat its own human teammate to
+  deck-building -- `advanceBotDraftTurn()` runs the instant drafting
+  ends, long before any human could realistically act -- quietly
+  claiming cards from its own drafted pool before the human has had any
+  real chance to see what their own teammate ends up keeping. See
+  `submitDraftDeck()`'s own docblock for why submission ORDER actually
+  matters between two teammates: the second submitter's own pickable
+  pool is trimmed by whatever the first submitter's already-chosen deck
+  claims out of the team's shared pool, so submitting first is a real
+  advantage worth leaving to the human. A teammate who is ALSO a bot
+  never blocks this (two bots waiting on each other would deadlock
+  forever), and neither does a teammate -- human or bot -- who has
+  ALREADY submitted; `openTeamPlayTeammateUserId()` itself already
+  returns `null` for every format other than `'team'`, so this never
+  applies outside Open Team Play. Once the human's own deck lands
+  (`submitDraftDeck()` followed by the route's own `advanceAutomatedTurns()`
+  call, same as every other draft route), the very next
+  `advanceBotDraftTurn()` call finds the bot free to submit. `draftMatchBotUserIds(int
   $draftMatchId): array` (queried against `draft_match_players` joined
   to `users.is_bot`, since draft state throughout this file is keyed by
   `user_id`, not `game_players.id` -- see `submitQuickDraftPick()`'s own
@@ -5631,6 +5657,31 @@ since it already holds that dependency):
   boosted treatment above, with no separate "how good is this target"
   scoring needed, since any qualifying opponent makes it worth its usual
   priority.
+
+  **Paranoia** (confirmed by the maintainer, the same policy as
+  Intimidation) gets the identical treatment via its own
+  `paranoiaTargetPlayerId()`: `buildChoicesForCard()` special-cases
+  `effectKey === 'paranoia'` to it instead of falling through to
+  `CardChoiceSchema`'s generic per-field loop, and it returns the first
+  active, non-teammate opponent who currently has at least one card in
+  hand, or `null` if none do. `CardChoiceSchema`'s own `'paranoia'` field
+  is scope `'any'` (Paranoia's printed text allows targeting yourself,
+  unlike Intimidation's "another player"), so `BotChoiceResolver`'s own
+  generic default would happily let the bot target itself -- excluding
+  both the acting player and any teammate is deliberate, "an opponent"
+  per the maintainer means neither. Unlike `IntimidationEffect`, which
+  quietly no-ops against an empty-handed target,
+  `ParanoiaEffect::afterPlaying()` throws
+  (`$state->hand($targetPlayerId) !== []` is a hard precondition), so
+  `paranoiaTargetPlayerId()` here isn't just avoiding a wasted play, it's
+  avoiding an illegal one. `sortPriorityValue()` demotes Paranoia to
+  `PHP_INT_MIN` the same way whenever `paranoiaTargetPlayerId()` returns
+  `null`. Paranoia is deliberately absent from `EARLY_PRIORITY_EFFECT_KEYS`
+  above, though -- it bottoms the target's card rather than gaining the
+  acting player's own hand a card the way Compulsion/Intimidation do, and
+  never forces a discard the way Suspicion does -- so once a valid target
+  exists it reverts to plain `baseValue()`, no boost, just no longer
+  vetoed.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
   i.e. "declined") for an optional pending-decision field (Duplicity's
