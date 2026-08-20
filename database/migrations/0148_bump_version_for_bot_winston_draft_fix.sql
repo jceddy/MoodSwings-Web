@@ -1,0 +1,17 @@
+-- Fixes a real bug reported live: once Winston Draft's own shared deck
+-- reads empty, declining pile 3 gets nothing back at all --
+-- submitWinstonDraftPick()'s own "mandatory" deck draw only fires
+-- `if ($deck !== [])`. A practice bot that simply followed
+-- BotPlayerService::chooseWinstonAction()'s own plain "is this pile good
+-- enough" scoring through every remaining pile in a turn (none of which
+-- can grow again once the deck feeding them is dry) could end its whole
+-- turn with zero cards despite a real, takeable pile having been
+-- available the entire time. GameService::advanceBotWinstonDraftPick()
+-- now forces 'take' instead of an otherwise-legal 'pass' whenever the
+-- deck is already empty and no LATER pile this turn still has a card of
+-- its own to fall back on -- guaranteeing the bot never forfeits its
+-- last remaining chance at a card for the turn. No schema change of its
+-- own -- this migration exists purely to keep schema_version in sync
+-- with the VERSION bump, the same way 0024/.../0147 already did for
+-- their own schema-less changes.
+UPDATE schema_version SET version = '1.28.4' WHERE id = 1;
