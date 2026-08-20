@@ -1350,6 +1350,59 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::disillusionmentSafeColor()
+     * (see BotPlayerServiceTest for the policy itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> respondToDecision() ->
+     * DisillusionmentEffect::resolveDecisions() request lifecycle. The
+     * HUMAN plays Disillusionment here (not the bot) -- DisillusionmentEffect's
+     * own queueOrder() asks every seated player starting with the next
+     * one in turn order, so with only 2 players at the table the bot is
+     * asked FIRST, before the human's own turn to answer even opens. The
+     * bot's own Dignity (white) is in play, so 'white' is unsafe -- it
+     * should pick 'blue' instead (the next color in options order), which
+     * happens to also be the human's own Ambivalence's color, proving the
+     * bot both avoided its own mood AND still meaningfully answered
+     * instead of just declining outright.
+     */
+    public function testBotChoosesASafeColorThatAvoidsItsOwnMoodWhenAnsweringDisillusionment(): void
+    {
+        $u1 = $this->insertUser('human16');
+        $botUserId = $this->insertBotUser('bot14');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $disillusionmentId = $this->insertGameCard($gameId, 10, 'hand', $p1);
+        $this->insertGameCard($gameId, 27, 'in_play', $p1); // human's own Ambivalence, blue
+        $this->insertGameCard($gameId, 8, 'in_play', $botPlayerId); // bot's own Dignity, white -- should be avoided
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $result = $this->games->playMood($gameId, $p1, $disillusionmentId, []);
+        self::assertTrue($result['pending_decision'] ?? false);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        // DisillusionmentEffect::resolveDecisions() only ever runs once the
+        // WHOLE queue (every seated player) has answered -- the bot's own
+        // step alone doesn't sweep anything yet, so this only confirms the
+        // queue moved on to the human next, still waiting on p1's own turn
+        // to decide.
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('disillusionment_choose_color', $pending['decision_type']);
+        self::assertSame($p1, $pending['target_game_player_id'], 'the queue should now be waiting on the human\'s own answer');
+
+        $this->games->respondToDecision($gameId, $p1, []); // the human declines
+
+        self::assertTrue($this->cardIsInPlay($gameId, 8), 'the bot should have avoided its own color, leaving Dignity untouched');
+
+        $ambivalenceZone = $this->pdo->prepare(
+            "SELECT zone FROM game_cards WHERE game_id = :game_id AND card_id = 27"
+        );
+        $ambivalenceZone->execute(['game_id' => $gameId]);
+        self::assertSame('discard', $ambivalenceZone->fetchColumn(), 'the human\'s own blue Ambivalence should have been swept by the bot\'s "blue" pick');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::cynicismHasAGoodReasonToPlayNow()/
      * cynicismChoices() (see BotPlayerServiceTest for the policy itself
      * in isolation) through the FULL advanceAutomatedTurns() -> playMood()

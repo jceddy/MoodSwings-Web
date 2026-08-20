@@ -5683,14 +5683,37 @@ since it already holds that dependency):
   exists it reverts to plain `baseValue()`, no boost, just no longer
   vetoed.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
-  $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
-  i.e. "declined") for an optional pending-decision field (Duplicity's
-  own repeat offer, Enthusiasm's/Passion's own scoring bonuses,
-  Disillusionment's optional color, Pride's optional player), or
-  `[$field['key'] => $value]` from the resolver for a required one
-  (Compulsion, Betrayal, Instability, Fury, Confusion, Suspicion,
-  Avoidance, Arrogance, Malice, Intimidation's own revealed-card grant,
-  the after-scoring order decision).
+  $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
+  as a plain empty answer, i.e. "declined") for an optional pending-
+  decision field (Duplicity's own repeat offer, Enthusiasm's/Passion's
+  own scoring bonuses, Pride's optional player), or `[$field['key'] =>
+  $value]` from the resolver for a required one (Compulsion, Betrayal,
+  Instability, Fury, Confusion, Suspicion, Avoidance, Arrogance, Malice,
+  Intimidation's own revealed-card grant, the after-scoring order
+  decision). `$decisionType` (the triggering `game_pending_decisions`
+  row's own `decision_type` column -- `advanceAutomatedTurns()`'s own
+  bot-decision branch reads it back via `activePendingDecision()` and
+  passes it straight through) exists purely so this method can
+  special-case `disillusionment_choose_color` below; every other
+  decision type ignores it and falls through to the generic
+  resolver-driven behavior above, same as before this parameter existed.
+
+  **Disillusionment** (confirmed by the maintainer) is the one exception
+  to "optional pending-decision field -- declined": every seated player
+  gets asked this once, not just whoever played it
+  (`DisillusionmentEffect::pendingDecisionsFor()`'s own `queueOrder()`),
+  so `$botGamePlayerId` here is whichever bot is currently being asked to
+  answer, not necessarily the one who played the mood.
+  `disillusionmentSafeColor()` picks the first color in `$field['options']`'s
+  own order that matches none of the RESPONDING bot's own moods currently
+  in play, nor a teammate's -- `DisillusionmentEffect::resolveDecisions()`
+  moves EVERY other mood of a chosen color to the discard pile regardless
+  of owner, so an unsafe pick would gladly thin out opponents' boards
+  while blowing up the bot's own (or its teammate's) at the same time.
+  `null` (decline, the same default every other optional field still
+  gets) whenever every color matches something the bot or a teammate
+  owns -- there's no way to participate here without also hurting
+  yourself/your team.
 
 **Driving a bot's turn: `GameService::advanceAutomatedTurns(int
 $gameId): ?array`.** Called immediately after a human's own

@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with ten deliberate
+ * field-filling policy this builds on -- with eleven deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -66,6 +66,12 @@ use MoodSwings\Rules\RoundScorer;
  * distinct_owners constraint forbids anyway) when playing Pacifism, and
  * deprioritizes it (the same PHP_INT_MIN treatment) whenever no
  * non-teammate opponent currently has any mood in play -- see that
+ * method's own docblock; and disillusionmentSafeColor()/
+ * chooseDecisionAnswer() (confirmed by the maintainer), which picks the
+ * first color that matches none of the responding bot's own (or a
+ * teammate's) moods currently in play when answering Disillusionment's
+ * own per-player "choose a color" decision, rather than this class's
+ * usual "never volunteer for an optional field" default -- see that
  * method's own docblock.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
@@ -325,11 +331,60 @@ final class BotPlayerService
     }
 
     /** @return array<string, mixed> */
-    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId): array
+    public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = ''): array
     {
+        if ($decisionType === 'disillusionment_choose_color') {
+            $color = $this->disillusionmentSafeColor($state, $field, $botGamePlayerId);
+
+            return $color === null ? [] : [$field['key'] => $color];
+        }
+
         $value = $this->resolver->resolve($state, $field, $botGamePlayerId, 0, '');
 
         return $value === null ? [] : [$field['key'] => $value];
+    }
+
+    /**
+     * Disillusionment's own "which color, if any" policy (confirmed by
+     * the maintainer) -- every seated player, not just whoever played
+     * Disillusionment, gets asked this once it resolves (see
+     * DisillusionmentEffect::pendingDecisionsFor()'s own queueOrder()), so
+     * $botGamePlayerId here is whichever bot is currently being asked, not
+     * necessarily the one who played the mood. A "safe" color is one that
+     * matches none of the responding bot's own moods currently in play,
+     * nor any teammate's -- DisillusionmentEffect::resolveDecisions()
+     * moves EVERY other mood of a chosen color to the discard pile
+     * regardless of owner, so picking an unsafe color would gladly thin
+     * out opponents' boards while blowing up the bot's own (or its
+     * teammate's) at the same time. The first such safe color in
+     * $field['options']' own order wins ties -- this class has no finer
+     * basis to prefer one safe color over another over the others (unlike
+     * avoidanceBestDirection()'s own value-driven tiebreak, nothing here
+     * distinguishes an opponent's mood from another's), matching
+     * BotChoiceResolver's own "first option" default for every other
+     * non-strategic mode field. Null (decline, this field's own pre-
+     * existing default before this policy existed) whenever every color
+     * matches something the bot or a teammate owns -- there's no way to
+     * participate here without also hurting yourself/your team, so this
+     * falls back to never volunteering for it at all, the same as any
+     * other optional field with a real cost attached.
+     */
+    private function disillusionmentSafeColor(BoardState $state, array $field, int $botGamePlayerId): ?string
+    {
+        $unsafeColors = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                $unsafeColors[] = $state->colorOf($mood->cardId);
+            }
+        }
+
+        foreach ($field['options'] ?? [] as $color) {
+            if (!in_array($color, $unsafeColors, true)) {
+                return $color;
+            }
+        }
+
+        return null;
     }
 
     /**
