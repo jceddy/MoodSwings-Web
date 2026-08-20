@@ -1272,6 +1272,37 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::shouldAttemptZealCycle()
+     * (see BotPlayerServiceTest for the policy itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> playMood() ->
+     * ZealEffect::afterPlaying() request lifecycle. Pacifism (id 20,
+     * value 1, not itself an EARLY_PRIORITY_EFFECT_KEYS card -- unlike
+     * Charity, which would otherwise compete with Zeal for the primary
+     * play here) sits well under ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD, so
+     * cycling it is the only legal outcome.
+     */
+    public function testBotCyclesZealWithALowValueHandCard(): void
+    {
+        $u1 = $this->insertUser('human11');
+        $botUserId = $this->insertBotUser('bot9');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 106, 'hand', $botPlayerId); // Zeal, base value 3
+        $this->insertGameCard($gameId, 20, 'hand', $botPlayerId); // Pacifism, value 1 -- cheap enough to cycle
+        $this->insertGameCard($gameId, 5, 'deck', deckPosition: 0); // the card the bot should draw
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 106));
+        self::assertFalse($this->cardIsInHand($gameId, 20, $botUserId), 'Pacifism should have been bottomed, not kept');
+        self::assertTrue($this->cardIsInHand($gameId, 5, $botUserId), 'the bot should have drawn a fresh card off the deck');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::avoidanceHasAGoodReasonToPlay()/
      * avoidanceBestDirection() (see BotPlayerServiceTest for the policy
      * itself in isolation) through the FULL advanceAutomatedTurns() ->

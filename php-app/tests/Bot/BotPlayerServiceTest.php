@@ -487,6 +487,54 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(78, $action['card_id']);
     }
 
+    /**
+     * Zeal's own "should I cycle" policy (confirmed by the maintainer):
+     * with a genuinely low-value card sitting in hand (Charity, id 3,
+     * value 1, well under ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD), the bot
+     * volunteers for its own optional bottom-and-redraw field, unlike
+     * every other unforced-optional-field card, which would leave it
+     * unfilled by default.
+     */
+    public function testChooseActionCyclesZealWithALowValueHandCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [106, 3]]);
+
+        $action = $this->bot->chooseAction($state, [106], 1);
+
+        self::assertSame(106, $action['card_id']);
+        self::assertSame(['hand_card_id' => 3], $action['choices']);
+    }
+
+    /**
+     * With nothing else in hand to cycle, Zeal's own optional field
+     * stays unfilled, the same as any other unforced optional field --
+     * "if it has one to cycle" per the maintainer.
+     */
+    public function testChooseActionDoesNotCycleZealWithAnEmptyRemainingHand(): void
+    {
+        $state = $this->boardState(hands: [1 => [106]]);
+
+        $action = $this->bot->chooseAction($state, [106], 1);
+
+        self::assertSame(106, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Dignity (id 8, value 3) is too valuable to gamble on a random
+     * replacement for -- above ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD -- so
+     * Zeal's own optional field stays unfilled here too.
+     */
+    public function testChooseActionDoesNotCycleZealWithOnlyAMediumValueHandCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [106, 8]]);
+
+        $action = $this->bot->chooseAction($state, [106], 1);
+
+        self::assertSame(106, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();

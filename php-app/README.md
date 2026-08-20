@@ -5457,6 +5457,26 @@ since it already holds that dependency):
   falls within a generous statistical tolerance, rather than asserting
   an exact outcome.
 
+  **Zeal** (confirmed by the maintainer) gets the same
+  `shouldAttemptValueBoostDiscard()`-shaped treatment
+  (`shouldAttemptZealCycle()`, feeding `buildChoicesForCard()`'s own
+  `$forced` the exact same way), but for "you may put a card from your
+  hand on the bottom of the deck; if you do, draw a card" rather than a
+  value boost -- worth attempting whenever the bot's own cheapest OTHER
+  hand card (excluding Zeal itself) is cheap enough
+  (`ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`, the same threshold/reasoning as
+  `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`/
+  `AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD`/`CYNICISM_LOW_VALUE_DISCARD_THRESHOLD`
+  elsewhere in this section) to be worth gambling on a random
+  replacement for. Once forced, `BotChoiceResolver`'s own generic
+  `'hand_card'` field policy already picks the LOWEST-value legal
+  candidate on its own, so `shouldAttemptZealCycle()` only ever decides
+  WHETHER to bother, never WHICH card -- no bespoke choice-building
+  method needed here the way Rationalization/Avoidance/Cynicism each
+  need their own. An empty remaining hand (Zeal was the bot's only
+  card) has nothing to cycle, so it stays unfilled -- "if it has one to
+  cycle" per the maintainer.
+
   **Rationalization** (confirmed by the maintainer) gets its own
   bespoke, two-part policy, since "you may choose one: refresh your own
   hand, or rotate hands with the table" (`CardChoiceSchema`'s own

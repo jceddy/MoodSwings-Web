@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with six deliberate
+ * field-filling policy this builds on -- with seven deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -46,7 +46,11 @@ use MoodSwings\Rules\RoundScorer;
  * every card that steals from an opponent's hand, forces one or more
  * opponents to discard from their own hand, or grants the acting player
  * an extra play -- see EARLY_PRIORITY_EFFECT_KEYS's own docblock for the
- * full list and why each card qualifies.
+ * full list and why each card qualifies; and shouldAttemptZealCycle()
+ * (confirmed by the maintainer), which volunteers Zeal's own optional
+ * "bottom a hand card, then draw a replacement" field whenever the
+ * bot's own cheapest OTHER hand card is cheap enough to gamble on a
+ * random replacement for -- see that method's own docblock.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -708,6 +712,7 @@ final class BotPlayerService
             $forced = !$required && (
                 $this->resolver->isAlwaysFilledOptionalField($effectKey, $field['key'])
                 || $this->shouldAttemptValueBoostDiscard($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
+                || $this->shouldAttemptZealCycle($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
             );
             if (!$required && !$forced) {
                 continue;
@@ -904,6 +909,50 @@ final class BotPlayerService
         }
 
         return mt_rand() / mt_getrandmax() < ($otherCardsInHand - 1) / 3;
+    }
+
+    /**
+     * How cheap a hand card needs to be before Zeal is worth spending it
+     * on ("After playing this mood, you may put a card from your hand on
+     * the bottom of the deck. If you do, draw a card.") -- a genuinely
+     * low-value card is worth gambling on a random replacement for; a
+     * merely mediocre one isn't worth the guaranteed loss of a known
+     * quantity for an unknown one. Same threshold, same reasoning, as
+     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE/AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD/
+     * CYNICISM_LOW_VALUE_DISCARD_THRESHOLD above.
+     */
+    private const ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD = 2;
+
+    /**
+     * Zeal's own "should this optional field be attempted" policy
+     * (confirmed by the maintainer) -- feeds buildChoicesForCard()'s own
+     * `$forced` the same way shouldAttemptValueBoostDiscard() does,
+     * rather than a bespoke buildChoicesForCard() special case: once
+     * forced, BotChoiceResolver's own generic 'hand_card' field policy
+     * already picks the LOWEST-value legal candidate on its own (the
+     * same "minimize what's given up" bias resolveOwnResourceField()
+     * documents), so there's no need to separately pick WHICH card here
+     * -- only WHETHER to bother at all. True only if the bot's own
+     * cheapest OTHER hand card (excluding $cardId, Zeal itself) is
+     * cheap enough (ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD) to be worth
+     * cycling for a random replacement; an empty remaining hand (Zeal
+     * was the bot's only card) has nothing to cycle at all, so it stays
+     * false -- "if it has one to cycle" per the maintainer.
+     */
+    private function shouldAttemptZealCycle(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
+    {
+        if ($effectKey !== 'zeal' || $fieldKey !== 'hand_card_id') {
+            return false;
+        }
+
+        $cheapestOtherHandCardValue = PHP_INT_MAX;
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if ($handCardId !== $cardId) {
+                $cheapestOtherHandCardValue = min($cheapestOtherHandCardValue, $this->baseValue($state, $handCardId));
+            }
+        }
+
+        return $cheapestOtherHandCardValue <= self::ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD;
     }
 
     /**

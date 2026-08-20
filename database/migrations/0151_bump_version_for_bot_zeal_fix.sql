@@ -1,0 +1,16 @@
+-- Practice bots previously always left Zeal's own optional "you may put
+-- a card from your hand on the bottom of the deck; if you do, draw a
+-- card" field unfilled, since it wasn't in ALWAYS_FILLED_OPTIONAL_FIELDS
+-- or the HAND_DISCARD_VALUE_BOOST_EFFECT family -- Zeal was always
+-- played with no cycling at all, even with an obviously weak card
+-- sitting right there in hand. BotPlayerService::shouldAttemptZealCycle()
+-- now volunteers for that field whenever the bot's own cheapest OTHER
+-- hand card is cheap enough to gamble on a random replacement for
+-- (ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD) -- BotChoiceResolver's own
+-- generic 'hand_card' field policy already picks the lowest-value
+-- legal candidate once forced, so no bespoke choice-building method was
+-- needed here, unlike Rationalization/Avoidance/Cynicism. No schema
+-- change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0150 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.7' WHERE id = 1;
