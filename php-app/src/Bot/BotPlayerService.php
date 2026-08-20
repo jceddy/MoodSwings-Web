@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with eleven deliberate
+ * field-filling policy this builds on -- with twelve deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -72,7 +72,11 @@ use MoodSwings\Rules\RoundScorer;
  * teammate's) moods currently in play when answering Disillusionment's
  * own per-player "choose a color" decision, rather than this class's
  * usual "never volunteer for an optional field" default -- see that
- * method's own docblock.
+ * method's own docblock; and creativityBestCopyTargetId() (confirmed by
+ * the maintainer), which targets generally the highest-value mood
+ * currently in play (any owner) when playing Creativity, skipping any
+ * candidate whose own printed ability has a "to play" cost the bot might
+ * not actually be able to pay -- see that method's own docblock.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -843,6 +847,12 @@ final class BotPlayerService
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
+        if ($effectKey === 'creativity') {
+            $copyTargetCardId = $this->creativityBestCopyTargetId($state);
+
+            return $copyTargetCardId !== null ? ['copy_card_id' => $copyTargetCardId] : [];
+        }
+
         $choices = [];
 
         foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
@@ -1438,5 +1448,52 @@ final class BotPlayerService
         usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * Creativity's own "what to copy" policy (confirmed by the
+     * maintainer) -- generally the highest-value mood currently in play,
+     * regardless of owner (CardChoiceSchema's own `copy_card_id` field is
+     * scope `'any'` with no `excludes_teammate`, and there's no reason to
+     * exclude the bot's own board here the way Intimidation/Paranoia/
+     * Pacifism exclude opponents' -- copying your own best mood is just
+     * as legitimate as copying an opponent's). Deliberately skips any
+     * candidate whose OWN printed ability has a "to play" cost (Bliss,
+     * Envy, Exhilaration, Guile, Neurosis, Regret, Self-Loathing) --
+     * `MoodPlayService::playMood()` pays a Creativity-copy's cost against
+     * the COPIED card's own `canPayToPlayCost()`, not Creativity's
+     * (always payable, since Creativity itself has no printed cost), so
+     * choosing one of these without knowing in advance whether the bot
+     * could actually pay it risks turning a legal Creativity play into an
+     * illegal one (`IllegalPlayException`) -- "generally" the highest
+     * value per the maintainer, not "the literal highest value no matter
+     * what," so skipping straight past a would-be-illegal target in favor
+     * of the next-best safe one is well within that. Resolved through
+     * `effectiveCardId()` throughout (both for the hasToPlay check and
+     * for `valueOf()`'s own live value), so copying a Creativity that's
+     * itself already copying something targets -- and is scored as --
+     * whatever THAT card actually is, never blank Creativity. `null`
+     * (leaving `copy_card_id` unfilled, the same "just a blank blue 0"
+     * default as before this policy existed) only when nothing is in
+     * play yet at all, or every in-play mood happens to have a to-play
+     * cost.
+     */
+    private function creativityBestCopyTargetId(BoardState $state): ?int
+    {
+        $bestCardId = null;
+        $bestValue = -1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['hasToPlay']) {
+                continue;
+            }
+
+            $value = $state->valueOf($mood->cardId);
+            if ($value > $bestValue) {
+                $bestValue = $value;
+                $bestCardId = $mood->cardId;
+            }
+        }
+
+        return $bestCardId;
     }
 }

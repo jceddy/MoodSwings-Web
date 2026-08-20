@@ -918,6 +918,68 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $answer);
     }
 
+    // -- Creativity (confirmed by the maintainer) --------------------------
+
+    public function testChooseActionCopiesTheHighestValueMoodInPlayWithCreativity(): void
+    {
+        $state = $this->boardState(hands: [1 => [32], 2 => [55], 3 => [30]]); // Apathy (value 4), Bashfulness (value 6)
+        $state->moveHandToInPlay(2, 55);
+        $state->moveHandToInPlay(3, 30);
+
+        $action = $this->bot->chooseAction($state, [32], 1);
+
+        self::assertSame(32, $action['card_id']);
+        self::assertSame(['copy_card_id' => 30], $action['choices']);
+    }
+
+    /**
+     * Copying your own board is just as legitimate as copying an
+     * opponent's -- Creativity's own CardChoiceSchema field has no
+     * `excludes_teammate`/opponent-only restriction the way Intimidation/
+     * Paranoia/Pacifism's own fields do, so the bot's own Bashfulness
+     * (value 6) beats the opponent's own Apathy (value 4).
+     */
+    public function testChooseActionWillCopyItsOwnMoodWhenItsTheHighestValue(): void
+    {
+        $state = $this->boardState(hands: [1 => [32, 30], 2 => [55]]);
+        $state->moveHandToInPlay(1, 30);
+        $state->moveHandToInPlay(2, 55);
+
+        $action = $this->bot->chooseAction($state, [32], 1);
+
+        self::assertSame(32, $action['card_id']);
+        self::assertSame(['copy_card_id' => 30], $action['choices']);
+    }
+
+    /**
+     * Self-Loathing (id 75, value 6) has its own "to play" cost --
+     * copying it risks turning a legal Creativity play into an illegal
+     * one if the bot can't actually pay that cost, so it's skipped in
+     * favor of the next-best SAFE candidate, Apathy (value 4), even
+     * though Self-Loathing is nominally worth more.
+     */
+    public function testChooseActionSkipsAToPlayCostCardWhenCopyingWithCreativity(): void
+    {
+        $state = $this->boardState(hands: [1 => [32], 2 => [55], 3 => [75]]);
+        $state->moveHandToInPlay(2, 55);
+        $state->moveHandToInPlay(3, 75);
+
+        $action = $this->bot->chooseAction($state, [32], 1);
+
+        self::assertSame(32, $action['card_id']);
+        self::assertSame(['copy_card_id' => 55], $action['choices']);
+    }
+
+    public function testChooseActionPlaysCreativityUnfilledWhenNothingIsInPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [32]]);
+
+        $action = $this->bot->chooseAction($state, [32], 1);
+
+        self::assertSame(32, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Team Play (issue #360) ------------------------------------------
 
     public function testChooseTeamDecisionProposalAlwaysPicksTheFirstCandidate(): void

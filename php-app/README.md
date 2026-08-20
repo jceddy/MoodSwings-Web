@@ -5682,6 +5682,33 @@ since it already holds that dependency):
   never forces a discard the way Suspicion does -- so once a valid target
   exists it reverts to plain `baseValue()`, no boost, just no longer
   vetoed.
+
+  **Creativity** (confirmed by the maintainer) gets its own targeting
+  exception via `creativityBestCopyTargetId()`: `buildChoicesForCard()`
+  special-cases `effectKey === 'creativity'` to it instead of falling
+  through to `CardChoiceSchema`'s generic per-field loop (which, since
+  `copy_card_id` is optional and not in `ALWAYS_FILLED_OPTIONAL_FIELDS`,
+  would otherwise always leave Creativity unfilled -- just a blank blue
+  card worth 0). Generally the highest-value mood currently in play,
+  regardless of owner -- unlike Intimidation/Paranoia/Pacifism, there's
+  no opponent-only restriction here (`CardChoiceSchema`'s own field is
+  scope `'any'` with no `excludes_teammate`), so copying the bot's own
+  best mood is just as valid a pick as copying an opponent's. "Generally"
+  because it deliberately skips any candidate whose own printed ability
+  has a "to play" cost (Bliss, Envy, Exhilaration, Guile, Neurosis,
+  Regret, Self-Loathing) -- `MoodPlayService::playMood()` pays a
+  Creativity-copy's cost against the COPIED card's own
+  `canPayToPlayCost()`, not Creativity's (always payable, since
+  Creativity has no printed cost of its own), so picking one of these
+  without knowing whether the bot could actually pay it risks turning a
+  legal Creativity play into an illegal one. Resolved through
+  `effectiveCardId()` throughout (both the to-play-cost check and the
+  live `valueOf()` comparison), so copying a Creativity that's itself
+  already copying something targets -- and is scored as -- whatever THAT
+  card actually is, never blank Creativity. `null` (leaving
+  `copy_card_id` unfilled, the same default as before this policy
+  existed) only when nothing is in play yet, or every in-play mood has a
+  to-play cost.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-

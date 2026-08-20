@@ -1403,6 +1403,80 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::creativityBestCopyTargetId()
+     * (see BotPlayerServiceTest for the policy itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> playMood() ->
+     * MoodPlayService's own copy-resolution request lifecycle. The human
+     * has two moods in play (Apathy, value 4, and Bashfulness, value 6);
+     * the bot's own Creativity should end up copying Bashfulness, the
+     * higher-value one.
+     */
+    public function testBotCopiesTheHighestValueMoodInPlayWithCreativity(): void
+    {
+        $u1 = $this->insertUser('human17');
+        $botUserId = $this->insertBotUser('bot15');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $botPlayerId);
+        $this->insertGameCard($gameId, 55, 'in_play', $p1); // Apathy, value 4
+        $this->insertGameCard($gameId, 30, 'in_play', $p1); // Bashfulness, value 6 -- the copy target
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $creativityCard = null;
+        foreach ($inPlay as $mood) {
+            if ($mood['card_id'] === $creativityId) {
+                $creativityCard = $mood;
+            }
+        }
+
+        self::assertNotNull($creativityCard, 'the bot\'s own Creativity should be in play');
+        self::assertTrue($creativityCard['is_creativity_copy']);
+        self::assertSame(30, $creativityCard['catalog_card_id'], 'Creativity should have copied Bashfulness, the higher-value mood');
+    }
+
+    /**
+     * End-to-end coverage of creativityBestCopyTargetId()'s own
+     * "to play" cost avoidance -- Self-Loathing (id 75, value 6) is
+     * nominally the higher-value candidate, but it has its own "to play"
+     * cost ("put one or more of your OWN moods into the discard pile"),
+     * which the bot -- with nothing else in play -- can't pay. Copying it
+     * anyway would make MoodPlayService::playMood() throw (the copy's own
+     * to-play cost check), so the bot should skip it in favor of the SAFE
+     * candidate, Apathy (value 4), rather than the play failing outright.
+     */
+    public function testBotSkipsAnUnpayableCopyTargetWithCreativity(): void
+    {
+        $u1 = $this->insertUser('human18');
+        $botUserId = $this->insertBotUser('bot16');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $creativityId = $this->insertGameCard($gameId, 32, 'hand', $botPlayerId); // the bot's only hand card
+        $this->insertGameCard($gameId, 55, 'in_play', $p1); // Apathy, value 4 -- safe
+        $this->insertGameCard($gameId, 75, 'in_play', $p1); // Self-Loathing, value 6, has its own to-play cost
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        $inPlay = $this->games->getState($gameId, $u1)['in_play'];
+        $creativityCard = null;
+        foreach ($inPlay as $mood) {
+            if ($mood['card_id'] === $creativityId) {
+                $creativityCard = $mood;
+            }
+        }
+
+        self::assertNotNull($creativityCard);
+        self::assertSame(55, $creativityCard['catalog_card_id'], 'Creativity should have copied the SAFE candidate, Apathy, not the unpayable Self-Loathing');
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::cynicismHasAGoodReasonToPlayNow()/
      * cynicismChoices() (see BotPlayerServiceTest for the policy itself
      * in isolation) through the FULL advanceAutomatedTurns() -> playMood()
