@@ -1,0 +1,15 @@
+-- Practice bots previously always left Intimidation's own optional
+-- target_player_id field unfilled, since it wasn't in
+-- ALWAYS_FILLED_OPTIONAL_FIELDS or EARLY_PRIORITY_EFFECT_KEYS' own
+-- choice-building special cases -- Intimidation was always played with
+-- no target chosen at all, accomplishing nothing. BotPlayerService now
+-- always targets the first active, non-teammate opponent who currently
+-- has a card in hand (intimidationTargetPlayerId(), skipping over an
+-- empty-handed opponent in favor of one who actually has a card to
+-- reveal), and deprioritizes Intimidation (the same PHP_INT_MIN
+-- treatment Rationalization/Cynicism get) whenever no such opponent
+-- exists at all, so other plays get prioritized above it instead. No
+-- schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0152 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.9' WHERE id = 1;

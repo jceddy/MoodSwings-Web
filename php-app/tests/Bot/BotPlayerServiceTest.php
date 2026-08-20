@@ -535,6 +535,97 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    /**
+     * Intimidation's own "always target an opponent" policy (confirmed
+     * by the maintainer): player 2 has a card in hand, so it's the only
+     * legal, non-teammate target -- the bot volunteers for its own
+     * optional target_player_id field rather than leaving it unfilled
+     * the way an ordinary unforced optional field would default to.
+     */
+    public function testChooseActionTargetsAnOpponentWithACardWhenPlayingIntimidation(): void
+    {
+        $state = $this->boardState(hands: [1 => [67], 2 => [8]]);
+
+        $action = $this->bot->chooseAction($state, [67], 1);
+
+        self::assertSame(67, $action['card_id']);
+        self::assertSame(['target_player_id' => 2], $action['choices']);
+    }
+
+    /**
+     * With no opponent holding any card at all, targeting anyone would
+     * be a pure no-op (IntimidationEffect's own pendingDecisionsFor()
+     * silently skips an empty-handed target), so Intimidation is
+     * deprioritized behind Pacifism (id 20, value 1, plain filler) --
+     * "other plays should be prioritized above it" per the maintainer.
+     */
+    public function testChooseActionDeprioritizesIntimidationWhenNoOpponentHasACard(): void
+    {
+        $state = $this->boardState(hands: [1 => [67, 20]]);
+
+        $action = $this->bot->chooseAction($state, [67, 20], 1);
+
+        self::assertSame(20, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Intimidation is still played --
+     * deprioritized WHEN, never skipped outright, the same treatment
+     * Rationalization/Cynicism already get. No opponent has a card, so
+     * its own optional field stays unfilled.
+     */
+    public function testChooseActionStillPlaysIntimidationUnfilledWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [67]]);
+
+        $action = $this->bot->chooseAction($state, [67], 1);
+
+        self::assertSame(67, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Player 2 (seated first) has an empty hand; player 3 has a card.
+     * The bot skips past the empty-handed seat to target player 3
+     * instead of just taking the first legal candidate in seat order
+     * the way BotChoiceResolver's own generic "player" field default
+     * would -- targeting player 2 here would accomplish nothing.
+     */
+    public function testChooseActionSkipsAnEmptyHandedOpponentToTargetOneWithACard(): void
+    {
+        $state = $this->boardState(hands: [1 => [67], 3 => [8]]);
+
+        $action = $this->bot->chooseAction($state, [67], 1);
+
+        self::assertSame(67, $action['card_id']);
+        self::assertSame(['target_player_id' => 3], $action['choices']);
+    }
+
+    /**
+     * A teammate with a card in hand doesn't count as a valid target --
+     * Intimidation's own printed text allows targeting anyone ("choose
+     * ANOTHER player", no opponent restriction), but the maintainer's
+     * own "opponent" framing means a teammate is deliberately excluded
+     * here, the same distinction Cynicism's own recipient search already
+     * draws. Player 2 (the bot's own teammate) has a card; player 3 (the
+     * only actual opponent) has none -- no valid target exists, so
+     * Intimidation is deprioritized behind Pacifism.
+     */
+    public function testChooseActionDoesNotCountATeammatesHandAsAValidIntimidationTarget(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [67, 20], 2 => [8]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+
+        $action = $this->bot->chooseAction($state, [67, 20], 1);
+
+        self::assertSame(20, $action['card_id']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();

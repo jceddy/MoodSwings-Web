@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with seven deliberate
+ * field-filling policy this builds on -- with eight deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -46,11 +46,17 @@ use MoodSwings\Rules\RoundScorer;
  * every card that steals from an opponent's hand, forces one or more
  * opponents to discard from their own hand, or grants the acting player
  * an extra play -- see EARLY_PRIORITY_EFFECT_KEYS's own docblock for the
- * full list and why each card qualifies; and shouldAttemptZealCycle()
+ * full list and why each card qualifies; shouldAttemptZealCycle()
  * (confirmed by the maintainer), which volunteers Zeal's own optional
  * "bottom a hand card, then draw a replacement" field whenever the
  * bot's own cheapest OTHER hand card is cheap enough to gamble on a
- * random replacement for -- see that method's own docblock.
+ * random replacement for -- see that method's own docblock; and
+ * intimidationTargetPlayerId()/sortPriorityValue() once more (confirmed
+ * by the maintainer), which always targets the first active, non-
+ * teammate opponent with a card in hand when playing Intimidation, and
+ * deprioritizes it (the same PHP_INT_MIN treatment as Rationalization/
+ * Cynicism) whenever no such opponent currently exists -- see that
+ * method's own docblock.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -394,6 +400,21 @@ final class BotPlayerService
      * already uses for draft-pick scoring, just at a scale that fits
      * this method's own single-digit baseValue() range instead of that
      * one's draft_priority_score range.
+     *
+     * Intimidation (confirmed by the maintainer) gets the same
+     * PHP_INT_MIN treatment as Rationalization/Cynicism above, but the
+     * condition is simpler: no OTHER currently active, non-teammate
+     * player has any card in hand at all right now
+     * (intimidationTargetPlayerId() returns null) -- targeting anyone in
+     * that state would ask for an empty-handed opponent's own "reveal a
+     * card" decision, which IntimidationEffect's own pendingDecisionsFor()
+     * already treats as a legal no-op (an empty hand simply has nothing
+     * to reveal), so the whole play accomplishes nothing. The instant at
+     * least one non-teammate opponent has a card, this reverts to
+     * EARLY_PRIORITY_EFFECT_KEYS' own ordinary boosted treatment above
+     * -- no separate "how good is this target" scoring the way Cynicism
+     * needs, since ANY opponent with a card in hand makes Intimidation
+     * worth its usual priority.
      */
     private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
     {
@@ -402,6 +423,9 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'cynicism' && !$this->cynicismHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds)) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'intimidation' && $this->intimidationTargetPlayerId($state, $botGamePlayerId) === null) {
             return PHP_INT_MIN;
         }
 
@@ -703,6 +727,12 @@ final class BotPlayerService
 
         if ($effectKey === 'cynicism') {
             return $this->cynicismChoices($state, $botGamePlayerId);
+        }
+
+        if ($effectKey === 'intimidation') {
+            $targetPlayerId = $this->intimidationTargetPlayerId($state, $botGamePlayerId);
+
+            return $targetPlayerId !== null ? ['target_player_id' => $targetPlayerId] : [];
         }
 
         $choices = [];
@@ -1188,6 +1218,38 @@ final class BotPlayerService
     {
         foreach ($state->activePlayerOrder() as $playerId) {
             if ($playerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $playerId)) {
+                return $playerId;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Intimidation's own "who to target" policy (confirmed by the
+     * maintainer) -- the first active, non-teammate opponent who
+     * currently has at least one card in hand, or null if none do.
+     * Deliberately excludes teammates (Intimidation's own printed text
+     * has no such restriction -- "choose ANOTHER player" -- but taking a
+     * card from your own teammate's hand for yourself isn't the
+     * "opponent" this policy means, the same distinction Cynicism's own
+     * recipient search already draws). An opponent with an empty hand is
+     * skipped over in favor of one who actually has a card to reveal,
+     * rather than just taking the first opponent in seat order the way
+     * BotChoiceResolver's own generic "first legal candidate" default
+     * would -- IntimidationEffect's own pendingDecisionsFor() silently
+     * no-ops against an empty hand, so targeting one on purpose while
+     * another qualifying opponent sits right there would waste the play
+     * for nothing. Used both to decide WHETHER Intimidation is worth
+     * playing right now (see sortPriorityValue()'s own docblock) and, if
+     * so, WHO to actually target.
+     */
+    private function intimidationTargetPlayerId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId
+                && !$state->isTeammate($botGamePlayerId, $playerId)
+                && $state->hand($playerId) !== []) {
                 return $playerId;
             }
         }

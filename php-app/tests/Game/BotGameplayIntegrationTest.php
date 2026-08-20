@@ -1228,6 +1228,39 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::intimidationTargetPlayerId()
+     * (see BotPlayerServiceTest for the policy itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> playMood() ->
+     * IntimidationEffect::pendingDecisionsFor() request lifecycle -- the
+     * human opponent has a card in hand, so the bot's own optional
+     * target_player_id field gets volunteered for and correctly reaches
+     * IntimidationEffect itself, which pauses on a real pending decision
+     * asking the human to reveal a card (never auto-answered here, since
+     * it targets the human, not the bot).
+     */
+    public function testBotTargetsTheHumanOpponentWhenPlayingIntimidation(): void
+    {
+        $u1 = $this->insertUser('human12');
+        $botUserId = $this->insertBotUser('bot10');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 67, 'hand', $botPlayerId); // Intimidation
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human's own card, the reveal target
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 67));
+
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('intimidation_reveal_card', $pending['decision_type']);
+        self::assertSame($p1, $pending['target_game_player_id']);
+        self::assertTrue($pending['is_you']);
+    }
+
+    /**
      * End-to-end coverage of BotPlayerService::cynicismHasAGoodReasonToPlayNow()/
      * cynicismChoices() (see BotPlayerServiceTest for the policy itself
      * in isolation) through the FULL advanceAutomatedTurns() -> playMood()
