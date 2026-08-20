@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with four deliberate
+ * field-filling policy this builds on -- with seven deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -25,14 +25,32 @@ use MoodSwings\Rules\RoundScorer;
  * synergy partners, see migration 0143) plus CardStatsService's deck
  * win rate instead of just a card's own printed value -- there's no
  * BoardState yet during drafting for the "highest printed value" bias
- * every other method here uses to even read from; and
+ * every other method here uses to even read from;
  * rationalizationChoices()/sortPriorityValue() (confirmed by the
  * maintainer), which both decide WHICH of Rationalization's two optional
  * modes to commit to (never leaving it unchosen -- a no-op play the way
  * every other unforced-optional-field card here would default to) and
  * deprioritize playing it at all except when doing so pays off (a weak
  * remaining hand, or an overstuffed seat neighbor worth taking cards
- * from), rather than leading with it purely by printed value.
+ * from), rather than leading with it purely by printed value;
+ * cynicismChoices()/sortPriorityValue() again (confirmed by the
+ * maintainer), which similarly deprioritize Cynicism unless a cheap
+ * discard-pile card is available to boost it for free, the round's own
+ * score makes playing it (even unboosted) the deciding difference with
+ * nothing else able to swing it as much, or (an addendum, also
+ * confirmed by the maintainer) nothing else playable offers a 3+-point
+ * swing OR interacts with an opponent's hand either -- see
+ * cynicismHasAGoodReasonToPlayNow()'s own docblock; and
+ * EARLY_PRIORITY_EFFECT_KEYS/sortPriorityValue() once more (confirmed
+ * by the maintainer, the same addendum), a flat priority bonus for
+ * every card that steals from an opponent's hand, forces one or more
+ * opponents to discard from their own hand, or grants the acting player
+ * an extra play -- see EARLY_PRIORITY_EFFECT_KEYS's own docblock for the
+ * full list and why each card qualifies; and shouldAttemptZealCycle()
+ * (confirmed by the maintainer), which volunteers Zeal's own optional
+ * "bottom a hand card, then draw a replacement" field whenever the
+ * bot's own cheapest OTHER hand card is cheap enough to gamble on a
+ * random replacement for -- see that method's own docblock.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -91,7 +109,7 @@ final class BotPlayerService
     {
         usort(
             $playableCardIds,
-            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId),
+            fn (int $a, int $b) => $this->sortPriorityValue($state, $b, $botGamePlayerId, $playableCardIds) <=> $this->sortPriorityValue($state, $a, $botGamePlayerId, $playableCardIds),
         );
 
         foreach ($playableCardIds as $cardId) {
@@ -354,16 +372,95 @@ final class BotPlayerService
      * outright, only to deprioritize WHEN -- buildChoicesForCard()'s own
      * rationalizationChoices() always commits to a mode regardless of
      * this ordering.
+     *
+     * Cynicism (confirmed by the maintainer) gets the identical PHP_INT_MIN
+     * treatment unless cynicismHasAGoodReasonToPlayNow() says otherwise --
+     * see that method's own docblock. $playableCardIds is threaded
+     * through purely for that check's own "does anything else on offer
+     * swing the round as much, or interact with an opponent's hand"
+     * comparisons, and for EARLY_PRIORITY_EFFECT_KEYS' own bonus below;
+     * every other candidate here ignores it.
+     *
+     * EARLY_PRIORITY_EFFECT_KEYS (confirmed by the maintainer, an
+     * addendum to the Cynicism policy above) adds a flat bonus on top of
+     * baseValue() for a card that steals from an opponent's hand, forces
+     * an opponent to discard, or grants the acting player an extra play
+     * -- see that constant's own docblock for the full list and why.
+     * Large enough (EARLY_PRIORITY_BONUS) to always outrank an
+     * un-boosted card regardless of either one's own printed value,
+     * while still ranking sensibly AMONG themselves by that same
+     * printed value (a stronger bonus card doesn't lose to a weaker
+     * one) -- the same additive-bonus shape SYNERGY_PARTNER_BONUS
+     * already uses for draft-pick scoring, just at a scale that fits
+     * this method's own single-digit baseValue() range instead of that
+     * one's draft_priority_score range.
      */
-    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId): int
+    private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
         if ($effectKey === 'rationalization' && !$this->rationalizationHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
             return PHP_INT_MIN;
         }
+        if ($effectKey === 'cynicism' && !$this->cynicismHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds)) {
+            return PHP_INT_MIN;
+        }
 
-        return $this->baseValue($state, $cardId);
+        $priority = $this->baseValue($state, $cardId);
+        if (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
+            $priority += self::EARLY_PRIORITY_BONUS;
+        }
+
+        return $priority;
     }
+
+    /**
+     * Every effect key that steals a card from an opponent's hand into
+     * the acting player's own hand (Compulsion, Intimidation -- not
+     * Confusion/Rationalization's own 'rotate', which redistribute every
+     * seated player's hand symmetrically rather than a one-directional
+     * gain, and not Regret/Guile, which take an opponent's MOOD already
+     * in play rather than a hand card), forces one or more OTHER players
+     * to discard from their own hand (Suspicion -- the only card in the
+     * catalog that does; every other forced-discard-shaped effect either
+     * targets a mood already in play, or discards from the ACTING
+     * player's own hand as a self-paid cost), or grants the acting
+     * player (or, while in play, keeps granting every one of their own
+     * turns) an extra play -- confirmed by the maintainer as cards worth
+     * leading with rather than ordering purely by printed value, the
+     * same way a bigger hand/tempo advantage would matter to a human
+     * player. Every extra-play grant here is listed regardless of
+     * whether it's unconditional (Charity, Duplicity, Idealism,
+     * Validation, Ambition, Bravado, Fear, Nostalgia, Gluttony,
+     * Insecurity, Angst, Harmony, Grief, Thrill, Joy) or conditional on
+     * the NEXT play meeting some restriction (Benevolence, Eagerness,
+     * Friendliness, Kindness, Pride, Intimidation's own restriction to
+     * the one card just taken) or an ongoing while-in-play grant instead
+     * of a one-time one (Hope, Grace, Stubbornness) -- "legal, not
+     * strategic" stops short of predicting whether a conditional grant
+     * will actually be used. Generosity deliberately excluded: it grants
+     * its own extra play to a chosen OPPONENT, not the acting player, so
+     * leading with it would help whoever's targeted, not the bot itself.
+     *
+     * @var string[]
+     */
+    private const EARLY_PRIORITY_EFFECT_KEYS = [
+        // steals from an opponent's hand
+        'compulsion', 'intimidation',
+        // forces one or more opponents to discard from their own hand
+        'suspicion',
+        // grants the acting player an extra play
+        'charity', 'duplicity', 'idealism', 'validation', 'ambition', 'bravado', 'fear', 'nostalgia',
+        'gluttony', 'insecurity', 'angst', 'harmony', 'grief', 'thrill', 'benevolence', 'eagerness',
+        'friendliness', 'kindness', 'pride', 'hope', 'grace', 'stubbornness', 'joy',
+    ];
+
+    /**
+     * @see EARLY_PRIORITY_EFFECT_KEYS's own docblock. Comfortably above
+     * any real baseValue() (the catalog's own values top out around
+     * 6) so a boosted card always outranks an un-boosted one regardless
+     * of either one's own printed value.
+     */
+    private const EARLY_PRIORITY_BONUS = 10;
 
     /**
      * Issue #359's own draft practice bots' pick-priority bonus for a
@@ -604,6 +701,10 @@ final class BotPlayerService
             return ['direction' => $this->avoidanceBestDirection($state, $botGamePlayerId)];
         }
 
+        if ($effectKey === 'cynicism') {
+            return $this->cynicismChoices($state, $botGamePlayerId);
+        }
+
         $choices = [];
 
         foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
@@ -611,6 +712,7 @@ final class BotPlayerService
             $forced = !$required && (
                 $this->resolver->isAlwaysFilledOptionalField($effectKey, $field['key'])
                 || $this->shouldAttemptValueBoostDiscard($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
+                || $this->shouldAttemptZealCycle($state, $effectKey, $field['key'], $cardId, $botGamePlayerId)
             );
             if (!$required && !$forced) {
                 continue;
@@ -810,6 +912,50 @@ final class BotPlayerService
     }
 
     /**
+     * How cheap a hand card needs to be before Zeal is worth spending it
+     * on ("After playing this mood, you may put a card from your hand on
+     * the bottom of the deck. If you do, draw a card.") -- a genuinely
+     * low-value card is worth gambling on a random replacement for; a
+     * merely mediocre one isn't worth the guaranteed loss of a known
+     * quantity for an unknown one. Same threshold, same reasoning, as
+     * RATIONALIZATION_LOW_VALUE_HAND_AVERAGE/AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD/
+     * CYNICISM_LOW_VALUE_DISCARD_THRESHOLD above.
+     */
+    private const ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD = 2;
+
+    /**
+     * Zeal's own "should this optional field be attempted" policy
+     * (confirmed by the maintainer) -- feeds buildChoicesForCard()'s own
+     * `$forced` the same way shouldAttemptValueBoostDiscard() does,
+     * rather than a bespoke buildChoicesForCard() special case: once
+     * forced, BotChoiceResolver's own generic 'hand_card' field policy
+     * already picks the LOWEST-value legal candidate on its own (the
+     * same "minimize what's given up" bias resolveOwnResourceField()
+     * documents), so there's no need to separately pick WHICH card here
+     * -- only WHETHER to bother at all. True only if the bot's own
+     * cheapest OTHER hand card (excluding $cardId, Zeal itself) is
+     * cheap enough (ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD) to be worth
+     * cycling for a random replacement; an empty remaining hand (Zeal
+     * was the bot's only card) has nothing to cycle at all, so it stays
+     * false -- "if it has one to cycle" per the maintainer.
+     */
+    private function shouldAttemptZealCycle(BoardState $state, string $effectKey, string $fieldKey, int $cardId, int $botGamePlayerId): bool
+    {
+        if ($effectKey !== 'zeal' || $fieldKey !== 'hand_card_id') {
+            return false;
+        }
+
+        $cheapestOtherHandCardValue = PHP_INT_MAX;
+        foreach ($state->hand($botGamePlayerId) as $handCardId) {
+            if ($handCardId !== $cardId) {
+                $cheapestOtherHandCardValue = min($cheapestOtherHandCardValue, $this->baseValue($state, $handCardId));
+            }
+        }
+
+        return $cheapestOtherHandCardValue <= self::ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD;
+    }
+
+    /**
      * Whether boosting $cardId's own value from $unboostedValue to
      * $boostedValue would move the bot's own group (itself, plus a
      * teammate in Open/Closed Team Play -- see BoardState::isTeammate())
@@ -855,5 +1001,197 @@ final class BotPlayerService
         }
 
         return $myTotal + $unboostedValue < $rivalBest && $myTotal + $boostedValue >= $rivalBest;
+    }
+
+    /**
+     * How cheap a discard-pile card needs to be before handing it to an
+     * opponent to boost Cynicism is worth it regardless of anything
+     * else -- giving an opponent back a card this weak barely helps them
+     * at all, so the boost is effectively free. Same threshold, same
+     * reasoning, as RATIONALIZATION_LOW_VALUE_HAND_AVERAGE/
+     * AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD above.
+     */
+    private const CYNICISM_LOW_VALUE_DISCARD_THRESHOLD = 2;
+
+    /**
+     * Cynicism's own "should this be played at all right now" policy
+     * (confirmed by the maintainer) -- unlike Rationalization, there's no
+     * unconditionally-safe mode to fall back on here (boosting genuinely
+     * costs an opponent's own hand a fresh card), so this is worth
+     * playing NOW only if either:
+     * - A cheap discard-pile card (cynicismCheapDiscardCardId(), together
+     *   with a legal, non-teammate recipient to give it to) is available
+     *   -- a near-free +3 (BOOSTED_VALUE 6 minus this card's own printed
+     *   3), worth taking whenever it's on offer rather than saving for
+     *   later.
+     * - OR playing $cardId for its own plain printed value (no boost at
+     *   all -- "for no extra value" per the maintainer) would be the
+     *   deciding difference between the bot's own group NOT currently
+     *   having the highest score this round and having it
+     *   (wouldBecomeHighestScore(), reused here with an $unboostedValue
+     *   of 0 -- comparing "didn't play this" against "played this
+     *   unboosted", rather than that method's usual "unboosted" vs
+     *   "boosted" comparison), AND no OTHER currently playable card
+     *   offers as big a swing on its own (anotherPlayableCardOffersASufficientSwing())
+     *   -- if something else already closes the same gap, there's no
+     *   need to reach for Cynicism specifically to do it.
+     * - OR (an addendum, also confirmed by the maintainer): Cynicism is
+     *   a perfectly fine FIRST play, independent of the round's own
+     *   score entirely, whenever nothing else currently playable is
+     *   better -- no other card offers a 3+-point swing on its own
+     *   (anotherPlayableCardOffersASufficientSwing() again, reusing
+     *   Cynicism's own printed value as the bar), AND no other card
+     *   interacts with an opponent's hand at all
+     *   (anotherPlayableCardInteractsWithOpponentsHand() --
+     *   EARLY_PRIORITY_EFFECT_KEYS' own hand-stealing/forced-discard
+     *   entries specifically, not its extra-play ones). Unlike the
+     *   round-deciding branch above, this one doesn't require Cynicism
+     *   to actually decide anything -- just that nothing more useful is
+     *   on offer right now.
+     * Otherwise PHP_INT_MIN via sortPriorityValue() -- deprioritized
+     * behind everything else, the same "save it for when it actually
+     * pays off" treatment Rationalization already gets, though
+     * cynicismChoices() itself still always plays SOMETHING once
+     * chooseAction() does reach it (never a reason to skip it outright,
+     * same as Rationalization).
+     */
+    private function cynicismHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): bool
+    {
+        if ($this->cynicismFirstValidRecipient($state, $botGamePlayerId) !== null
+            && $this->cynicismCheapDiscardCardId($state) !== null) {
+            return true;
+        }
+
+        $baseValue = $this->baseValue($state, $cardId);
+        $anotherSufficientSwingExists = $this->anotherPlayableCardOffersASufficientSwing($state, $playableCardIds, $cardId, $baseValue);
+
+        if ($this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $baseValue) && !$anotherSufficientSwingExists) {
+            return true;
+        }
+
+        return !$anotherSufficientSwingExists
+            && !$this->anotherPlayableCardInteractsWithOpponentsHand($state, $playableCardIds, $cardId);
+    }
+
+    /**
+     * Whether some OTHER currently playable card's own plain printed
+     * value already swings the round by at least $neededSwing on its
+     * own -- @see cynicismHasAGoodReasonToPlayNow()'s own docblock for
+     * why this matters: if something else can already close the same
+     * gap, Cynicism doesn't need to be the one that does it.
+     *
+     * @param int[] $playableCardIds
+     */
+    private function anotherPlayableCardOffersASufficientSwing(BoardState $state, array $playableCardIds, int $excludeCardId, int $neededSwing): bool
+    {
+        foreach ($playableCardIds as $otherCardId) {
+            if ($otherCardId !== $excludeCardId && $this->baseValue($state, $otherCardId) >= $neededSwing) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether some OTHER currently playable card steals from an
+     * opponent's hand or forces one open -- EARLY_PRIORITY_EFFECT_KEYS'
+     * own hand-stealing/forced-discard entries (`compulsion`/
+     * `intimidation`/`suspicion`), deliberately excluding its
+     * extra-play entries, since @see cynicismHasAGoodReasonToPlayNow()'s
+     * own addendum only names "a card that interacts with an opponent's
+     * hand" specifically.
+     *
+     * @param int[] $playableCardIds
+     */
+    private function anotherPlayableCardInteractsWithOpponentsHand(BoardState $state, array $playableCardIds, int $excludeCardId): bool
+    {
+        foreach ($playableCardIds as $otherCardId) {
+            if ($otherCardId === $excludeCardId) {
+                continue;
+            }
+            $effectKey = $state->catalogRow($state->effectiveCardId($otherCardId))['effectKey'];
+            if (in_array($effectKey, ['compulsion', 'intimidation', 'suspicion'], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Cynicism's own "should this actually be boosted, and with what"
+     * policy (confirmed by the maintainer), bypassing the generic
+     * per-field CardChoiceSchema loop above the same way
+     * rationalizationChoices()/avoidanceBestDirection() already do for
+     * their own cards -- both of Cynicism's own fields (discard_card_id,
+     * recipient_player_id) are optional but genuinely interdependent
+     * (CynicismEffect::afterPlaying() throws if one is set without the
+     * other), so they're decided together here rather than independently
+     * per field. Boosts only when a cheap discard-pile card AND a legal
+     * recipient both exist (cynicismCheapDiscardCardId()/
+     * cynicismFirstValidRecipient()) -- empty otherwise, playing
+     * Cynicism for its own plain printed value with nothing given away,
+     * exactly the "for no extra value" case
+     * cynicismHasAGoodReasonToPlayNow() already vetted before this was
+     * ever reached.
+     *
+     * @return array{}|array{discard_card_id: int, recipient_player_id: int}
+     */
+    private function cynicismChoices(BoardState $state, int $botGamePlayerId): array
+    {
+        $recipientId = $this->cynicismFirstValidRecipient($state, $botGamePlayerId);
+        $discardCardId = $this->cynicismCheapDiscardCardId($state);
+        if ($recipientId === null || $discardCardId === null) {
+            return [];
+        }
+
+        return ['discard_card_id' => $discardCardId, 'recipient_player_id' => $recipientId];
+    }
+
+    /**
+     * The cheapest (lowest baseValue()) card currently in the discard
+     * pile, or null if either the pile is empty or its own cheapest card
+     * still isn't cheap enough (CYNICISM_LOW_VALUE_DISCARD_THRESHOLD) to
+     * hand an opponent for free. Plain catalog baseValue(), the same
+     * "not in play" reading rationalizationLowValueHand() already uses
+     * for hand cards -- BoardState::valueOf() requires a card to
+     * currently be a mood in play, which a discard-pile card never is.
+     */
+    private function cynicismCheapDiscardCardId(BoardState $state): ?int
+    {
+        $cheapestCardId = null;
+        $cheapestValue = PHP_INT_MAX;
+        foreach ($state->discardPile() as $discardCardId) {
+            $value = $this->baseValue($state, $discardCardId);
+            if ($value < $cheapestValue) {
+                $cheapestValue = $value;
+                $cheapestCardId = $discardCardId;
+            }
+        }
+
+        return $cheapestCardId !== null && $cheapestValue <= self::CYNICISM_LOW_VALUE_DISCARD_THRESHOLD
+            ? $cheapestCardId
+            : null;
+    }
+
+    /**
+     * The first active player who's a legal Cynicism recipient --
+     * CynicismEffect's own validation (not the acting player, not a
+     * teammate -- see BoardState::isTeammate()) -- matching
+     * BotChoiceResolver's own generic "first legal candidate" default
+     * for any other required/forced 'player' field with scope 'other'
+     * (there's no per-opponent value to rank by the way a mood target
+     * has, so "first" is as good as any).
+     */
+    private function cynicismFirstValidRecipient(BoardState $state, int $botGamePlayerId): ?int
+    {
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $playerId)) {
+                return $playerId;
+            }
+        }
+
+        return null;
     }
 }
