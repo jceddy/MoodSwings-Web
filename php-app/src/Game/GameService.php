@@ -3041,8 +3041,15 @@ final class GameService
             // Issue #315's Quick Draft pick-position signal -- written
             // live, right alongside the pick itself, rather than deferred
             // to game/match completion (see CardStatsService's own
-            // docblock for why).
-            $this->cardStats->recordQuickDraftPick($cardIds, $roundNumber, $stageNumber, $playerCount);
+            // docblock for why). Skipped for a practice-bot draft
+            // (confirmed by the maintainer) -- unlike
+            // recordGameCompletionStats()'s own $containsBot check, this
+            // fires from the pick itself rather than at game/match
+            // completion, so it needs its own guard here rather than
+            // sharing that one.
+            if ($this->draftMatchBotUserIds($draftMatchId) === []) {
+                $this->cardStats->recordQuickDraftPick($cardIds, $roundNumber, $stageNumber, $playerCount);
+            }
 
             $stageCountStmt = $pdo->prepare(
                 'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
@@ -3431,8 +3438,12 @@ final class GameService
             // forced deck-draw card from declining pile 3 (count 1, always
             // freshest, since nobody else has seen it) -- count($newlyDrafted)
             // covers both uniformly. Empty for a plain pass that doesn't
-            // end the turn, hence the guard.
-            if ($newlyDrafted !== []) {
+            // end the turn, hence the guard. Also skipped entirely for a
+            // practice-bot draft (confirmed by the maintainer) -- see
+            // submitQuickDraftPick()'s own identical guard for why this
+            // needs its own check rather than sharing
+            // recordGameCompletionStats()'s.
+            if ($newlyDrafted !== [] && $this->draftMatchBotUserIds($draftMatchId) === []) {
                 $this->cardStats->recordWinstonDraftPick($newlyDrafted, count($newlyDrafted));
             }
 
@@ -3777,8 +3788,12 @@ final class GameService
 
             // Issue #315's Grid Draft pick-position signal -- the round
             // this pick happened in, read before it's ever incremented
-            // below.
-            $this->cardStats->recordGridDraftPick($cardsTaken, (int) $state['current_round']);
+            // below. Skipped for a practice-bot draft (confirmed by the
+            // maintainer) -- see submitQuickDraftPick()'s own identical
+            // guard for why this needs its own check.
+            if ($this->draftMatchBotUserIds($draftMatchId) === []) {
+                $this->cardStats->recordGridDraftPick($cardsTaken, (int) $state['current_round']);
+            }
 
             $picksThisRound = (int) $state['picks_this_round'] + 1;
             $remainingDeck = array_map(intval(...), json_decode((string) $state['remaining_deck_card_ids'], true));
@@ -3969,7 +3984,12 @@ final class GameService
             // right alongside the pick itself, same as the other three
             // draft formats' own recordQuickDraftPick()/
             // recordWinstonDraftPick()/recordGridDraftPick() calls.
-            $this->cardStats->recordRotisserieDraftPick([$cardId], $pickIndex);
+            // Skipped for a practice-bot draft (confirmed by the
+            // maintainer) -- see submitQuickDraftPick()'s own identical
+            // guard for why this needs its own check.
+            if ($this->draftMatchBotUserIds($draftMatchId) === []) {
+                $this->cardStats->recordRotisserieDraftPick([$cardId], $pickIndex);
+            }
 
             if ($pickIndex >= $totalPicksNeeded) {
                 // The draft is complete -- whatever's left in $pool is

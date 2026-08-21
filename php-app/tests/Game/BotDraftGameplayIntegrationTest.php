@@ -622,4 +622,139 @@ final class BotDraftGameplayIntegrationTest extends TestCase
         $rarityStmt->execute(['id' => $draftedCardIds[0]]);
         self::assertSame('mythic', $rarityStmt->fetchColumn());
     }
+
+    // -- Bot games excluded from global card statistics (confirmed by the maintainer) --
+
+    /**
+     * Issue #315's own live per-pick card-stats signal
+     * (recordQuickDraftPick() et al., see submitQuickDraftPick()'s own
+     * docblock) is a completely separate write path from
+     * recordGameCompletionStats()'s own $containsBot guard -- it fires
+     * from the pick itself, well before a game (let alone a whole match)
+     * ever completes, so it needed (and, before this fix, was missing)
+     * its own bot check. A match with a bot seated anywhere in it should
+     * never feed the global card-stats pick-position signal at all,
+     * matching the same "a bot game doesn't count" policy already
+     * applied to lifetime/deck-win-rate stats.
+     */
+    public function testQuickDraftPicksAgainstABotAreNotRecordedInCardStats(): void
+    {
+        $human = $this->insertUser('human4');
+        $bot1 = $this->insertBotUser('bot7');
+        $bot2 = $this->insertBotUser('bot8');
+        $bot3 = $this->insertBotUser('bot9');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot1, $bot2, $bot3],
+            format: 'draft',
+            deckType: 'quick_draft',
+            quickDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->games->advanceAutomatedTurns($gameId); // the 3 bot seats each pick stage 1 automatically
+
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :id AND round_number = 1 AND stage_number = 1'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+        self::assertSame(3, (int) $stmt->fetchColumn(), 'the 3 bot picks should have genuinely happened');
+
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(quick_draft_pick_position_count) FROM card_stats')->fetchColumn();
+        self::assertSame(0, $totalPicks, 'none of those bot picks should have been recorded into the global card-stats signal');
+    }
+
+    public function testWinstonDraftPicksAgainstABotAreNotRecordedInCardStats(): void
+    {
+        $human = $this->insertUser('human5');
+        $bot = $this->insertBotUser('bot10');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'winston_draft',
+            winstonDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_winston_state SET current_player_user_id = :bot WHERE draft_match_id = :match_id')
+            ->execute(['bot' => $bot, 'match_id' => $draftMatchId]);
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $draftedStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $draftedStmt->execute(['id' => $draftMatchId, 'user_id' => $bot]);
+        self::assertNotSame('[]', $draftedStmt->fetchColumn(), "the bot's own pick should have genuinely happened");
+
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(winston_draft_pick_pile_size_count) FROM card_stats')->fetchColumn();
+        self::assertSame(0, $totalPicks, 'the bot pick should not have been recorded into the global card-stats signal');
+    }
+
+    public function testGridDraftPicksAgainstABotAreNotRecordedInCardStats(): void
+    {
+        $human = $this->insertUser('human6');
+        $bot = $this->insertBotUser('bot11');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'grid_draft',
+            gridDraftPoolSource: 'random_48',
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $this->pdo->prepare('UPDATE draft_grid_state SET current_turn_user_id = :bot WHERE draft_match_id = :match_id')
+            ->execute(['bot' => $bot, 'match_id' => $draftMatchId]);
+
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $draftedStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $draftedStmt->execute(['id' => $draftMatchId, 'user_id' => $bot]);
+        self::assertNotSame('[]', $draftedStmt->fetchColumn(), "the bot's own pick should have genuinely happened");
+
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(grid_draft_pick_round_count) FROM card_stats')->fetchColumn();
+        self::assertSame(0, $totalPicks, 'the bot pick should not have been recorded into the global card-stats signal');
+    }
+
+    public function testRotisserieDraftPicksAgainstABotAreNotRecordedInCardStats(): void
+    {
+        $human = $this->insertUser('human7');
+        $bot = $this->insertBotUser('bot12');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot],
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 26; $i++) {
+            $stateStmt = $this->pdo->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+            $stateStmt->execute(['id' => $draftMatchId]);
+            $state = $stateStmt->fetch();
+            if ($state === false) {
+                break;
+            }
+            if ((int) $state['current_turn_user_id'] === $human) {
+                $pool = array_map(intval(...), json_decode((string) $state['pool_card_ids'], true));
+                $this->games->submitRotisserieDraftPick($gameId, $human, $pool[0]);
+            }
+            $this->games->advanceAutomatedTurns($gameId);
+        }
+
+        $draftedStmt = $this->pdo->prepare('SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $draftedStmt->execute(['id' => $draftMatchId, 'user_id' => $human]);
+        self::assertCount(13, json_decode((string) $draftedStmt->fetchColumn(), true), "the human's own picks should have genuinely happened too");
+
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(rotisserie_draft_pick_position_count) FROM card_stats')->fetchColumn();
+        self::assertSame(0, $totalPicks, 'none of the 26 picks -- bot or human -- should have been recorded, since a bot is seated in this match');
+    }
 }

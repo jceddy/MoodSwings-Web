@@ -81,7 +81,19 @@ use MoodSwings\Rules\RoundScorer;
  * maintainer), which deprioritizes it (the same PHP_INT_MIN treatment)
  * whenever the discard pile is completely empty -- its own extra-play
  * grant is restricted to a card FROM the discard pile, so with nothing
- * there to take advantage of, playing it accomplishes nothing.
+ * there to take advantage of, playing it accomplishes nothing; and
+ * angerTargetMoodIds() (confirmed by the maintainer), which targets the
+ * highest-total-value subset of non-teammate opponents' own in-play
+ * moods that still fits Anger's own 5-point combined-value ceiling
+ * (angerSwingMaximizingTargets()/maxValueSubsetWithinBudget()), PLUS
+ * Anger's own just-played card id whenever the bot's own deck has more
+ * discard-recursion capacity than every active non-teammate opponent's
+ * own deck AND none of them currently has Grace in play
+ * (angerShouldAlsoTargetItself()/recursionCardCount()) -- since Anger's
+ * own printed value is 0, self-targeting never costs anything against
+ * that budget, so it's simply added on top rather than traded off
+ * against the swing-maximizing targets; see angerTargetMoodIds()'s own
+ * docblock for the full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -111,6 +123,26 @@ final class BotPlayerService
         'cheer' => 5,
         'delight' => 5,
     ];
+
+    /** AngerEffect::MAX_TOTAL_VALUE, mirrored here the same way HAND_DISCARD_VALUE_BOOST_EFFECT_BOOSTED_VALUES's own 5s already hand-pick a card-specific value rather than exposing the effect class's own private constant just for this. */
+    private const ANGER_DISCARD_BUDGET = 5;
+
+    /**
+     * Every effect key whose printed ability lets its owner actually PLAY
+     * a mood from the discard pile -- Harmony/Grief/Angst (a one-shot
+     * discard-sourced extra play granted after playing them), Grace (the
+     * same grant, but perpetual, every turn while in play), Melancholy
+     * (lets its owner treat the whole discard pile as part of their hand
+     * for every play, not just a dedicated bonus one), and Nostalgia
+     * (returns a discard-pile card straight to hand, from which it can be
+     * played normally). Used only by recursionCardCount() below, for
+     * angerShouldAlsoTargetItself()'s own "does this player have enough
+     * recursion to plausibly get back to a self-discarded Anger" check
+     * (confirmed by the maintainer).
+     *
+     * @var string[]
+     */
+    private const RECURSION_EFFECT_KEYS = ['harmony', 'grief', 'angst', 'grace', 'melancholy', 'nostalgia'];
 
     public function __construct(
         private readonly BotChoiceResolver $resolver,
@@ -882,6 +914,10 @@ final class BotPlayerService
             return $copyTargetCardId !== null ? ['copy_card_id' => $copyTargetCardId] : [];
         }
 
+        if ($effectKey === 'anger') {
+            return ['target_mood_ids' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId)];
+        }
+
         $choices = [];
 
         foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
@@ -1524,5 +1560,170 @@ final class BotPlayerService
         }
 
         return $bestCardId;
+    }
+
+    /**
+     * Anger's own after-playing targets (confirmed by the maintainer): the
+     * subset of every non-teammate opponent's own in-play moods that
+     * maximizes total value discarded without exceeding
+     * AngerEffect::MAX_TOTAL_VALUE, via angerSwingMaximizingTargets()
+     * below, PLUS Anger's own card id whenever
+     * angerShouldAlsoTargetItself() says the bot should discard itself too
+     * -- always additive, never a trade-off against the swing-maximizing
+     * targets, since Anger's own printed base value is 0 (see
+     * CardChoiceSchema's own `includes_self` docblock for `anger`), so
+     * including it never eats into the 5-point budget the opponent-owned
+     * targets are competing for.
+     *
+     * @return int[]
+     */
+    private function angerTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $targets = $this->angerSwingMaximizingTargets($state, $botGamePlayerId);
+
+        if ($this->angerShouldAlsoTargetItself($state, $botGamePlayerId)) {
+            $targets[] = $cardId;
+        }
+
+        return $targets;
+    }
+
+    /**
+     * The "maximize point swing" half of Anger's own targeting policy
+     * (confirmed by the maintainer): every non-teammate opponent's own
+     * in-play mood is a candidate (the acting player's own moods, and any
+     * teammate's, are deliberately excluded -- discarding either would
+     * only ever REDUCE the swing, the same "an opponent means neither"
+     * policy pacifismTargetMoodIds() already applies), scored by
+     * maxValueSubsetWithinBudget() to find the highest-total-value subset
+     * that still fits Anger's own 5-point combined-value ceiling.
+     *
+     * @return int[]
+     */
+    private function angerSwingMaximizingTargets(BoardState $state, int $botGamePlayerId): array
+    {
+        $opponentMoodValues = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->ownerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                continue;
+            }
+
+            $opponentMoodValues[$mood->cardId] = $state->valueOf($mood->cardId);
+        }
+
+        return $this->maxValueSubsetWithinBudget($opponentMoodValues, self::ANGER_DISCARD_BUDGET);
+    }
+
+    /**
+     * A standard 0/1 knapsack over $valuesByCardId (weight == value for
+     * each candidate, same as Anger's own combined-value ceiling) -- the
+     * subset whose values sum to the highest total that still fits within
+     * $budget. $bestValueAt[$b]/$chosenAt[$b] track, for every budget from
+     * 0 to $budget, the best achievable total and which card ids reach it;
+     * iterating each candidate's own capacity slots downward (the
+     * ordinary 0/1 knapsack trick) keeps every candidate from being
+     * counted against itself twice. A candidate above $budget on its own,
+     * or worth 0, can never improve any achievable total, so it's skipped
+     * outright rather than wasting a pass through every capacity slot for
+     * nothing.
+     *
+     * @param array<int, int> $valuesByCardId card id => value
+     * @return int[]
+     */
+    private function maxValueSubsetWithinBudget(array $valuesByCardId, int $budget): array
+    {
+        $bestValueAt = array_fill(0, $budget + 1, 0);
+        $chosenAt = array_fill(0, $budget + 1, []);
+
+        foreach ($valuesByCardId as $cardId => $value) {
+            if ($value <= 0 || $value > $budget) {
+                continue;
+            }
+
+            for ($capacity = $budget; $capacity >= $value; $capacity--) {
+                $candidateTotal = $bestValueAt[$capacity - $value] + $value;
+                if ($candidateTotal > $bestValueAt[$capacity]) {
+                    $bestValueAt[$capacity] = $candidateTotal;
+                    $chosenAt[$capacity] = [...$chosenAt[$capacity - $value], $cardId];
+                }
+            }
+        }
+
+        return $chosenAt[$budget];
+    }
+
+    /**
+     * Whether Anger should also target its own just-played card id
+     * (confirmed by the maintainer): only in a format with genuinely
+     * separate per-player decks (BoardState::hasSeparateDecks() -- 'duel'
+     * and any drafted deck_type, including team formats using one; every
+     * other format shares one deck, so there's no distinct "the bot's own
+     * deck" vs "the opponent's deck" to compare recursion counts between
+     * at all), only once the bot's own recursionCardCount() strictly
+     * exceeds EVERY currently active non-teammate opponent's own count
+     * (not just one of them, in a multi-opponent draft -- the bot needs a
+     * clear recursion edge over the WHOLE table before gambling that it,
+     * rather than some other player, is the one who actually gets back to
+     * Anger sitting in the shared discard pile), and never when any such
+     * opponent currently has Grace in play -- Grace's own perpetual,
+     * every-turn discard-sourced grant (unlike Harmony/Grief/Angst/
+     * Nostalgia's one-shot ones) makes that opponent likely to reach the
+     * discard pile before the bot's own recursion ever gets a turn,
+     * regardless of who has more of it on paper.
+     */
+    private function angerShouldAlsoTargetItself(BoardState $state, int $botGamePlayerId): bool
+    {
+        if (!$state->hasSeparateDecks()) {
+            return false;
+        }
+
+        $opponents = array_filter(
+            $state->activePlayerOrder(),
+            fn (int $playerId) => $playerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $playerId),
+        );
+        if ($opponents === []) {
+            return false;
+        }
+
+        $botRecursionCount = $this->recursionCardCount($state, $botGamePlayerId);
+
+        foreach ($opponents as $opponentId) {
+            if ($state->playerHasMoodInPlay($opponentId, 'grace')) {
+                return false;
+            }
+            if ($this->recursionCardCount($state, $opponentId) >= $botRecursionCount) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * How many of $playerId's own cards -- across their remaining deck,
+     * hand, and current in-play moods (deliberately excluding the discard
+     * pile: a Harmony/Grief/Angst/Nostalgia sitting there already spent
+     * its one-time grant, and Grace/Melancholy wouldn't be there at all
+     * while still actively granting anything) -- have one of
+     * RECURSION_EFFECT_KEYS as their own effect key. Used only by
+     * angerShouldAlsoTargetItself() above, as a proxy for how much live-or-
+     * future capability a player has to eventually play a mood back out of
+     * the shared discard pile.
+     */
+    private function recursionCardCount(BoardState $state, int $playerId): int
+    {
+        $cardIds = [...$state->deck($playerId), ...$state->hand($playerId)];
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            $cardIds[] = $mood->cardId;
+        }
+
+        $count = 0;
+        foreach ($cardIds as $cardId) {
+            if (in_array($state->catalogRow($cardId)['effectKey'], self::RECURSION_EFFECT_KEYS, true)) {
+                $count++;
+            }
+        }
+
+        return $count;
     }
 }

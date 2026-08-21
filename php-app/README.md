@@ -4475,7 +4475,9 @@ auto-loss branch -- the latter completes the *match* without game 1 ever
 completing, so it contributes to `match_wins`/`match_losses` but not
 `game_wins`/`game_losses` for that pairing. Neither one runs at all when any seated player is a practice bot (issue
 #140) -- see "Practice bots" below for why a bot game is deliberately
-excluded from both this and Card statistics below. Both private methods
+excluded from both this and the deck-membership/played-card half of Card
+statistics below (its draft pick-position signal is a separate write path
+with its own bot guard -- see "Card statistics" below). Both private methods
 funnel
 through `bumpLifetimeStats(array $userIds, string $column)`, a single
 `INSERT ... ON DUPLICATE KEY UPDATE ... = ... + 1` per user id -- there's
@@ -4575,6 +4577,21 @@ hook point:
     other three, this is a genuine ordinal rather than a proxy, since the
     whole pool is dealt face-up once and drafted in a single fixed snake
     order with no rounds/piles/grid to derive a stand-in from.
+
+  Each of these four call sites also skips its write entirely when any
+  seated player in that draft match is a practice bot (confirmed by the
+  maintainer) -- the same "a bot game doesn't count" policy already
+  applied to lifetime stats and the deck-membership/played-card stats
+  above, extended here too. `recordGameCompletionStats()`'s own
+  `$containsBot` check doesn't cover this, though: each of these four
+  fires from the pick itself, well before a game (let alone a whole
+  match) ever completes, so each carries its own identical guard instead
+  -- `if ($this->draftMatchBotUserIds($draftMatchId) === []) { ... }`,
+  reusing the same private helper `advanceBotDraftTurn()` already relies
+  on to find bot seats in a draft match. The exclusion is whole-match,
+  not per-seat: once any bot is seated anywhere in it, none of that
+  match's picks -- the bot's own or a human co-drafter's -- get recorded,
+  not just the bot's own.
 
   These four numbers are on different scales and never compared across
   formats (same as 17lands' own ATA, which is always within-format), so
@@ -5780,6 +5797,52 @@ since it already holds that dependency):
   the discard-pile sourcing itself, so a plain non-empty check on the
   pile is enough. The instant the pile has even one card in it, Harmony
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
+
+  **Anger** (confirmed by the maintainer) gets its own targeting
+  exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
+  special-cases `effectKey === 'anger'` the same way it does
+  `'pacifism'`/`'creativity'` above, since `target_mood_ids` is optional
+  and not in `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver
+  would otherwise always leave Anger unfilled -- a wasted play of its own
+  "put any number of moods with total value 5 or less into the discard
+  pile" ability. Two independent policies, always additive rather than a
+  trade-off against each other:
+  - `angerSwingMaximizingTargets()` -- the highest-total-value subset of
+    every non-teammate opponent's own in-play moods (the acting player's
+    own moods, and any teammate's, are deliberately excluded, the same
+    "an opponent means neither" policy Intimidation/Paranoia/Pacifism
+    above already apply -- discarding either could only ever REDUCE the
+    swing) that still fits Anger's own 5-point combined-value ceiling,
+    found via `maxValueSubsetWithinBudget()`, a small 0/1 knapsack (value
+    doubling as weight) rather than a naive "take the single
+    highest-value mood" greedy pick, which can leave value on the table
+    -- two moods worth 3 and 2 together outweigh one worth 4 alone.
+  - `angerShouldAlsoTargetItself()` -- Anger's own just-played card id is
+    ALSO targeted (on top of, never instead of, the swing-maximizing
+    targets above) whenever `BoardState::hasSeparateDecks()` (a 'duel'
+    game, or any drafted `deck_type` -- see "Draft format" above -- since
+    only those have a genuinely separate "the bot's own deck" to compare
+    against "the opponent's own deck" at all; every other format shares
+    one deck, so there's nothing to compare), the bot's own
+    `recursionCardCount()` (how many of its own remaining deck/hand/
+    in-play cards have `harmony`/`grief`/`angst`/`grace`/`melancholy`/
+    `nostalgia` as their own effect key -- the only printed abilities
+    that actually let their owner play a mood back OUT of the discard
+    pile) strictly exceeds EVERY currently active non-teammate opponent's
+    own count (not just one of them, in a multi-opponent draft), AND none
+    of those opponents currently has Grace in play. Since Anger's own
+    printed base value is 0 (see `CardChoiceSchema`'s own `includes_self`
+    docblock for `'anger'`), targeting itself never costs anything against
+    the 5-point ceiling the opponent-owned targets are competing for, so
+    the two policies simply combine rather than compete. The Grace veto
+    exists because Anger's own discard-pile target becomes fair game for
+    ANY seated player's own discard-sourced grant, not just the acting
+    player's (`BoardState::grantAllows()` places no ownership restriction
+    on which discard-pile card a `'source' => 'discard'` grant may take)
+    -- Grace's own grant is perpetual, firing every turn its owner has it
+    in play, unlike Harmony/Grief/Angst/Nostalgia's one-shot ones, making
+    that opponent likely to reach it before the bot's own recursion ever
+    gets a turn, regardless of who has more of it on paper.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
@@ -5964,13 +6027,21 @@ would -- genuinely reachable now that Team Play is within a bot's scope
 partner is holding the same as any other teammate's.
 
 **Stats exclusion.** A bot game deliberately never bumps lifetime stats
-(issue #106) or card statistics (issue #315) -- see
-`GameService::recordGameCompletionStats()`'s own `$containsBot` check,
-the single choke point both stats systems already funnel through for
-every game-completion path. Beating (or losing to) a bot repeatedly
-shouldn't be able to inflate a real player's own win rate, and a bot's
-deck has nothing to do with real card-performance data either. The game
-still completes normally in every other way -- it still shows up in that
+(issue #106) or card statistics (issue #315). Lifetime stats and the
+deck-membership/played-card half of card statistics both funnel through
+`GameService::recordGameCompletionStats()`'s own `$containsBot` check at
+game-completion time (see "Lifetime stats"/"Card statistics" above); the
+four live per-pick draft pick-position writers
+(`recordQuickDraftPick()`/`recordWinstonDraftPick()`/
+`recordGridDraftPick()`/`recordRotisserieDraftPick()`) fire well before
+that, from the pick itself, so each carries its own identical
+`draftMatchBotUserIds($draftMatchId) === []` guard instead (see "Card
+statistics" above). Beating (or losing to) a bot repeatedly shouldn't be
+able to inflate a real player's own win rate, and a bot's deck has
+nothing to do with real card-performance data either -- nor should a
+bot-seeded draft's picks (bot's own or a human co-drafter's) skew what
+card typically gets taken early. The game still completes normally in
+every other way -- it still shows up in that
 player's own `GET /games`/`GET /games/past` (each player entry there,
 and in `GET /games/state`'s own `players`, carries `is_bot` so the
 frontend can badge it -- see "New game dialog"/board `players-list` in
