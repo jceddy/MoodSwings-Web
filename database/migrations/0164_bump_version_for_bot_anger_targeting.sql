@@ -1,0 +1,24 @@
+-- Anger's own target_mood_ids field is optional, so BotChoiceResolver's
+-- generic "never volunteer for an optional field nobody asked for" default
+-- meant a practice bot playing Anger never actually used its "put any
+-- number of moods with total value 5 or less into the discard pile"
+-- ability at all -- a wasted play every time.
+--
+-- Fixed with a new targeting exception in BotPlayerService
+-- (angerTargetMoodIds()), two independent, additive policies:
+-- angerSwingMaximizingTargets() picks the highest-total-value subset of
+-- non-teammate opponents' own in-play moods that still fits Anger's own
+-- 5-point ceiling (a small 0/1 knapsack, not a naive "take the single
+-- highest-value mood" greedy pick); angerShouldAlsoTargetItself() ALSO
+-- targets Anger's own just-played card (free, since its own printed value
+-- is 0) whenever the bot has a genuinely separate deck (BoardState::
+-- hasSeparateDecks()) with strictly more discard-recursion capacity
+-- (recursionCardCount() -- harmony/grief/angst/grace/melancholy/nostalgia)
+-- than every active non-teammate opponent, and none of them has Grace in
+-- play (whose own perpetual discard-sourced grant would likely beat the
+-- bot back to a self-discarded Anger regardless of the recursion count).
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0163 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.20' WHERE id = 1;

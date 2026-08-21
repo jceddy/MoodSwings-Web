@@ -5797,6 +5797,52 @@ since it already holds that dependency):
   the discard-pile sourcing itself, so a plain non-empty check on the
   pile is enough. The instant the pile has even one card in it, Harmony
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
+
+  **Anger** (confirmed by the maintainer) gets its own targeting
+  exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
+  special-cases `effectKey === 'anger'` the same way it does
+  `'pacifism'`/`'creativity'` above, since `target_mood_ids` is optional
+  and not in `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver
+  would otherwise always leave Anger unfilled -- a wasted play of its own
+  "put any number of moods with total value 5 or less into the discard
+  pile" ability. Two independent policies, always additive rather than a
+  trade-off against each other:
+  - `angerSwingMaximizingTargets()` -- the highest-total-value subset of
+    every non-teammate opponent's own in-play moods (the acting player's
+    own moods, and any teammate's, are deliberately excluded, the same
+    "an opponent means neither" policy Intimidation/Paranoia/Pacifism
+    above already apply -- discarding either could only ever REDUCE the
+    swing) that still fits Anger's own 5-point combined-value ceiling,
+    found via `maxValueSubsetWithinBudget()`, a small 0/1 knapsack (value
+    doubling as weight) rather than a naive "take the single
+    highest-value mood" greedy pick, which can leave value on the table
+    -- two moods worth 3 and 2 together outweigh one worth 4 alone.
+  - `angerShouldAlsoTargetItself()` -- Anger's own just-played card id is
+    ALSO targeted (on top of, never instead of, the swing-maximizing
+    targets above) whenever `BoardState::hasSeparateDecks()` (a 'duel'
+    game, or any drafted `deck_type` -- see "Draft format" above -- since
+    only those have a genuinely separate "the bot's own deck" to compare
+    against "the opponent's own deck" at all; every other format shares
+    one deck, so there's nothing to compare), the bot's own
+    `recursionCardCount()` (how many of its own remaining deck/hand/
+    in-play cards have `harmony`/`grief`/`angst`/`grace`/`melancholy`/
+    `nostalgia` as their own effect key -- the only printed abilities
+    that actually let their owner play a mood back OUT of the discard
+    pile) strictly exceeds EVERY currently active non-teammate opponent's
+    own count (not just one of them, in a multi-opponent draft), AND none
+    of those opponents currently has Grace in play. Since Anger's own
+    printed base value is 0 (see `CardChoiceSchema`'s own `includes_self`
+    docblock for `'anger'`), targeting itself never costs anything against
+    the 5-point ceiling the opponent-owned targets are competing for, so
+    the two policies simply combine rather than compete. The Grace veto
+    exists because Anger's own discard-pile target becomes fair game for
+    ANY seated player's own discard-sourced grant, not just the acting
+    player's (`BoardState::grantAllows()` places no ownership restriction
+    on which discard-pile card a `'source' => 'discard'` grant may take)
+    -- Grace's own grant is perpetual, firing every turn its owner has it
+    in play, unlike Harmony/Grief/Angst/Nostalgia's one-shot ones, making
+    that opponent likely to reach it before the bot's own recursion ever
+    gets a turn, regardless of who has more of it on paper.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
