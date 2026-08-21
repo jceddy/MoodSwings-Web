@@ -1,0 +1,22 @@
+-- GET /games/state called GameService::advanceAutomatedTurns() with no
+-- try/catch around it at all -- unlike every other call site for the
+-- same method elsewhere in public/index.php, each already wrapped in its
+-- own try/catch (GameStateException $e). This call's own result is
+-- already documented as discarded regardless of success (getState()
+-- reads fresh state right after either way), but nothing actually
+-- guarded against the call THROWING. A GameStateException there (most
+-- plausibly withGameLock()'s own "busy" timeout from ordinary concurrent
+-- traffic on the same game) fell through to public/index.php's top-level
+-- exception handler, surfacing as a bare "Something went wrong. Please
+-- try again." -- and because this is the one route a client polls
+-- continuously to read board state at all, a single such failure made
+-- the affected game look PERMANENTLY unloadable: every retry
+-- re-triggers the identical unguarded call. Fixed by wrapping just the
+-- advanceAutomatedTurns() call in its own try/catch (GameStateException)
+-- that silently does nothing on failure, matching the exact pattern
+-- already used at every other call site.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0160 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.17' WHERE id = 1;

@@ -1080,8 +1080,21 @@ if ($path === '/games/state' && $method === 'GET') {
     // cheap to call here even when nothing's actually stuck (two early-out
     // queries, see botGamePlayerIds()/autoPassEmptyHandGamePlayerIds()),
     // and its own result is simply discarded in favor of the fresh
-    // getState() read below either way.
-    $games->advanceAutomatedTurns($gameId);
+    // getState() read below either way. Unlike every other call site for
+    // this same method, this one is a plain GET with no natural place to
+    // surface a GameStateException to the caller -- and since the result
+    // is already thrown away regardless of success, a transient failure
+    // here (e.g. lock contention -- withGameLock()'s own "busy" timeout
+    // -- from a concurrent write elsewhere in this same game) must never
+    // block the state read that follows. Without this, a single such
+    // failure made the game PERMANENTLY unloadable via this route: every
+    // retry re-triggers the identical unguarded call, with no way for a
+    // human to recover through ordinary use.
+    try {
+        $games->advanceAutomatedTurns($gameId);
+    } catch (GameStateException) {
+        // Best-effort only -- see above. The next poll simply tries again.
+    }
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
