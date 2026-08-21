@@ -5244,7 +5244,9 @@ entirely BEFORE any `BoardState`/round exists for a game:
   would hit -- this method itself never mutates draft state directly.
   `'deck_building'` submits one not-yet-submitted bot's own trimmed deck
   (via the ordinary `submitDraftDeck()`, `draftMinDeckSizeFor()` shared
-  with that method's own floor lookup) if any bot still needs one, or --
+  with that method's own floor lookup, and -- see below -- `pickableDraftPoolFor()`
+  shared with that same method's own pool computation) if any bot still
+  needs one, or --
   once every bot here already has one in -- calls
   `tryAutoStartDraftGame()`, which tries `startGame()` and silently
   swallows a `GameStateException` (not ready yet, some human still
@@ -5291,6 +5293,34 @@ entirely BEFORE any `BoardState`/round exists for a game:
   game exactly the same way it always covered everything else, so an
   all-bot-except-the-creator draft still advances on nothing more than
   the creator's own client periodically checking in.
+
+  **The bot's own deck choice used to ignore the shared pool entirely --
+  caught live, from a real user report.** `advanceBotDraftDeck()` used
+  to build the bot's own deck straight from its raw `drafted_card_ids`
+  alone, passed directly to `BotPlayerService::chooseDraftDeck()` --
+  correct for every OTHER format, but wrong for Open Team Play: a card
+  the bot itself drafted can still end up *unavailable* if its human
+  teammate's own already-submitted deck claimed it first (the same
+  first-come-first-served pooling `submitDraftDeck()`'s own docblock
+  documents). Whenever that happened, the bot would confidently submit a
+  deck `submitDraftDeck()` itself immediately rejected with a
+  `GameStateException` -- and nothing anywhere in `advanceBotDraftDeck()`
+  or its own caller chain caught it, so the exception propagated all the
+  way out of `advanceAutomatedTurns()` uncaught. Before `GET /games/state`'s
+  own exception guard existed (see "Driving a bot's turn" above), this
+  surfaced as a hard 500 on every single poll; after that guard shipped,
+  the symptom flipped to something quieter but just as broken -- the
+  poll itself stopped crashing, but the bot's deck submission silently
+  and PERMANENTLY never succeeded, since `chooseDraftDeck()` is a pure
+  function of the same unchanged (and still wrong) pool every time this
+  ran. Fixed by extracting `submitDraftDeck()`'s own pool computation
+  into `pickableDraftPoolFor(int $draftMatchId, int $userId, ?int
+  $teammateUserId): array` -- the exact same "own drafted cards, or (Open
+  Team Play) the team's combined pool minus whatever the teammate's
+  CURRENT `deck_card_ids` already claimed" logic, now shared by both
+  `submitDraftDeck()`'s own validation and `advanceBotDraftDeck()`'s own
+  deck-building choice, so a bot's guess and what actually validates can
+  never disagree.
 
   **`advanceBotFirstPlayerDecision()`** -- a follow-up fix, caught live
   ("Waiting for BotAlice to decide who goes first..."): a best-of-three

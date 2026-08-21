@@ -287,6 +287,89 @@ final class BotDraftGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of GameService::pickableDraftPoolFor() (confirmed
+     * by the maintainer, a real bug caught live from a user report) through
+     * advanceBotDraftDeck() -- Open Team Play's shared draft pool means a
+     * bot's own RAW drafted_card_ids alone is no longer a safe basis for
+     * its own deck: a card the bot itself drafted can end up unavailable
+     * if its human teammate's own already-submitted deck claimed it first
+     * (first-come-first-served -- see submitDraftDeck()'s own docblock).
+     * Before this fix, advanceBotDraftDeck() built the bot's deck from its
+     * own drafted_card_ids alone, with nothing anywhere catching the
+     * GameStateException submitDraftDeck() throws when that guess turns
+     * out to be wrong -- silently and PERMANENTLY stalling the bot's own
+     * submission, since chooseDraftDeck() deterministically repeats the
+     * exact same losing choice every time this runs.
+     *
+     * Bypasses the actual pick-by-pick draft entirely (already covered by
+     * the tests above) and hand-crafts drafted_card_ids directly, so the
+     * numbers below are exact regardless of any draft_priority_score
+     * internals: the human's own 13 are mostly Dignity (id 8, one
+     * Pacifism, id 20), the bot's own 13 are the mirror image (mostly
+     * Pacifism, one Dignity) -- a 13/13 combined team split either way.
+     * The human then submits a deck of mostly PACIFISM (using the team's
+     * shared pool, not just their own personally-drafted cards) -- 12 of
+     * the team's 13 total Pacifism, leaving only 1 actually pickable
+     * afterward. The bot's own RAW pool is mostly Pacifism (12 of its own
+     * 13), so an unfixed bot's naive top-12 trim asks for far more
+     * Pacifism than the single copy actually still available once its
+     * teammate's deck is accounted for.
+     */
+    public function testBotAvoidsCardsItsHumanTeammateAlreadyClaimedWhenSubmittingItsOwnDraftDeck(): void
+    {
+        $human = $this->insertUser('human4');
+        $bot = $this->insertBotUser('bot7');
+        $bot2 = $this->insertBotUser('bot8');
+        $bot3 = $this->insertBotUser('bot9');
+
+        $gameId = $this->games->createGame(
+            $human,
+            [$human, $bot, $bot2, $bot3],
+            format: 'team',
+            deckType: 'rotisserie_draft',
+            partnerUserId: $bot,
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $this->pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+
+        $setDrafted = function (int $userId, array $cardIds) use ($draftMatchId): void {
+            $this->pdo->prepare(
+                'UPDATE draft_match_players SET drafted_card_ids = :ids, deck_card_ids = NULL WHERE draft_match_id = :match_id AND user_id = :user_id'
+            )->execute(['ids' => json_encode($cardIds), 'match_id' => $draftMatchId, 'user_id' => $userId]);
+        };
+
+        // Dignity (id 8), Pacifism (id 20) -- both simple white commons,
+        // chosen only for their catalog ids here, never actually played.
+        $setDrafted($human, array_merge(array_fill(0, 12, 8), [20]));
+        $setDrafted($bot, array_merge(array_fill(0, 12, 20), [8]));
+        // Team 2 -- no human teammate, unrelated to this test.
+        $setDrafted($bot2, array_fill(0, 12, 8));
+        $setDrafted($bot3, array_fill(0, 12, 8));
+
+        $this->games->submitDraftDeck($gameId, $human, array_merge(array_fill(0, 12, 20), [8]));
+
+        // Before the fix, this call itself throws (see this test's own
+        // docblock) -- the bot's own naive deck choice collides with what
+        // its human teammate's deck already claimed, and nothing catches
+        // the resulting GameStateException.
+        $this->games->advanceAutomatedTurns($gameId);
+
+        $botRow = $this->pdo->prepare('SELECT deck_card_ids FROM draft_match_players WHERE draft_match_id = :id AND user_id = :user_id');
+        $botRow->execute(['id' => $draftMatchId, 'user_id' => $bot]);
+        $botDeck = json_decode((string) $botRow->fetchColumn(), true);
+
+        self::assertNotNull($botDeck, "the bot's own deck should have been submitted, not silently stalled forever");
+        self::assertGreaterThanOrEqual(12, count($botDeck));
+
+        $pacifismCount = count(array_filter($botDeck, fn (int $id) => $id === 20));
+        self::assertLessThanOrEqual(1, $pacifismCount, "the bot should never submit more Pacifism than was actually still available once its human teammate's deck claimed the rest");
+    }
+
+    /**
      * Quick Draft's own simultaneous-per-stage picking (submitQuickDraftPick())
      * has no single "current turn" at all -- every seated player picks
      * independently once a stage opens, and a stage can't advance until

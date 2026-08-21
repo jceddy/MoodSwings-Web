@@ -1,0 +1,25 @@
+-- Open Team Play: advanceBotDraftDeck() used to build a bot's own draft
+-- deck straight from its raw drafted_card_ids alone -- correct for
+-- every other format, but wrong here, since a card the bot itself
+-- drafted can still end up unavailable if its human teammate's own
+-- already-submitted deck claimed it first (the same first-come-first-
+-- served pooling submitDraftDeck() itself enforces). Whenever that
+-- happened, the bot would confidently submit a deck submitDraftDeck()
+-- immediately rejected with a GameStateException that nothing in
+-- advanceBotDraftDeck()'s own caller chain ever caught -- silently and
+-- permanently stalling the bot's own deck submission, since
+-- chooseDraftDeck() deterministically repeats the same losing choice
+-- from the same unchanged (and still wrong) pool every time it runs.
+--
+-- Fixed by extracting submitDraftDeck()'s own pool computation into a
+-- shared pickableDraftPoolFor() helper -- the same "own drafted cards,
+-- or (Open Team Play) the team's combined pool minus whatever the
+-- teammate's CURRENT deck_card_ids already claimed" logic, now used by
+-- both submitDraftDeck()'s own validation and advanceBotDraftDeck()'s
+-- own deck-building choice, so a bot's guess and what actually
+-- validates can never disagree.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0161 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.18' WHERE id = 1;

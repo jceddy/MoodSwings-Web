@@ -3155,34 +3155,10 @@ final class GameService
                 throw new GameStateException('This match is not currently building/sideboarding a deck');
             }
 
-            $pdo = Connection::get();
-            $playerStmt = $pdo->prepare(
-                'SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
-            );
-            $playerStmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
-            $draftedCardIdsJson = $playerStmt->fetchColumn();
-            if ($draftedCardIdsJson === false || $draftedCardIdsJson === null) {
-                throw new GameStateException("User {$userId} has no drafted cards in this match yet");
-            }
-            $draftedCardIds = array_map(intval(...), json_decode((string) $draftedCardIdsJson, true));
-
-            $pickableCardIds = $draftedCardIds;
-            $errorNoun = 'you drafted';
-            if ($teammateUserId !== null) {
-                $teammateStmt = $pdo->prepare(
-                    'SELECT drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
-                );
-                $teammateStmt->execute(['match_id' => $draftMatchId, 'user_id' => $teammateUserId]);
-                $teammateRow = $teammateStmt->fetch();
-                $teammateDraftedCardIds = $teammateRow !== false && $teammateRow['drafted_card_ids'] !== null
-                    ? array_map(intval(...), json_decode((string) $teammateRow['drafted_card_ids'], true))
-                    : [];
-                $teammateDeckCardIds = $teammateRow !== false && $teammateRow['deck_card_ids'] !== null
-                    ? array_map(intval(...), json_decode((string) $teammateRow['deck_card_ids'], true))
-                    : [];
-                $pickableCardIds = $this->multisetSubtract([...$draftedCardIds, ...$teammateDraftedCardIds], $teammateDeckCardIds);
-                $errorNoun = "your team drafted (and that your teammate hasn't already used in their own deck)";
-            }
+            $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $userId, $teammateUserId);
+            $errorNoun = $teammateUserId !== null
+                ? "your team drafted (and that your teammate hasn't already used in their own deck)"
+                : 'you drafted';
             $effectiveMaxDeckSize = $maxDeckSize ?? count($pickableCardIds);
 
             $deckCardIds = array_values(array_map(intval(...), $deckCardIds));
@@ -3197,7 +3173,7 @@ final class GameService
                 throw new GameStateException("Your deck can only contain cards {$errorNoun}");
             }
 
-            $pdo->prepare(
+            Connection::get()->prepare(
                 'UPDATE draft_match_players SET deck_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id'
             )->execute([
                 'ids' => json_encode($deckCardIds),
@@ -3207,6 +3183,59 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+    }
+
+    /**
+     * @return int[] every card $userId may legally include in their own
+     *     draft deck submission right now -- their own drafted_card_ids
+     *     alone, or (Open Team Play, $teammateUserId !== null) the whole
+     *     team's combined pool minus whatever the teammate's own CURRENT
+     *     deck_card_ids has already claimed (first-come-first-served) --
+     *     see submitDraftDeck()'s own docblock. Shared with
+     *     advanceBotDraftDeck() (confirmed by the maintainer, a real bug
+     *     caught live) so a bot's own deck choice is built from the exact
+     *     same pool submitDraftDeck() will validate it against, rather
+     *     than just the bot's own drafted_card_ids alone -- which could
+     *     otherwise pick one of its human teammate's own already-claimed
+     *     cards (a legal pick from the bot's OWN drafted pool, but no
+     *     longer available once the teammate's submitted deck claimed
+     *     it), throwing a GameStateException submitDraftDeck() itself has
+     *     no caller ever catching or retrying. That silently stalled the
+     *     bot's own deck forever (deterministically -- chooseDraftDeck()
+     *     is a pure function of the same unchanged pool every time this
+     *     runs) once GET /games/state stopped surfacing the exception at
+     *     all -- see that route's own migration/README entry.
+     */
+    private function pickableDraftPoolFor(int $draftMatchId, int $userId, ?int $teammateUserId): array
+    {
+        $pdo = Connection::get();
+        $playerStmt = $pdo->prepare(
+            'SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+        );
+        $playerStmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+        $draftedCardIdsJson = $playerStmt->fetchColumn();
+        if ($draftedCardIdsJson === false || $draftedCardIdsJson === null) {
+            throw new GameStateException("User {$userId} has no drafted cards in this match yet");
+        }
+        $draftedCardIds = array_map(intval(...), json_decode((string) $draftedCardIdsJson, true));
+
+        if ($teammateUserId === null) {
+            return $draftedCardIds;
+        }
+
+        $teammateStmt = $pdo->prepare(
+            'SELECT drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+        );
+        $teammateStmt->execute(['match_id' => $draftMatchId, 'user_id' => $teammateUserId]);
+        $teammateRow = $teammateStmt->fetch();
+        $teammateDraftedCardIds = $teammateRow !== false && $teammateRow['drafted_card_ids'] !== null
+            ? array_map(intval(...), json_decode((string) $teammateRow['drafted_card_ids'], true))
+            : [];
+        $teammateDeckCardIds = $teammateRow !== false && $teammateRow['deck_card_ids'] !== null
+            ? array_map(intval(...), json_decode((string) $teammateRow['deck_card_ids'], true))
+            : [];
+
+        return $this->multisetSubtract([...$draftedCardIds, ...$teammateDraftedCardIds], $teammateDeckCardIds);
     }
 
     /**
@@ -5041,7 +5070,7 @@ final class GameService
     {
         $placeholders = implode(',', array_fill(0, count($botUserIds), '?'));
         $stmt = Connection::get()->prepare(
-            "SELECT user_id, drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = ? AND user_id IN ({$placeholders})"
+            "SELECT user_id, deck_card_ids FROM draft_match_players WHERE draft_match_id = ? AND user_id IN ({$placeholders})"
         );
         $stmt->execute([$draftMatchId, ...$botUserIds]);
 
@@ -5055,9 +5084,21 @@ final class GameService
                 continue; // wait for the human teammate to submit their own deck first
             }
 
-            $draftedCardIds = array_map(intval(...), json_decode((string) $row['drafted_card_ids'], true));
+            // pickableDraftPoolFor() (confirmed by the maintainer, a real
+            // bug caught live) -- NOT just this bot's own drafted_card_ids
+            // -- see that method's own docblock: a bot building from its
+            // own drafted pool alone could choose a card its human
+            // teammate had already claimed in their own submitted deck (a
+            // legal pick from the bot's OWN drafted cards, but no longer
+            // available once shared), throwing an uncaught
+            // GameStateException here every single time this ran, since
+            // chooseDraftDeck() deterministically picks the same cards
+            // from the same unchanged pool -- a silent, permanent stall
+            // once GET /games/state stopped surfacing the exception.
+            $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $format, $botUserId);
+            $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $botUserId, $teammateUserId);
             $minDeckSize = self::draftMinDeckSizeFor($deckType);
-            $deckCardIds = $this->bots->chooseDraftDeck($draftedCardIds, $minDeckSize, $this->draftBotScoringData());
+            $deckCardIds = $this->bots->chooseDraftDeck($pickableCardIds, $minDeckSize, $this->draftBotScoringData());
 
             $this->submitDraftDeck($gameId, $botUserId, $deckCardIds);
 
