@@ -1404,6 +1404,138 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::angerSwingMaximizingTargets()
+     * (see BotPlayerServiceTest for the knapsack itself in isolation)
+     * through the FULL advanceAutomatedTurns() -> playMood() ->
+     * AngerEffect::afterPlaying() request lifecycle -- the human opponent
+     * has three moods in play (Complacency value 4, Dignity value 3,
+     * Kindness value 2), so the naive "take the single highest-value mood"
+     * policy would stop at Complacency (value 4), but the actual
+     * highest-total-value subset that still fits Anger's own 5-point
+     * ceiling is Dignity+Kindness (3+2=5), which the bot should choose
+     * instead. The bot's own Honor stays in play throughout -- Anger's own
+     * target field is scope 'any' with no rules-level restriction against
+     * targeting the acting player's own moods, but the bot's own swing-
+     * maximizing policy never targets its own (or a teammate's) moods,
+     * since doing so could only ever reduce the swing.
+     */
+    public function testBotMaximizesTotalValueDiscardedRatherThanTheSingleHighestValueMoodWhenPlayingAnger(): void
+    {
+        $u1 = $this->insertUser('human16');
+        $botUserId = $this->insertBotUser('bot14');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 80, 'hand', $botPlayerId); // Anger
+        $this->insertGameCard($gameId, 15, 'in_play', $botPlayerId); // the bot's own Honor, value 3 -- should never be targeted
+        $this->insertGameCard($gameId, 5, 'in_play', $p1); // human's own Complacency, value 4 -- the naive "highest single value" pick
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // human's own Dignity, value 3
+        $this->insertGameCard($gameId, 17, 'in_play', $p1); // human's own Kindness, value 2 -- Dignity+Kindness (5) beats Complacency (4) alone
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 15), "the bot's own Honor should never be targeted");
+        self::assertTrue($this->cardIsInPlay($gameId, 5), 'Complacency should stay in play -- the 3+2 combo beats it, so it should NOT have been taken instead');
+        self::assertFalse($this->cardIsInPlay($gameId, 8), 'Dignity should have been discarded, part of the higher-total combo');
+        self::assertFalse($this->cardIsInPlay($gameId, 17), 'Kindness should have been discarded, part of the higher-total combo');
+
+        $format = 'standard';
+        self::assertSame($format, $this->fetchGame($gameId)['format'], 'sanity check -- a standard-format game has one shared deck, so self-targeting should never trigger here');
+        self::assertTrue($this->cardIsInPlay($gameId, 80), 'Anger itself should stay in play -- a shared-deck game has no separate "bot deck" vs "opponent deck" to compare recursion between, so it should never target itself here');
+    }
+
+    /**
+     * End-to-end coverage of BotPlayerService::angerShouldAlsoTargetItself()
+     * (see BotPlayerServiceTest for the policy itself in isolation) through
+     * the FULL advanceAutomatedTurns() -> playMood() ->
+     * AngerEffect::afterPlaying() request lifecycle, in a 'duel' game
+     * (genuinely separate per-player decks) where the bot's own deck holds
+     * two discard-recursion cards (Harmony, Grief) and the human
+     * opponent's own deck holds none -- the bot should target itself in
+     * addition to the human's own in-play mood, since Anger's own printed
+     * value is 0 and doesn't cost anything against the 5-point ceiling.
+     */
+    public function testBotAlsoTargetsItselfWhenPlayingAngerWithMoreRecursionThanTheOpponent(): void
+    {
+        $u1 = $this->insertUser('human17');
+        $botUserId = $this->insertBotUser('bot15');
+        $gameId = $this->insertGame('duel', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 80, 'hand', $botPlayerId); // Anger
+        $this->insertGameCard($gameId, 123, 'deck', $botPlayerId, 0); // Harmony -- recursion, still in the bot's own deck
+        $this->insertGameCard($gameId, 65, 'deck', $botPlayerId, 1); // Grief -- recursion, still in the bot's own deck
+        $this->insertGameCard($gameId, 17, 'in_play', $p1); // human's own Kindness, value 2 -- also a swing target
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertFalse($this->cardIsInPlay($gameId, 80), 'Anger should have targeted itself -- the bot has 2 recursion cards in its own deck against the human opponent\'s 0');
+        self::assertFalse($this->cardIsInPlay($gameId, 17), "Kindness should also have been discarded -- self-targeting is free (Anger's own value is 0), so it never trades off against the swing-maximizing target");
+    }
+
+    /**
+     * The other half of angerShouldAlsoTargetItself() -- when the human
+     * opponent's own deck has AT LEAST as much discard-recursion capacity
+     * as the bot's own (here, strictly more: 2 recursion cards against the
+     * bot's 1), the bot should NOT gamble on getting back to a
+     * self-discarded Anger first, so it leaves itself in play.
+     */
+    public function testBotDoesNotTargetItselfWhenPlayingAngerWithoutMoreRecursionThanTheOpponent(): void
+    {
+        $u1 = $this->insertUser('human18');
+        $botUserId = $this->insertBotUser('bot16');
+        $gameId = $this->insertGame('duel', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 80, 'hand', $botPlayerId); // Anger
+        $this->insertGameCard($gameId, 123, 'deck', $botPlayerId, 0); // Harmony -- the bot's own only recursion card
+        $this->insertGameCard($gameId, 65, 'deck', $p1, 0); // Grief -- human opponent's own recursion
+        $this->insertGameCard($gameId, 54, 'deck', $p1, 1); // Angst -- human opponent's own recursion, 2 total against the bot's 1
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 80), "Anger should stay in play -- the bot's own 1 recursion card doesn't exceed the opponent's own 2");
+    }
+
+    /**
+     * The Grace veto half of angerShouldAlsoTargetItself() -- even though
+     * the bot's own deck holds far more recursion capacity than the human
+     * opponent's (5 recursion cards against 0), the human opponent
+     * currently has Grace in play, whose own perpetual, every-turn
+     * discard-sourced grant (unlike Harmony/Grief/Angst/Nostalgia's
+     * one-shot ones) makes the opponent likely to reach a self-discarded
+     * Anger before the bot's own recursion ever gets a turn -- so the bot
+     * should never gamble on it regardless of the recursion-count edge.
+     */
+    public function testBotDoesNotTargetItselfWhenPlayingAngerIfTheOpponentHasGraceInPlay(): void
+    {
+        $u1 = $this->insertUser('human19');
+        $botUserId = $this->insertBotUser('bot17');
+        $gameId = $this->insertGame('duel', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 80, 'hand', $botPlayerId); // Anger
+        $this->insertGameCard($gameId, 123, 'deck', $botPlayerId, 0); // Harmony -- recursion
+        $this->insertGameCard($gameId, 65, 'deck', $botPlayerId, 1); // Grief -- recursion
+        $this->insertGameCard($gameId, 54, 'deck', $botPlayerId, 2); // Angst -- recursion
+        $this->insertGameCard($gameId, 69, 'deck', $botPlayerId, 3); // Melancholy -- recursion
+        $this->insertGameCard($gameId, 128, 'deck', $botPlayerId, 4); // Nostalgia -- recursion, 5 total against the opponent's 0
+        $this->insertGameCard($gameId, 121, 'in_play', $p1); // human's own Grace, value 0 -- the veto
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 80), "Anger should stay in play -- Grace on the opponent's board vetoes self-targeting regardless of the bot's own recursion edge");
+    }
+
+    /**
      * End-to-end coverage of sortPriorityValue()'s own Harmony policy (see
      * BotPlayerServiceTest for the same scenario checked in isolation)
      * through the FULL advanceAutomatedTurns() -> chooseAction() ->
