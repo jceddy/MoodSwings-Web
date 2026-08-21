@@ -864,6 +864,60 @@ final class BotGameplayIntegrationTest extends TestCase
         self::assertNull($round['current_turn_game_player_id']);
     }
 
+    /**
+     * End-to-end coverage of advanceBotTeamDecision()'s own
+     * rejected_game_player_id check (migration 0160, confirmed by the
+     * maintainer) -- before this fix, a human rejecting a bot's proposal
+     * was a no-op: chooseTeamDecisionProposal() is deliberately
+     * non-strategic (always candidateGamePlayerIds[0]), so the very next
+     * advanceAutomatedTurns() call just saw an ordinary 'propose' phase
+     * again and had the bot immediately re-propose the exact candidate
+     * the human just rejected. The bot should now wait for the human
+     * instead -- and once the human DOES propose (regardless of which
+     * candidate), the bot's own confirm still always approves, so the
+     * decision resolves on that very next human action.
+     */
+    public function testAdvanceBotTurnsWaitsAfterAHumanRejectsItsProposal(): void
+    {
+        $u1 = $this->insertUser('human1');
+        $botUserId = $this->insertBotUser('bot1');
+        $gameId = $this->insertGame('team', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0, teamId: 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1, teamId: 0);
+        $this->insertGamePlayer($gameId, $this->insertUser('human2'), 2, teamId: 1);
+        $this->insertGamePlayer($gameId, $this->insertUser('human3'), 3, teamId: 1);
+
+        $roundId = $this->insertFrozenTeamRound($gameId, 1, $p1);
+        // The bot already proposed p1 (candidateIds[0]); only the human's
+        // own confirm is left.
+        $decisionId = $this->insertProposedTeamDecision($gameId, $roundId, 0, 'turn_order', [$p1, $botPlayerId], proposerGamePlayerId: $botPlayerId, proposedGamePlayerId: $p1);
+
+        $this->games->confirmTeamDecision($gameId, $p1, false); // the human rejects
+
+        $rejected = $this->fetchTeamDecisionById($decisionId);
+        self::assertSame('propose', $rejected['phase']);
+        self::assertNull($rejected['proposer_game_player_id']);
+        self::assertNull($rejected['proposed_game_player_id']);
+        self::assertSame($p1, (int) $rejected['rejected_game_player_id']);
+
+        // The bot should NOT immediately re-propose -- it waits for the
+        // human instead of overriding their own rejection.
+        self::assertNull($this->games->advanceAutomatedTurns($gameId));
+        $stillWaiting = $this->fetchTeamDecisionById($decisionId);
+        self::assertSame('propose', $stillWaiting['phase']);
+        self::assertNull($stillWaiting['proposer_game_player_id']);
+
+        // Once the human proposes themselves (either candidate is fine --
+        // here, the SAME one the bot originally suggested and the human
+        // just rejected), the bot's own confirm still always approves, so
+        // this resolves on the human's very next action.
+        $this->games->proposeTeamDecision($gameId, $p1, $p1);
+        $result = $this->games->advanceAutomatedTurns($gameId);
+
+        self::assertNotNull($result);
+        self::assertNotNull($this->fetchTeamDecisionById($decisionId)['resolved_at']);
+    }
+
     public function testAdvanceBotTurnsConfirmsATeamDecisionProposedByAHuman(): void
     {
         $u1 = $this->insertUser('human1');
