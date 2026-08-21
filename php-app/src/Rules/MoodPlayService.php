@@ -172,8 +172,25 @@ final class MoodPlayService
         // Gluttony/Insecurity tag whichever specific card ends up consuming
         // their granted extra play with effectState (e.g. "discard it after
         // scoring") -- see BoardState's 'onUseEffectState' restriction key.
+        // Insecurity's own 'afterScoring' payload additionally gets
+        // $playerId folded in here (never set by InsecurityEffect itself,
+        // which only knows who played INSECURITY, not necessarily who
+        // ends up spending the resulting extra play -- the same player in
+        // every real game today, since a turn never changes hands mid-
+        // grant, but this is still the one place that actually KNOWS for
+        // certain) so GameService::applyAfterScoringHooks() can return the
+        // card to that specific player's hand rather than whatever
+        // ownerOf() says at scoring time -- a real bug reported live:
+        // Chaos (or anything else that reassigns a mood's own owner
+        // between now and scoring) used to send the card to whoever
+        // happened to own it BY THEN instead of "your hand" as the
+        // card's own text means it -- the player who actually played it
+        // via this grant.
         if ($consumedGrant !== null && isset($consumedGrant['onUseEffectState'])) {
             foreach ($consumedGrant['onUseEffectState'] as $key => $value) {
+                if ($key === 'afterScoring' && is_array($value) && !isset($value['playerId'])) {
+                    $value['playerId'] = $playerId;
+                }
                 $state->setEffectState($cardId, $key, $value);
             }
         }
@@ -209,19 +226,22 @@ final class MoodPlayService
      * repeat-offer's own "choices" sub-bag for a repeat (see
      * resolveDuplicityRepeatOffer()).
      *
-     * Duplicity's own repeat-eligibility is snapshotted here into a local
+     * Duplicity's own repeat-eligibility -- and, the same way and for the
+     * same reason, every OTHER card the acting player currently owns in
+     * play (this invocation's own reactToAnotherPlay() candidates, see
+     * PlayResult's own docblock) -- is snapshotted here into a local
      * variable, before this invocation's own effect gets to mutate
      * anything -- see continueAfterPlayingChain()'s docblock for why the
      * timing matters. This has to happen whether the effect resolves
      * synchronously below or pauses for an opponent's own decision first
      * (RequiresOpponentDecision), since either way
      * continueAfterPlayingChain() eventually needs this invocation's
-     * *pre*-mutation count, not whatever the count happens to be by the
-     * time it actually runs -- so every PlayResult::pending() below
-     * carries it along (persisted as that pause's own
-     * game_pending_decision_batches.duplicity_eligible_sources, see
-     * PlayResult's own docblock for why it can no longer live on
-     * BoardState).
+     * *pre*-mutation count/candidates, not whatever they happen to be by
+     * the time it actually runs -- so every PlayResult::pending() below
+     * carries both along (persisted as that pause's own
+     * game_pending_decision_batches.duplicity_eligible_sources/
+     * reactor_candidate_card_ids, see PlayResult's own docblock for why
+     * neither can live on BoardState).
      */
     private function resolveAfterPlayingChain(
         BoardState $state,
@@ -231,9 +251,14 @@ final class MoodPlayService
         PlayerChoices $invocationChoices,
         int $invocationSeq,
     ): PlayResult {
+        $reactorCandidateCardIds = array_values(array_map(
+            static fn ($mood) => $mood->cardId,
+            array_filter($state->moodsOwnedBy($playerId), static fn ($mood) => $mood->cardId !== $cardId),
+        ));
+
         $effectiveRow = $state->catalogRow($state->effectiveCardId($cardId));
         if (!$effectiveRow['hasAfterPlaying']) {
-            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);
+            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $reactorCandidateCardIds);
         }
 
         $effectiveEffectKey = $effectiveRow['effectKey'];
@@ -245,20 +270,20 @@ final class MoodPlayService
         if ($effect instanceof RequiresOpponentDecision) {
             $pendingDecisions = $effect->pendingDecisionsFor($state, $cardId, $playerId, $invocationChoices);
             if ($pendingDecisions !== []) {
-                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq, $invocationChoices, $eligibleSources);
+                return PlayResult::pending($pendingDecisions, $cardId, $invocationSeq, $invocationChoices, $eligibleSources, $reactorCandidateCardIds);
             }
             // Nothing to ask for this specific play (e.g. declined, or no
             // qualifying target/candidate) -- same as an ordinary no-op
             // afterPlaying().
             $followUpDecisions = $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, []);
             if ($followUpDecisions !== []) {
-                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $eligibleSources);
+                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $eligibleSources, $reactorCandidateCardIds);
             }
         } else {
             $effect->afterPlaying($state, $cardId, $playerId, $invocationChoices);
         }
 
-        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $eligibleSources);
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
     }
 
     /**
@@ -277,17 +302,20 @@ final class MoodPlayService
      * $invocationChoices is passed through unchanged, so a later round
      * can still read whatever the first round's own choices bag carried.
      *
-     * $duplicityEligibleSources is this invocation's own pre-mutation
-     * snapshot, read back from wherever GameService persisted it when
-     * this invocation first paused (game_pending_decision_batches.
-     * duplicity_eligible_sources -- see PlayResult's own docblock) --
+     * $duplicityEligibleSources/$reactorCandidateCardIds are this
+     * invocation's own pre-mutation snapshots, read back from wherever
+     * GameService persisted them when this invocation first paused
+     * (game_pending_decision_batches.duplicity_eligible_sources/
+     * reactor_candidate_card_ids -- see PlayResult's own docblock) --
      * carried through to continueAfterPlayingChain() unchanged, exactly
      * like $invocationChoices already is, since resolveDecisions() below
-     * may itself be what causes $cardId to leave play (e.g. Malice
-     * discarding itself as part of its own color cascade) and this value
-     * has to survive that regardless.
+     * may itself be what causes $cardId (or one of the reactor
+     * candidates) to leave play (e.g. Malice discarding itself as part of
+     * its own color cascade) and these values have to survive that
+     * regardless.
      *
      * @param array<string, PlayerChoices> $answers
+     * @param int[] $reactorCandidateCardIds
      */
     public function resolvePendingDecisions(
         BoardState $state,
@@ -298,9 +326,10 @@ final class MoodPlayService
         int $invocationSeq,
         array $answers,
         int $duplicityEligibleSources,
+        array $reactorCandidateCardIds = [],
     ): PlayResult {
         if (isset($answers[self::DUPLICITY_REPEAT_KEY])) {
-            return $this->resolveDuplicityRepeatOffer($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $answers[self::DUPLICITY_REPEAT_KEY]);
+            return $this->resolveDuplicityRepeatOffer($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $answers[self::DUPLICITY_REPEAT_KEY], $reactorCandidateCardIds);
         }
 
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
@@ -311,10 +340,10 @@ final class MoodPlayService
 
         $followUpDecisions = $effect->resolveDecisions($state, $cardId, $playerId, $invocationChoices, $answers);
         if ($followUpDecisions !== []) {
-            return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $duplicityEligibleSources);
+            return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $duplicityEligibleSources, $reactorCandidateCardIds);
         }
 
-        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $duplicityEligibleSources);
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $duplicityEligibleSources, $reactorCandidateCardIds);
     }
 
     /**
@@ -376,6 +405,9 @@ final class MoodPlayService
      * hand-card choice for a later one) -- something only the server, not
      * a pre-rendered form, can know for certain at each step.
      */
+    /**
+     * @param int[] $reactorCandidateCardIds
+     */
     private function continueAfterPlayingChain(
         BoardState $state,
         int $cardId,
@@ -383,6 +415,7 @@ final class MoodPlayService
         PlayerChoices $topLevelChoices,
         int $invocationSeq,
         int $eligibleSources,
+        array $reactorCandidateCardIds = [],
     ): PlayResult {
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
 
@@ -391,17 +424,21 @@ final class MoodPlayService
             // resolveDuplicityRepeatOffer() below, which never reads the
             // batch's stored invocation_choices -- $topLevelChoices here
             // is just a harmless, always-valid placeholder to satisfy
-            // PlayResult::pending()'s signature. $eligibleSources itself
-            // rides along too (unchanged) purely so a still-open repeat
-            // offer keeps reporting the same count if this same pause is
-            // read back again before being answered -- resolveDecisions()
-            // never actually needs it for this particular decision type,
-            // since resolveDuplicityRepeatOffer() below always recomputes
-            // its own fresh count on repeat (see resolveAfterPlayingChain()).
-            return PlayResult::pending([$this->duplicityRepeatOfferRequest($playerId, $effectiveEffectKey)], $cardId, $invocationSeq, $topLevelChoices, $eligibleSources);
+            // PlayResult::pending()'s signature. $eligibleSources/
+            // $reactorCandidateCardIds both ride along too (unchanged)
+            // purely so a still-open repeat offer keeps reporting the
+            // same values if this same pause is read back again before
+            // being answered -- resolveDecisions() never actually needs
+            // either for this particular decision type, since
+            // resolveDuplicityRepeatOffer() below always recomputes its
+            // own fresh snapshot on repeat (see resolveAfterPlayingChain()),
+            // and only needs $reactorCandidateCardIds back at all for its
+            // own DECLINE branch, where it's this same, still-current
+            // snapshot that applies.
+            return PlayResult::pending([$this->duplicityRepeatOfferRequest($playerId, $effectiveEffectKey)], $cardId, $invocationSeq, $topLevelChoices, $eligibleSources, $reactorCandidateCardIds);
         }
 
-        return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);
+        return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $reactorCandidateCardIds);
     }
 
     /**
@@ -448,7 +485,14 @@ final class MoodPlayService
      * PendingDecisionRequest's own $key), so reading it back out needs the
      * same key again, matching every RequiresOpponentDecision
      * implementation's own resolveDecisions() convention exactly (see e.g.
-     * CompulsionEffect).
+     * CompulsionEffect). On decline, $reactorCandidateCardIds is the
+     * snapshot THIS invocation was originally paused with (threaded
+     * through unchanged, same as $topLevelChoices) -- correct even though
+     * more turns/effects may have happened since this pause first opened,
+     * since it's still this specific invocation's own pre-mutation
+     * candidates that finishAfterPlayingChain() needs.
+     *
+     * @param int[] $reactorCandidateCardIds
      */
     private function resolveDuplicityRepeatOffer(
         BoardState $state,
@@ -457,10 +501,11 @@ final class MoodPlayService
         PlayerChoices $topLevelChoices,
         int $invocationSeq,
         PlayerChoices $repeatAnswer,
+        array $reactorCandidateCardIds = [],
     ): PlayResult {
         $repeatBag = $repeatAnswer->sub(self::DUPLICITY_REPEAT_KEY);
         if (!$repeatBag->bool('repeat')) {
-            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices);
+            return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $reactorCandidateCardIds);
         }
 
         return $this->resolveAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $repeatBag->sub('choices'), $invocationSeq + 1);
@@ -475,16 +520,38 @@ final class MoodPlayService
      * other (registered) mood this is a no-op inherited from
      * AbstractMoodEffect. Never itself needs another player's input --
      * always the last step once nothing else is pending.
+     *
+     * Iterates $reactorCandidateCardIds -- resolveAfterPlayingChain()'s
+     * own pre-mutation snapshot of who was in play right before THIS
+     * invocation's own afterPlaying()/resolveDecisions() ran -- rather
+     * than a fresh $state->moodsOwnedBy($playerId) query here. A bug
+     * caught live: querying fresh meant a card whose own effect returns
+     * or discards one of the player's OTHER in-play moods as a side
+     * effect (Thrill's "you may put any number of your other moods into
+     * your hand" is the clearest example) silently robbed that mood of
+     * ever reacting to the very play that displaced it -- e.g. Validation
+     * never got the chance to react to Thrill's own play if Thrill's own
+     * choice happened to return Validation itself to hand, even though
+     * Validation genuinely was in play at the moment Thrill was played.
+     * isInPlay() is deliberately NOT re-checked per candidate here --
+     * the snapshot alone is the authority for "was this reactor eligible
+     * at trigger time", same principle as $duplicityEligibleSources
+     * (see PlayResult's own docblock); reactToAnotherPlay() itself
+     * doesn't touch the reactor's own zone (only its owner's grants), so
+     * there's nothing unsafe about calling it for a candidate that later
+     * left play as a result of this same resolution.
+     *
+     * @param int[] $reactorCandidateCardIds
      */
-    private function finishAfterPlayingChain(BoardState $state, int $cardId, int $playerId, PlayerChoices $topLevelChoices): PlayResult
+    private function finishAfterPlayingChain(BoardState $state, int $cardId, int $playerId, PlayerChoices $topLevelChoices, array $reactorCandidateCardIds = []): PlayResult
     {
-        foreach ($state->moodsOwnedBy($playerId) as $mood) {
-            if ($mood->cardId === $cardId) {
+        foreach ($reactorCandidateCardIds as $reactorCardId) {
+            if ($reactorCardId === $cardId) {
                 continue;
             }
-            $reactorEffectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            $reactorEffectKey = $state->catalogRow($state->effectiveCardId($reactorCardId))['effectKey'];
             if ($this->registry->has($reactorEffectKey)) {
-                $this->registry->for($reactorEffectKey)->reactToAnotherPlay($state, $mood->cardId, $cardId, $playerId, $topLevelChoices);
+                $this->registry->for($reactorEffectKey)->reactToAnotherPlay($state, $reactorCardId, $cardId, $playerId, $topLevelChoices);
             }
         }
 

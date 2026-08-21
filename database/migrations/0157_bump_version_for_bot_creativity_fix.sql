@@ -1,0 +1,16 @@
+-- Practice bots previously always left Creativity's own optional
+-- copy_card_id field unfilled, since it wasn't in
+-- ALWAYS_FILLED_OPTIONAL_FIELDS -- Creativity was always played as a
+-- blank blue card worth 0, accomplishing nothing even when a genuinely
+-- valuable copy target was on offer. BotPlayerService now always
+-- targets generally the highest-value mood currently in play,
+-- regardless of owner (creativityBestCopyTargetId()), deliberately
+-- skipping any candidate with its own "to play" cost (Bliss, Envy,
+-- Exhilaration, Guile, Neurosis, Regret, Self-Loathing) since copying
+-- one without knowing whether the bot could pay that cost risks turning
+-- a legal Creativity play into an illegal one.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0156 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.13' WHERE id = 1;

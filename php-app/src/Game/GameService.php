@@ -124,10 +124,21 @@ final class GameService
     ];
 
     /**
-     * jceddy's 150 Card deck's own per-color spec -- used only for a
-     * 4-player Quick Draft/Grid Draft 'jceddys_75' pool (the one player
-     * count whose own target pool size, 96/90, exceeds jceddy's 75 Card
-     * deck's 75 cards). Not a literal doubling of the 75-card pool (which
+     * jceddy's 75 Card deck's own total size -- the threshold buildDraftPool()
+     * swaps a 'jceddys_75' pool source up to jceddy's 150 Card deck at, once
+     * whatever target size the caller actually needs exceeds it. See
+     * buildDraftPool()'s own docblock.
+     */
+    private const JCEDDYS_75_DECK_SIZE = 75;
+
+    /**
+     * jceddy's 150 Card deck's own per-color spec -- used for a 'jceddys_75'
+     * pool source whenever the target pool size actually needed exceeds
+     * jceddy's 75 Card deck's own 75 cards (JCEDDYS_75_DECK_SIZE): always
+     * true at 4 players for Quick/Winston/Grid Draft (96/90/96), but for
+     * Rotisserie Draft only once its own cutoff-count-times-player-count
+     * floor crosses that same line -- see buildDraftPool()'s own docblock.
+     * Not a literal doubling of the 75-card pool (which
      * would just duplicate the same 75 card ids) -- its own themed
      * 150-card construction, every one of JCEDDYS_75_DECK_RARITY_SPEC's
      * count/max_copies pairs doubled: 2 Mythics, 4 *different* Rares, 8
@@ -255,9 +266,10 @@ final class GameService
      * additional seat meaningfully better-stocked, and specifically
      * ensures jceddy's 75 Card deck's own 75 cards still cover a 3-player
      * pool (70) without needing jceddy's 150 Card deck's own themed
-     * 150-card pool -- that swap only ever triggers at exactly 4 players
-     * (90 > 75), the same trigger point as Quick Draft's/Grid Draft's own
-     * jceddys_75 handling (see buildDraftPool()).
+     * 150-card pool -- that swap (buildDraftPool()'s own
+     * $targetSize > JCEDDYS_75_DECK_SIZE check) only ever triggers at
+     * exactly 4 players here (90 > 75), the same trigger point as Quick
+     * Draft's/Grid Draft's own jceddys_75 handling.
      */
     private static function winstonDraftPoolTargetSize(int $playerCount): int
     {
@@ -378,6 +390,158 @@ final class GameService
     }
 
     /**
+     * Rotisserie Draft (issue #361, format 'draft' alongside 'quick_draft'/
+     * 'winston_draft'/'grid_draft'): unlike those three, there's no
+     * packs/piles/grid at all -- the entire pool is dealt face-up once,
+     * up front (see buildRotisserieDraftPool()), and players simply pick
+     * ONE card at a time in a fixed snake-style turn order (see
+     * rotisserieDraftPickUserId()) until each has picked
+     * ROTISSERIE_DRAFT_DEFAULT_CUTOFF (creator-adjustable within
+     * ROTISSERIE_DRAFT_MIN_CUTOFF..ROTISSERIE_DRAFT_MAX_CUTOFF) cards.
+     * Like Winston/Grid Draft, every player ends up with the exact same
+     * number of cards (the cutoff itself, fixed for the whole match), but
+     * that number varies match to match depending on what the creator
+     * chose, so deck-building still only has a floor
+     * (ROTISSERIE_DRAFT_MIN_DECK_SIZE), never a fixed/max size of its own.
+     */
+    private const ROTISSERIE_DRAFT_MIN_CUTOFF = 13;
+
+    /** @see ROTISSERIE_DRAFT_MIN_CUTOFF's own docblock. */
+    private const ROTISSERIE_DRAFT_MAX_CUTOFF = 20;
+
+    /** @see ROTISSERIE_DRAFT_MIN_CUTOFF's own docblock. */
+    private const ROTISSERIE_DRAFT_DEFAULT_CUTOFF = 14;
+
+    /** @see ROTISSERIE_DRAFT_MIN_CUTOFF's own docblock. */
+    private const ROTISSERIE_DRAFT_MIN_DECK_SIZE = 12;
+
+    /**
+     * Tiered Rotisserie Draft (issue #361's own generalization of base
+     * Rotisserie Draft immediately above): N rounds ("tiers"), each
+     * drafting from its own distinct sub-pool with its own per-player
+     * pick count, before the next tier begins -- pick order snakes
+     * CONTINUOUSLY across ALL tiers (does not reset to seat 0 at the
+     * start of each new tier), reusing rotisserieDraftPickUserId()
+     * completely unchanged, fed an ever-incrementing GLOBAL pick_index
+     * (see tieredRotisserieDraftTierIndexFor()). Two selectable tiering
+     * modes -- see buildTieredRotisserieDraftTierPools()'s own docblock
+     * and "Tiered Rotisserie Draft" in php-app/README.md for the full
+     * mechanic:
+     *   - 'rarity': the fixed reference scheme (4 tiers, Mythic/Rare/
+     *     Uncommon/Common, see TIERED_ROTISSERIE_DRAFT_RARITY_TIERS).
+     *   - 'custom': the creator configures TIERED_ROTISSERIE_DRAFT_MIN_TIERS..
+     *     TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS tiers themselves, each
+     *     with its own pool and cutoff count, the cutoffs summing to at
+     *     least ROTISSERIE_DRAFT_MIN_DECK_SIZE.
+     * Both modes share the same fixed ROTISSERIE_DRAFT_MIN_DECK_SIZE
+     * deck-build floor as base Rotisserie Draft.
+     */
+    private const TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS = 2;
+
+    /** @see TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS's own docblock. */
+    private const TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS = 4;
+
+    /**
+     * The rarity tiering mode's own fully-specified reference scheme
+     * (issue #361, confirmed by the maintainer): one tier per rarity, in
+     * draft order, each tier's own layout size exactly DOUBLE what it
+     * actually distributes that tier (cutoff_count picks per player) --
+     * see tieredRotisserieDraftRarityLayout()'s own docblock for the
+     * per-rarity supply-math confirmation against the real catalog (only
+     * the common tier, at 3-4 players, ever actually needs the "up to 2
+     * copies of one card" duplicate allowance that math confirmed).
+     *
+     * @var array<int, array{label: string, cutoff_count: int}>
+     */
+    private const TIERED_ROTISSERIE_DRAFT_RARITY_TIERS = [
+        ['label' => 'mythic', 'cutoff_count' => 1],
+        ['label' => 'rare', 'cutoff_count' => 2],
+        ['label' => 'uncommon', 'cutoff_count' => 4],
+        ['label' => 'common', 'cutoff_count' => 8],
+    ];
+
+    /**
+     * The minimum pool size for a $cutoffCount-card cutoff and
+     * $playerCount seated players -- every player picking exactly
+     * $cutoffCount cards from a shared, never-refilled pool needs at
+     * least that many cards to exist in total. Unlike Grid Draft's own
+     * gridDraftPoolTargetSize() (an EXACT size every pool source is
+     * truncated or rejected against), this is a FLOOR: the built-in
+     * 'random_48'-style source is sized to exactly this (see
+     * buildRotisserieDraftPool()), but every other pool source (a full
+     * structure deck/jceddy's 75/the whole catalog/a custom or saved
+     * decklist) is laid out at its own natural size when that's larger,
+     * with whatever's left over once every player hits the cutoff simply
+     * never drafted -- the same "remainder discarded" precedent Rarity
+     * Rotisserie's own per-rarity rounds already establish (issue #361).
+     */
+    private static function rotisserieDraftMinPoolSize(int $cutoffCount, int $playerCount): int
+    {
+        return $cutoffCount * $playerCount;
+    }
+
+    /**
+     * Rotisserie Draft's own turn order (confirmed by the maintainer) --
+     * $pickIndex is a 0-based global counter of picks made so far in this
+     * match; returns which of $userIds (in seat order) picks next.
+     *
+     * The unit of repetition is a "double-round" of 2 * count($userIds)
+     * picks: an ordinary forward pass through the seats starting at that
+     * double-round's own STARTER seat ("round A"), immediately followed
+     * by the exact reverse of round A ("round B") -- standard snake-draft
+     * shape, giving the pivot seat (round A's last picker) the round's
+     * own double-pick at the turnaround, e.g. for 3 players starting at
+     * seat 0: round A = [0,1,2], round B = reverse = [2,1,0], picks =
+     * 0,1,2,2,1,0.
+     *
+     * The STARTER seat itself rotates by one, every double-round, through
+     * every seat in turn (0,1,2,...,n-1,0,1,2,...) -- "alternating who
+     * chooses first after every 2 rounds," the maintainer's own words --
+     * EXCEPT for exactly 2 players, where the starter never rotates (always
+     * seat 0): rotating it for 2 players would actually produce a
+     * DIFFERENT repeating pattern every other double-round (0,1,1,0 then
+     * 1,0,0,1, alternating) rather than the same 0,1,1,0 block forever,
+     * which isn't what was specified for 2 players -- confirmed against
+     * all three of the maintainer's own worked examples (2/3/4 players).
+     *
+     * This alone (no separately stored "whose turn" beyond a cached copy)
+     * is why no per-round dealing/refilling machinery like Grid Draft's
+     * own is needed: turn order is a pure function of $pickIndex, and the
+     * draft's own end condition is just $pickIndex reaching
+     * $cutoffCount * count($userIds) -- which naturally lands mid-double-round
+     * whenever $cutoffCount is odd (13/15/17/19), ending right after that
+     * double-round's own round A with no special-casing needed either.
+     *
+     * $starterSeatOffset (migration 0134) rotates every resulting seat
+     * index by a fixed amount, chosen once per match -- see
+     * initializeRotisserieDraft()/submitRotisserieDraftPick(). $userIds
+     * itself is always in fixed seat order (creator first for
+     * 'team'/'closed_team', since seatOrderForTeamGame()/
+     * seatOrderForClosedTeamGame() deliberately never shuffle it, unlike
+     * plain 'draft' format's own shuffledSeatOrder()), so without this
+     * offset $pickIndex 0 would always resolve to $userIds[0] -- the
+     * creator, every single team-format match. A cyclic rotation
+     * preserves the snake shape and every seat's neighbor relationships
+     * exactly as they are; it only relabels which physical seat plays the
+     * role of "seat 0" for pick-order purposes, the same trick
+     * array_rand($userIds) already achieves for Quick/Winston/Grid Draft.
+     */
+    private static function rotisserieDraftPickUserId(array $userIds, int $pickIndex, int $starterSeatOffset = 0): int
+    {
+        $playerCount = count($userIds);
+        $doubleRoundSize = 2 * $playerCount;
+        $doubleRoundIndex = intdiv($pickIndex, $doubleRoundSize);
+        $withinDoubleRound = $pickIndex % $doubleRoundSize;
+        $starterSeatIndex = $playerCount === 2 ? 0 : $doubleRoundIndex % $playerCount;
+
+        $seatIndex = $withinDoubleRound < $playerCount
+            ? ($starterSeatIndex + $withinDoubleRound) % $playerCount
+            : ($starterSeatIndex + ($playerCount - 1 - ($withinDoubleRound - $playerCount))) % $playerCount;
+
+        return $userIds[($seatIndex + $starterSeatOffset) % $playerCount];
+    }
+
+    /**
      * Shared best-of-three threshold for every draft-based deck_type's own
      * match -- still the right number for every 2-player draft match
      * (Quick Draft, Winston Draft, Grid Draft alike). Quick Draft's 3-4
@@ -478,9 +642,11 @@ final class GameService
 
     /**
      * @param int[] $userIds seat order follows array order for every format
-     *        except 'team'/'closed_team', where seating is instead derived
-     *        from $partnerUserId -- see seatOrderForTeamGame()/
-     *        seatOrderForClosedTeamGame().
+     *        except 'team'/'closed_team' (seating instead derived from
+     *        $partnerUserId -- see seatOrderForTeamGame()/
+     *        seatOrderForClosedTeamGame()) and 'draft' (seating shuffled --
+     *        see shuffledSeatOrder()'s own docblock for why a draft's own
+     *        table position needs randomizing, unlike every other format's).
      * @param ?int $partnerUserId only meaningful (and required) when
      *        $format is 'team' or 'closed_team': which of $userIds (other
      *        than $createdByUserId) the creator pairs up with as their
@@ -511,13 +677,50 @@ final class GameService
      * @param ?string $gridDraftCustomPoolText Grid Draft's own analog of
      *        $quickDraftCustomPoolText -- a decklist-line pool of 54+ cards, only
      *        meaningful when $gridDraftPoolSource is 'custom'.
+     * @param ?string $rotisserieDraftPoolSource Rotisserie Draft's (issue
+     *        #361) own analog of $quickDraftPoolSource -- only meaningful
+     *        (and required) when $deckType is 'rotisserie_draft', same
+     *        pool-source options, see buildRotisserieDraftPool(). Unlike
+     *        the other three draft types' own pool sources, this one is a
+     *        FLOOR rather than an exact target -- see
+     *        buildRotisserieDraftPool()'s own docblock.
+     * @param ?string $rotisserieDraftCustomPoolText Rotisserie Draft's own
+     *        analog of $quickDraftCustomPoolText -- a decklist-line pool
+     *        of at least $rotisserieDraftCutoffCount * count($userIds)
+     *        cards, only meaningful when $rotisserieDraftPoolSource is
+     *        'custom'.
+     * @param int $rotisserieDraftCutoffCount only meaningful when
+     *        $deckType is 'rotisserie_draft' -- how many cards each
+     *        player picks before the draft ends and deck-building begins,
+     *        creator-chosen within ROTISSERIE_DRAFT_MIN_CUTOFF..
+     *        ROTISSERIE_DRAFT_MAX_CUTOFF (13-20), defaulting to
+     *        ROTISSERIE_DRAFT_DEFAULT_CUTOFF (14). Fixed for the whole
+     *        match once chosen, the same shape as $winsNeeded.
+     * @param ?string $tieredRotisserieDraftMode only meaningful (and
+     *        required) when $deckType is 'tiered_rotisserie_draft' --
+     *        'rarity' (the fixed reference scheme, no further fields
+     *        needed) or 'custom' (see $tieredRotisserieDraftTiers). See
+     *        buildTieredRotisserieDraftTierPools()'s own docblock and
+     *        "Tiered Rotisserie Draft" in php-app/README.md.
+     * @param ?array<int, array{pool_source: string, custom_pool_text: ?string, saved_decklist_id: ?int, cutoff_count: int}> $tieredRotisserieDraftTiers
+     *        only meaningful (and required) when $tieredRotisserieDraftMode
+     *        is 'custom' -- TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS..
+     *        TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS (2-4) tiers, each its
+     *        own pool_source ('custom' or 'saved_deck' -- the same two
+     *        options $rotisserieDraftPoolSource's own 'custom'/'saved_deck'
+     *        cases use, just restricted to those two here) plus that pool
+     *        source's own custom_pool_text/saved_decklist_id, and its own
+     *        cutoff_count (how many cards each player picks from THAT
+     *        tier specifically). The tiers' own cutoff_counts must sum to
+     *        at least ROTISSERIE_DRAFT_MIN_DECK_SIZE.
      * @param ?int $savedDecklistId one of $createdByUserId's own saved decklists
      *        (issue #92) to source cards from instead of freshly-pasted/uploaded
      *        text -- meaningful when $deckType is 'custom' (an alternative to
      *        $decklistText), or when any of $quickDraftPoolSource/
-     *        $winstonDraftPoolSource/$gridDraftPoolSource is 'saved_deck' (issue
-     *        #290, an alternative to that draft type's own *CustomPoolText).
-     *        A single param shared across all four cases -- unlike the pool
+     *        $winstonDraftPoolSource/$gridDraftPoolSource/
+     *        $rotisserieDraftPoolSource is 'saved_deck' (issue #290, an
+     *        alternative to that draft type's own *CustomPoolText).
+     *        A single param shared across all five cases -- unlike the pool
      *        sources' own per-deck_type params, it's the same underlying
      *        "which saved decklist" concept regardless of which one is
      *        active, and only one deck_type is ever in effect per call.
@@ -576,20 +779,51 @@ final class GameService
         ?string $botDecklistText = null,
         ?int $botSavedDecklistId = null,
         bool $randomTeams = false,
+        ?string $rotisserieDraftPoolSource = null,
+        ?string $rotisserieDraftCustomPoolText = null,
+        int $rotisserieDraftCutoffCount = self::ROTISSERIE_DRAFT_DEFAULT_CUTOFF,
+        ?string $tieredRotisserieDraftMode = null,
+        ?array $tieredRotisserieDraftTiers = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
         if (self::isDuelShapedFormat($format)) {
-            // Quick Draft, Grid Draft, and Winston Draft all support 3-4
-            // players now (issue #189) -- 'duel' itself stays locked to
-            // exactly 2.
-            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft'], true)) {
+            // Quick Draft, Grid Draft, Winston Draft, Rotisserie Draft, and
+            // Tiered Rotisserie Draft all support 3-4 players now (issue
+            // #189) -- 'duel' itself stays locked to exactly 2.
+            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
                 if (count($userIds) < 2 || count($userIds) > 4) {
                     throw new GameStateException("A {$deckType} game must have 2-4 players");
                 }
             } elseif (count($userIds) !== 2) {
                 throw new GameStateException("A {$format} game must have exactly 2 players");
+            }
+        }
+        if ($deckType === 'rotisserie_draft' && ($rotisserieDraftCutoffCount < self::ROTISSERIE_DRAFT_MIN_CUTOFF || $rotisserieDraftCutoffCount > self::ROTISSERIE_DRAFT_MAX_CUTOFF)) {
+            throw new GameStateException(
+                'Rotisserie Draft\'s cutoff count must be between ' . self::ROTISSERIE_DRAFT_MIN_CUTOFF
+                . ' and ' . self::ROTISSERIE_DRAFT_MAX_CUTOFF
+            );
+        }
+        if ($deckType === 'tiered_rotisserie_draft') {
+            if (!in_array($tieredRotisserieDraftMode, ['rarity', 'custom'], true)) {
+                throw new GameStateException('Tiered Rotisserie Draft requires a "rarity" or "custom" tiering mode');
+            }
+            if ($tieredRotisserieDraftMode === 'custom') {
+                $tierCount = count($tieredRotisserieDraftTiers ?? []);
+                if ($tierCount < self::TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS || $tierCount > self::TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS) {
+                    throw new GameStateException(
+                        'Custom-tiered Rotisserie Draft requires between ' . self::TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS
+                        . ' and ' . self::TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS . ' tiers'
+                    );
+                }
+                $cutoffSum = array_sum(array_map(static fn (array $tier): int => (int) ($tier['cutoff_count'] ?? 0), $tieredRotisserieDraftTiers));
+                if ($cutoffSum < self::ROTISSERIE_DRAFT_MIN_DECK_SIZE) {
+                    throw new GameStateException(
+                        "Custom-tiered Rotisserie Draft's tier cutoff counts must sum to at least " . self::ROTISSERIE_DRAFT_MIN_DECK_SIZE
+                    );
+                }
             }
         }
         if (self::isTeamFormat($format)) {
@@ -616,13 +850,17 @@ final class GameService
         // 'custom_duel' -- the one deck_type that DOES need per-player
         // setup, but which this call itself supplies on the bot's behalf
         // via $botDecklistText/$botSavedDecklistId below, rather than the
-        // bot ever needing to submit one itself. See botsSupportedFor()'s
-        // own docblock for why 'draft' stays excluded. Checked up front,
-        // ahead of the deck-type-specific validation/building below, so a
-        // doomed request never gets as far as e.g. parsing a decklist.
+        // bot ever needing to submit one itself. Issue #359 additionally
+        // supports every draft-based deck_type (see botsSupportedFor()'s
+        // own docblock) -- a bot seated there makes its own picks via
+        // advanceBotDraftTurn() instead of needing anything supplied here
+        // at creation time, same as every other bot-supported deck_type.
+        // Checked up front, ahead of the deck-type-specific validation/
+        // building below, so a doomed request never gets as far as e.g.
+        // parsing a decklist.
         $botUserId = $this->botUserIdAmong($userIds);
         if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, or Duel using Custom Decklists (Duel)');
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft game');
         }
         if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
             throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
@@ -636,8 +874,8 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
-        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true)) {
-            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
+        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
+            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft" deck types');
         }
         // Team Play/Closed Team Play (issue #362) may also draft: each of
         // the 4 players still drafts and builds their own deck
@@ -652,7 +890,7 @@ final class GameService
         // gridDraftDraftingStateFor()'s/draftDeckBuildingStateFor()'s own
         // `team_drafted_cards` field. Closed Team Play stays fully private
         // between teammates instead, exactly like Stage 1 left it.
-        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
+        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
             throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, Team Play, or Closed Team Play");
         }
 
@@ -680,6 +918,17 @@ final class GameService
             $duelEvenColorDistributionRarities = $rules->evenColorDistributionRarities;
         }
 
+        // Built once here (buildTieredRotisserieDraftTierPools() draws
+        // randomly for 'rarity' mode, so it must not be called twice) --
+        // $draftPoolCardIds below just flattens it into the same "whole
+        // pool, informational only" shape draft_matches.pool_card_ids
+        // already holds for every other draft deck_type; the actual live
+        // per-tier state lives in draft_tiered_rotisserie_state.tiers
+        // instead (see initializeTieredRotisserieDraft()).
+        $tieredRotisserieDraftTierPools = $deckType === 'tiered_rotisserie_draft'
+            ? $this->buildTieredRotisserieDraftTierPools((string) $tieredRotisserieDraftMode, $tieredRotisserieDraftTiers, $createdByUserId, count($userIds))
+            : null;
+
         // Built (and, for a 'custom' pool, fully validated) before the
         // transaction starts, same rationale as parseCustomDecklist()/
         // resolveDuelDeckRules() above -- a bad pool should fail loudly
@@ -688,12 +937,16 @@ final class GameService
             'quick_draft' => $quickDraftPoolSource,
             'winston_draft' => $winstonDraftPoolSource,
             'grid_draft' => $gridDraftPoolSource,
+            'rotisserie_draft' => $rotisserieDraftPoolSource,
+            'tiered_rotisserie_draft' => $tieredRotisserieDraftMode,
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
             'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
+            'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount),
+            'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
             default => null,
         };
 
@@ -752,6 +1005,7 @@ final class GameService
             $seatedUserIds = match ($format) {
                 'team' => $this->seatOrderForTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
                 'closed_team' => $this->seatOrderForClosedTeamGame($createdByUserId, (int) $partnerUserId, $userIds),
+                'draft' => $this->shuffledSeatOrder($userIds),
                 default => array_values($userIds),
             };
             $botGamePlayerId = null;
@@ -799,7 +1053,7 @@ final class GameService
                 $insertMatchPlayer = $pdo->prepare(
                     'INSERT INTO draft_match_players (draft_match_id, user_id, drafted_card_ids) VALUES (:match_id, :user_id, :drafted_card_ids)'
                 );
-                $initialDraftedCardIds = in_array($deckType, ['winston_draft', 'grid_draft'], true) ? json_encode([]) : null;
+                $initialDraftedCardIds = in_array($deckType, ['winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) ? json_encode([]) : null;
                 foreach ($seatedUserIds as $userId) {
                     $insertMatchPlayer->execute([
                         'match_id' => $draftMatchId,
@@ -814,6 +1068,10 @@ final class GameService
                     $this->initializeWinstonDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
                 } elseif ($deckType === 'grid_draft') {
                     $this->initializeGridDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
+                } elseif ($deckType === 'rotisserie_draft') {
+                    $this->initializeRotisserieDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds), $rotisserieDraftCutoffCount);
+                } elseif ($deckType === 'tiered_rotisserie_draft') {
+                    $this->initializeTieredRotisserieDraft($gameId, $draftMatchId, $tieredRotisserieDraftTierPools, array_values($seatedUserIds), (string) $tieredRotisserieDraftMode);
                 }
             }
 
@@ -831,7 +1089,8 @@ final class GameService
      * with *without* createGame() itself supplying anything extra on its
      * behalf -- none of these five need any PER-PLAYER setup a bot would
      * otherwise have to do itself, unlike 'quick_draft'/'winston_draft'/
-     * 'grid_draft' (each player makes their own draft picks) or
+     * 'grid_draft'/'rotisserie_draft' (each player makes their own draft
+     * picks) or
      * 'custom_duel' (each duel player submits their own separate
      * decklist). 'custom' belongs here despite needing a decklist at all
      * -- unlike 'custom_duel', it's a single TABLE-wide shared deck
@@ -848,10 +1107,25 @@ final class GameService
     private const BOT_SUPPORTED_DECK_TYPES = ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'];
 
     /**
+     * Every draft-based deck_type -- the same 5-item list already
+     * repeated inline throughout this file's own draft methods (each
+     * predating this constant), pulled out here purely for
+     * botsSupportedFor()/advanceBotDraftTurn() (issue #359) rather than
+     * as a wholesale refactor of every existing inline copy.
+     */
+    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'];
+
+    /**
      * Whether a practice bot (issue #140) can be seated in a game with
-     * this $format/$deckType combination -- every format except 'draft',
-     * which needs a bot to make its own draft picks (BotPlayerService
-     * doesn't implement that). Team Play (issue #360) needed
+     * this $format/$deckType combination. Every draft-based deck_type
+     * (DRAFT_DECK_TYPES) is supported regardless of format -- issue
+     * #359 taught BotPlayerService/advanceBotDraftTurn() how to make a
+     * bot's own draft pick and deck-building trim for all 5, so unlike
+     * every deck_type below (which needs no per-player setup a bot
+     * can't already skip, or gets one supplied for it at creation time),
+     * a draft deck_type's bot support lives entirely in
+     * advanceAutomatedTurns()'s own new draft branch, not here or in
+     * createGame() at all. Team Play (issue #360) needed
      * advanceAutomatedTurns() to learn two new frozen-round states first
      * -- a bot answering Open/Closed Team Play's own turn-order/draw-
      * recipient propose/confirm decision (see advanceBotTeamDecision())
@@ -879,6 +1153,22 @@ final class GameService
     private function botsSupportedFor(string $format, string $deckType): bool
     {
         if ($format === 'duel' && $deckType === 'custom_duel') {
+            return true;
+        }
+        if (in_array($format, ['draft', 'team', 'closed_team'], true) && in_array($deckType, self::DRAFT_DECK_TYPES, true)) {
+            // Issue #359: BotPlayerService now knows how to make a draft
+            // pick for every one of the 5 draft deck_types (see
+            // advanceBotDraftTurn()), independent of format -- Open/
+            // Closed Team Play's own draft support (issue #362) already
+            // drafts exactly the same way ('team'/'closed_team' only
+            // change seating/scoring, applied afterward -- see
+            // createGame()'s own comment on that), so a bot fills one of
+            // those 4 seats and drafts/builds a deck no differently than
+            // it would in plain 'draft' format; it just never gets any
+            // benefit from Open Team Play's own shared-pool deck-building
+            // widening (see chooseDraftDeck()'s own docblock -- its own
+            // drafted pool alone is always enough to clear the format's
+            // minimum deck size regardless).
             return true;
         }
 
@@ -969,6 +1259,54 @@ final class GameService
     }
 
     /**
+     * A real bug, caught live: every other format seats players in
+     * whatever order $userIds itself arrives in -- the creator first,
+     * then opponents in whichever order they were selected in the New
+     * Game dialog -- which is harmless for standard/duel (round 1's own
+     * leader is separately randomized, see startGame()) and meaningless
+     * for team/closed_team (seatOrderForTeamGame()/
+     * seatOrderForClosedTeamGame() already derive seating from
+     * $partnerUserId instead). A draft's own snake/rotation turn order
+     * makes table position itself matter, though, in a way those other
+     * formats' own "who goes first" randomization never fixes: who picks
+     * immediately before/after whom repeats every lap of every round, for
+     * the whole match (best-of-three included) -- so leaving seat order
+     * as bare creation order means the same two players are always
+     * neighbors, every single draft, however many times they play each
+     * other. Winston/Grid Draft separately randomize which *seat* picks
+     * first (initializeWinstonDraft()/initializeGridDraft()'s own
+     * array_rand($userIds)), which only rotates the starting point around
+     * an otherwise-fixed ring -- it doesn't touch who's adjacent to whom.
+     * Rotisserie Draft didn't even have that: rotisserieDraftPickUserId()
+     * always starts at seat 0, so the creator picked first in literally
+     * every Rotisserie Draft match before this fix. Shuffling the actual
+     * seat assignment here, once, fixes all of this at the source: every
+     * draft init function (dealQuickDraftRound()/initializeWinstonDraft()/
+     * initializeGridDraft()/initializeRotisserieDraft()) already receives
+     * this same seated order, so neighbor relationships -- and, for
+     * Rotisserie Draft, who picks first at all -- are now genuinely random
+     * per match rather than fixed by opponent-selection order.
+     *
+     * This function is only ever called for plain 'draft' format, though
+     * (see createGame()'s own $seatedUserIds match/default below) --
+     * 'team'/'closed_team' still seat the creator at a fixed seat 0, so
+     * Rotisserie Draft's own "always $userIds[0] picks first" trap still
+     * applied to THOSE formats even after this fix, just via a different
+     * path; see rotisserieDraftPickUserId()'s own $starterSeatOffset
+     * parameter and migration 0134 for the follow-up fix.
+     *
+     * @param int[] $userIds
+     * @return int[]
+     */
+    private function shuffledSeatOrder(array $userIds): array
+    {
+        $shuffled = array_values($userIds);
+        shuffle($shuffled);
+
+        return $shuffled;
+    }
+
+    /**
      * Whether $format is one of the two 4-player 2v2 team formats -- see
      * "Open Team Play"/"Closed Team Play" in php-app/README.md. Most of
      * createGame()'s validation, and GameService::finishScoringAndAdvance()'s/
@@ -998,16 +1336,17 @@ final class GameService
     /**
      * Whether $deckType puts the whole table on one shared deck rather than
      * giving each player their own -- every deck_type except 'custom_duel'
-     * and the three draft-based ones (quick_draft/winston_draft/grid_draft),
-     * the same four deckCardIdsFor() itself refuses to build a deck for
-     * (each reads its own per-player card ids from somewhere else instead
-     * -- game_players.custom_deck_card_ids or draft_match_players.deck_card_ids).
-     * Used by viewSharedDeck() (issue #197) to reject a request for a
-     * deck_type with no single "the deck" to show.
+     * and the four draft-based ones (quick_draft/winston_draft/grid_draft/
+     * rotisserie_draft), the same five deckCardIdsFor() itself refuses to
+     * build a deck for (each reads its own per-player card ids from
+     * somewhere else instead -- game_players.custom_deck_card_ids or
+     * draft_match_players.deck_card_ids). Used by viewSharedDeck() (issue
+     * #197) to reject a request for a deck_type with no single "the deck"
+     * to show.
      */
     private static function isSharedDeckType(string $deckType): bool
     {
-        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft'], true);
+        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true);
     }
 
     /**
@@ -1292,7 +1631,7 @@ final class GameService
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
-        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true)
+        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)
             ? $this->requireDraftDecksSubmitted($gameId, $playerIds)
             : [];
 
@@ -1320,11 +1659,11 @@ final class GameService
             // formats support that ISN'T one shared/identical pool --
             // see BoardStateRepository::load()'s identical check.
             if (self::isDuelShapedFormat($game['format'])
-                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true)) {
+                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
                 foreach ($playerIds as $playerId) {
                     $playerCardIds = match ($game['deck_type']) {
                         'custom_duel' => $customDuelDeckCardIds[$playerId],
-                        'quick_draft', 'winston_draft', 'grid_draft' => $draftDeckCardIds[$playerId],
+                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft' => $draftDeckCardIds[$playerId],
                         default => $this->deckCardIdsFor($game),
                     };
                     shuffle($playerCardIds);
@@ -1615,7 +1954,7 @@ final class GameService
     {
         $this->withGameLock($gameId, function () use ($gameId, $userId, $playFirst): void {
             $game = $this->fetchGame($gameId);
-            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true) || $game['draft_match_id'] === null) {
+            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
                 throw new GameStateException("Game {$gameId} is not a draft match game");
             }
             $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
@@ -1665,8 +2004,9 @@ final class GameService
 
             $state = $this->boardStates->load($gameId);
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+            $this->logFreshGrants($gameId, (int) $round['id'], $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+            $this->updateRoundTurnState((int) $round['id'], $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
 
             $this->logEvent($gameId, (int) $round['id'], $chosenGamePlayerId, 'draft_match_first_player_decided', null, ['game_player_id' => $chosenGamePlayerId], $state);
         });
@@ -1712,6 +2052,15 @@ final class GameService
             // above -- Grid Draft's own per-player deck lives on
             // draft_match_players.deck_card_ids too.
             'grid_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "grid_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
+            // Same reasoning as 'quick_draft'/'winston_draft'/'grid_draft'
+            // immediately above -- Rotisserie Draft's own per-player deck
+            // lives on draft_match_players.deck_card_ids too.
+            'rotisserie_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "rotisserie_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
+            // Same reasoning as 'quick_draft'/'winston_draft'/'grid_draft'/
+            // 'rotisserie_draft' immediately above -- Tiered Rotisserie
+            // Draft's own per-player deck lives on
+            // draft_match_players.deck_card_ids too.
+            'tiered_rotisserie_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "tiered_rotisserie_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
             default => range(1, self::TOTAL_CARDS), // 'one_of_each'
         };
     }
@@ -1898,9 +2247,18 @@ final class GameService
      * mistakenly did before. Grid Draft rejects 'structure' outright
      * instead, since it has no top-up mechanism of any kind), 'jceddys_75' (reuses
      * buildJceddys75DeckCardIds() as-is -- its own 75-card pool -- except
-     * at exactly 4 players, where buildJceddys150DeckCardIds()'s own
-     * 150-card pool is used instead, since 75 falls short of every
-     * 4-player target this pool source is ever used for), 'one_of_each'
+     * once $targetSize itself exceeds JCEDDYS_75_DECK_SIZE (75), where
+     * buildJceddys150DeckCardIds()'s own 150-card pool is used instead.
+     * For Quick/Winston/Grid Draft that's always exactly the 4-player case
+     * (their own 4-player targets, 96/90/96, all exceed 75, and every
+     * lower player count's own target never does), but this is checked
+     * against $targetSize itself rather than hardcoding "4 players" --
+     * Rotisserie Draft's own target (buildRotisserieDraftPool()'s
+     * cutoff-count-times-player-count floor) can land on either side of
+     * that line even at 4 players, depending on the cutoff chosen (e.g. a
+     * 4-player, 14-card-cutoff match needs only 56, comfortably under 75,
+     * so it correctly stays on the 75-card pool instead of needlessly
+     * jumping to the 150-card one)), 'one_of_each'
      * (the full TOTAL_CARDS catalog), or 'custom' (parseDraftCustomPool()).
      * Whatever the source produces, anything over $targetSize is randomly
      * truncated down to it -- "if more than 48 cards are in the pool, just
@@ -1911,9 +2269,9 @@ final class GameService
      * 133, and an oversized 'custom' pool all end up the same size as
      * 'random_48' before drafting ever starts. Shared by
      * buildQuickDraftPool()/buildWinstonDraftPool()/buildGridDraftPool()
-     * below, parameterized only by target/minimum pool size, player
-     * count, and the structure-doubling flag -- the pool assembly logic
-     * itself has nothing else format-specific about it. Plus 'saved_deck'
+     * below, parameterized only by target/minimum pool size and the
+     * structure-doubling flag -- the pool assembly logic itself has
+     * nothing else format-specific about it. Plus 'saved_deck'
      * (issue #290): reuses one of $requestingUserId's own saved decklists
      * (issue #92's UserDecklistService -- friends'-visibility decks
      * included, via the exact same authorization cardIdsForUse() already
@@ -1924,22 +2282,38 @@ final class GameService
      * resolveSavedDeckDraftPool().
      *
      * @return int[]
+     * @param bool $doubleStructureForMultiplayer whether to double the
+     *        'structure' pool source -- the CALLER decides when (Quick
+     *        Draft/Winston Draft pass whether $playerCount > 2; Rotisserie
+     *        Draft passes whether $targetSize itself exceeds 45, a
+     *        different condition entirely, see buildRotisserieDraftPool())
+     *        rather than this method hardcoding any one format's own
+     *        threshold.
+     * @param bool $truncateToTarget whether an oversized pool gets randomly
+     *        truncated down to exactly $targetSize before drafting starts
+     *        (Quick/Winston/Grid Draft's own convention -- "if more than
+     *        the target number of cards are in the pool, just ignore the
+     *        extra cards," see this method's own docblock above) or laid
+     *        out at its own full size instead, leaving genuinely
+     *        undrafted cards once the draft ends (Rotisserie Draft's own
+     *        "a floor, not an exact match" pool-source convention -- see
+     *        buildRotisserieDraftPool()).
      */
-    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, int $playerCount, bool $doubleStructureForMultiplayer = false): array
+    private function buildDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $targetSize, int $minCustomPoolSize, bool $doubleStructureForMultiplayer = false, bool $truncateToTarget = true): array
     {
         $cardIds = match ($poolSource) {
             'random_48' => $this->buildRandomDraftCardIds($targetSize),
-            'structure' => $doubleStructureForMultiplayer && $playerCount > 2
+            'structure' => $doubleStructureForMultiplayer
                 ? [...$this->buildStructureDeckCardIds(), ...$this->buildStructureDeckCardIds()]
                 : $this->buildStructureDeckCardIds(),
-            'jceddys_75' => $playerCount === 4 ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
+            'jceddys_75' => $targetSize > self::JCEDDYS_75_DECK_SIZE ? $this->buildJceddys150DeckCardIds() : $this->buildJceddys75DeckCardIds(),
             'one_of_each' => range(1, self::TOTAL_CARDS),
             'custom' => $this->parseDraftCustomPool($customPoolText, $minCustomPoolSize),
             'saved_deck' => $this->resolveSavedDeckDraftPool($requestingUserId, $savedDecklistId, $minCustomPoolSize),
             default => throw new GameStateException("Unknown pool source \"{$poolSource}\""),
         };
 
-        if (count($cardIds) <= $targetSize) {
+        if (!$truncateToTarget || count($cardIds) <= $targetSize) {
             return array_values($cardIds);
         }
 
@@ -2032,8 +2406,9 @@ final class GameService
      *         3-4 player shortfall. `'jceddys_75'` is the one pool source
      *         that never needs the reshuffle top-up at all: buildDraftPool()
      *         itself swaps in buildJceddys150DeckCardIds()'s own 150-card
-     *         pool at exactly 4 players, comfortably covering that target
-     *         outright.
+     *         pool once the 4-player target itself exceeds
+     *         JCEDDYS_75_DECK_SIZE (always true here), comfortably covering
+     *         that target outright.
      */
     private function buildQuickDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
@@ -2044,8 +2419,7 @@ final class GameService
             $requestingUserId,
             self::quickDraftPoolTargetSize($playerCount),
             self::quickDraftMinCustomPoolSize($playerCount),
-            $playerCount,
-            doubleStructureForMultiplayer: true,
+            doubleStructureForMultiplayer: $playerCount > 2,
         );
     }
 
@@ -2059,8 +2433,7 @@ final class GameService
             $requestingUserId,
             self::winstonDraftPoolTargetSize($playerCount),
             self::winstonDraftMinCustomPoolSize($playerCount),
-            $playerCount,
-            doubleStructureForMultiplayer: true,
+            doubleStructureForMultiplayer: $playerCount > 2,
         );
     }
 
@@ -2079,13 +2452,14 @@ final class GameService
      *         rather than silently dealing a final round or two short of
      *         cards -- 'jceddys_75' doesn't need this rejection at 4
      *         players, since buildDraftPool() itself already swaps in the
-     *         150-card 'jceddys_150' pool for that case.
+     *         150-card 'jceddys_150' pool once its own 96-card target
+     *         exceeds JCEDDYS_75_DECK_SIZE.
      */
     private function buildGridDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount): array
     {
         $targetSize = self::gridDraftPoolTargetSize($playerCount);
 
-        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount), $playerCount);
+        $cardIds = $this->buildDraftPool($poolSource, $customPoolText, $savedDecklistId, $requestingUserId, $targetSize, self::gridDraftMinCustomPoolSize($playerCount));
 
         if (count($cardIds) < $targetSize) {
             throw new GameStateException(
@@ -2095,6 +2469,205 @@ final class GameService
         }
 
         return array_values($cardIds);
+    }
+
+    /**
+     * @return int[] Rotisserie Draft's own pool -- unlike Quick/Winston/
+     *         Grid Draft, this is a FLOOR (rotisserieDraftMinPoolSize()),
+     *         not an exact target: $truncateToTarget is false, so anything
+     *         over the floor is laid out in full rather than randomly cut
+     *         down first (see buildDraftPool()'s own docblock). The
+     *         'random_48' source is the one exception in practice --
+     *         buildRandomDraftCardIds() already returns exactly
+     *         $minPoolSize cards, so there's never anything to truncate
+     *         either way -- matching "N random cards, where N is the
+     *         minimum pool size" (the maintainer's own words) exactly.
+     *         'structure' is doubled whenever the floor itself exceeds a
+     *         single 45-card copy -- a different condition than Quick/
+     *         Winston Draft's own $playerCount > 2 (see
+     *         doubleStructureForMultiplayer's own docblock on
+     *         buildDraftPool()) -- and, since $cutoffCount/$playerCount
+     *         are both capped (13-20, 2-4), the minimum pool size can
+     *         never exceed 80, so doubling (up to 90) always suffices;
+     *         no format here ever needs a 3rd copy. Likewise, 'jceddys_75'
+     *         only swaps up to the 150-card 'jceddys_150' pool once
+     *         $minPoolSize itself exceeds JCEDDYS_75_DECK_SIZE (75) --
+     *         unlike Quick/Winston/Grid Draft, where that's always exactly
+     *         the 4-player case, here it depends on $cutoffCount too: a
+     *         4-player match with a 14-card cutoff (the default) needs
+     *         only 56, so it correctly stays on the 75-card pool, while an
+     *         18-card cutoff (72) still fits but a 19-card one (76) tips
+     *         over into needing the 150-card pool -- see
+     *         buildDraftPool()'s own docblock.
+     */
+    private function buildRotisserieDraftPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId, int $playerCount, int $cutoffCount): array
+    {
+        $minPoolSize = self::rotisserieDraftMinPoolSize($cutoffCount, $playerCount);
+
+        $cardIds = $this->buildDraftPool(
+            $poolSource,
+            $customPoolText,
+            $savedDecklistId,
+            $requestingUserId,
+            $minPoolSize,
+            $minPoolSize,
+            doubleStructureForMultiplayer: $minPoolSize > 45,
+            truncateToTarget: false,
+        );
+
+        if (count($cardIds) < $minPoolSize) {
+            throw new GameStateException(
+                'The "' . $poolSource . '" pool source has only ' . count($cardIds)
+                . " cards, but Rotisserie Draft with {$playerCount} players and a {$cutoffCount}-card cutoff requires at least {$minPoolSize}"
+            );
+        }
+
+        return array_values($cardIds);
+    }
+
+    /**
+     * Tiered Rotisserie Draft's own tier pools (issue #361's
+     * generalization of base Rotisserie Draft) -- dispatches to whichever
+     * of the two tiering modes $mode selects, both returning the same
+     * shape: an ordered list of tiers, each
+     * {label: ?string, cutoff_count: int, pool_card_ids: int[]}, fully
+     * resolved up front (unlike base Rotisserie Draft's single pool,
+     * nothing here is dealt lazily as a tier is reached -- every tier's
+     * own layout is built once, at creation time, and stored whole in
+     * draft_tiered_rotisserie_state.tiers).
+     *
+     * @param ?array<int, array{pool_source: string, custom_pool_text: ?string, saved_decklist_id: ?int, cutoff_count: int}> $customTiers
+     *        only meaningful when $mode is 'custom' -- see
+     *        buildTieredRotisserieDraftCustomTierPools()'s own docblock.
+     * @return array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}>
+     */
+    private function buildTieredRotisserieDraftTierPools(string $mode, ?array $customTiers, int $requestingUserId, int $playerCount): array
+    {
+        return match ($mode) {
+            'rarity' => $this->buildTieredRotisserieDraftRarityTierPools($playerCount),
+            'custom' => $this->buildTieredRotisserieDraftCustomTierPools($customTiers ?? [], $requestingUserId, $playerCount),
+            default => throw new GameStateException('Tiered Rotisserie Draft requires a "rarity" or "custom" tiering mode'),
+        };
+    }
+
+    /**
+     * The rarity tiering mode's own 4 tiers (TIERED_ROTISSERIE_DRAFT_RARITY_TIERS),
+     * each tier's own layout built via tieredRotisserieDraftRarityLayout().
+     *
+     * @return array<int, array{label: string, cutoff_count: int, pool_card_ids: int[]}>
+     */
+    private function buildTieredRotisserieDraftRarityTierPools(int $playerCount): array
+    {
+        return array_map(function (array $tier) use ($playerCount): array {
+            $layoutSize = 2 * $playerCount * $tier['cutoff_count'];
+
+            return [
+                'label' => $tier['label'],
+                'cutoff_count' => $tier['cutoff_count'],
+                'pool_card_ids' => $this->tieredRotisserieDraftRarityLayout($tier['label'], $layoutSize),
+            ];
+        }, self::TIERED_ROTISSERIE_DRAFT_RARITY_TIERS);
+    }
+
+    /**
+     * $layoutSize card ids of catalog rarity $rarity, chosen randomly --
+     * distinct catalog cards wherever the catalog has enough of that
+     * rarity, otherwise laying out every distinct card of that rarity
+     * once and filling the remaining shortfall with a second copy of a
+     * random subset of them (never a 3rd copy of any single card,
+     * matching the rarity scheme's own "up to 2 copies of any one card"
+     * allowance -- see TIERED_ROTISSERIE_DRAFT_RARITY_TIERS's own
+     * docblock). Confirmed against the real catalog (133 cards: 15
+     * mythic/30 rare/40 uncommon/48 common) at the worst case, 4 players:
+     * mythic needs 8 (of 15), rare 16 (of 30), uncommon 32 (of 40) --
+     * comfortable margins, never needing a 2nd copy of anything -- while
+     * common needs 64 (of 48 distinct), short by 16, covered by doubling
+     * 16 of the 48 commons once each; at 3 players the common tier is an
+     * exact zero-margin fit (48 needed, 48 available); at 2 players
+     * there's plenty of slack (32 of 48). See "Tiered Rotisserie Draft"
+     * in php-app/README.md for the full supply-math table.
+     *
+     * @return int[]
+     */
+    private function tieredRotisserieDraftRarityLayout(string $rarity, int $layoutSize): array
+    {
+        $rowsById = $this->loadCardCatalog()['rowsById'];
+        $distinctIds = array_keys(array_filter($rowsById, static fn (array $row): bool => $row['rarity'] === $rarity));
+
+        if ($layoutSize <= count($distinctIds)) {
+            $keys = (array) array_rand($distinctIds, $layoutSize);
+
+            return array_map(static fn ($key) => $distinctIds[$key], $keys);
+        }
+
+        $shortfall = $layoutSize - count($distinctIds);
+        if ($shortfall > count($distinctIds)) {
+            throw new GameStateException(
+                "Not enough {$rarity} cards in the catalog to lay out {$layoutSize}, even allowing up to 2 copies of each"
+            );
+        }
+
+        $doubledFrom = $distinctIds;
+        shuffle($doubledFrom);
+
+        return [...$distinctIds, ...array_slice($doubledFrom, 0, $shortfall)];
+    }
+
+    /**
+     * The custom tiering mode's own creator-configured tiers (issue #361,
+     * confirmed by the maintainer) -- $tiers.count() is validated
+     * (TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS..
+     * TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS, cutoffs summing to at
+     * least ROTISSERIE_DRAFT_MIN_DECK_SIZE) by createGame() itself before
+     * this is ever called, the same "validate before building" order
+     * parseCustomDecklist()/resolveDuelDeckRules() already establish.
+     * Each tier's own pool is sourced from EITHER a saved decklist or a
+     * pasted custom list -- the same 'custom'/'saved_deck' pool sources
+     * buildDraftPool() already offers, just restricted to those two (no
+     * built-in random/structure/jceddy's-collection sources for a custom
+     * tier -- the creator supplies every tier's own pool explicitly) --
+     * and must contain at least $playerCount * that tier's own
+     * cutoff_count cards, the same per-tier floor base Rotisserie Draft's
+     * own rotisserieDraftMinPoolSize() enforces for its single pool, laid
+     * out in full rather than truncated (truncateToTarget: false), same
+     * "a floor, not an exact target" convention.
+     *
+     * @param array<int, array{pool_source: string, custom_pool_text: ?string, saved_decklist_id: ?int, cutoff_count: int}> $tiers
+     * @return array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}>
+     */
+    private function buildTieredRotisserieDraftCustomTierPools(array $tiers, int $requestingUserId, int $playerCount): array
+    {
+        return array_map(function (array $tier) use ($requestingUserId, $playerCount): array {
+            $poolSource = (string) ($tier['pool_source'] ?? '');
+            if (!in_array($poolSource, ['custom', 'saved_deck'], true)) {
+                throw new GameStateException('Each custom Tiered Rotisserie Draft tier\'s pool source must be "custom" or "saved_deck"');
+            }
+
+            $cutoffCount = (int) ($tier['cutoff_count'] ?? 0);
+            if ($cutoffCount < 1) {
+                throw new GameStateException('Each custom Tiered Rotisserie Draft tier requires a cutoff count of at least 1');
+            }
+
+            $minPoolSize = $playerCount * $cutoffCount;
+            $cardIds = $this->buildDraftPool(
+                $poolSource,
+                $tier['custom_pool_text'] ?? null,
+                isset($tier['saved_decklist_id']) ? (int) $tier['saved_decklist_id'] : null,
+                $requestingUserId,
+                $minPoolSize,
+                $minPoolSize,
+                truncateToTarget: false,
+            );
+
+            if (count($cardIds) < $minPoolSize) {
+                throw new GameStateException(
+                    'One of the custom Tiered Rotisserie Draft tiers\' pool has only ' . count($cardIds)
+                    . " cards, but {$playerCount} players and a {$cutoffCount}-card cutoff requires at least {$minPoolSize}"
+                );
+            }
+
+            return ['label' => null, 'cutoff_count' => $cutoffCount, 'pool_card_ids' => array_values($cardIds)];
+        }, $tiers);
     }
 
     /**
@@ -2549,18 +3122,30 @@ final class GameService
      *
      * @param int[] $deckCardIds
      */
-    public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
+    private static function draftMinDeckSizeFor(string $deckType): int
     {
-        $game = $this->fetchGame($gameId);
-        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true) || $game['draft_match_id'] === null) {
-            throw new GameStateException("Game {$gameId} is not a draft game");
-        }
-        $draftMatchId = (int) $game['draft_match_id'];
-        $minDeckSize = match ($game['deck_type']) {
+        return match ($deckType) {
             'quick_draft' => self::QUICK_DRAFT_MIN_DECK_SIZE,
             'winston_draft' => self::WINSTON_MIN_DECK_SIZE,
             'grid_draft' => self::GRID_DRAFT_MIN_DECK_SIZE,
+            'rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
+            // Both Tiered Rotisserie Draft modes share base Rotisserie
+            // Draft's own fixed floor -- 'rarity' mode's own 15-card pool
+            // (1+2+4+8) always clears it, and 'custom' mode's own tier
+            // cutoffs are validated (createGame()) to sum to at least
+            // this same floor already.
+            'tiered_rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
         };
+    }
+
+    public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
+    {
+        $game = $this->fetchGame($gameId);
+        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+        $minDeckSize = self::draftMinDeckSizeFor($game['deck_type']);
         $maxDeckSize = null;
         $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $game['format'], $userId);
 
@@ -2570,34 +3155,10 @@ final class GameService
                 throw new GameStateException('This match is not currently building/sideboarding a deck');
             }
 
-            $pdo = Connection::get();
-            $playerStmt = $pdo->prepare(
-                'SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
-            );
-            $playerStmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
-            $draftedCardIdsJson = $playerStmt->fetchColumn();
-            if ($draftedCardIdsJson === false || $draftedCardIdsJson === null) {
-                throw new GameStateException("User {$userId} has no drafted cards in this match yet");
-            }
-            $draftedCardIds = array_map(intval(...), json_decode((string) $draftedCardIdsJson, true));
-
-            $pickableCardIds = $draftedCardIds;
-            $errorNoun = 'you drafted';
-            if ($teammateUserId !== null) {
-                $teammateStmt = $pdo->prepare(
-                    'SELECT drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
-                );
-                $teammateStmt->execute(['match_id' => $draftMatchId, 'user_id' => $teammateUserId]);
-                $teammateRow = $teammateStmt->fetch();
-                $teammateDraftedCardIds = $teammateRow !== false && $teammateRow['drafted_card_ids'] !== null
-                    ? array_map(intval(...), json_decode((string) $teammateRow['drafted_card_ids'], true))
-                    : [];
-                $teammateDeckCardIds = $teammateRow !== false && $teammateRow['deck_card_ids'] !== null
-                    ? array_map(intval(...), json_decode((string) $teammateRow['deck_card_ids'], true))
-                    : [];
-                $pickableCardIds = $this->multisetSubtract([...$draftedCardIds, ...$teammateDraftedCardIds], $teammateDeckCardIds);
-                $errorNoun = "your team drafted (and that your teammate hasn't already used in their own deck)";
-            }
+            $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $userId, $teammateUserId);
+            $errorNoun = $teammateUserId !== null
+                ? "your team drafted (and that your teammate hasn't already used in their own deck)"
+                : 'you drafted';
             $effectiveMaxDeckSize = $maxDeckSize ?? count($pickableCardIds);
 
             $deckCardIds = array_values(array_map(intval(...), $deckCardIds));
@@ -2612,7 +3173,7 @@ final class GameService
                 throw new GameStateException("Your deck can only contain cards {$errorNoun}");
             }
 
-            $pdo->prepare(
+            Connection::get()->prepare(
                 'UPDATE draft_match_players SET deck_card_ids = :ids WHERE draft_match_id = :match_id AND user_id = :user_id'
             )->execute([
                 'ids' => json_encode($deckCardIds),
@@ -2622,6 +3183,59 @@ final class GameService
         });
 
         $this->touchLastMoveAt($gameId);
+    }
+
+    /**
+     * @return int[] every card $userId may legally include in their own
+     *     draft deck submission right now -- their own drafted_card_ids
+     *     alone, or (Open Team Play, $teammateUserId !== null) the whole
+     *     team's combined pool minus whatever the teammate's own CURRENT
+     *     deck_card_ids has already claimed (first-come-first-served) --
+     *     see submitDraftDeck()'s own docblock. Shared with
+     *     advanceBotDraftDeck() (confirmed by the maintainer, a real bug
+     *     caught live) so a bot's own deck choice is built from the exact
+     *     same pool submitDraftDeck() will validate it against, rather
+     *     than just the bot's own drafted_card_ids alone -- which could
+     *     otherwise pick one of its human teammate's own already-claimed
+     *     cards (a legal pick from the bot's OWN drafted pool, but no
+     *     longer available once the teammate's submitted deck claimed
+     *     it), throwing a GameStateException submitDraftDeck() itself has
+     *     no caller ever catching or retrying. That silently stalled the
+     *     bot's own deck forever (deterministically -- chooseDraftDeck()
+     *     is a pure function of the same unchanged pool every time this
+     *     runs) once GET /games/state stopped surfacing the exception at
+     *     all -- see that route's own migration/README entry.
+     */
+    private function pickableDraftPoolFor(int $draftMatchId, int $userId, ?int $teammateUserId): array
+    {
+        $pdo = Connection::get();
+        $playerStmt = $pdo->prepare(
+            'SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+        );
+        $playerStmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+        $draftedCardIdsJson = $playerStmt->fetchColumn();
+        if ($draftedCardIdsJson === false || $draftedCardIdsJson === null) {
+            throw new GameStateException("User {$userId} has no drafted cards in this match yet");
+        }
+        $draftedCardIds = array_map(intval(...), json_decode((string) $draftedCardIdsJson, true));
+
+        if ($teammateUserId === null) {
+            return $draftedCardIds;
+        }
+
+        $teammateStmt = $pdo->prepare(
+            'SELECT drafted_card_ids, deck_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+        );
+        $teammateStmt->execute(['match_id' => $draftMatchId, 'user_id' => $teammateUserId]);
+        $teammateRow = $teammateStmt->fetch();
+        $teammateDraftedCardIds = $teammateRow !== false && $teammateRow['drafted_card_ids'] !== null
+            ? array_map(intval(...), json_decode((string) $teammateRow['drafted_card_ids'], true))
+            : [];
+        $teammateDeckCardIds = $teammateRow !== false && $teammateRow['deck_card_ids'] !== null
+            ? array_map(intval(...), json_decode((string) $teammateRow['deck_card_ids'], true))
+            : [];
+
+        return $this->multisetSubtract([...$draftedCardIds, ...$teammateDraftedCardIds], $teammateDeckCardIds);
     }
 
     /**
@@ -3259,6 +3873,326 @@ final class GameService
     }
 
     /**
+     * Deals Rotisserie Draft's own shared pool face-up, all at once -- no
+     * rounds or refills at all (see draft_rotisserie_state's own
+     * migration comment). Shuffled here purely so a pool source with any
+     * natural ordering (e.g. 'one_of_each''s range(1, TOTAL_CARDS))
+     * doesn't reveal anything about which cards are "left" for later
+     * picks before the very first pick even happens -- Quick/Winston/Grid
+     * Draft's own pool sources get this for free from buildDraftPool()'s
+     * own truncate-and-shuffle step, but Rotisserie Draft's own
+     * $truncateToTarget: false means that step is skipped whenever the
+     * pool comes in at or under its own floor (see
+     * buildRotisserieDraftPool()), so this shuffles explicitly instead of
+     * relying on it.
+     */
+    private function initializeRotisserieDraft(int $gameId, int $draftMatchId, array $poolCardIds, array $userIds, int $cutoffCount): void
+    {
+        shuffle($poolCardIds);
+        // See rotisserieDraftPickUserId()'s own docblock and migration
+        // 0134 -- without this, $userIds[0] (always the creator for
+        // 'team'/'closed_team' format) would pick first in every match.
+        $starterSeatOffset = random_int(0, count($userIds) - 1);
+        $firstPickerUserId = self::rotisserieDraftPickUserId($userIds, 0, $starterSeatOffset);
+
+        Connection::get()->prepare(
+            'INSERT INTO draft_rotisserie_state
+                (draft_match_id, pool_card_ids, cutoff_count, starter_seat_offset, pick_index, current_turn_user_id)
+             VALUES (:match_id, :pool, :cutoff, :starter_seat_offset, 0, :first_picker)'
+        )->execute([
+            'match_id' => $draftMatchId,
+            'pool' => json_encode(array_values($poolCardIds)),
+            'cutoff' => $cutoffCount,
+            'starter_seat_offset' => $starterSeatOffset,
+            'first_picker' => $firstPickerUserId,
+        ]);
+
+        $this->notifyDraftUsersItsYourTurn($gameId, [$firstPickerUserId], "Game #{$gameId}'s Rotisserie Draft is ready for your pick.", 'draft-pick');
+    }
+
+    /**
+     * A single card pick, by catalog card id (the pool itself is a flat
+     * list of catalog ids, same as Grid Draft's own grid_card_ids -- see
+     * buildRotisserieDraftPool()) -- much simpler than
+     * submitGridDraftPick() since there's no row/column line, no refill,
+     * and no per-round re-dealing: just remove $cardId from the pool,
+     * record it, and advance pick_index by one. Whose turn comes next
+     * (or whether the draft just ended) is entirely a function of the new
+     * pick_index -- see rotisserieDraftPickUserId()'s own docblock for
+     * why $cutoffCount being odd needs no special-casing here either.
+     *
+     * @return array{card_id: int, pick_index: int, turn_advanced: bool, draft_completed: bool}
+     */
+    public function submitRotisserieDraftPick(int $gameId, int $userId, int $cardId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'rotisserie_draft' || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a Rotisserie Draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+
+        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $cardId): array {
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if ($match['status'] !== 'drafting') {
+                throw new GameStateException('This match is not currently drafting');
+            }
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            $playerCount = count($userIds);
+
+            $pdo = Connection::get();
+            $stateStmt = $pdo->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+            $stateStmt->execute(['id' => $draftMatchId]);
+            $state = $stateStmt->fetch();
+            if ($state === false) {
+                throw new GameStateException("No Rotisserie Draft state for match {$draftMatchId}");
+            }
+            if ((int) $state['current_turn_user_id'] !== $userId) {
+                throw new GameStateException("It's not your turn to draft");
+            }
+
+            $pool = array_map(intval(...), json_decode((string) $state['pool_card_ids'], true));
+            $poolKey = array_search($cardId, $pool, true);
+            if ($poolKey === false) {
+                throw new GameStateException("Card {$cardId} is not available in the pool");
+            }
+            unset($pool[$poolKey]);
+            $pool = array_values($pool);
+
+            $this->appendDraftedCardIds($draftMatchId, $userId, [$cardId]);
+
+            $pickIndex = (int) $state['pick_index'] + 1;
+            $totalPicksNeeded = (int) $state['cutoff_count'] * $playerCount;
+
+            // Issue #315's Rotisserie Draft pick-position signal -- the
+            // draft's own 1-based global pick position, written live
+            // right alongside the pick itself, same as the other three
+            // draft formats' own recordQuickDraftPick()/
+            // recordWinstonDraftPick()/recordGridDraftPick() calls.
+            $this->cardStats->recordRotisserieDraftPick([$cardId], $pickIndex);
+
+            if ($pickIndex >= $totalPicksNeeded) {
+                // The draft is complete -- whatever's left in $pool is
+                // simply discarded, never reshuffled back in (same
+                // "remainder discarded" precedent as Grid Draft's own
+                // leftover grid cells).
+                $pdo->prepare('DELETE FROM draft_rotisserie_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
+                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+                $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
+
+                return [
+                    'card_id' => $cardId,
+                    'pick_index' => $pickIndex,
+                    'turn_advanced' => false,
+                    'draft_completed' => true,
+                ];
+            }
+
+            $nextTurnUserId = self::rotisserieDraftPickUserId($userIds, $pickIndex, (int) $state['starter_seat_offset']);
+
+            $pdo->prepare(
+                'UPDATE draft_rotisserie_state SET pool_card_ids = :pool, pick_index = :pick_index, current_turn_user_id = :next_turn WHERE draft_match_id = :match_id'
+            )->execute([
+                'pool' => json_encode($pool),
+                'pick_index' => $pickIndex,
+                'next_turn' => $nextTurnUserId,
+                'match_id' => $draftMatchId,
+            ]);
+
+            $this->notifyDraftUsersItsYourTurn($gameId, [$nextTurnUserId], "Game #{$gameId}'s Rotisserie Draft is ready for your pick.", 'draft-pick');
+
+            return [
+                'card_id' => $cardId,
+                'pick_index' => $pickIndex,
+                'turn_advanced' => true,
+                'draft_completed' => false,
+            ];
+        });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
+    }
+
+    /**
+     * Given the whole match's own tiers (each with a fixed cutoff_count,
+     * unchanged for the whole match) and player count, which tier a
+     * GLOBAL $pickIndex falls within -- the cumulative sum of each
+     * earlier tier's own total picks (cutoff_count * $playerCount) marks
+     * where one tier's picks end and the next begins; returns
+     * count($tiers) once $pickIndex has reached the very last tier's own
+     * cumulative total, meaning the whole draft is complete. Deliberately
+     * NOT cached as its own stored column (see draft_tiered_rotisserie_state's
+     * own migration comment) -- cheap to recompute (at most 4 tiers) and
+     * one less piece of state that could drift out of sync with
+     * pick_index itself.
+     *
+     * @param array<int, array{cutoff_count: int}> $tiers
+     */
+    private static function tieredRotisserieDraftTierIndexFor(array $tiers, int $playerCount, int $pickIndex): int
+    {
+        $cumulative = 0;
+        foreach ($tiers as $index => $tier) {
+            $cumulative += $tier['cutoff_count'] * $playerCount;
+            if ($pickIndex < $cumulative) {
+                return $index;
+            }
+        }
+
+        return count($tiers);
+    }
+
+    /**
+     * @param array<int, array{cutoff_count: int}> $tiers
+     */
+    private static function tieredRotisserieDraftTotalPicksNeeded(array $tiers, int $playerCount): int
+    {
+        return array_sum(array_map(static fn (array $tier): int => $tier['cutoff_count'] * $playerCount, $tiers));
+    }
+
+    /**
+     * Tiered Rotisserie Draft's own init (issue #361's generalization of
+     * initializeRotisserieDraft() immediately above) -- $tierPools is
+     * already fully resolved (buildTieredRotisserieDraftTierPools()), so
+     * this just shuffles each tier's own layout in place (same "don't
+     * reveal anything about pool order" rationale as base Rotisserie
+     * Draft's own shuffle -- only matters for the 'custom' mode's pasted/
+     * saved-deck pools, which could otherwise arrive in a suggestive
+     * order; the 'rarity' mode's own tieredRotisserieDraftRarityLayout()
+     * already draws randomly) and picks a random $starterSeatOffset the
+     * same way initializeRotisserieDraft() does, for the same reason
+     * (rotisserieDraftPickUserId()'s own docblock) -- reused here
+     * completely unchanged, fed pick_index 0 for the very first pick.
+     *
+     * @param array<int, array{label: ?string, cutoff_count: int, pool_card_ids: int[]}> $tierPools
+     */
+    private function initializeTieredRotisserieDraft(int $gameId, int $draftMatchId, array $tierPools, array $userIds, string $mode): void
+    {
+        foreach ($tierPools as &$tier) {
+            shuffle($tier['pool_card_ids']);
+        }
+        unset($tier);
+
+        $starterSeatOffset = random_int(0, count($userIds) - 1);
+        $firstPickerUserId = self::rotisserieDraftPickUserId($userIds, 0, $starterSeatOffset);
+
+        Connection::get()->prepare(
+            'INSERT INTO draft_tiered_rotisserie_state
+                (draft_match_id, tiering_mode, tiers, starter_seat_offset, pick_index, current_turn_user_id)
+             VALUES (:match_id, :mode, :tiers, :starter_seat_offset, 0, :first_picker)'
+        )->execute([
+            'match_id' => $draftMatchId,
+            'mode' => $mode,
+            'tiers' => json_encode(array_values($tierPools)),
+            'starter_seat_offset' => $starterSeatOffset,
+            'first_picker' => $firstPickerUserId,
+        ]);
+
+        $this->notifyDraftUsersItsYourTurn($gameId, [$firstPickerUserId], "Game #{$gameId}'s Tiered Rotisserie Draft is ready for your pick.", 'draft-pick');
+    }
+
+    /**
+     * A single card pick from whichever tier is currently active (see
+     * tieredRotisserieDraftTierIndexFor()) -- otherwise identical to
+     * submitRotisserieDraftPick() immediately above: remove $cardId from
+     * that tier's own pool_card_ids, record it, advance the whole match's
+     * global pick_index by one, and let rotisserieDraftPickUserId() (fed
+     * that same never-reset-per-tier pick_index) resolve whose turn is
+     * next -- including straight across a tier boundary, with no
+     * special-casing needed there any more than base Rotisserie Draft
+     * needs any for an odd cutoff_count ending mid-double-round.
+     *
+     * @return array{card_id: int, pick_index: int, turn_advanced: bool, draft_completed: bool}
+     */
+    public function submitTieredRotisserieDraftPick(int $gameId, int $userId, int $cardId): array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['deck_type'] !== 'tiered_rotisserie_draft' || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a Tiered Rotisserie Draft game");
+        }
+        $draftMatchId = (int) $game['draft_match_id'];
+
+        $result = $this->withGameLock($gameId, function () use ($gameId, $draftMatchId, $userId, $cardId): array {
+            $match = $this->fetchDraftMatch($draftMatchId);
+            if ($match['status'] !== 'drafting') {
+                throw new GameStateException('This match is not currently drafting');
+            }
+
+            $userIds = $this->draftMatchUserIds($draftMatchId);
+            $playerCount = count($userIds);
+
+            $pdo = Connection::get();
+            $stateStmt = $pdo->prepare('SELECT * FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+            $stateStmt->execute(['id' => $draftMatchId]);
+            $state = $stateStmt->fetch();
+            if ($state === false) {
+                throw new GameStateException("No Tiered Rotisserie Draft state for match {$draftMatchId}");
+            }
+            if ((int) $state['current_turn_user_id'] !== $userId) {
+                throw new GameStateException("It's not your turn to draft");
+            }
+
+            $tiers = json_decode((string) $state['tiers'], true);
+            $pickIndex = (int) $state['pick_index'];
+            $tierIndex = self::tieredRotisserieDraftTierIndexFor($tiers, $playerCount, $pickIndex);
+
+            $pool = array_map(intval(...), $tiers[$tierIndex]['pool_card_ids']);
+            $poolKey = array_search($cardId, $pool, true);
+            if ($poolKey === false) {
+                throw new GameStateException("Card {$cardId} is not available in the current tier's pool");
+            }
+            unset($pool[$poolKey]);
+            $tiers[$tierIndex]['pool_card_ids'] = array_values($pool);
+
+            $this->appendDraftedCardIds($draftMatchId, $userId, [$cardId]);
+
+            $pickIndex++;
+            $totalPicksNeeded = self::tieredRotisserieDraftTotalPicksNeeded($tiers, $playerCount);
+
+            if ($pickIndex >= $totalPicksNeeded) {
+                // The draft is complete -- whatever's left in any tier's
+                // own pool is simply discarded, never reshuffled back in,
+                // same "remainder discarded" precedent as base Rotisserie
+                // Draft's own leftover pool cards.
+                $pdo->prepare('DELETE FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id')->execute(['id' => $draftMatchId]);
+                $pdo->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")->execute(['id' => $draftMatchId]);
+                $this->notifyDraftUsersItsYourTurn($gameId, $userIds, "Game #{$gameId}'s draft is complete -- submit your deck.", 'draft-deck');
+
+                return [
+                    'card_id' => $cardId,
+                    'pick_index' => $pickIndex,
+                    'turn_advanced' => false,
+                    'draft_completed' => true,
+                ];
+            }
+
+            $nextTurnUserId = self::rotisserieDraftPickUserId($userIds, $pickIndex, (int) $state['starter_seat_offset']);
+
+            $pdo->prepare(
+                'UPDATE draft_tiered_rotisserie_state SET tiers = :tiers, pick_index = :pick_index, current_turn_user_id = :next_turn WHERE draft_match_id = :match_id'
+            )->execute([
+                'tiers' => json_encode($tiers),
+                'pick_index' => $pickIndex,
+                'next_turn' => $nextTurnUserId,
+                'match_id' => $draftMatchId,
+            ]);
+
+            $this->notifyDraftUsersItsYourTurn($gameId, [$nextTurnUserId], "Game #{$gameId}'s Tiered Rotisserie Draft is ready for your pick.", 'draft-pick');
+
+            return [
+                'card_id' => $cardId,
+                'pick_index' => $pickIndex,
+                'turn_advanced' => true,
+                'draft_completed' => false,
+            ];
+        });
+
+        $this->touchLastMoveAt($gameId);
+
+        return $result;
+    }
+
+    /**
      * playMood()/pass()/respondToDecision() each load a BoardState, mutate
      * it in memory, and save it back across one or more separate SQL
      * transactions (see e.g. respondToDecision()'s own sequential
@@ -3321,7 +4255,7 @@ final class GameService
 
                 try {
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                    $this->updateRoundTurnState($roundId, $gamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
                     $this->writePendingBatch($gameId, $roundId, $gamePlayerId, $playerChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $gamePlayerId, 'pending_decision_created', $cardId, $this->withPlayedFrom($state, $cardId, $choices), $state);
 
@@ -3457,6 +4391,25 @@ final class GameService
 
         $lastResult = null;
         for ($i = 0; $i < self::MAX_AUTOMATED_ACTIONS_PER_REQUEST; $i++) {
+            // A still-drafting/deck-building game (issue #359) is checked
+            // even before the team decision below -- exactly the same
+            // "needs no round" reasoning: draft_matches.tiers/piles/grid/
+            // pool state predates game_rounds entirely (see
+            // submitDraftDeck()'s own docblock -- games.status stays
+            // 'waiting' and no round exists until startGame() actually
+            // deals the match), so currentRound() below would just throw
+            // and break every single time for a game still drafting,
+            // with no later branch ever getting a chance to drive it.
+            // advanceBotDraftTurn() is always safe to try unconditionally
+            // here for the same reason advanceBotTeamDecision() already
+            // is: a no-op (null) for any game that isn't a bot-seated
+            // draft currently mid-draft/deck-building.
+            $draftResult = $this->advanceBotDraftTurn($gameId);
+            if ($draftResult !== null) {
+                $lastResult = $draftResult;
+                continue;
+            }
+
             // Team Play's own turn_order/draw_recipient decision (see
             // activeTeamDecision()) is checked FIRST, before even trying
             // to load a currently-in-progress round below -- a bug caught
@@ -3503,24 +4456,35 @@ final class GameService
                 }
 
                 $field = json_decode((string) $decision['field'], true);
-                $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId);
+                $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type']);
                 $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
                 continue;
             }
 
             $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
             if ($currentTurnGamePlayerId === null) {
-                // Frozen round -- Closed Team Play only, round 1's blind
-                // pregame card pass (see pendingInitialCardPass()) hasn't
-                // resolved yet. (An open turn_order/draw_recipient team
-                // decision is already handled unconditionally at the top
-                // of this loop, before $round was even loaded -- reaching
-                // here with $currentTurnGamePlayerId still null and no
-                // resolvable team decision left just means the card pass,
-                // if any, is itself waiting on a real player.)
+                // Frozen round -- one of two mutually-exclusive states,
+                // neither ever overlapping the other for the same game:
+                // Closed Team Play's own round 1 blind pregame card pass
+                // (the match's FIRST game only -- see
+                // pendingInitialCardPass()), or a best-of-three draft
+                // match's own "who goes first" freeze (round 1 of game
+                // 2/3 specifically -- see setPlayFirstNextMatchGame()).
+                // (An open turn_order/draw_recipient team decision is
+                // already handled unconditionally at the top of this
+                // loop, before $round was even loaded -- reaching here
+                // with $currentTurnGamePlayerId still null and neither of
+                // these two resolving anything just means whichever one
+                // actually applies is itself waiting on a real player.)
                 $cardPassResult = $this->advanceBotInitialCardPass($gameId, $round, $botGamePlayerIds);
                 if ($cardPassResult !== null) {
                     $lastResult = $cardPassResult;
+                    continue;
+                }
+
+                $firstPlayerResult = $this->advanceBotFirstPlayerDecision($gameId, $round, $botGamePlayerIds);
+                if ($firstPlayerResult !== null) {
+                    $lastResult = $firstPlayerResult;
                     continue;
                 }
 
@@ -3599,6 +4563,68 @@ final class GameService
     }
 
     /**
+     * advanceAutomatedTurns()'s own helper for the "who goes first" freeze
+     * setPlayFirstNextMatchGame() resolves -- games 2/3 of a best-of-three
+     * draft match only (round 1 of THAT game, not the match's very first
+     * game), a genuinely separate frozen-round state from
+     * advanceBotInitialCardPass() immediately above (Closed Team Play's
+     * own blind pregame pass, round 1 of the match's FIRST game) -- the
+     * two never overlap for the same game, but both are tried here
+     * unconditionally for the same reason advanceBotTeamDecision() is
+     * tried unconditionally at the top of the loop: cheap to check, and
+     * "waiting on a real player either way" already covers whichever one
+     * doesn't apply. Left unhandled entirely until this method existed --
+     * a bot-seated draft match's own game 2/3 would otherwise deadlock
+     * forever the instant the previous game's LOSER happened to be a bot,
+     * exactly the "no round exists yet to drive" class of bug issue #360
+     * already fixed once for Team Play's own frozen states (see
+     * advanceAutomatedTurns()'s own top-of-loop comment).
+     *
+     * Bot policy: never opts to go first itself ($playFirst = false) --
+     * the same passive outcome as never answering at all
+     * (resolveFirstPlayerId()'s own placeholder: the previous game's
+     * winner goes first again), deliberately arbitrary and deterministic,
+     * matching chooseTeamDecisionProposal()'s own "legal, not strategic"
+     * precedent for a decision with no clear strategic bias either way.
+     *
+     * @param int[] $botGamePlayerIds
+     * @return array<string, mixed>|null
+     */
+    private function advanceBotFirstPlayerDecision(int $gameId, array $round, array $botGamePlayerIds): ?array
+    {
+        if ($botGamePlayerIds === [] || (int) $round['round_number'] !== 1) {
+            return null;
+        }
+
+        $game = $this->fetchGame($gameId);
+        $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
+        if ($game['draft_match_id'] === null || $matchGameNumber === null || $matchGameNumber <= 1) {
+            return null;
+        }
+
+        $seatsStmt = Connection::get()->prepare('SELECT user_id FROM game_players WHERE game_id = :game_id');
+        $seatsStmt->execute(['game_id' => $gameId]);
+        $seatUserIds = array_map(intval(...), $seatsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+        $previousWinnerUserId = $this->previousMatchGameWinnerUserId((int) $game['draft_match_id'], $matchGameNumber);
+        $previousLoserUserId = $previousWinnerUserId !== null
+            ? ($seatUserIds[0] === $previousWinnerUserId ? ($seatUserIds[1] ?? $seatUserIds[0]) : $seatUserIds[0])
+            : null;
+        if ($previousLoserUserId === null) {
+            return null; // shouldn't happen once $matchGameNumber > 1 -- see previousMatchGameWinnerUserId()'s own docblock
+        }
+
+        $loserGamePlayerId = $this->gamePlayerIdFor($gameId, $previousLoserUserId);
+        if ($loserGamePlayerId === null || !in_array($loserGamePlayerId, $botGamePlayerIds, true)) {
+            return null; // the previous game's loser is a real player -- wait for them
+        }
+
+        $this->setPlayFirstNextMatchGame($gameId, $previousLoserUserId, false);
+
+        return ['first_player_choice_user_id' => $previousWinnerUserId];
+    }
+
+    /**
      * advanceAutomatedTurns()'s own helper for Open/Closed Team Play's
      * turn-order/draw-recipient decision (issue #360; see
      * proposeTeamDecision()/confirmTeamDecision()) -- returns whichever
@@ -3606,6 +4632,26 @@ final class GameService
      * no active team decision at all, or the seat that needs to act next
      * (whichever candidate hasn't proposed yet, or the OTHER candidate
      * once one has) belongs to a real player instead.
+     *
+     * **Once a human has rejected one of this bot's own proposals for
+     * this decision (confirmed by the maintainer), the bot stops
+     * proposing for it entirely and waits for a real player instead** --
+     * see `rejected_game_player_id` (migration 0160), set by
+     * `confirmTeamDecision()`'s own reject branch. Before this, a
+     * rejection was a no-op whenever a bot sat on the deciding team:
+     * `chooseTeamDecisionProposal()` is deliberately non-strategic
+     * (always `candidateGamePlayerIds[0]`), so the very next automated
+     * drive -- this same request's own `advanceAutomatedTurns()` loop, or
+     * just the next `GET /games/state` poll -- saw an ordinary fresh
+     * 'propose' phase and had the bot immediately re-propose the exact
+     * candidate the human just turned down. `rejected_game_player_id`
+     * only ever gets set by an actual human rejection (a bot's own
+     * confirm always approves, just below), and each decision is a fresh
+     * row (`createTeamDecision()`), so this never needs resetting mid-row
+     * -- once a human is known to be involved, every later proposal in
+     * this same row comes from a human too (the confirming bot always
+     * approves, so the decision resolves on their very next proposal
+     * regardless of which candidate they pick).
      *
      * @param int[] $botGamePlayerIds
      * @return array<string, mixed>|null
@@ -3624,6 +4670,10 @@ final class GameService
         $candidateIds = array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true));
 
         if ($decision['phase'] === 'propose') {
+            if ($decision['rejected_game_player_id'] !== null) {
+                return null; // a human already rejected this bot's own proposal -- wait for a real player
+            }
+
             // Either of the team's own two members may propose -- act as
             // whichever candidate is a bot, if either is (their own
             // proposed answer is the same regardless of which one acts,
@@ -3646,9 +4696,9 @@ final class GameService
 
         // 'confirm' -- only the candidate who DIDN'T propose may confirm
         // (confirmTeamDecision() itself rejects the proposer trying to).
-        // Always approves; see chooseTeamDecisionProposal()'s own
-        // docblock for why rejecting a bot's proposal never gets a human
-        // confirmer anything different next time.
+        // Always approves -- a bot never itself rejects, so
+        // rejected_game_player_id above is only ever set by a genuine
+        // human decision.
         $proposerId = (int) $decision['proposer_game_player_id'];
         $confirmerId = $candidateIds[0] === $proposerId ? $candidateIds[1] : $candidateIds[0];
         if (!in_array($confirmerId, $botGamePlayerIds, true)) {
@@ -3656,6 +4706,524 @@ final class GameService
         }
 
         return $this->confirmTeamDecision($gameId, $confirmerId, true);
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own draft-phase branch (issue #359) --
+     * see that method's own call site for why this has to run before
+     * currentRound() is ever loaded. Dispatches on draft_matches.status:
+     * 'drafting' hands off to whichever of the 5 per-format
+     * advanceBotXDraftPick() helpers matches $game['deck_type'], each of
+     * which reads just enough state to know whether a SEATED BOT needs
+     * to act right now and, if so, what its legal candidates are, then
+     * submits through the exact same public submitXDraftPick() method a
+     * human's own request would hit -- this method itself never mutates
+     * draft state directly, only decides whether/how to call into that
+     * same public surface. 'deck_building' submits one not-yet-submitted
+     * bot's own trimmed deck if any bot still needs one, or -- once
+     * every bot here already has one in -- tries starting the game
+     * outright (tryAutoStartDraftGame()), since a bot-seated draft has
+     * no browser polling on the bot's own behalf to do what the
+     * frontend's own autoStartGameIfReady() does for a human's client.
+     * Any other draft_matches.status (or no bots seated in this match at
+     * all) is simply nothing for a bot to do here.
+     *
+     * @return array<string, mixed>|null
+     */
+    private function advanceBotDraftTurn(int $gameId): ?array
+    {
+        $game = $this->fetchGame($gameId);
+        if ($game['status'] !== 'waiting' || $game['draft_match_id'] === null
+            || !in_array($game['deck_type'], self::DRAFT_DECK_TYPES, true)) {
+            return null;
+        }
+
+        $draftMatchId = (int) $game['draft_match_id'];
+        $botUserIds = $this->draftMatchBotUserIds($draftMatchId);
+        if ($botUserIds === []) {
+            return null;
+        }
+
+        $match = $this->fetchDraftMatch($draftMatchId);
+
+        if ($match['status'] === 'deck_building') {
+            $result = $this->advanceBotDraftDeck($gameId, $draftMatchId, $botUserIds, $game['deck_type'], $game['format']);
+            if ($result !== null) {
+                return $result;
+            }
+
+            $this->tryAutoStartDraftGame($gameId);
+
+            return null;
+        }
+
+        if ($match['status'] !== 'drafting') {
+            return null; // match already completed/abandoned -- nothing left for a bot to do
+        }
+
+        return match ($game['deck_type']) {
+            'quick_draft' => $this->advanceBotQuickDraftPick($gameId, $draftMatchId, $match, $botUserIds),
+            'winston_draft' => $this->advanceBotWinstonDraftPick($gameId, $draftMatchId, $botUserIds),
+            'grid_draft' => $this->advanceBotGridDraftPick($gameId, $draftMatchId, $botUserIds),
+            'rotisserie_draft' => $this->advanceBotRotisserieDraftPick($gameId, $draftMatchId, $botUserIds),
+            'tiered_rotisserie_draft' => $this->advanceBotTieredRotisserieDraftPick($gameId, $draftMatchId, $botUserIds),
+        };
+    }
+
+    /**
+     * Quick Draft's own simultaneous-per-stage bot pick -- unlike the
+     * other 4 formats below, there's no single "current turn" column to
+     * read (see submitQuickDraftPick()'s own docblock): every seated
+     * player picks independently once a stage opens, so this finds the
+     * round's own current stage first (the lowest stage number that
+     * doesn't yet have every seat's own pick recorded), then acts for
+     * the first bot that hasn't submitted ITS OWN pile+stage pick yet --
+     * one bot's pick per call, same as every other advanceBotXDraftPick()
+     * here, relying on advanceAutomatedTurns()'s own loop to keep
+     * calling back around for the rest. Mirrors submitQuickDraftPick()'s
+     * own pile-ownership seat arithmetic exactly (has to -- this decides
+     * WHICH pile a bot is even looking at before it can score anything
+     * in it).
+     */
+    private function advanceBotQuickDraftPick(int $gameId, int $draftMatchId, array $match, array $botUserIds): ?array
+    {
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $playerCount = count($userIds);
+        $roundNumber = (int) $match['current_round'];
+
+        $pdo = Connection::get();
+        $stageCountStmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND stage_number = :stage'
+        );
+
+        $currentStage = null;
+        for ($stage = 1; $stage <= $playerCount; $stage++) {
+            $stageCountStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'stage' => $stage]);
+            if ((int) $stageCountStmt->fetchColumn() < $playerCount) {
+                $currentStage = $stage;
+                break;
+            }
+        }
+        if ($currentStage === null) {
+            return null; // every stage this round is already complete -- the round itself just hasn't advanced yet
+        }
+
+        $direction = self::quickDraftPassDirection($roundNumber);
+        $existingStmt = $pdo->prepare(
+            'SELECT id FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND pile_owner_user_id = :owner AND stage_number = :stage'
+        );
+        $drawnStmt = $pdo->prepare(
+            'SELECT drawn_card_ids FROM draft_round_picks WHERE draft_match_id = :match_id AND user_id = :owner AND round_number = :round'
+        );
+        $priorStagesStmt = $pdo->prepare(
+            'SELECT kept_card_ids FROM draft_pile_stage_picks WHERE draft_match_id = :match_id AND round_number = :round AND pile_owner_user_id = :owner AND stage_number < :stage'
+        );
+
+        foreach ($botUserIds as $botUserId) {
+            $seatIndex = array_search($botUserId, $userIds, true);
+            $pileOwnerUserId = $userIds[self::mod($seatIndex - ($currentStage - 1) * $direction, $playerCount)];
+
+            $existingStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'owner' => $pileOwnerUserId, 'stage' => $currentStage]);
+            if ($existingStmt->fetchColumn() !== false) {
+                continue; // this bot already submitted its own pick for this stage
+            }
+
+            $drawnStmt->execute(['match_id' => $draftMatchId, 'owner' => $pileOwnerUserId, 'round' => $roundNumber]);
+            $availableCardIds = array_map(intval(...), json_decode((string) $drawnStmt->fetchColumn(), true));
+
+            if ($currentStage > 1) {
+                $priorStagesStmt->execute(['match_id' => $draftMatchId, 'round' => $roundNumber, 'owner' => $pileOwnerUserId, 'stage' => $currentStage]);
+                foreach ($priorStagesStmt->fetchAll(PDO::FETCH_COLUMN) as $keptJson) {
+                    $availableCardIds = $this->multisetSubtract($availableCardIds, array_map(intval(...), json_decode((string) $keptJson, true)));
+                }
+            }
+
+            $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $botUserId);
+            $picks = $this->bots->chooseDraftCards($availableCardIds, self::QUICK_DRAFT_KEEP_PER_STAGE, $draftedSoFar, $this->draftBotScoringData());
+
+            return $this->submitQuickDraftPick($gameId, $botUserId, $roundNumber, $currentStage, $picks);
+        }
+
+        return null; // every seated bot already has its own pick in for this stage -- waiting on a human
+    }
+
+    /**
+     * Winston Draft's own bot take/pass -- draft_winston_state.current_player_user_id
+     * is a genuine single-current-turn column (unlike Quick Draft above),
+     * so this is a plain "is it a bot's turn" check against the single
+     * currently active pile. An empty active pile (possible once the
+     * shared deck itself runs out -- see submitWinstonDraftPick()'s own
+     * take/pass branches) always passes outright rather than asking
+     * BotPlayerService to score an empty list.
+     *
+     * `chooseWinstonAction()`'s own docblock already documents that a
+     * 'pass' it returns isn't always legal to actually act on, and that
+     * downgrading an illegal one to 'take' is this method's job, not
+     * its -- this is that downgrade. Once the shared deck itself is
+     * empty, `submitWinstonDraftPick()`'s own pile-3-decline branch only
+     * fires its "mandatory" deck draw `if ($deck !== [])`; with an empty
+     * deck that draw silently does nothing, so passing every remaining
+     * pile this turn (this one plus whichever of pile_2/pile_3 haven't
+     * been reached yet, none of which can ever grow again once the deck
+     * that feeds them is empty) would end the bot's whole turn with
+     * ZERO cards despite a real, takeable pile having been available --
+     * reported live. So once the deck reads empty, a 'pass' on THIS pile
+     * only stands if at least one LATER pile (current+1..3) still has a
+     * card of its own to fall back on; otherwise this is the bot's last
+     * chance this turn and 'take' is forced instead, regardless of what
+     * `chooseWinstonAction()` itself said the pile was worth.
+     */
+    private function advanceBotWinstonDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_winston_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentPlayerUserId = (int) $state['current_player_user_id'];
+        if (!in_array($currentPlayerUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $currentPileNumber = (int) $state['current_pile_number'];
+        $pileCardIds = array_map(intval(...), json_decode((string) $state["pile_{$currentPileNumber}_card_ids"], true));
+        if ($pileCardIds === []) {
+            return $this->submitWinstonDraftPick($gameId, $currentPlayerUserId, 'pass');
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentPlayerUserId);
+        $action = $this->bots->chooseWinstonAction($pileCardIds, $draftedSoFar, $this->draftBotScoringData());
+
+        if ($action === 'pass' && $this->winstonDraftPassWouldForfeitTheWholeTurn($state, $currentPileNumber)) {
+            $action = 'take';
+        }
+
+        return $this->submitWinstonDraftPick($gameId, $currentPlayerUserId, $action);
+    }
+
+    /**
+     * @see advanceBotWinstonDraftPick()'s own docblock -- true only when
+     * the shared deck is already empty (so pile 3's own "mandatory" draw
+     * would come up empty too) AND every later pile this turn could
+     * still reach (current+1..3) is itself already empty, meaning no
+     * remaining decision this turn could still produce a card.
+     */
+    private function winstonDraftPassWouldForfeitTheWholeTurn(array $winstonState, int $currentPileNumber): bool
+    {
+        $deck = json_decode((string) $winstonState['remaining_deck_card_ids'], true);
+        if ($deck !== []) {
+            return false;
+        }
+
+        for ($laterPileNumber = $currentPileNumber + 1; $laterPileNumber <= 3; $laterPileNumber++) {
+            if (json_decode((string) $winstonState["pile_{$laterPileNumber}_card_ids"], true) !== []) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Grid Draft's own bot row/column pick -- draft_grid_state.current_turn_user_id
+     * is a single-current-turn column, same shape as Winston Draft
+     * above. Builds every currently legal line (at least 1 non-null
+     * cell, same requirement submitGridDraftPick() itself enforces) the
+     * same way a human's own frontend grid would show them, before
+     * handing the whole set to BotPlayerService::chooseGridLine().
+     */
+    private function advanceBotGridDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_grid_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentTurnUserId = (int) $state['current_turn_user_id'];
+        if (!in_array($currentTurnUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $gridSize = self::gridDraftGridSize(count($userIds));
+        $grid = json_decode((string) $state['grid_card_ids'], true);
+
+        $candidateLines = [];
+        foreach (['row', 'column'] as $axis) {
+            for ($index = 0; $index < $gridSize; $index++) {
+                $cardIds = [];
+                foreach ($this->gridDraftLineCells($axis, $index, $gridSize) as $cell) {
+                    if ($grid[$cell] !== null) {
+                        $cardIds[] = (int) $grid[$cell];
+                    }
+                }
+                if ($cardIds !== []) {
+                    $candidateLines[] = ['axis' => $axis, 'index' => $index, 'cardIds' => $cardIds];
+                }
+            }
+        }
+        if ($candidateLines === []) {
+            return null; // shouldn't happen -- the round would already have advanced
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentTurnUserId);
+        $line = $this->bots->chooseGridLine($candidateLines, $draftedSoFar, $this->draftBotScoringData());
+
+        return $this->submitGridDraftPick($gameId, $currentTurnUserId, $line['axis'], $line['index']);
+    }
+
+    /**
+     * Rotisserie Draft's own bot pick -- draft_rotisserie_state.current_turn_user_id
+     * is a single-current-turn column, same shape as Winston/Grid Draft
+     * above; the whole shared pool is always legal.
+     */
+    private function advanceBotRotisserieDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentTurnUserId = (int) $state['current_turn_user_id'];
+        if (!in_array($currentTurnUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $pool = array_map(intval(...), json_decode((string) $state['pool_card_ids'], true));
+        if ($pool === []) {
+            return null; // shouldn't happen -- the draft would already be complete
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentTurnUserId);
+        $cardIds = $this->bots->chooseDraftCards($pool, 1, $draftedSoFar, $this->draftBotScoringData());
+
+        return $this->submitRotisserieDraftPick($gameId, $currentTurnUserId, $cardIds[0]);
+    }
+
+    /**
+     * Tiered Rotisserie Draft's own bot pick -- draft_tiered_rotisserie_state.current_turn_user_id
+     * is a single-current-turn column, same shape as base Rotisserie
+     * Draft above; only the CURRENT tier's own pool_card_ids (see
+     * tieredRotisserieDraftTierIndexFor()) is legal, exactly as
+     * submitTieredRotisserieDraftPick() itself enforces.
+     */
+    private function advanceBotTieredRotisserieDraftPick(int $gameId, int $draftMatchId, array $botUserIds): ?array
+    {
+        $stmt = Connection::get()->prepare('SELECT * FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+        $state = $stmt->fetch();
+        if ($state === false) {
+            return null;
+        }
+
+        $currentTurnUserId = (int) $state['current_turn_user_id'];
+        if (!in_array($currentTurnUserId, $botUserIds, true)) {
+            return null; // waiting on a real player
+        }
+
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $tiers = json_decode((string) $state['tiers'], true);
+        $tierIndex = self::tieredRotisserieDraftTierIndexFor($tiers, count($userIds), (int) $state['pick_index']);
+        $pool = array_map(intval(...), $tiers[$tierIndex]['pool_card_ids']);
+        if ($pool === []) {
+            return null; // shouldn't happen -- the draft would already be complete
+        }
+
+        $draftedSoFar = $this->draftedCardIdsFor($draftMatchId, $currentTurnUserId);
+        $cardIds = $this->bots->chooseDraftCards($pool, 1, $draftedSoFar, $this->draftBotScoringData());
+
+        return $this->submitTieredRotisserieDraftPick($gameId, $currentTurnUserId, $cardIds[0]);
+    }
+
+    /**
+     * Submits a not-yet-submitted seated bot's own deck once drafting has
+     * finished (draft_matches.status 'deck_building') -- chooseDraftDeck()'s
+     * trim-to-$minDeckSize policy against that bot's own drafted_card_ids
+     * alone (never Open Team Play's own wider shared-pool option -- see
+     * botsSupportedFor()'s own docblock for why that's fine: a bot's
+     * personal pool always already clears the floor on its own). Acts
+     * for at most one bot per call, same "one action, let the loop call
+     * back around" convention as every advanceBotXDraftPick() above.
+     * Deliberately unconditional on which game of a best-of-three match
+     * this is -- deck_card_ids is reset to NULL for every game after the
+     * first (advanceDraftMatch()), so a returning bot here is really
+     * just re-submitting the exact same chooseDraftDeck() result all
+     * over again (deterministic -- same drafted pool in, same trimmed
+     * deck out), never asked to sideboard differently.
+     *
+     * Open Team Play only (confirmed by the maintainer): a bot whose own
+     * teammate is a human who hasn't submitted a deck yet is skipped over
+     * here -- see awaitingHumanTeammatesDraftDeck()'s own docblock for
+     * why -- leaving that bot's own deck_card_ids NULL and moving on to
+     * the next candidate bot instead, the same "one action, let the loop
+     * call back around" shape as skipping a bot that already has a deck
+     * in. Doesn't apply to any other format, since
+     * openTeamPlayTeammateUserId() itself already returns null there.
+     */
+    private function advanceBotDraftDeck(int $gameId, int $draftMatchId, array $botUserIds, string $deckType, string $format): ?array
+    {
+        $placeholders = implode(',', array_fill(0, count($botUserIds), '?'));
+        $stmt = Connection::get()->prepare(
+            "SELECT user_id, deck_card_ids FROM draft_match_players WHERE draft_match_id = ? AND user_id IN ({$placeholders})"
+        );
+        $stmt->execute([$draftMatchId, ...$botUserIds]);
+
+        foreach ($stmt->fetchAll() as $row) {
+            if ($row['deck_card_ids'] !== null) {
+                continue; // this bot already has a deck submitted for this game
+            }
+
+            $botUserId = (int) $row['user_id'];
+            if ($this->awaitingHumanTeammatesDraftDeck($gameId, $draftMatchId, $format, $botUserId)) {
+                continue; // wait for the human teammate to submit their own deck first
+            }
+
+            // pickableDraftPoolFor() (confirmed by the maintainer, a real
+            // bug caught live) -- NOT just this bot's own drafted_card_ids
+            // -- see that method's own docblock: a bot building from its
+            // own drafted pool alone could choose a card its human
+            // teammate had already claimed in their own submitted deck (a
+            // legal pick from the bot's OWN drafted cards, but no longer
+            // available once shared), throwing an uncaught
+            // GameStateException here every single time this ran, since
+            // chooseDraftDeck() deterministically picks the same cards
+            // from the same unchanged pool -- a silent, permanent stall
+            // once GET /games/state stopped surfacing the exception.
+            $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $format, $botUserId);
+            $pickableCardIds = $this->pickableDraftPoolFor($draftMatchId, $botUserId, $teammateUserId);
+            $minDeckSize = self::draftMinDeckSizeFor($deckType);
+            $deckCardIds = $this->bots->chooseDraftDeck($pickableCardIds, $minDeckSize, $this->draftBotScoringData());
+
+            $this->submitDraftDeck($gameId, $botUserId, $deckCardIds);
+
+            return ['bot_action' => 'draft_deck', 'user_id' => $botUserId];
+        }
+
+        return null; // every seated bot already has a deck in -- only humans (or a waited-on teammate) left, if any
+    }
+
+    /**
+     * Open Team Play only (issue #362; confirmed by the maintainer):
+     * whether $botUserId should hold off submitting its own draft deck
+     * because its own teammate is a HUMAN who hasn't submitted theirs
+     * yet. advanceBotDraftDeck() runs the instant drafting ends, long
+     * before any human could realistically act -- without this, a bot
+     * would always beat its own human teammate to deck-building, quietly
+     * claiming cards from its own drafted pool before the human has had
+     * any real chance to see what their teammate ends up keeping. See
+     * submitDraftDeck()'s own docblock for why submission ORDER actually
+     * matters between two teammates: the second submitter's own pickable
+     * pool is trimmed by whatever the first submitter's already-chosen
+     * deck claims out of the team's shared pool, so submitting first is
+     * a real advantage worth leaving to the human. A teammate who is
+     * ALSO a bot never blocks this (two bots waiting on each other would
+     * deadlock forever), and neither does a teammate -- human or bot --
+     * who has ALREADY submitted.
+     */
+    private function awaitingHumanTeammatesDraftDeck(int $gameId, int $draftMatchId, string $format, int $botUserId): bool
+    {
+        $teammateUserId = $this->openTeamPlayTeammateUserId($gameId, $format, $botUserId);
+        if ($teammateUserId === null) {
+            return false;
+        }
+
+        $stmt = Connection::get()->prepare(
+            'SELECT dmp.deck_card_ids, u.is_bot FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :match_id AND dmp.user_id = :user_id'
+        );
+        $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $teammateUserId]);
+        $teammate = $stmt->fetch();
+
+        return $teammate !== false && !(bool) $teammate['is_bot'] && $teammate['deck_card_ids'] === null;
+    }
+
+    /**
+     * Draft's own analog of the frontend's autoStartGameIfReady() (issue
+     * #359) -- a bot-seated draft has no browser polling on the bot's
+     * own behalf to notice "every seat now has a submitted deck" and
+     * fire startGame() the way a human's own client does. Silently does
+     * nothing if the game isn't actually ready yet (some human still
+     * hasn't submitted) or has already been started by a concurrent
+     * request -- startGame() itself is the single source of truth for
+     * both checks, so this just lets its own GameStateException fall
+     * through unused, the same tolerance the frontend's own version
+     * documents ("the next regular poll picks up whatever the real
+     * state is").
+     */
+    private function tryAutoStartDraftGame(int $gameId): void
+    {
+        try {
+            $this->startGame($gameId);
+        } catch (GameStateException) {
+            // Not ready yet (a human still hasn't submitted), or already
+            // started by a concurrent request -- either way, nothing
+            // more to do here.
+        }
+    }
+
+    /**
+     * @return int[] every draft_match_players.user_id in $draftMatchId
+     *     who's a practice bot (users.is_bot) -- draft state throughout
+     *     this file is keyed by user_id, not game_players.id (see
+     *     submitQuickDraftPick()'s own docblock for why), so this can't
+     *     reuse botGamePlayerIds() above.
+     */
+    private function draftMatchBotUserIds(int $draftMatchId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT dmp.user_id FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id AND u.is_bot = 1'
+        );
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * @return int[] $userId's own drafted_card_ids for $draftMatchId so
+     *     far -- NULL (never yet written) for two different reasons
+     *     depending on format: Winston/Grid/(Tiered) Rotisserie Draft
+     *     accumulate incrementally (appendDraftedCardIds()), so NULL only
+     *     means literally zero picks made yet; Quick Draft's own column
+     *     stays NULL for the WHOLE draft until finalizeQuickDraft() writes
+     *     it all at once at the very end (its own per-pick state lives in
+     *     draft_pile_stage_picks instead -- see submitQuickDraftPick()'s
+     *     own docblock), so mid-draft this always reads as "nothing yet"
+     *     there regardless of how many picks a Quick Draft bot has
+     *     actually made. Either way, "nothing yet" is the right answer
+     *     for a caller scoring what to pick NEXT -- there's no synergy
+     *     bonus to apply for a mythic that isn't reflected here yet.
+     */
+    private function draftedCardIdsFor(int $draftMatchId, int $userId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT drafted_card_ids FROM draft_match_players WHERE draft_match_id = :match_id AND user_id = :user_id'
+        );
+        $stmt->execute(['match_id' => $draftMatchId, 'user_id' => $userId]);
+        $raw = $stmt->fetchColumn();
+
+        return $raw !== false && $raw !== null ? array_map(intval(...), json_decode((string) $raw, true)) : [];
+    }
+
+    /**
+     * BotPlayerService's own draft-pick scoring inputs (issue #359),
+     * bundled once per advanceBotDraftTurn() call rather than re-queried
+     * by every individual draftCardScore() call within it -- see
+     * BotPlayerService::chooseDraftCards()'s own docblock for the shape.
+     *
+     * @return array{rowsById: array<int, array{draftPriorityScore: int}>, synergyPartnersByMythicId: array<int, int[]>, deckWinRatesByCardId: array<int, array{times_in_deck: int, deck_win_rate: ?float}>}
+     */
+    private function draftBotScoringData(): array
+    {
+        return [
+            'rowsById' => $this->loadCardCatalog()['rowsById'],
+            'synergyPartnersByMythicId' => CardCatalog::loadSynergyPartnersByMythicId(),
+            'deckWinRatesByCardId' => $this->cardStats->deckWinRatesByCardId(),
+        ];
     }
 
     /**
@@ -3752,7 +5320,7 @@ final class GameService
 
             if (
                 $game['status'] === 'waiting'
-                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft'], true)
+                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)
                 && $game['draft_match_id'] !== null
             ) {
                 return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id'], $game['format']);
@@ -4124,6 +5692,30 @@ final class GameService
                 }
             }
 
+            if (in_array($decisionRow['decision_type'], self::SCORING_DECISION_TYPES, true)) {
+                // A production bug caught live: Passion's target_mood_id
+                // used to only ever get checked by resolveScoringDecisionBonus()
+                // when this round's whole decision chain finished (or,
+                // worse, whenever a later getState() call recomputed
+                // serializeScoringPreview() -- see that method's docblock)
+                // -- never right here. For the round's LAST outstanding
+                // decision that's the same moment, but for any earlier one
+                // (this round has more than one Enthusiasm/Passion mood in
+                // play) a bad target got silently persisted as "resolved"
+                // with nothing to catch it until much later. Once that
+                // happened, every subsequent getState() call for the game
+                // re-threw the same InvalidChoiceException uncaught,
+                // permanently: "Could not load this game." with no way
+                // back in. Reusing resolveScoringDecisionBonus() here
+                // (its return value is discarded -- only the validation it
+                // performs matters) guarantees whatever gets persisted
+                // below is still valid whenever it's recomputed later, the
+                // same "reject before ever writing this row" principle the
+                // two checks above already follow.
+                $effectKey = $decisionRow['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
+                $this->resolveScoringDecisionBonus($this->boardStates->load($gameId), (int) $batchRow['played_card_id'], $effectKey, new PlayerChoices($choices));
+            }
+
             $pdo = Connection::get();
             $pdo->beginTransaction();
 
@@ -4133,6 +5725,26 @@ final class GameService
                         'answer' => json_encode([$answerKey => $choices[$answerKey] ?? null]),
                         'id' => $decisionRow['id'],
                     ]);
+
+                // Disillusionment's own queue asks every player in turn
+                // order for a color, but only actually moves any moods once
+                // every answer is in (its own combined pending_decision_resolved
+                // event, further below) -- so without this, an earlier
+                // player's own pick was invisible to everyone else the
+                // whole time they were waiting their own turn to answer,
+                // even though the card's own text is explicit that later
+                // players decide with that information already public
+                // (their own chosen colors apply simultaneously, but
+                // choosing itself is sequential and, on a real table,
+                // spoken aloud as it happens). Logged here, immediately,
+                // rather than waiting for the whole batch to resolve --
+                // deliberately scoped to just this one decision_type rather
+                // than every multi-target batch (e.g. Suspicion's own
+                // per-player discard choices), since that's what was
+                // actually asked for.
+                if ($decisionRow['decision_type'] === 'disillusionment_choose_color') {
+                    $this->logEvent($gameId, $roundId, $gamePlayerId, 'disillusionment_color_chosen', (int) $batchRow['played_card_id'], ['color' => $choices[$answerKey] ?? null]);
+                }
 
                 $remainingStmt = $pdo->prepare(
                     'SELECT COUNT(*) FROM game_pending_decisions WHERE batch_id = :batch_id AND resolved_at IS NULL'
@@ -4200,6 +5812,7 @@ final class GameService
                 $initiatingPlayerId = (int) $batchRow['initiating_game_player_id'];
                 $invocationSeq = (int) $batchRow['invocation_seq'];
                 $duplicityEligibleSources = (int) $batchRow['duplicity_eligible_sources'];
+                $reactorCandidateCardIds = array_map(intval(...), (array) json_decode((string) $batchRow['reactor_candidate_card_ids'], true));
 
                 $result = $this->plays->resolvePendingDecisions(
                     $state,
@@ -4210,6 +5823,7 @@ final class GameService
                     $invocationSeq,
                     $answers,
                     $duplicityEligibleSources,
+                    $reactorCandidateCardIds,
                 );
 
                 // Logged only now, after resolvePendingDecisions() has
@@ -4261,7 +5875,7 @@ final class GameService
                     // Already inside this method's own transaction, so this
                     // just writes rows -- no nested beginTransaction().
                     $this->boardStates->save($gameId, $state);
-                    $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+                    $this->updateRoundTurnState($roundId, $initiatingPlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
                     $this->writePendingBatch($gameId, $roundId, $initiatingPlayerId, $topLevelChoices, $result->invocationChoices, $result);
                     $this->logEvent($gameId, $roundId, $initiatingPlayerId, 'pending_decision_created', $playedCardId, $this->withPlayedFrom($state, $playedCardId, []), $state);
 
@@ -4385,8 +5999,9 @@ final class GameService
                 $firstPlayerId = (int) $round['first_game_player_id'];
                 $freshState = $this->boardStates->load($gameId);
                 $freshGrants = $this->computeFreshGrants($freshState, $firstPlayerId, 1);
+                $this->logFreshGrants($gameId, (int) $round['id'], $firstPlayerId, $freshGrants);
                 $this->boardStates->save($gameId, $freshState);
-                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound());
+                $this->updateRoundTurnState((int) $round['id'], $firstPlayerId, $freshGrants, $freshState->discardedThisRound(), $freshState->skipScoringThisRound(), $freshState->skipScoringFirstPlayerId(), $freshState->skipScoringSourceCardId(), $freshState->skipScoringOwnerId());
             }
 
             return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => !$allSubmitted];
@@ -4501,7 +6116,12 @@ final class GameService
      * proposer themselves) -- approving locks it in and actually acts on
      * it (applyTurnOrderDecision()/applyDrawRecipientDecision()); rejecting
      * sends the decision back to 'propose' (clearing the previous
-     * proposal) so either teammate can try again.
+     * proposal) so either teammate can try again. Also records the
+     * rejected candidate into rejected_game_player_id (migration 0160) --
+     * see advanceBotTeamDecision()'s own docblock for why: without this,
+     * a human rejecting a bot's own proposal was a no-op, since the very
+     * next automated drive just saw an ordinary 'propose' phase again and
+     * had the bot immediately re-propose the identical candidate.
      *
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
@@ -4522,8 +6142,13 @@ final class GameService
             $pdo = Connection::get();
 
             if (!$approve) {
+                // rejected_game_player_id is assigned from proposed_game_player_id
+                // BEFORE that same column is cleared just below -- MySQL
+                // evaluates a multi-column SET left-to-right, so reversing
+                // this order would just copy the NULL it was about to
+                // become instead of the rejected candidate.
                 $pdo->prepare(
-                    'UPDATE game_team_decisions SET phase = :phase, proposer_game_player_id = NULL, proposed_game_player_id = NULL WHERE id = :id'
+                    'UPDATE game_team_decisions SET phase = :phase, rejected_game_player_id = proposed_game_player_id, proposer_game_player_id = NULL, proposed_game_player_id = NULL WHERE id = :id'
                 )->execute(['phase' => 'propose', 'id' => $decision['id']]);
 
                 return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
@@ -4587,8 +6212,9 @@ final class GameService
         if ($round['current_turn_game_player_id'] === null) {
             // Hurt Feelings never applies in team format -- see php-app/README.md.
             $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+            $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
             $this->boardStates->save($gameId, $state);
-            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+            $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
         }
 
         $pdo->prepare("UPDATE game_rounds SET {$column} = :chosen WHERE id = :round_id")
@@ -4631,8 +6257,9 @@ final class GameService
         // Team Play -- see "Closed Team Play" in php-app/README.md), so
         // the base grant is always 1.
         $freshGrants = $this->computeFreshGrants($state, $chosenGamePlayerId, 1);
+        $this->logFreshGrants($gameId, $roundId, $chosenGamePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState($roundId, $chosenGamePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
 
         Connection::get()->prepare('UPDATE game_rounds SET first_game_player_id = :chosen WHERE id = :round_id')
             ->execute(['chosen' => $chosenGamePlayerId, 'round_id' => $roundId]);
@@ -4678,8 +6305,9 @@ final class GameService
         // grant is always 1 -- same as applyTurnOrderDecision()'s/
         // applyClosedTeamLeaderDecision()'s own identical comment.
         $freshGrants = $this->computeFreshGrants($state, $overridePlayerId, 1);
+        $this->logFreshGrants($gameId, $roundId, $overridePlayerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState($roundId, $overridePlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
 
         $pdo = Connection::get();
 
@@ -4859,7 +6487,7 @@ final class GameService
         $this->boardStates->save($gameId, $state);
 
         if ($state->playsRemaining() > 0) {
-            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound());
+            $this->updateRoundTurnState((int) $round['id'], $actingGamePlayerId, $state->pendingPlayGrants(), $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
 
             return ['round_scored' => false, 'game_completed' => false];
         }
@@ -4907,11 +6535,12 @@ final class GameService
         $hurtFeelingsHolder = $round['hurt_feelings_game_player_id'] !== null ? (int) $round['hurt_feelings_game_player_id'] : null;
 
         $freshGrants = $this->computeFreshGrants($state, $nextPlayerId, $nextPlayerId === $hurtFeelingsHolder ? 2 : 1);
+        $this->logFreshGrants($gameId, (int) $round['id'], $nextPlayerId, $freshGrants);
         // computeFreshGrants() may consume a banked Generosity/Joy tag,
         // which has to be persisted even though this turn's own play
         // didn't otherwise touch the board.
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState((int) $round['id'], $nextPlayerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
 
         return ['round_scored' => false, 'game_completed' => false];
     }
@@ -4945,7 +6574,7 @@ final class GameService
 
         if ($currentPlayerId === $turn1) {
             if ($turn2 === null) {
-                $this->freezeRoundForTeamDecision($roundId);
+                $this->freezeRoundForTeamDecision($roundId, $state);
 
                 return ['round_scored' => false, 'game_completed' => false];
             }
@@ -4984,8 +6613,9 @@ final class GameService
     private function unfreezeRoundForTeamPlayer(int $gameId, int $roundId, int $playerId, BoardState $state): void
     {
         $freshGrants = $this->computeFreshGrants($state, $playerId, 1);
+        $this->logFreshGrants($gameId, $roundId, $playerId, $freshGrants);
         $this->boardStates->save($gameId, $state);
-        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound());
+        $this->updateRoundTurnState($roundId, $playerId, $freshGrants, $state->discardedThisRound(), $state->skipScoringThisRound(), $state->skipScoringFirstPlayerId(), $state->skipScoringSourceCardId(), $state->skipScoringOwnerId());
     }
 
     /**
@@ -5028,11 +6658,18 @@ final class GameService
         ];
     }
 
-    private function freezeRoundForTeamDecision(int $roundId): void
+    private function freezeRoundForTeamDecision(int $roundId, BoardState $state): void
     {
         Connection::get()->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = NULL, plays_remaining = 0, pending_play_grants = :grants WHERE id = :round_id'
-        )->execute(['grants' => json_encode([]), 'round_id' => $roundId]);
+            'UPDATE game_rounds SET current_turn_game_player_id = NULL, plays_remaining = 0, pending_play_grants = :grants, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id WHERE id = :round_id'
+        )->execute([
+            'grants' => json_encode([]),
+            'skip_scoring' => $state->skipScoringThisRound() ? 1 : 0,
+            'skip_scoring_first_player_id' => $state->skipScoringFirstPlayerId(),
+            'skip_scoring_source_card_id' => $state->skipScoringSourceCardId(),
+            'skip_scoring_owner_id' => $state->skipScoringOwnerId(),
+            'round_id' => $roundId,
+        ]);
     }
 
     /** @return int the OTHER of $teamId's two members (the one that isn't $knownMemberGamePlayerId) */
@@ -5163,13 +6800,35 @@ final class GameService
      * finalizeWinstonDraft()'s under-12-cards auto-loss branch, which
      * completes the match without game 1 ever completing (see the
      * migration's own comment on why that still counts here even though
-     * recordGameCompletionStats() never ran for it).
+     * recordGameCompletionStats() never ran for it). Skips entirely if
+     * any seated player is a practice bot (issue #359 -- draft matches
+     * couldn't have one at all until then, the same "excluded from
+     * lifetime/card stats" rule recordGameCompletionStats() already
+     * applies elsewhere), via the same containsBot pattern -- a bot never
+     * has a session to view its own (nonexistent) stats page through
+     * regardless, so this is purely about not leaving stray
+     * user_lifetime_stats rows behind for one.
      */
     private function recordMatchCompletionStats(int $draftMatchId, int $winnerUserId): void
     {
-        $stmt = Connection::get()->prepare('SELECT user_id FROM draft_match_players WHERE draft_match_id = :match_id');
+        $stmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, u.is_bot FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :match_id'
+        );
         $stmt->execute(['match_id' => $draftMatchId]);
-        $userIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+        $players = $stmt->fetchAll();
+
+        $containsBot = false;
+        foreach ($players as $player) {
+            if ((bool) $player['is_bot']) {
+                $containsBot = true;
+                break;
+            }
+        }
+        if ($containsBot) {
+            return;
+        }
+
+        $userIds = array_map(static fn (array $player): int => (int) $player['user_id'], $players);
 
         $this->bumpLifetimeStats([$winnerUserId], 'match_wins');
         $this->bumpLifetimeStats(array_diff($userIds, [$winnerUserId]), 'match_losses');
@@ -5646,6 +7305,8 @@ final class GameService
             'plays_remaining' => count($nextRoundGrants),
             'pending_play_grants' => json_encode($nextRoundGrants),
         ]);
+        $newRoundId = (int) $pdo->lastInsertId();
+        $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
         // Unlike an ordinary same-round turn advance (updateRoundTurnState(),
         // which this INSERT deliberately doesn't go through -- there's no
         // existing row to UPDATE yet), a brand new round setting a real
@@ -5653,7 +7314,7 @@ final class GameService
         // "your turn" moment, and was missing its own notification entirely
         // until now -- the exact gap that made round-to-round handoffs go
         // silent even though same-round turn advances already worked.
-        $this->notifyItsYourTurn((int) $pdo->lastInsertId(), $nextFirstPlayer);
+        $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
 
         return ['round_scored' => true, 'game_completed' => false];
     }
@@ -5935,7 +7596,24 @@ final class GameService
             $cardId = (int) $row['played_card_id'];
             $effectKey = $row['decision_type'] === self::ENTHUSIASM_DECISION_TYPE ? 'enthusiasm' : 'passion';
             $answer = new PlayerChoices((array) json_decode((string) $row['answer'], true));
-            $bonuses[$cardId] = $this->resolveScoringDecisionBonus($state, $cardId, $effectKey, $answer);
+            try {
+                $bonuses[$cardId] = $this->resolveScoringDecisionBonus($state, $cardId, $effectKey, $answer);
+            } catch (InvalidChoiceException $e) {
+                // Defensive only -- respondToDecision() now runs this same
+                // validation before ever persisting an answer as resolved
+                // (see its own docblock comment), so a fresh answer can't
+                // reach this state anymore. This only guards against
+                // already-corrupted rows written before that fix existed:
+                // without it, a single bad legacy answer would throw here
+                // uncaught, permanently breaking getState() for the whole
+                // game (this is recomputed fresh on every call -- see this
+                // method's own docblock) -- "Could not load this game."
+                // forever, with no way for the game to ever recover on its
+                // own. Falling back to a declined-bonus (0) instead lets
+                // the round -- and every future page load -- keep going.
+                error_log("resolvedScoringDecisionBonuses(): treating card {$cardId}'s already-resolved {$effectKey} answer as declined -- " . $e->getMessage());
+                $bonuses[$cardId] = 0;
+            }
         }
 
         return $bonuses;
@@ -6237,7 +7915,16 @@ final class GameService
                         $ownerId = $state->ownerOf($cardId);
                         match ($afterScoring['action']) {
                             'discard' => $state->moveInPlayToDiscard($cardId),
-                            'return_to_hand' => $state->moveInPlayToHand($cardId),
+                            // Insecurity's own 'playerId' (see
+                            // MoodPlayService's own onUseEffectState
+                            // handling) is the player who actually played
+                            // this card via Insecurity's granted extra
+                            // play -- not necessarily $ownerId by now, if
+                            // something like Chaos reassigned ownership
+                            // in between. Falls back to $ownerId for any
+                            // other 'return_to_hand' self-tag that never
+                            // records one.
+                            'return_to_hand' => $state->moveInPlayToPlayersHand($cardId, $afterScoring['playerId'] ?? $ownerId),
                             'bottom_and_draw' => $this->bottomOfDeckAndDraw($state, $cardId, $ownerId),
                             default => throw new GameStateException("Unknown afterScoring action '{$afterScoring['action']}'"),
                         };
@@ -6426,9 +8113,18 @@ final class GameService
 
         if ($group['self']) {
             $afterScoring = $state->effectState($group['cardId'], 'afterScoring');
+            // Insecurity's own 'playerId' (see MoodPlayService's own
+            // onUseEffectState handling) only ever needs naming here when
+            // it differs from whoever currently controls the tagged card
+            // -- e.g. Chaos reassigned ownership since it was played --
+            // the common case (nothing reassigned it) still just reads
+            // "your hand", same as before this distinction existed.
+            $returnToHandPlayerId = $afterScoring['playerId'] ?? null;
             $sentences[] = match ($afterScoring['action'] ?? null) {
                 'discard' => 'Discards after scoring.',
-                'return_to_hand' => 'Returns to your hand after scoring.',
+                'return_to_hand' => $returnToHandPlayerId !== null && $returnToHandPlayerId !== $state->ownerOf($group['cardId'])
+                    ? 'Returns to ' . ($playerNames[$returnToHandPlayerId] ?? 'its original player') . "'s hand after scoring."
+                    : 'Returns to your hand after scoring.',
                 'bottom_and_draw' => 'Goes to the bottom of your deck and you draw a new card after scoring.',
                 default => 'Resolves its own after-scoring effect.',
             };
@@ -6569,6 +8265,13 @@ final class GameService
 
     private function hasSkipScoringMarker(BoardState $state): bool
     {
+        if ($state->skipScoringThisRound()) {
+            return true;
+        }
+
+        // Legacy per-card marker, kept purely for backward compatibility
+        // with a game whose Awe resolved before this round-level tracking
+        // existed -- see BoardState::$skipScoringThisRound's own docblock.
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->effectState($mood->cardId, 'skipScoringThisRound')) {
                 return true;
@@ -6658,6 +8361,31 @@ final class GameService
     }
 
     /**
+     * Diagnostic-only record of exactly what computeFreshGrants() just
+     * handed $playerId, written to game_events (so it survives a same-
+     * round turn switch overwriting game_rounds.pending_play_grants in
+     * place, and a whole new round's own opening grants being otherwise
+     * unrecoverable once a later turn switch overwrites that round's row
+     * too) but deliberately excluded from both player-facing log reads
+     * (fullEventLog()/recentEvents()'s own event_type filters) -- a
+     * player doesn't need to see "grants computed" fire on literally
+     * every turn/round boundary, this exists purely so a future "why did
+     * this player have no legal play" mystery (a real one caught live --
+     * a player's own auto-pass-on-empty-hand fired despite them holding
+     * cards, and by the time it was reported, the round's own row had
+     * already been overwritten by the very next turn switch, leaving no
+     * way to see what grants that turn had actually opened with) can be
+     * answered straight from this table instead of needing this same
+     * from-scratch forensic reconstruction again.
+     *
+     * @param array<int, ?array{type?: string, values?: int[], source?: string, sourceCardId?: int, sourceLabel?: string, requiresSourceInPlay?: bool}> $grants
+     */
+    private function logFreshGrants(int $gameId, ?int $roundId, int $playerId, array $grants): void
+    {
+        $this->logEvent($gameId, $roundId, $playerId, 'round_grants_computed', null, ['grants' => $grants]);
+    }
+
+    /**
      * The instance id of every one of $playerId's own in-play moods whose
      * EFFECTIVE (copy-aware) effect key is $effectKey -- the same
      * effectiveCardId()-per-mood scan
@@ -6701,11 +8429,37 @@ final class GameService
      * round... You choose which player goes first next round." No scores
      * are recorded, no one draws a card, there's no Hurt Feelings, and win
      * totals are untouched -- the round is simply marked scored with no
-     * winner and play moves on. Awe's 'oneTimeFirstPlayerOverride'
-     * effectState key (see BoardState::firstPlayerOverride()) picks who
-     * goes first; unlike Honor's perpetual override, it's explicitly
-     * cleared here alongside skipScoringThisRound once consumed, since
-     * Awe's choice only covers this one transition.
+     * winner and play moves on. BoardState::firstPlayerOverride() picks
+     * who goes first, checking $skipScoringFirstPlayerId first (see its
+     * own docblock) -- nothing needs to explicitly clear that round-level
+     * state here, since the round it belongs to is about to become
+     * 'scored' and BoardStateRepository::load() only ever reads the
+     * latest 'in_progress' one; the fresh round created below simply
+     * starts with it unset. The `skipScoringThisRound`/
+     * `oneTimeFirstPlayerOverride` half of the per-card clearing loop just
+     * below is legacy cleanup only, for a game whose Awe resolved before
+     * this round-level tracking existed -- see BoardState::
+     * $skipScoringThisRound's own docblock.
+     *
+     * The `swapScoreWithPlayerId`/`awardsExtraWin` half is NOT legacy,
+     * though -- a real bug, reported live: Sneakiness's "this round, after
+     * scoring, swap your score..." and Corruption's "the winner of the
+     * CURRENT round wins two..." are both explicitly THIS round's own
+     * one-time effects, normally cleared by applyScoreSwaps()/
+     * consumeExtraWinMarker() the moment they're actually applied -- but
+     * neither of those ever runs on this (skipped-scoring) path, since
+     * this method entirely bypasses finishScoringAndAdvance(), where both
+     * live. Playing Sneakiness/Corruption in the SAME round as Awe used to
+     * leave their own tag sitting on the card indefinitely (both cards
+     * commonly stay in play well past the round they were played), so
+     * they'd keep showing in "How scoring will be affected"
+     * (scoringEffectEntries()) forever after -- and, far worse than a
+     * cosmetic display bug, actually fire for real on whatever LATER round
+     * eventually does score normally, silently swapping/doubling that
+     * unrelated round's own outcome. Clearing both tags here matches "no
+     * one wins or loses this round" at face value: if there's no scoring,
+     * there's nothing for either effect to modify, so neither should
+     * survive to ambush a round it was never meant to touch.
      *
      * @return array{round_scored: bool, game_completed: bool}
      */
@@ -6720,6 +8474,12 @@ final class GameService
             if ($state->effectState($mood->cardId, 'skipScoringThisRound')) {
                 $state->clearEffectState($mood->cardId, 'skipScoringThisRound');
                 $state->clearEffectState($mood->cardId, 'oneTimeFirstPlayerOverride');
+            }
+            if ($state->effectState($mood->cardId, 'swapScoreWithPlayerId') !== null) {
+                $state->clearEffectState($mood->cardId, 'swapScoreWithPlayerId');
+            }
+            if ($state->effectState($mood->cardId, 'awardsExtraWin')) {
+                $state->clearEffectState($mood->cardId, 'awardsExtraWin');
             }
         }
 
@@ -6791,10 +8551,12 @@ final class GameService
                     'plays_remaining' => count($nextRoundGrants),
                     'pending_play_grants' => json_encode($nextRoundGrants),
                 ]);
+                $newRoundId = (int) $pdo->lastInsertId();
+                $this->logFreshGrants($gameId, $newRoundId, $nextFirstPlayer, $nextRoundGrants);
                 // Same gap as finishScoringAndAdvance()'s own "create the
                 // next round" INSERT -- this is Awe's own skip-scoring
                 // equivalent of it, and was missing the same notification.
-                $this->notifyItsYourTurn((int) $pdo->lastInsertId(), $nextFirstPlayer);
+                $this->notifyItsYourTurn($newRoundId, $nextFirstPlayer);
             }
 
             $pdo->commit();
@@ -6945,11 +8707,24 @@ final class GameService
         // is. Within each of those two tiers, most-recently-active first
         // (last_move_at, falling back to started_at, then created_at for a
         // game nothing has happened in yet).
+        //
+        // gp.resigned_at IS NULL excludes a game THIS caller has personally
+        // resigned from but that's still 'in_progress' for everyone else --
+        // only ever possible for 'standard' format's own 3-4 player
+        // "continue without them" resignation (resignGame()'s own
+        // skipTurnForResignedPlayer() path; every other format/player-count
+        // combination completes the whole game outright on resignation,
+        // already caught by the status check above). Once resigned, a
+        // player can never take another turn in that game (see
+        // advanceTurn()'s active-player filtering) or win it, so from
+        // their own perspective it's just as much history as a completed
+        // game -- listPastGamesForUser() picks it up via the same column.
         $gameIdsStmt = $pdo->prepare(
             "SELECT g.id FROM games g
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
+               AND gp.resigned_at IS NULL
                AND (g.status NOT IN ('completed', 'abandoned') OR (g.draft_match_id IS NOT NULL AND dm.status != 'completed'))
              ORDER BY
                  (g.status IN ('waiting', 'in_progress')) DESC,
@@ -6964,16 +8739,24 @@ final class GameService
 
     /**
      * The complement of listGamesForUser() above: every 'completed' or
-     * 'abandoned' game NOT still tied to an in-progress draft match -- see
-     * that method's own docblock for exactly where the line falls (and
+     * 'abandoned' game NOT still tied to an in-progress draft match (see
+     * that method's own docblock for exactly where the line falls, and
      * why an 'abandoned' game never actually hits that carve-out in
-     * practice). Sorted most-recently-completed first, the natural order
-     * for a "past games" archive (as opposed to listGamesForUser()'s own
-     * actionability-first ordering, which has no reason to apply once
+     * practice), PLUS any game this caller has personally resigned from
+     * (gp.resigned_at IS NOT NULL) regardless of the game's own overall
+     * status -- the complement of listGamesForUser()'s own identical
+     * gp.resigned_at exclusion, for the one case (a 'standard' format 3-4
+     * player game the caller resigned from but that's still 'in_progress'
+     * for everyone else) where that status alone wouldn't already have
+     * routed it here. Sorted most-recently-completed first, the natural
+     * order for a "past games" archive (as opposed to listGamesForUser()'s
+     * own actionability-first ordering, which has no reason to apply once
      * nothing here is actionable at all). An 'abandoned' game never gets
      * its own completed_at set (only the draft_matches row it belonged to
-     * does -- see abandonDraftMatch()), so it naturally sorts by
-     * last_move_at instead, same as it would anywhere else in the app.
+     * does -- see abandonDraftMatch()), and a resigned-but-still-
+     * 'in_progress' game never gets one at all until everyone else
+     * finishes it, so both naturally sort by last_move_at instead, same
+     * as they would anywhere else in the app.
      *
      * @return array<int, array{id:int,format:string,deck_type:string,status:string,wins_needed:int,created_at:string,started_at:?string,last_move_at:?string,completed_at:?string,players:array<int,array{user_id:int,username:string,seat_order:int}>,is_your_turn:bool,is_awaiting_your_response:bool,current_turn_username:?string,awaiting_response_usernames:array<int,string>,winner_usernames:array<int,string>,draft_match_id:?int,match_game_number:?int,draft_match:?array{status:string,your_wins:int,opponent_wins:int,games_to_win:int,winner_username:?string}}>
      */
@@ -6986,8 +8769,13 @@ final class GameService
              JOIN game_players gp ON gp.game_id = g.id
              LEFT JOIN draft_matches dm ON dm.id = g.draft_match_id
              WHERE gp.user_id = :user_id
-               AND g.status IN ('completed', 'abandoned')
-               AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+               AND (
+                 gp.resigned_at IS NOT NULL
+                 OR (
+                   g.status IN ('completed', 'abandoned')
+                   AND (g.draft_match_id IS NULL OR dm.status = 'completed')
+                 )
+               )
              ORDER BY COALESCE(g.completed_at, g.last_move_at, g.started_at, g.created_at) DESC, g.id DESC"
         );
         $gameIdsStmt->execute(['user_id' => $userId]);
@@ -7535,6 +9323,12 @@ final class GameService
             ),
             'grid_draft' => Connection::get()->prepare(
                 'SELECT current_turn_user_id FROM draft_grid_state WHERE draft_match_id = :id'
+            ),
+            'rotisserie_draft' => Connection::get()->prepare(
+                'SELECT current_turn_user_id FROM draft_rotisserie_state WHERE draft_match_id = :id'
+            ),
+            'tiered_rotisserie_draft' => Connection::get()->prepare(
+                'SELECT current_turn_user_id FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id'
             ),
             default => null,
         };
@@ -8521,6 +10315,343 @@ final class GameService
         ];
     }
 
+    /**
+     * getState()'s own 'rotisserie_draft' field builder -- structurally the
+     * same shape as gridDraftStateFor() above (match-level scoreline plus
+     * drafting/deck_building sub-state, same next_game_id logic), reusing
+     * draftDeckBuildingStateFor() identically once the match reaches
+     * deck_building.
+     *
+     * @param array<string, mixed> $game
+     */
+    private function rotisserieDraftStateFor(array $game, int $viewerUserId): array
+    {
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $playersStmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, dmp.wins, dmp.drafted_card_ids, dmp.deck_card_ids, dmp.previous_deck_card_ids, u.username
+             FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
+        );
+        $playersStmt->execute(['id' => $draftMatchId]);
+        $playersByUser = [];
+        foreach ($playersStmt->fetchAll() as $row) {
+            $playersByUser[(int) $row['user_id']] = $row;
+        }
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $match['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE draft_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        $state = [
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            'status' => $match['status'],
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
+            'next_game_id' => $nextGameId,
+            'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
+            'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$uid]['wins'] ?? 0),
+                'is_you' => $uid === $viewerUserId,
+            ], $userIds),
+            'drafting' => null,
+            'deck_building' => null,
+        ];
+
+        $teamIdByUserId = $this->openTeamPlayTeamIdByUserId((int) $game['id'], $game['format']);
+
+        if ($match['status'] === 'drafting') {
+            $state['drafting'] = $this->rotisserieDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser, $teamIdByUserId);
+        } elseif ($match['status'] === 'deck_building') {
+            $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $playersByUser,
+                $viewerUserId,
+                array_values(array_diff($userIds, [$viewerUserId])),
+                self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
+                null,
+                $this->openTeamPlayTeammateUserId((int) $game['id'], $game['format'], $viewerUserId),
+            );
+        }
+
+        return $state;
+    }
+
+    /**
+     * getState()'s own view of Rotisserie Draft's current pool/turn state
+     * for $viewerUserId. Unlike Grid Draft's own partially-hidden
+     * remaining_deck_card_ids, the ENTIRE pool is face-up from the start
+     * (see draft_rotisserie_state's own migration comment) -- pool_cards
+     * is every card still available to pick, fully serialized (not just a
+     * count), since there's nothing hidden left to protect. cutoff_count/
+     * picks_made/total_picks_needed let the frontend show a progress bar
+     * ("9 of 14 picked") without having to re-derive the target itself.
+     * current_turn_username names whoever current_turn_user_id actually
+     * is, the same "not your turn alone doesn't say whose" need Grid
+     * Draft's own 3-4 player support already established (issue #189).
+     * drafted_so_far/opponent_drafted_so_far/other_players_drafted_so_far/
+     * teams_drafted_so_far mirror gridDraftDraftingStateFor()'s own
+     * identically-shaped fields exactly -- Rotisserie Draft is open
+     * information end to end the same way Grid Draft is (every card any
+     * player has ever drafted was visible to everyone else the moment it
+     * was dealt face-up), so the same privacy story applies unchanged,
+     * Open Team Play's own 'teams_drafted_so_far' regrouping included.
+     *
+     * @param int[] $userIds the match's user ids (any count 2-4), in seat order
+     * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
+     * @param array<int, int> $teamIdByUserId user_id => team_id (openTeamPlayTeamIdByUserId()) -- empty outside Open Team Play
+     */
+    private function rotisserieDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser, array $teamIdByUserId = []): array
+    {
+        $stateStmt = Connection::get()->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $rotisserieState = $stateStmt->fetch();
+
+        $poolCardIds = array_map(intval(...), json_decode((string) $rotisserieState['pool_card_ids'], true));
+
+        $draftedCardIdsFor = fn (int $userId): array => ($playersByUser[$userId]['drafted_card_ids'] ?? null) !== null
+            ? array_map(intval(...), json_decode((string) $playersByUser[$userId]['drafted_card_ids'], true))
+            : [];
+
+        $currentTurnUserId = (int) $rotisserieState['current_turn_user_id'];
+        $otherUserIds = array_values(array_diff($userIds, [$viewerUserId]));
+        $opponentUserId = $otherUserIds[0] ?? null;
+
+        $teamsDraftedSoFar = null;
+        if ($teamIdByUserId !== []) {
+            $userIdsByTeam = [];
+            foreach ($userIds as $uid) {
+                $userIdsByTeam[$teamIdByUserId[$uid] ?? -1][] = $uid;
+            }
+            ksort($userIdsByTeam);
+
+            $teamsDraftedSoFar = array_map(function (array $teamUserIds) use ($teamIdByUserId, $viewerUserId, $playersByUser, $draftedCardIdsFor): array {
+                $teamCardIds = [];
+                foreach ($teamUserIds as $uid) {
+                    $teamCardIds = [...$teamCardIds, ...$draftedCardIdsFor($uid)];
+                }
+
+                return [
+                    'team_id' => $teamIdByUserId[$teamUserIds[0]],
+                    'is_your_team' => in_array($viewerUserId, $teamUserIds, true),
+                    'member_usernames' => array_map(fn (int $uid) => $playersByUser[$uid]['username'] ?? null, $teamUserIds),
+                    'drafted_so_far' => $this->serializeCatalogCards($teamCardIds),
+                ];
+            }, array_values($userIdsByTeam));
+        }
+
+        return [
+            'is_your_turn' => $currentTurnUserId === $viewerUserId,
+            'current_turn_username' => $playersByUser[$currentTurnUserId]['username'] ?? null,
+            'cutoff_count' => (int) $rotisserieState['cutoff_count'],
+            'picks_made' => (int) $rotisserieState['pick_index'],
+            'total_picks_needed' => (int) $rotisserieState['cutoff_count'] * count($userIds),
+            'pool_cards' => $this->serializeCatalogCards($poolCardIds),
+            'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
+            'opponent_drafted_so_far' => $opponentUserId !== null
+                ? $this->serializeCatalogCards($draftedCardIdsFor($opponentUserId))
+                : [],
+            'other_players_drafted_so_far' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($uid)),
+            ], $otherUserIds),
+            'teams_drafted_so_far' => $teamsDraftedSoFar,
+        ];
+    }
+
+    /**
+     * getState()'s own 'tiered_rotisserie_draft' field builder --
+     * structurally the same match-level scoreline/next_game_id shape as
+     * rotisserieDraftStateFor() immediately above, dispatching to
+     * tieredRotisserieDraftDraftingStateFor() below once drafting.
+     *
+     * @param array<string, mixed> $game
+     */
+    private function tieredRotisserieDraftStateFor(array $game, int $viewerUserId): array
+    {
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $playersStmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, dmp.wins, dmp.drafted_card_ids, dmp.deck_card_ids, dmp.previous_deck_card_ids, u.username
+             FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
+        );
+        $playersStmt->execute(['id' => $draftMatchId]);
+        $playersByUser = [];
+        foreach ($playersStmt->fetchAll() as $row) {
+            $playersByUser[(int) $row['user_id']] = $row;
+        }
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $match['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE draft_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        $state = [
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            'status' => $match['status'],
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
+            'next_game_id' => $nextGameId,
+            'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
+            'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$uid]['wins'] ?? 0),
+                'is_you' => $uid === $viewerUserId,
+            ], $userIds),
+            'drafting' => null,
+            'deck_building' => null,
+        ];
+
+        $teamIdByUserId = $this->openTeamPlayTeamIdByUserId((int) $game['id'], $game['format']);
+
+        if ($match['status'] === 'drafting') {
+            $state['drafting'] = $this->tieredRotisserieDraftDraftingStateFor($draftMatchId, $viewerUserId, $userIds, $playersByUser, $teamIdByUserId);
+        } elseif ($match['status'] === 'deck_building') {
+            $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $playersByUser,
+                $viewerUserId,
+                array_values(array_diff($userIds, [$viewerUserId])),
+                self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
+                null,
+                $this->openTeamPlayTeammateUserId((int) $game['id'], $game['format'], $viewerUserId),
+            );
+        }
+
+        return $state;
+    }
+
+    /**
+     * getState()'s own view of Tiered Rotisserie Draft's current
+     * tier/pool/turn state for $viewerUserId -- structurally
+     * rotisserieDraftDraftingStateFor()'s own shape, generalized to
+     * whichever tier is currently active (tieredRotisserieDraftTierIndexFor()):
+     * 'pool_cards' is that CURRENT tier's own remaining face-up pool
+     * only (a prior tier's own now-discarded remainder, and a later
+     * tier's own not-yet-revealed pool, are neither shown), while
+     * 'tiers' gives the frontend the whole match's own tier-by-tier
+     * progress overview (label/cutoff_count/status) to render as a
+     * stepper -- 'drafted_so_far'/etc. stay whole-match totals (a single
+     * running drafted_card_ids list spans every tier already, same as
+     * base Rotisserie Draft's own semantics carrying unchanged).
+     *
+     * @param int[] $userIds the match's user ids (any count 2-4), in seat order
+     * @param array<int, array<string, mixed>> $playersByUser draft_match_players rows, keyed by user_id
+     * @param array<int, int> $teamIdByUserId user_id => team_id (openTeamPlayTeamIdByUserId()) -- empty outside Open Team Play
+     */
+    private function tieredRotisserieDraftDraftingStateFor(int $draftMatchId, int $viewerUserId, array $userIds, array $playersByUser, array $teamIdByUserId = []): array
+    {
+        $stateStmt = Connection::get()->prepare('SELECT * FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+        $stateStmt->execute(['id' => $draftMatchId]);
+        $tieredState = $stateStmt->fetch();
+
+        $playerCount = count($userIds);
+        $tiers = json_decode((string) $tieredState['tiers'], true);
+        $pickIndex = (int) $tieredState['pick_index'];
+        $currentTierIndex = self::tieredRotisserieDraftTierIndexFor($tiers, $playerCount, $pickIndex);
+        $currentTier = $tiers[$currentTierIndex];
+
+        $picksBeforeCurrentTier = 0;
+        for ($i = 0; $i < $currentTierIndex; $i++) {
+            $picksBeforeCurrentTier += $tiers[$i]['cutoff_count'] * $playerCount;
+        }
+
+        $draftedCardIdsFor = fn (int $userId): array => ($playersByUser[$userId]['drafted_card_ids'] ?? null) !== null
+            ? array_map(intval(...), json_decode((string) $playersByUser[$userId]['drafted_card_ids'], true))
+            : [];
+
+        $currentTurnUserId = (int) $tieredState['current_turn_user_id'];
+        $otherUserIds = array_values(array_diff($userIds, [$viewerUserId]));
+        $opponentUserId = $otherUserIds[0] ?? null;
+
+        $teamsDraftedSoFar = null;
+        if ($teamIdByUserId !== []) {
+            $userIdsByTeam = [];
+            foreach ($userIds as $uid) {
+                $userIdsByTeam[$teamIdByUserId[$uid] ?? -1][] = $uid;
+            }
+            ksort($userIdsByTeam);
+
+            $teamsDraftedSoFar = array_map(function (array $teamUserIds) use ($teamIdByUserId, $viewerUserId, $playersByUser, $draftedCardIdsFor): array {
+                $teamCardIds = [];
+                foreach ($teamUserIds as $uid) {
+                    $teamCardIds = [...$teamCardIds, ...$draftedCardIdsFor($uid)];
+                }
+
+                return [
+                    'team_id' => $teamIdByUserId[$teamUserIds[0]],
+                    'is_your_team' => in_array($viewerUserId, $teamUserIds, true),
+                    'member_usernames' => array_map(fn (int $uid) => $playersByUser[$uid]['username'] ?? null, $teamUserIds),
+                    'drafted_so_far' => $this->serializeCatalogCards($teamCardIds),
+                ];
+            }, array_values($userIdsByTeam));
+        }
+
+        return [
+            'is_your_turn' => $currentTurnUserId === $viewerUserId,
+            'current_turn_username' => $playersByUser[$currentTurnUserId]['username'] ?? null,
+            'current_tier_index' => $currentTierIndex,
+            'current_tier_label' => $currentTier['label'],
+            'tiers' => array_map(fn (int $index, array $tier): array => [
+                'label' => $tier['label'],
+                'cutoff_count' => $tier['cutoff_count'],
+                'status' => $index < $currentTierIndex ? 'completed' : ($index === $currentTierIndex ? 'current' : 'upcoming'),
+            ], array_keys($tiers), $tiers),
+            'cutoff_count' => (int) $currentTier['cutoff_count'],
+            'picks_made_this_tier' => $pickIndex - $picksBeforeCurrentTier,
+            'total_picks_needed_this_tier' => (int) $currentTier['cutoff_count'] * $playerCount,
+            'total_picks_made' => $pickIndex,
+            'total_picks_needed' => self::tieredRotisserieDraftTotalPicksNeeded($tiers, $playerCount),
+            'pool_cards' => $this->serializeCatalogCards(array_map(intval(...), $currentTier['pool_card_ids'])),
+            'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($viewerUserId)),
+            'opponent_drafted_so_far' => $opponentUserId !== null
+                ? $this->serializeCatalogCards($draftedCardIdsFor($opponentUserId))
+                : [],
+            'other_players_drafted_so_far' => array_map(fn (int $uid) => [
+                'user_id' => $uid,
+                'username' => $playersByUser[$uid]['username'] ?? null,
+                'drafted_so_far' => $this->serializeCatalogCards($draftedCardIdsFor($uid)),
+            ], $otherUserIds),
+            'teams_drafted_so_far' => $teamsDraftedSoFar,
+        ];
+    }
+
     /** @return array<string, mixed> */
     public function getState(int $gameId, int $viewerUserId): array
     {
@@ -8764,6 +10895,13 @@ final class GameService
             // Grid Draft's (issue #188) own analog of 'quick_draft'
             // immediately above -- see gridDraftStateFor().
             'grid_draft' => null,
+            // Rotisserie Draft's (issue #361) own analog of 'quick_draft'
+            // immediately above -- see rotisserieDraftStateFor().
+            'rotisserie_draft' => null,
+            // Tiered Rotisserie Draft's (issue #361) own analog of
+            // 'quick_draft' immediately above -- see
+            // tieredRotisserieDraftStateFor().
+            'tiered_rotisserie_draft' => null,
         ];
 
         if ($viewerGamePlayerId !== null) {
@@ -8780,6 +10918,10 @@ final class GameService
                 $response['winston_draft'] = $this->winstonDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'grid_draft' && $game['draft_match_id'] !== null) {
                 $response['grid_draft'] = $this->gridDraftStateFor($game, $viewerUserId);
+            } elseif ($game['deck_type'] === 'rotisserie_draft' && $game['draft_match_id'] !== null) {
+                $response['rotisserie_draft'] = $this->rotisserieDraftStateFor($game, $viewerUserId);
+            } elseif ($game['deck_type'] === 'tiered_rotisserie_draft' && $game['draft_match_id'] !== null) {
+                $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
             }
         }
 
@@ -8997,7 +11139,6 @@ final class GameService
             $response['in_play'][] = [
                 ...$serialized,
                 'owner_game_player_id' => $mood->ownerId,
-                'is_suppressed' => $mood->isSuppressed,
                 // Whether this specific card currently has an unused play
                 // grant it's responsible for -- most useful for Hope/Grace,
                 // whose own grant (see BoardState::grantIsActive()) is lost
@@ -9017,11 +11158,7 @@ final class GameService
                 // this to distinguish the two visually (see "Card art
                 // rendering" in web-static/README.md).
                 'value_locked' => array_key_exists('valueOverride', $mood->effectState),
-                'suppression_expiry' => $mood->suppressionExpiry,
-                'suppressed_by_card_id' => $mood->suppressionSourceCardId,
-                'suppressed_by_name' => $mood->suppressionSourceCardId !== null
-                    ? ($names[$mood->suppressionSourceCardId] ?? null)
-                    : null,
+                ...$this->suppressionFields($state, $cardId, $names),
                 'boosted_by_card_id' => $boosterCardId,
                 'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
                 'affecting' => $this->affectingEntries($state, $cardId, $names),
@@ -9133,10 +11270,10 @@ final class GameService
         }
 
         $stmt = $pdo->prepare(
-            'SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
+            "SELECT e.id, e.event_type, e.acting_game_player_id, e.card_id, e.details, e.created_at, r.round_number
              FROM game_events e
              LEFT JOIN game_rounds r ON r.id = e.game_round_id
-             WHERE e.game_id = :game_id ORDER BY e.id ASC'
+             WHERE e.game_id = :game_id AND e.event_type != 'round_grants_computed' ORDER BY e.id ASC"
         );
         $stmt->execute(['game_id' => $gameId]);
 
@@ -9518,14 +11655,9 @@ final class GameService
                     return [
                         ...$serialized,
                         'owner_game_player_id' => $mood->ownerId,
-                        'is_suppressed' => $mood->isSuppressed,
                         'has_unused_play_grant' => false,
                         'value_locked' => array_key_exists('valueOverride', $mood->effectState),
-                        'suppression_expiry' => $mood->suppressionExpiry,
-                        'suppressed_by_card_id' => $mood->suppressionSourceCardId,
-                        'suppressed_by_name' => $mood->suppressionSourceCardId !== null
-                            ? ($names[$mood->suppressionSourceCardId] ?? null)
-                            : null,
+                        ...$this->suppressionFields($state, $cardId, $names),
                         'boosted_by_card_id' => $boosterCardId,
                         'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
                         'affecting' => $this->affectingEntries($state, $cardId, $names),
@@ -9556,6 +11688,8 @@ final class GameService
             'quick_draft' => null,
             'winston_draft' => null,
             'grid_draft' => null,
+            'rotisserie_draft' => null,
+            'tiered_rotisserie_draft' => null,
         ];
     }
 
@@ -9643,8 +11777,8 @@ final class GameService
      */
     private function recentEvents(int $gameId, array $players, int $limit = 15, ?int $upToEventId = null): array
     {
-        $sql = 'SELECT id, event_type, acting_game_player_id, card_id, details, created_at
-                 FROM game_events WHERE game_id = :game_id';
+        $sql = "SELECT id, event_type, acting_game_player_id, card_id, details, created_at
+                 FROM game_events WHERE game_id = :game_id AND event_type != 'round_grants_computed'";
         if ($upToEventId !== null) {
             $sql .= ' AND id <= :up_to_event_id';
         }
@@ -9735,6 +11869,15 @@ final class GameService
                 : "{$actor} passed",
             $row['event_type'] === 'pending_decision_created' && ($details['scoring_trigger'] ?? false) => "{$cardName}'s scoring effect triggered, waiting on a response from {$actor}",
             $row['event_type'] === 'pending_decision_created' => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}, waiting on a response",
+            // Disillusionment's own per-player color pick (see
+            // respondToDecision()'s own docblock comment) -- logged the
+            // instant each player answers, well before the combined
+            // pending_decision_resolved event below actually moves any
+            // moods, so a later player in the queue can see every earlier
+            // pick before making their own.
+            $row['event_type'] === 'disillusionment_color_chosen' => ($details['color'] ?? null) !== null
+                ? "{$actor} chose {$details['color']} for {$cardName}"
+                : "{$actor} declined to choose a color for {$cardName}",
             $row['event_type'] === 'pending_decision_resolved' => "A response to {$cardName} was resolved",
             $row['event_type'] === 'round_scored' => $this->describeRoundScored($details, $playerNames, $teamMembersByTeamId),
             // 'automated' (seatFirstPlayerOverride(), same flag shape as
@@ -10044,7 +12187,17 @@ final class GameService
         if ((str_contains($key, 'mood_ids') || str_contains($key, 'card_ids')) && is_array($value)) {
             return $label . ': ' . implode(', ', array_map(fn ($id) => $cardNames[(int) $id] ?? 'a card', $value));
         }
-        if (str_contains($key, 'mood_id') || str_contains($key, 'card_id')) {
+        if (str_contains($key, 'mood_id') || str_contains($key, 'card_id') || $key === 'scorn_suppress_target') {
+            // Scorn's own reaction key (CardChoiceSchema::REACTIONS['scorn'])
+            // is the one id-valued key in the whole schema that breaks this
+            // method's own "purely by naming convention" contract above --
+            // it's just 'scorn_suppress_target', with no '_mood_id' suffix
+            // -- so it silently fell through to the raw-id-printing branch
+            // below instead, the same class of bug the 'player_ids'
+            // special-case above already exists to prevent. Special-cased
+            // here (rather than renaming the key everywhere) so this also
+            // fixes every ALREADY-logged event carrying the old key, not
+            // just new ones.
             return $label . ': ' . ($cardNames[(int) $value] ?? 'a card');
         }
         if ($value === true) {
@@ -10546,6 +12699,35 @@ final class GameService
      * @param array<int, string> $names
      * @return array<int, array{card_id:int, name:string, relationship:string}>
      */
+    /**
+     * A mood can be suppressed by more than one source at once, each on
+     * its own independent expiry (see MoodInPlay's own docblock) -- e.g.
+     * Scorn suppressing a mood 'end_of_round' while a Shame the owner
+     * played earlier also suppresses it 'while_source_in_play'. `suppressions`
+     * lists every currently-active one; `is_suppressed` is just whether
+     * that list is non-empty, kept as its own field since every caller
+     * already checks it before bothering to read the list itself.
+     *
+     * @param array<int, string> $names
+     * @return array{is_suppressed: bool, suppressions: array<int, array{expiry: string, suppressed_by_card_id: ?int, suppressed_by_name: ?string}>}
+     */
+    private function suppressionFields(BoardState $state, int $cardId, array $names): array
+    {
+        $suppressions = array_map(
+            static fn (array $s) => [
+                'expiry' => $s['expiry'],
+                'suppressed_by_card_id' => $s['sourceCardId'],
+                'suppressed_by_name' => $s['sourceCardId'] !== null ? ($names[$s['sourceCardId']] ?? null) : null,
+            ],
+            $state->suppressionsFor($cardId),
+        );
+
+        return [
+            'is_suppressed' => $suppressions !== [],
+            'suppressions' => $suppressions,
+        ];
+    }
+
     private function affectingEntries(BoardState $state, int $cardId, array $names): array
     {
         $affecting = [];
@@ -10863,7 +13045,7 @@ final class GameService
      * a Duplicity repeat) would re-notify the player already mid-turn for
      * no reason.
      */
-    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound): void
+    private function updateRoundTurnState(int $roundId, int $playerId, array $playGrants, bool $discardedThisRound, bool $skipScoringThisRound, ?int $skipScoringFirstPlayerId, ?int $skipScoringSourceCardId, ?int $skipScoringOwnerId): void
     {
         $pdo = Connection::get();
 
@@ -10873,13 +13055,17 @@ final class GameService
         $previousPlayerId = $previousPlayerId !== false ? (int) $previousPlayerId : null;
 
         $stmt = $pdo->prepare(
-            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round WHERE id = :round_id'
+            'UPDATE game_rounds SET current_turn_game_player_id = :player_id, plays_remaining = :plays_remaining, pending_play_grants = :pending_play_grants, discarded_this_round = :discarded_this_round, skip_scoring = :skip_scoring, skip_scoring_first_player_game_player_id = :skip_scoring_first_player_id, skip_scoring_source_card_id = :skip_scoring_source_card_id, skip_scoring_owner_game_player_id = :skip_scoring_owner_id WHERE id = :round_id'
         );
         $stmt->execute([
             'player_id' => $playerId,
             'plays_remaining' => count($playGrants),
             'pending_play_grants' => json_encode($playGrants),
             'discarded_this_round' => $discardedThisRound ? 1 : 0,
+            'skip_scoring' => $skipScoringThisRound ? 1 : 0,
+            'skip_scoring_first_player_id' => $skipScoringFirstPlayerId,
+            'skip_scoring_source_card_id' => $skipScoringSourceCardId,
+            'skip_scoring_owner_id' => $skipScoringOwnerId,
             'round_id' => $roundId,
         ]);
 
@@ -11097,15 +13283,27 @@ final class GameService
      * next-first-player, Corruption's mode), so it's identical for every
      * viewer.
      *
-     * Sneakiness/Awe/Corruption only appear here for as long as their
+     * Sneakiness/Corruption only appear here for as long as their
      * one-time round-scoped effectState tag stays set -- see
-     * applyScoreSwaps()/skipScoringAndAdvance()/consumeExtraWinMarker(),
-     * which each clear their own tag once the round it covers actually
-     * scores -- while Bliss/Exhilaration/Enthusiasm/Passion are genuinely
-     * perpetual for as long as the card stays in play. The effect_key
-     * lookup goes through effectiveCardId(), mirroring RoundScorer::
-     * score()'s own check, so a Creativity copy of one of these is picked
-     * up the same way it actually contributes to the score.
+     * applyScoreSwaps()/consumeExtraWinMarker(), which each clear their
+     * own tag once the round it covers actually scores -- while Bliss/
+     * Exhilaration/Enthusiasm/Passion are genuinely perpetual for as long
+     * as the card stays in play. The effect_key lookup goes through
+     * effectiveCardId(), mirroring RoundScorer::score()'s own check, so a
+     * Creativity copy of one of these is picked up the same way it
+     * actually contributes to the score.
+     *
+     * Awe is the one entry NOT keyed off a specific in-play mood at all
+     * (a bug caught live: it used to be, reading the same per-card
+     * 'skipScoringThisRound' tag skipScoringAndAdvance() itself checks --
+     * but that tag moved to round-level state precisely because it has to
+     * survive Awe leaving play before the round it was played in finishes
+     * scoring, see BoardState::$skipScoringThisRound's own docblock, and
+     * this entry silently went dark the same way the underlying skip
+     * itself used to). Built as its own, separate check below rather than
+     * inside the per-mood loop, straight from $state->skipScoringThisRound(),
+     * so it stays visible for exactly as long as the underlying effect
+     * does -- including after Awe itself is gone.
      *
      * @param array<int, string> $names
      * @param array<int, string> $playerNames
@@ -11114,6 +13312,25 @@ final class GameService
     private function scoringEffectEntries(BoardState $state, array $names, array $playerNames): array
     {
         $entries = [];
+
+        // Read from round-level state, not moodsInPlay() below, precisely
+        // so this stays visible even after Awe itself has left play --
+        // see BoardState::$skipScoringSourceCardId's own docblock.
+        if ($state->skipScoringThisRound()) {
+            $sourceCardId = $state->skipScoringSourceCardId();
+            $ownerId = $state->skipScoringOwnerId();
+            $aweCardName = $sourceCardId !== null ? ($names[$sourceCardId] ?? 'Awe') : 'Awe';
+            $aweOwnerName = $ownerId !== null ? ($playerNames[$ownerId] ?? 'A player') : null;
+
+            $entries[] = [
+                'card_id' => $sourceCardId ?? 0,
+                'card_name' => $aweCardName,
+                'owner_game_player_id' => $ownerId ?? 0,
+                'description' => ($aweOwnerName !== null ? "{$aweOwnerName}'s " : '') . $aweCardName
+                    . " means this round won't be scored -- no one wins or loses.",
+            ];
+        }
+
         foreach ($state->moodsInPlay() as $mood) {
             $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
             $ownerName = $playerNames[$mood->ownerId] ?? 'A player';
@@ -11123,9 +13340,6 @@ final class GameService
                 'exhilaration' => "{$ownerName}'s {$cardName} scores all of their moods an extra time.",
                 'bliss' => $this->blissScoringDescription($state, $mood, $ownerName, $cardName),
                 'sneakiness' => $this->sneakinessScoringDescription($state, $mood, $ownerName, $cardName, $playerNames),
-                'awe' => $state->effectState($mood->cardId, 'skipScoringThisRound')
-                    ? "{$ownerName}'s {$cardName} means this round won't be scored -- no one wins or loses."
-                    : null,
                 'corruption' => $state->effectState($mood->cardId, 'awardsExtraWin')
                     ? "This round's winner will get two wins instead of one ({$cardName})."
                     : null,
@@ -11171,13 +13385,17 @@ final class GameService
     }
 
     /**
-     * A board-wide summary of every in-play mood whose "while in play"
-     * ability reshapes every mood on the board (not just how scoring
-     * works, which scoringEffectEntries() above already covers) -- e.g.
-     * Imagination overriding every mood's color via
-     * BoardState::colorOf(). Sits alongside scoring_effects as its own
-     * always-visible list rather than folded into it, since this is about
-     * what a mood *is* right now, not what it's worth.
+     * A board-wide summary of every in-play mood currently affecting the
+     * board as a whole (not just how scoring works, which
+     * scoringEffectEntries() above already covers) -- a "while in play"
+     * ability that reshapes every mood on the board (Imagination
+     * overriding every mood's color via BoardState::colorOf()), or an
+     * "after playing" effect whose consequence still lingers into a
+     * later round (Doubt's color ban, active only for the single round
+     * immediately after it was played -- see doubtBoardDescription()).
+     * Sits alongside scoring_effects as its own always-visible list
+     * rather than folded into it, since this is about what a mood *is*
+     * or *does* to the board right now, not what it's worth.
      *
      * @param array<int, string> $names
      * @param array<int, string> $playerNames
@@ -11193,6 +13411,7 @@ final class GameService
 
             $description = match ($effectKey) {
                 'imagination' => $this->imaginationBoardDescription($state, $mood, $ownerName, $cardName),
+                'doubt' => $this->doubtBoardDescription($state, $mood, $ownerName, $cardName),
                 default => null,
             };
 
@@ -11217,6 +13436,31 @@ final class GameService
         }
 
         return "{$ownerName}'s {$cardName} — all moods are {$color}.";
+    }
+
+    /**
+     * Doubt's own "During the next round, players can't play moods that
+     * share a color with any of the revealed cards" -- previously
+     * enforced entirely server-side (an illegal play is simply rejected,
+     * see BoardState::bannedColorsThisRound()) with nothing telling a
+     * player the ban was even active until they tried and failed. Reads
+     * the exact same 'bannedColors'/'playedInRound' effectState tags
+     * DoubtEffect::afterPlaying() stamped on this Doubt, gated on the
+     * same "only for the single round immediately after it was played"
+     * window bannedColorsThisRound() itself checks, so this entry
+     * disappears the moment the ban actually lifts -- null both before
+     * Doubt's own choice was ever made (declined, or not yet resolved)
+     * and once the round it applied to has passed.
+     */
+    private function doubtBoardDescription(BoardState $state, MoodInPlay $mood, string $ownerName, string $cardName): ?string
+    {
+        $bannedColors = $state->effectState($mood->cardId, 'bannedColors');
+        $playedInRound = $state->effectState($mood->cardId, 'playedInRound');
+        if ($bannedColors === null || $bannedColors === [] || $playedInRound === null || $state->currentRoundNumber() !== $playedInRound + 1) {
+            return null;
+        }
+
+        return "{$ownerName}'s {$cardName} — " . implode(', ', $bannedColors) . " moods can't be played this round.";
     }
 
     /**
@@ -11274,8 +13518,8 @@ final class GameService
 
         $insertBatch = $pdo->prepare(
             'INSERT INTO game_pending_decision_batches
-                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices, duplicity_eligible_sources)
-             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices, :duplicity_eligible_sources)'
+                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices, duplicity_eligible_sources, reactor_candidate_card_ids)
+             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices, :duplicity_eligible_sources, :reactor_candidate_card_ids)'
         );
 
         try {
@@ -11288,6 +13532,7 @@ final class GameService
                 'top_level_choices' => json_encode($topLevelChoices->toArray()),
                 'invocation_choices' => json_encode($invocationChoices->toArray()),
                 'duplicity_eligible_sources' => $result->duplicityEligibleSources,
+                'reactor_candidate_card_ids' => json_encode($result->reactorCandidateCardIds),
             ]);
         } catch (PDOException $e) {
             if ($e->getCode() === '23000') {

@@ -1,0 +1,17 @@
+-- No schema change: an uncaught Throwable from any route (only specific,
+-- anticipated exceptions like GameStateException had per-route try/catch
+-- blocks) fell through to PHP's own raw fatal-error output -- plain
+-- text/HTML, not JSON. apiRequest() in app.js can't parse that as JSON, so
+-- the caller falls back to a generic, undiagnosable message (e.g.
+-- game.js's refreshBoard() showing "Could not load this game." with no
+-- trace of what actually happened). Added a top-level set_exception_handler()
+-- in index.php that turns any such exception into a proper JSON 500 and
+-- logs the real exception server-side via error_log(), so a future
+-- occurrence is actually diagnosable instead of a dead end.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0136 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.26.2' WHERE id = 1;

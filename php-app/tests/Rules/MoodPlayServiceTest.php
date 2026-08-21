@@ -2181,6 +2181,31 @@ final class MoodPlayServiceTest extends TestCase
         self::assertSame(0, $state->playsRemaining());
     }
 
+    /**
+     * A real bug, caught live: Validation never reacted to Thrill's own
+     * play when Thrill's own choice happened to return Validation itself
+     * to hand -- even though Validation genuinely was in play at the
+     * moment Thrill (base value 1, a qualifying "0 or 1" mood) was
+     * played. The old design re-queried "who's in play right now" only
+     * after Thrill's own afterPlaying() had already moved Validation out,
+     * so it silently never saw it. See PlayResult's own
+     * $reactorCandidateCardIds docblock.
+     */
+    public function testThrillReturningValidationStillLetsValidationReactToThrillsOwnPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [103, 26]]); // Thrill, Validation
+        $state->moveHandToInPlay(1, 26); // Validation, already in play
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 103, new PlayerChoices(['hand_mood_ids' => [26]]));
+
+        self::assertTrue($state->isInHand(1, 26));
+        // Base play consumed by playing Thrill (1 -> 0), +1 from Thrill's
+        // own "returned 1 mood" grant, +1 from Validation's own
+        // reactToAnotherPlay() reacting to Thrill's own play = 2.
+        self::assertSame(2, $state->playsRemaining());
+    }
+
     public function testFearGrantsAnUnconditionalExtraPlayAndOptionallyReturnsAMood(): void
     {
         $state = $this->boardState(hands: [1 => [38, 9, 106]]);
@@ -3397,7 +3422,8 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 107, new PlayerChoices(['target_player_id' => 3]));
 
         self::assertSame(3, $state->firstPlayerOverride());
-        self::assertTrue($state->effectState(107, 'skipScoringThisRound'));
+        self::assertTrue($state->skipScoringThisRound());
+        self::assertSame(3, $state->skipScoringFirstPlayerId());
     }
 
     public function testAweRejectsAnInvalidPlayer(): void
@@ -3482,7 +3508,11 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
 
         self::assertTrue($state->isInPlay(5));
-        self::assertSame(['action' => 'discard', 'condition' => 'always'], $state->effectState(5, 'afterScoring'));
+        // 'playerId' is folded into every 'afterScoring' onUseEffectState
+        // payload now (see the identical Insecurity test above), even
+        // though Gluttony's own 'discard' action has no use for it --
+        // harmless, and simpler than special-casing which action gets it.
+        self::assertSame(['action' => 'discard', 'condition' => 'always', 'playerId' => 1], $state->effectState(5, 'afterScoring'));
     }
 
     public function testGluttonyLeavesNoTagWhenTheExtraPlayGoesUnused(): void
@@ -3503,7 +3533,16 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 45, new PlayerChoices([]));
         $this->plays->playMood($state, 1, 5, new PlayerChoices([]));
 
-        self::assertSame(['action' => 'return_to_hand', 'condition' => 'always'], $state->effectState(5, 'afterScoring'));
+        // 'playerId' (the player who actually played Complacency via
+        // Insecurity's own grant) is folded in by MoodPlayService itself
+        // -- InsecurityEffect only ever knows who played INSECURITY, not
+        // necessarily who ends up spending the resulting extra play, so
+        // it can't set this itself. See GameService::applyAfterScoringHooks()'s
+        // own use of it: without it, the card would return to whoever
+        // CURRENTLY owns it once scoring resolves, which can differ from
+        // who actually played it if something like Chaos reassigned
+        // ownership in between -- a real bug reported live.
+        self::assertSame(['action' => 'return_to_hand', 'condition' => 'always', 'playerId' => 1], $state->effectState(5, 'afterScoring'));
     }
 
     public function testPatienceValueIs1WhenPlayedThisRound(): void

@@ -20,20 +20,47 @@ use MoodSwings\Game\Exceptions\GameStateException;
 final class CardCatalog
 {
     /**
-     * @return array{idsByName: array<string, int>, rowsById: array<int, array{name: string, rarity: string, color: string}>}
+     * @return array{idsByName: array<string, int>, rowsById: array<int, array{name: string, rarity: string, color: string, draftPriorityScore: int}>}
      */
     public static function load(): array
     {
-        $stmt = Connection::get()->query('SELECT id, name, rarity, color FROM cards');
+        $stmt = Connection::get()->query('SELECT id, name, rarity, color, draft_priority_score FROM cards');
         $idsByName = [];
         $rowsById = [];
         foreach ($stmt->fetchAll() as $row) {
             $id = (int) $row['id'];
             $idsByName[mb_strtolower($row['name'])] = $id;
-            $rowsById[$id] = ['name' => $row['name'], 'rarity' => $row['rarity'], 'color' => $row['color']];
+            $rowsById[$id] = [
+                'name' => $row['name'],
+                'rarity' => $row['rarity'],
+                'color' => $row['color'],
+                'draftPriorityScore' => (int) $row['draft_priority_score'],
+            ];
         }
 
         return ['idsByName' => $idsByName, 'rowsById' => $rowsById];
+    }
+
+    /**
+     * Issue #359's own draft practice bots: the 5 build-around mythics'
+     * curated partner-card lists (migration 0143's card_synergy_partners
+     * table, see its own docblock for where this data comes from) --
+     * mythic card id => that mythic's own 14 partner card ids. A bot that
+     * has drafted a mythic reads its own list here to prioritize those
+     * partners more highly for the rest of the draft (see
+     * MoodSwings\Bot\BotPlayerService's draft-pick scoring).
+     *
+     * @return array<int, int[]>
+     */
+    public static function loadSynergyPartnersByMythicId(): array
+    {
+        $stmt = Connection::get()->query('SELECT mythic_card_id, partner_card_id FROM card_synergy_partners');
+        $partnersByMythicId = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $partnersByMythicId[(int) $row['mythic_card_id']][] = (int) $row['partner_card_id'];
+        }
+
+        return $partnersByMythicId;
     }
 
     /**

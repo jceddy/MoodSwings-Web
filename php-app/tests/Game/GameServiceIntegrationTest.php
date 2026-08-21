@@ -62,6 +62,8 @@ final class GameServiceIntegrationTest extends TestCase
         $pdo->exec('TRUNCATE TABLE draft_pile_stage_picks');
         $pdo->exec('TRUNCATE TABLE draft_winston_state');
         $pdo->exec('TRUNCATE TABLE draft_grid_state');
+        $pdo->exec('TRUNCATE TABLE draft_rotisserie_state');
+        $pdo->exec('TRUNCATE TABLE draft_tiered_rotisserie_state');
         $pdo->exec('TRUNCATE TABLE draft_match_players');
         $pdo->exec('TRUNCATE TABLE draft_matches');
         $pdo->exec('TRUNCATE TABLE game_notes');
@@ -2691,6 +2693,62 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A real bug, caught live: Validation never reacted to Thrill's own
+     * play when Thrill's own choice happened to return Validation itself
+     * to hand, because the reaction loop used to re-query "who's in play
+     * right now" only after Thrill's own afterPlaying() had already
+     * moved Validation out. Exercises the REAL round trip the fix needed:
+     * playMood() writes the pending batch
+     * (game_pending_decision_batches.reactor_candidate_card_ids,
+     * migration 0127) while pausing for Duplicity's own "repeat again?"
+     * offer, and respondToDecision() reads that persisted snapshot back
+     * in a separate call -- same as GameService's own two public entry
+     * points a real client actually calls across two separate HTTP
+     * requests -- proving the fix survives a genuine request boundary,
+     * not just in-memory threading within a single playMood() call. See
+     * PlayResult's own $reactorCandidateCardIds docblock.
+     */
+    public function testRespondToDecisionLetsValidationReactToThrillAfterAPersistedDuplicityRepeatPause(): void
+    {
+        $u1 = $this->insertUser('thrillval1');
+        $u2 = $this->insertUser('thrillval2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 37, 'in_play', $p1); // Duplicity
+        $validationId = $this->insertGameCard($gameId, 26, 'in_play', $p1); // Validation, already in play
+        $thrillId = $this->insertGameCard($gameId, 103, 'hand', $p1); // Thrill, value 1
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $playResult = $this->games->playMood($gameId, $p1, $thrillId, ['hand_mood_ids' => [$validationId]]);
+        self::assertTrue($playResult['pending_decision'] ?? false, "Duplicity's own repeat offer should pause the play before Validation's reaction has a chance to run");
+
+        $pending = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('duplicity_repeat_offer', $pending['decision_type']);
+
+        $registry = DefaultEffectRegistry::build();
+        $stateAfterPlay = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($stateAfterPlay->isInHand($p1, $validationId), "Thrill's own effect should already have returned Validation to hand");
+        self::assertSame(1, (int) $this->fetchRound($gameId)['plays_remaining']); // base 1 -> 0 for playing Thrill, +1 from Thrill's own "returned 1 mood" grant
+
+        $respondResult = $this->games->respondToDecision($gameId, $p1, [
+            'duplicity_repeat' => ['repeat' => false],
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $respondResult);
+
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        self::assertTrue($state->isInHand($p1, $validationId));
+        self::assertSame(2, (int) $this->fetchRound($gameId)['plays_remaining']); // +1 more from Validation's own reactToAnotherPlay(), read back from the persisted reactor_candidate_card_ids snapshot
+    }
+
+    /**
      * Hurt Feelings' own second base play must be described as
      * attributable to Hurt Feelings, not render as an indistinguishable
      * second "Your normal turn" -- see
@@ -2843,36 +2901,112 @@ final class GameServiceIntegrationTest extends TestCase
         $this->insertGamePlayer($gameId, $u2, 1);
 
         $faithId = $this->insertGameCard($gameId, 12, 'in_play', $p1); // Faith
-        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by Faith, for as long as Faith is in play
+        $scornId = $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn
+        $courageId = $this->insertGameCard($gameId, 7, 'in_play', $p1); // Courage -- suppressed by BOTH Faith and Scorn at once
         $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity -- suppressed until the end of the round, no tracked source (mirrors Repentance)
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
-        $this->pdo->prepare(
-            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'while_source_in_play', suppression_source_game_card_id = :source
-             WHERE id = :id"
-        )->execute(['source' => $faithId, 'id' => $courageId]);
+        // A mood can be suppressed by more than one source at once, each on
+        // its own independent expiry -- see MoodInPlay's own docblock and
+        // migration 0128. Courage here carries both a 'while_source_in_play'
+        // entry from Faith and an 'end_of_round' one from Scorn.
+        $this->pdo->prepare('UPDATE game_cards SET suppressions = :suppressions WHERE id = :id')->execute([
+            'suppressions' => json_encode([
+                ['expiry' => 'while_source_in_play', 'sourceCardId' => $faithId],
+                ['expiry' => 'end_of_round', 'sourceCardId' => $scornId],
+            ]),
+            'id' => $courageId,
+        ]);
 
-        $this->pdo->prepare(
-            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'end_of_round'
-             WHERE id = :id"
-        )->execute(['id' => $dignityId]);
+        $this->pdo->prepare('UPDATE game_cards SET suppressions = :suppressions WHERE id = :id')->execute([
+            'suppressions' => json_encode([['expiry' => 'end_of_round', 'sourceCardId' => null]]),
+            'id' => $dignityId,
+        ]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
 
         $courage = self::findByCardId($inPlay, $courageId);
         self::assertTrue($courage['is_suppressed']);
-        self::assertSame('while_source_in_play', $courage['suppression_expiry']);
-        self::assertSame($faithId, $courage['suppressed_by_card_id']);
-        self::assertSame('Faith', $courage['suppressed_by_name']);
+        self::assertSame(
+            [
+                ['expiry' => 'while_source_in_play', 'suppressed_by_card_id' => $faithId, 'suppressed_by_name' => 'Faith'],
+                ['expiry' => 'end_of_round', 'suppressed_by_card_id' => $scornId, 'suppressed_by_name' => 'Scorn'],
+            ],
+            $courage['suppressions'],
+        );
 
         $dignity = self::findByCardId($inPlay, $dignityId);
         self::assertTrue($dignity['is_suppressed']);
-        self::assertSame('end_of_round', $dignity['suppression_expiry']);
-        self::assertNull($dignity['suppressed_by_card_id']);
-        self::assertNull($dignity['suppressed_by_name']);
+        self::assertSame(
+            [['expiry' => 'end_of_round', 'suppressed_by_card_id' => null, 'suppressed_by_name' => null]],
+            $dignity['suppressions'],
+        );
 
         $faith = self::findByCardId($inPlay, $faithId);
         self::assertFalse($faith['is_suppressed']);
+        self::assertSame([], $faith['suppressions']);
+    }
+
+    /**
+     * A real bug, caught live: with Scorn already in play, playing Shame
+     * (discarding a white card) suppressed an opponent's Loyalty
+     * 'while_source_in_play' via Shame's own effect, and Scorn's own
+     * reaction to that same play then ALSO suppressed that Loyalty
+     * 'end_of_round'. The old single-slot suppression columns could only
+     * remember one source at a time, so Scorn's own suppress() call
+     * silently overwrote Shame's -- when the round ended,
+     * clearEndOfRoundSuppressions() lifted Loyalty's suppression entirely,
+     * even though Shame (still in play) should have kept it suppressed.
+     * See MoodInPlay's own docblock and migration 0128.
+     */
+    public function testAScornSuppressionExpiringAtRoundEndDoesNotClobberAStillActiveShameSuppression(): void
+    {
+        $u1 = $this->insertUser('scornshame1');
+        $u2 = $this->insertUser('scornshame2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $scornId = $this->insertGameCard($gameId, 24, 'in_play', $p1); // Scorn
+        $shameId = $this->insertGameCard($gameId, 25, 'hand', $p1); // Shame
+        $guiltHandId = $this->insertGameCard($gameId, 14, 'hand', $p1); // Guilt (white) -- discarded to Shame to suppress white
+        $loyaltyId = $this->insertGameCard($gameId, 18, 'in_play', $p2); // Loyalty (white) -- opponent's, shares color with the discard
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Scorn's own reaction to Shame's play reads its choice
+        // (scorn_suppress_target) from the same top-level choices bag as
+        // Shame's own (discard_card_id) -- it's the same player's own
+        // decision, made in the same request, not a separate pending
+        // decision (see MoodEffect::reactToAnotherPlay()'s own docblock).
+        $playResult = $this->games->playMood($gameId, $p1, $shameId, [
+            'discard_card_id' => $guiltHandId,
+            'scorn_suppress_target' => $loyaltyId,
+        ]);
+        self::assertArrayNotHasKey('pending_decision', $playResult);
+
+        $inPlayDuringRound1 = $this->games->getState($gameId, $u1)['in_play'];
+        $loyaltyDuringRound1 = self::findByCardId($inPlayDuringRound1, $loyaltyId);
+        self::assertTrue($loyaltyDuringRound1['is_suppressed']);
+        self::assertCount(2, $loyaltyDuringRound1['suppressions']);
+
+        $this->games->pass($gameId, $p2); // p1 already used their only play -- this ends round 1
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+
+        $inPlayDuringRound2 = $this->games->getState($gameId, $u1)['in_play'];
+        $loyaltyDuringRound2 = self::findByCardId($inPlayDuringRound2, $loyaltyId);
+        self::assertTrue($loyaltyDuringRound2['is_suppressed'], "Shame's own 'while_source_in_play' suppression should survive the round ending");
+        self::assertSame(
+            [['expiry' => 'while_source_in_play', 'suppressed_by_card_id' => $shameId, 'suppressed_by_name' => 'Shame']],
+            $loyaltyDuringRound2['suppressions'],
+        );
     }
 
     /**
@@ -2906,7 +3040,7 @@ final class GameServiceIntegrationTest extends TestCase
         $inPlayDuringRound1 = $this->games->getState($gameId, $u1)['in_play'];
         $courageDuringRound1 = self::findByCardId($inPlayDuringRound1, $courageId);
         self::assertTrue($courageDuringRound1['is_suppressed']);
-        self::assertSame('end_of_round', $courageDuringRound1['suppression_expiry']);
+        self::assertSame('end_of_round', $courageDuringRound1['suppressions'][0]['expiry']);
 
         $this->games->pass($gameId, $p2); // p1 already used their only play -- this ends round 1
 
@@ -2916,7 +3050,7 @@ final class GameServiceIntegrationTest extends TestCase
         $inPlayDuringRound2 = $this->games->getState($gameId, $u1)['in_play'];
         $courageDuringRound2 = self::findByCardId($inPlayDuringRound2, $courageId);
         self::assertFalse($courageDuringRound2['is_suppressed']);
-        self::assertNull($courageDuringRound2['suppression_expiry']);
+        self::assertSame([], $courageDuringRound2['suppressions']);
     }
 
     /**
@@ -3046,9 +3180,11 @@ final class GameServiceIntegrationTest extends TestCase
         )->execute(['effect_state' => json_encode(['boostedMoodId' => $dignityId]), 'id' => $encouragementId]);
 
         $this->pdo->prepare(
-            "UPDATE game_cards SET is_suppressed = 1, suppression_expiry = 'while_source_in_play', suppression_source_game_card_id = :source
-             WHERE id = :id"
-        )->execute(['source' => $faithId, 'id' => $courageId]);
+            'UPDATE game_cards SET suppressions = :suppressions WHERE id = :id'
+        )->execute([
+            'suppressions' => json_encode([['expiry' => 'while_source_in_play', 'sourceCardId' => $faithId]]),
+            'id' => $courageId,
+        ]);
 
         $inPlay = $this->games->getState($gameId, $u1)['in_play'];
 
@@ -3090,7 +3226,7 @@ final class GameServiceIntegrationTest extends TestCase
         $corruptionId = $this->insertGameCard($gameId, 60, 'in_play', $p2); // Corruption
         $enthusiasmId = $this->insertGameCard($gameId, 116, 'in_play', $p1); // Enthusiasm
         $passionId = $this->insertGameCard($gameId, 97, 'in_play', $p2); // Passion
-        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
 
         $setEffectState = function (int $cardId, array $effectState): void {
             $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
@@ -3098,8 +3234,13 @@ final class GameServiceIntegrationTest extends TestCase
         };
         $setEffectState($blissId, ['blissColor' => 'red']);
         $setEffectState($sneakinessId, ['swapScoreWithPlayerId' => $p2]);
-        $setEffectState($aweId, ['skipScoringThisRound' => true, 'oneTimeFirstPlayerOverride' => $p2]);
         $setEffectState($corruptionId, ['awardsExtraWin' => true]);
+        // Awe's own skip-scoring/first-player choice is round-level state,
+        // not per-card effectState -- see BoardState::$skipScoringThisRound's
+        // own docblock -- so it's set here rather than via $setEffectState().
+        $this->pdo->prepare(
+            'UPDATE game_rounds SET skip_scoring = 1, skip_scoring_first_player_game_player_id = :first_player, skip_scoring_source_card_id = :card_id, skip_scoring_owner_game_player_id = :owner_id WHERE id = :round_id'
+        )->execute(['first_player' => $p2, 'card_id' => $aweId, 'owner_id' => $p2, 'round_id' => $roundId]);
 
         $effects = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
         $byCardId = [];
@@ -3123,6 +3264,49 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertStringContainsString('scoringfx1 may score their highest-valued mood an extra time (Enthusiasm).', $byCardId[$enthusiasmId]['description']);
 
         self::assertStringContainsString("scoringfx2 may score one of an opponent's moods as their own (Passion).", $byCardId[$passionId]['description']);
+    }
+
+    /**
+     * A bug caught live: the "How scoring will be affected" section's own
+     * Awe entry used to be built by scanning moodsInPlay() for the same
+     * per-card 'skipScoringThisRound' tag the underlying skip-scoring
+     * mechanism itself used to rely on -- once that moved to round-level
+     * state (so the actual skip survives Awe leaving play), this entry
+     * silently stopped appearing at all, since the per-card tag it
+     * checked was never written anymore. Confirms the entry now reads
+     * from the same round-level state the mechanism does, so it stays
+     * visible for the rest of the round even after Awe itself is gone.
+     */
+    public function testGetStateStillExposesAweScoringEffectEvenAfterAweLeavesPlay(): void
+    {
+        $u1 = $this->insertUser('awescoringfx1');
+        $u2 = $this->insertUser('awescoringfx2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p2]);
+
+        $beforeLeaving = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
+        self::assertCount(1, $beforeLeaving);
+        self::assertStringContainsString("awescoringfx1's Awe means this round won't be scored", $beforeLeaving[0]['description']);
+
+        // Awe leaves play before the round finishes scoring.
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = :id")
+            ->execute(['id' => $aweId]);
+
+        $afterLeaving = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
+        self::assertCount(1, $afterLeaving, 'the entry survives Awe itself leaving play');
+        self::assertStringContainsString("awescoringfx1's Awe means this round won't be scored", $afterLeaving[0]['description']);
     }
 
     public function testGetStateOmitsCorruptionFromScoringEffectsWhenItDidNotChooseTheDoubleWinMode(): void
@@ -3229,6 +3413,66 @@ final class GameServiceIntegrationTest extends TestCase
         // test setup that never actually went through afterPlaying().
         $this->insertGameCard($gameId, 42, 'in_play', $p1); // Imagination
         $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        self::assertSame([], $this->games->getState($gameId, $u1)['round']['board_effects']);
+    }
+
+    /**
+     * Doubt's own ban was previously enforced purely server-side (an
+     * illegal play targeting a banned color is just rejected) with no
+     * indication anywhere that it was even active -- now surfaced in
+     * board_effects for the single round it actually applies to, the
+     * same "played in round N -> active in round N+1" window
+     * BoardState::bannedColorsThisRound() itself checks.
+     */
+    public function testGetStateExposesBoardEffectsForDoubtsColorBanStillActiveThisRound(): void
+    {
+        $u1 = $this->insertUser('doubtboardfx1');
+        $u2 = $this->insertUser('doubtboardfx2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $doubtId = $this->insertGameCard($gameId, 36, 'in_play', $p1); // Doubt
+        $this->insertGameRound($gameId, 2, $p1, $p1, 1); // current round 2 -- one after Doubt's own playedInRound (1)
+
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['bannedColors' => ['blue', 'red'], 'playedInRound' => 1]), 'id' => $doubtId]);
+
+        $effects = $this->games->getState($gameId, $u1)['round']['board_effects'];
+
+        self::assertCount(1, $effects);
+        self::assertSame($doubtId, $effects[0]['card_id']);
+        self::assertSame($p1, $effects[0]['owner_game_player_id']);
+        self::assertStringContainsString("doubtboardfx1's Doubt", $effects[0]['description']);
+        self::assertStringContainsString('blue, red', $effects[0]['description']);
+    }
+
+    public function testGetStateOmitsDoubtFromBoardEffectsOnceTheBannedRoundHasPassed(): void
+    {
+        $u1 = $this->insertUser('doubtboardfxstale1');
+        $u2 = $this->insertUser('doubtboardfxstale2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $this->insertGamePlayer($gameId, $u2, 1);
+
+        $doubtId = $this->insertGameCard($gameId, 36, 'in_play', $p1); // Doubt
+        $this->insertGameRound($gameId, 3, $p1, $p1, 1); // current round 3 -- two rounds after Doubt's own playedInRound (1), so its ban already lifted
+
+        $this->pdo->prepare('UPDATE game_cards SET effect_state = :effect_state WHERE id = :id')
+            ->execute(['effect_state' => json_encode(['bannedColors' => ['blue'], 'playedInRound' => 1]), 'id' => $doubtId]);
 
         self::assertSame([], $this->games->getState($gameId, $u1)['round']['board_effects']);
     }
@@ -3597,13 +3841,21 @@ final class GameServiceIntegrationTest extends TestCase
         $recentEvents = $this->games->getState($gameId, $u1)['recent_events'];
         self::assertCount(15, $recentEvents, "recentEvents()'s own hardcoded limit");
 
-        $countStmt = $this->pdo->prepare('SELECT COUNT(*) FROM game_events WHERE game_id = :game_id');
+        // Excludes 'round_grants_computed' the same way fullEventLog()
+        // itself now does -- a diagnostic-only row (logFreshGrants(),
+        // added after a real "no legal play despite a full hand" report
+        // turned out to be unreconstructable from game_rounds alone)
+        // fired on every turn/round boundary, deliberately never surfaced
+        // to players on either log read path.
+        $countStmt = $this->pdo->prepare(
+            "SELECT COUNT(*) FROM game_events WHERE game_id = :game_id AND event_type != 'round_grants_computed'"
+        );
         $countStmt->execute(['game_id' => $gameId]);
         $actualEventCount = (int) $countStmt->fetchColumn();
         self::assertGreaterThan(15, $actualEventCount, 'sanity check that this scenario really does exceed the 15-row limit');
 
         $fullLog = $this->games->fullEventLog($gameId);
-        self::assertCount($actualEventCount, $fullLog, 'fullEventLog() has no cap at all');
+        self::assertCount($actualEventCount, $fullLog, 'fullEventLog() has no cap on player-visible events');
 
         $ids = array_column($fullLog, 'id');
         $sortedIds = $ids;
@@ -3757,7 +4009,7 @@ final class GameServiceIntegrationTest extends TestCase
         $entry = $this->games->fullEventLog($gameId)[0];
 
         self::assertSame(
-            [['card_id' => $charityId, 'is_suppressed' => true, 'suppression_expiry' => 'end_of_round', 'suppression_source_card_id' => $scornId]],
+            [['card_id' => $charityId, 'suppressions' => [['expiry' => 'end_of_round', 'suppression_source_card_id' => $scornId]]]],
             $entry['details']['suppression_changes'],
         );
         self::assertContains(
@@ -4632,6 +4884,133 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A bug caught live, reported by a user: playing Sneakiness and Awe in
+     * the SAME round used to leave Sneakiness's own 'swapScoreWithPlayerId'
+     * effectState tag sitting on the card forever afterward. That tag is
+     * normally cleared by applyScoreSwaps() the instant it's actually
+     * applied -- but Awe skipping the round it was played in means
+     * scoreRoundAndAdvance() takes the skipScoringAndAdvance() branch
+     * instead, which never calls applyScoreSwaps() at all (Sneakiness's
+     * own text is "THIS round, after scoring" -- there IS no scoring this
+     * round for it to hook into). Sneakiness commonly stays in play well
+     * past the round it was played in, so the stale tag used to keep
+     * showing up in "How scoring will be affected" (scoring_effects) for
+     * every later round too, AND -- the real bug, not just a display
+     * glitch -- actually fire for real the next time scoring genuinely
+     * happens, silently swapping that unrelated later round's own outcome.
+     * skipScoringAndAdvance() now clears the tag itself, the same way it
+     * already cleared Awe's own round-level markers.
+     */
+    public function testSneakinessDoesNotSwapAFutureRoundsScoreWhenItsOwnRoundWasSkippedByAwe(): void
+    {
+        $u1 = $this->insertUser('sneakawe1');
+        $u2 = $this->insertUser('sneakawe2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $sneakinessId = $this->insertGameCard($gameId, 51, 'hand', $p1); // Sneakiness, value 5
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p2); // Awe, value 4
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // vanilla common, value 4 -- round 2
+        $indifferenceId = $this->insertGameCard($gameId, 44, 'hand', $p2); // vanilla common, value 4 -- round 2
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        // Round 1: p1 plays Sneakiness (tagging a swap with p2), then p2
+        // plays Awe (skipping round 1's own scoring entirely).
+        $this->games->playMood($gameId, $p1, $sneakinessId, ['opponent_player_id' => $p2]);
+        $this->games->playMood($gameId, $p2, $aweId, ['target_player_id' => $p1]);
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p1, (int) $round2['first_game_player_id']); // Awe's own choice
+
+        // The stale tag used to still show up here, describing a swap that
+        // will never actually happen.
+        $effects = $this->games->getState($gameId, $u1)['round']['scoring_effects'];
+        self::assertSame([], $effects, 'Sneakiness\'s own one-time swap should not still be pending after Awe skipped its round');
+
+        // Round 2 scores for real -- Sneakiness (5) and Awe (4) are both
+        // still in play from round 1, plus each player's fresh round-2
+        // card.
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+        $result = $this->games->playMood($gameId, $p2, $indifferenceId, []);
+
+        self::assertTrue($result['round_scored']);
+
+        $scoresStmt = $this->pdo->prepare(
+            "SELECT s.game_player_id, s.score FROM game_round_scores s JOIN game_rounds r ON r.id = s.game_round_id
+             WHERE r.game_id = :game_id AND r.round_number = 2"
+        );
+        $scoresStmt->execute(['game_id' => $gameId]);
+        $scores = array_column($scoresStmt->fetchAll(), 'score', 'game_player_id');
+
+        self::assertSame(9, (int) $scores[$p1], 'p1: Sneakiness (5) + Complacency (4) -- NOT swapped with p2');
+        self::assertSame(8, (int) $scores[$p2], 'p2: Awe (4) + Indifference (4) -- NOT swapped with p1');
+    }
+
+    /**
+     * A bug caught live: Awe's own effect triggers "after playing" -- its
+     * choice of who goes first next round is already fully locked in the
+     * instant it resolves, unlike Honor's genuinely "while in play"
+     * ability of the same shape. Previously this was tracked as
+     * effectState tagged on Awe's own card, so if Awe left play (stolen,
+     * discarded, etc.) before the round it was played in actually
+     * finished scoring, its own tag silently vanished along with it --
+     * the round scored normally instead of being skipped, and no one went
+     * first next round on purpose. Awe itself is discarded directly here
+     * (bypassing any specific removal card) to isolate the one thing that
+     * matters: does the choice survive Awe no longer being in play by the
+     * time the round finishes, across a real load()/save() round trip.
+     */
+    public function testAweStillSkipsScoringAndSetsNextRoundsFirstPlayerEvenIfAweLeavesPlayFirst(): void
+    {
+        $u1 = $this->insertUser('aweleaves1');
+        $u2 = $this->insertUser('aweleaves2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'hand', $p1); // Awe
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $aweId, ['target_player_id' => $p2]);
+
+        // Awe leaves play before the round it was played in finishes
+        // scoring -- exactly the scenario the bug report described,
+        // simulated directly rather than via any one specific removal
+        // card, since the fix has nothing to do with how it leaves.
+        $this->pdo->prepare("UPDATE game_cards SET zone = 'discard', owner_game_player_id = NULL WHERE id = :id")
+            ->execute(['id' => $aweId]);
+
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored'], 'scoring is still skipped even though Awe is no longer in play');
+        self::assertFalse($result['game_completed']);
+
+        $round1Stmt = $this->pdo->prepare('SELECT status, winner_game_player_id FROM game_rounds WHERE game_id = :game_id AND round_number = 1');
+        $round1Stmt->execute(['game_id' => $gameId]);
+        $round1 = $round1Stmt->fetch();
+        self::assertSame('scored', $round1['status']);
+        self::assertNull($round1['winner_game_player_id'], 'no winner -- Awe\'s "no one wins or loses this round" still applies');
+
+        $round2 = $this->fetchRound($gameId);
+        self::assertSame(2, (int) $round2['round_number']);
+        self::assertSame($p2, (int) $round2['first_game_player_id'], 'Awe\'s own choice of who goes first still applies');
+    }
+
+    /**
      * Bashfulness's after-scoring hook has to survive a real load()/save()
      * round trip: it's tagged when played, then resolved once the round's
      * winner is known, moving itself to the bottom of the deck and
@@ -4669,6 +5048,67 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertContains($p1ReplacementId, $state->hand($p1));
         self::assertContains($p2DrawId, $state->hand($p2));
         self::assertSame([$bashfulnessId], $state->deck());
+    }
+
+    /**
+     * Regression test (a live bug report, with a screenshot): p1 plays
+     * Insecurity, then Complacency (no ability of its own) using the
+     * granted extra play -- MoodPlayService tags Complacency with
+     * 'playerId' => p1, the player who actually played it via that
+     * grant. Something else then reassigns Complacency's own ownership
+     * to p2 BEFORE scoring resolves (Chaos, in the reported bug --
+     * simulated here with a direct ownership swap so the test stays
+     * deterministic rather than depending on Chaos's own shuffle()).
+     * Insecurity's own card text reads "put THAT MOOD into YOUR hand" --
+     * "your" meaning whoever played it via the grant, not whoever
+     * happens to own it by the time scoring rolls around -- so
+     * Complacency must land in p1's hand, not p2's, once the round ends,
+     * even though p2 is its current owner at that point.
+     */
+    public function testInsecuritysExtraPlayReturnsToWhoeverPlayedItEvenIfOwnershipChangedSinceThen(): void
+    {
+        $u1 = $this->insertUser('insecurity1');
+        $u2 = $this->insertUser('insecurity2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $insecurityId = $this->insertGameCard($gameId, 45, 'hand', $p1); // Insecurity
+        $complacencyId = $this->insertGameCard($gameId, 5, 'hand', $p1); // Complacency, no ability
+        // Reassigning Complacency's own ownership to p2 (below) hands
+        // p2 its value in the round score too, so either player could
+        // plausibly end up needing a loser-draw card once scoring
+        // resolves -- both are stocked here; which one (if either)
+        // actually gets drawn isn't what this test is about.
+        $this->insertGameCard($gameId, 3, 'deck', null, 0);
+        $this->insertGameCard($gameId, 7, 'deck', null, 1);
+        $this->insertGameCard($gameId, 8, 'hand', $p2); // p2 needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $insecurityId, []);
+        $this->games->playMood($gameId, $p1, $complacencyId, []);
+
+        // Simulate Chaos (or anything else that reassigns a mood's own
+        // owner) having handed Complacency to p2 before scoring.
+        $this->pdo->prepare('UPDATE game_cards SET owner_game_player_id = :new_owner WHERE game_id = :game_id AND card_id = :card_id AND zone = \'in_play\'')
+            ->execute(['new_owner' => $p2, 'game_id' => $gameId, 'card_id' => 5]);
+
+        $result = $this->games->pass($gameId, $p2);
+
+        self::assertTrue($result['round_scored']);
+
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+
+        self::assertFalse($state->isInPlay($complacencyId));
+        self::assertContains($complacencyId, $state->hand($p1), "Complacency should return to p1's hand -- the player who actually played it via Insecurity's grant");
+        self::assertNotContains($complacencyId, $state->hand($p2), "Complacency should NOT go to p2's hand just because Chaos-like reassignment made them its owner by scoring time");
     }
 
     /**
@@ -5419,6 +5859,71 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * Diagnostic-only instrumentation, added after a real "why did this
+     * player have no legal play" report turned out to be unreproducible
+     * from game_rounds alone -- a same-round turn switch overwrites that
+     * row in place, so a round's own opening grants are otherwise lost
+     * forever the moment the next turn starts. logFreshGrants() records
+     * them permanently in game_events instead, but must stay invisible to
+     * players (fullEventLog()/recentEvents() both filter it out) since it
+     * fires on literally every turn/round boundary.
+     */
+    public function testRoundGrantsComputedIsLoggedButHiddenFromThePlayerFacingLog(): void
+    {
+        $u1 = $this->insertUser('rgc1');
+        $u2 = $this->insertUser('rgc2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $joyId = $this->insertGameCard($gameId, 125, 'hand', $p1); // Joy, value 3
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $joyId, []);
+        $this->games->pass($gameId, $p2);
+
+        $eventsStmt = $this->pdo->prepare(
+            "SELECT * FROM game_events WHERE game_id = :game_id AND event_type = 'round_grants_computed' ORDER BY id ASC"
+        );
+        $eventsStmt->execute(['game_id' => $gameId]);
+        $grantEvents = $eventsStmt->fetchAll();
+
+        // One per turn/round boundary computeFreshGrants() actually runs
+        // for -- NOT p1's own round-1 turn start, which this test's fixture
+        // seeds directly via insertGameRound() (a raw INSERT mimicking
+        // BoardState::startTurn()'s own simpler round-1 allowance, which
+        // never calls computeFreshGrants() at all: Hope/Grace/Stubbornness
+        // all require moods already in play, and no plays can possibly be
+        // banked yet, before a single card has been played in the whole
+        // game). So just p2's round-1 turn start (base only, via
+        // advanceTurn()) and p1's round-2 turn start (base + Joy's banked
+        // play, via finishScoringAndAdvance()).
+        self::assertCount(2, $grantEvents);
+        self::assertSame($p1, (int) $grantEvents[1]['acting_game_player_id']);
+        $round2Grants = json_decode((string) $grantEvents[1]['details'], true)['grants'];
+        self::assertCount(2, $round2Grants, 'base allowance + Joy\'s banked play');
+
+        // Never surfaced to players, on either log read path.
+        $fullLogEventTypes = array_column($this->games->fullEventLog($gameId), 'event_type');
+        self::assertNotContains('round_grants_computed', $fullLogEventTypes);
+
+        // recentEvents()'s own mapped shape (id/created_at/description)
+        // doesn't expose event_type at all, so the exclusion is checked
+        // arithmetically instead: p1's Joy play, p2's pass, and the
+        // round-1 round_scored that pass triggers are the only real,
+        // player-visible events here -- if the 2 round_grants_computed
+        // rows leaked through, this count would be 5, not 3.
+        $state = $this->games->getState($gameId, $u1);
+        self::assertCount(3, $state['recent_events']);
+    }
+
+    /**
      * Arrogance's "give it back if you still have it" only triggers once
      * the mood actually leaves play -- exercised here via a direct
      * BoardStateRepository round trip, since no player action in this
@@ -5497,6 +6002,44 @@ final class GameServiceIntegrationTest extends TestCase
         $registry = DefaultEffectRegistry::build();
         $state = (new BoardStateRepository($registry))->load($gameId);
         self::assertTrue($state->isSuppressed($scornId));
+    }
+
+    /**
+     * A bug caught live: 'scorn_suppress_target' is the one id-valued
+     * choice key in the whole schema that doesn't follow describeChoices()'s
+     * own "every id-valued key ends in _mood_id(s)/_card_id(s)" naming
+     * convention -- it silently fell through to the generic fallback,
+     * printing the raw game_cards.id instead of resolving it to the
+     * suppressed mood's own name, e.g. "(scorn suppress target: 5007)"
+     * instead of "(scorn suppress target: Scorn)".
+     */
+    public function testScornSuppressTargetLogEntryNamesTheCardNotItsRawId(): void
+    {
+        $u1 = $this->insertUser('scornlog1');
+        $u2 = $this->insertUser('scornlog2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $charityId = $this->insertGameCard($gameId, 3, 'hand', $p1); // Charity -- grants the extra play needed to also play Scorn this turn
+        $scornId = $this->insertGameCard($gameId, 24, 'hand', $p1); // Scorn, value 2, white
+        $courageId = $this->insertGameCard($gameId, 7, 'hand', $p1); // Courage, white -- played next round to trigger the reaction
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->playMood($gameId, $p1, $charityId, []);
+        $this->games->playMood($gameId, $p1, $scornId, ['target_mood_id' => $charityId]);
+        $this->games->pass($gameId, $p2);
+        $this->games->playMood($gameId, $p1, $courageId, ['scorn_suppress_target' => $scornId]);
+
+        $description = $this->games->getState($gameId, $u1)['recent_events'][0]['description'];
+        self::assertStringContainsString('scorn suppress target: Scorn', $description);
+        self::assertStringNotContainsString((string) $scornId, $description);
     }
 
     public function testCompulsionPausesForP2sOwnChoiceAndOnlyCompletesAfterTheyRespond(): void
@@ -6011,6 +6554,73 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertTrue($state->isInPlay($disciplineId)); // white, not chosen by anyone
         self::assertFalse($state->isInPlay($ambitionId)); // black
         self::assertFalse($state->isInPlay($anxietyId)); // blue
+    }
+
+    /**
+     * Each player's own color pick (or decline) is logged the instant they
+     * answer -- well before the queue's last response actually moves any
+     * moods -- so a later player can see every earlier pick before making
+     * their own, the same way it would be spoken aloud around a real
+     * table. A bug caught live: this used to only ever surface once, for
+     * the LAST responder, folded into the combined pending_decision_resolved
+     * event -- everyone else's own pick was recorded in
+     * game_pending_decisions but never once reached the public log.
+     */
+    public function testDisillusionmentLogsEachPlayersColorChoiceAsTheyRespond(): void
+    {
+        $u1 = $this->insertUser('disillog1');
+        $u2 = $this->insertUser('disillog2');
+        $u3 = $this->insertUser('disillog3');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+        $p3 = $this->insertGamePlayer($gameId, $u3, 2);
+
+        $disillusionmentId = $this->insertGameCard($gameId, 10, 'hand', $p1); // Disillusionment
+
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+        $this->games->playMood($gameId, $p1, $disillusionmentId, []);
+
+        // p2 picks black; check the log BEFORE p3/p1 have answered at all
+        // -- this is the "can a later player already see it" moment the
+        // card's own text implies.
+        $this->games->respondToDecision($gameId, $p2, ['chosen_color_' . $p2 => 'black']);
+        $descriptionsAfterP2 = array_column($this->games->fullEventLog($gameId), 'description');
+        self::assertContains($this->fetchUsername($u2) . ' chose black for Disillusionment', $descriptionsAfterP2);
+
+        // p3 declines outright.
+        $this->games->respondToDecision($gameId, $p3, []);
+        $descriptionsAfterP3 = array_column($this->games->fullEventLog($gameId), 'description');
+        self::assertContains($this->fetchUsername($u3) . ' declined to choose a color for Disillusionment', $descriptionsAfterP3);
+
+        // p1 (the acting player) answers last, completing the queue.
+        $this->games->respondToDecision($gameId, $p1, ['chosen_color_' . $p1 => 'red']);
+        $finalDescriptions = array_column($this->games->fullEventLog($gameId), 'description');
+
+        // All three individual picks survive in the final log, in order,
+        // alongside the combined resolution event.
+        $disillusionmentLines = array_values(array_filter(
+            $finalDescriptions,
+            fn (string $d) => str_contains($d, 'Disillusionment'),
+        ));
+        self::assertSame([
+            $this->fetchUsername($u1) . ' played Disillusionment from hand, waiting on a response',
+            $this->fetchUsername($u2) . ' chose black for Disillusionment',
+            $this->fetchUsername($u3) . ' declined to choose a color for Disillusionment',
+            $this->fetchUsername($u1) . ' chose red for Disillusionment',
+            // Pre-existing, unchanged behavior: the combined resolution
+            // event still folds in the LAST responder's own raw answer via
+            // describeChoices() -- p1's own pick is now visible twice
+            // (once via the new per-player line just above, once here),
+            // which is harmless and not what this test is about.
+            'A response to Disillusionment was resolved (chosen color: red)',
+        ], $disillusionmentLines);
     }
 
     /**
@@ -6993,6 +7603,152 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * The flip side of testRespondToDecisionRejectsAnInvalidPassionTargetEvenWhenNotTheRoundsLastDecision()
+     * below -- a genuinely VALID Passion target, submitted for a non-final
+     * decision (the same player also owns Enthusiasm, still outstanding
+     * after this one resolves), must still be accepted, not rejected as a
+     * false positive by the new synchronous validation.
+     */
+    public function testRespondToDecisionAcceptsAValidPassionTargetEvenWhenNotTheRoundsLastDecision(): void
+    {
+        $u1 = $this->insertUser('validmulti1');
+        $u2 = $this->insertUser('validmulti2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // p1's Passion -- asked first
+        $this->insertGameCard($gameId, 116, 'in_play', $p1); // p1's Enthusiasm -- same owner, asked second/last
+        $dignityId = $this->insertGameCard($gameId, 8, 'in_play', $p2); // Dignity, base value 3 -- a valid Passion target
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+
+        $firstDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('passion_score_opponent_mood', $firstDecision['decision_type']);
+
+        $afterFirst = $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => $dignityId]);
+        self::assertTrue($afterFirst['pending_decision'] ?? false, 'Enthusiasm\'s own decision is still outstanding');
+
+        $secondDecision = $this->games->getState($gameId, $u1)['round']['pending_decision'];
+        self::assertSame('enthusiasm_extra_score', $secondDecision['decision_type']);
+    }
+
+    /**
+     * A bug caught live in production: with more than one Enthusiasm/
+     * Passion mood in play, an invalid Passion target submitted for a
+     * NON-final scoring decision this round used to get silently persisted
+     * as "resolved" -- resolveScoringDecisionBonus()'s own validation only
+     * ever ran later, once the round's whole decision chain finished (or,
+     * worse, on a later getState() call recomputing the live
+     * scoring_preview -- see serializeScoringPreview()). Once a bad answer
+     * like that was written, every subsequent getState() call for the
+     * whole game re-threw the same InvalidChoiceException uncaught,
+     * permanently: "Could not load this game." with no way back in, since
+     * nothing ever re-asked for a corrected answer. respondToDecision()
+     * now runs this same validation before ever writing the row, so the
+     * bad answer is rejected right here instead, attributed to whoever
+     * actually submitted it -- see testPassionRejectsAnInvalidTargetMood
+     * above for the pre-existing single-decision case this generalizes.
+     */
+    public function testRespondToDecisionRejectsAnInvalidPassionTargetEvenWhenNotTheRoundsLastDecision(): void
+    {
+        $u1 = $this->insertUser('multidecision1');
+        $u2 = $this->insertUser('multidecision2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // p1's Passion -- asked first (turn order starts with p1)
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, p1's OWN mood -- invalid Passion target
+        $this->insertGameCard($gameId, 116, 'in_play', $p2); // p2's Enthusiasm -- asked second/last
+        $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $this->games->pass($gameId, $p2);
+
+        // p1 submits an invalid target (their own mood) for Passion, NOT the
+        // round's last outstanding decision (p2's Enthusiasm is still open).
+        $this->expectException(InvalidChoiceException::class);
+        $this->games->respondToDecision($gameId, $p1, ['target_mood_id' => 8]);
+    }
+
+    /**
+     * A safety net for whatever already-corrupted rows existed before the
+     * fix above shipped (or any other way a bad answer might ever end up
+     * persisted): resolvedScoringDecisionBonuses() is recomputed fresh on
+     * every single getState() call while a round's scoring decision is
+     * outstanding, so previously it would throw the exact same
+     * InvalidChoiceException on every subsequent load, forever, for a
+     * game already carrying one. Treating an already-resolved-but-invalid
+     * answer as a decline (0 bonus) instead means the game can still be
+     * loaded and finished even if a bad answer somehow made it into the
+     * database.
+     */
+    public function testGetStateTreatsAnAlreadyCorruptedPassionAnswerAsDeclinedInsteadOfThrowing(): void
+    {
+        $u1 = $this->insertUser('corrupted1');
+        $u2 = $this->insertUser('corrupted2');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $u1]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $p2 = $this->insertGamePlayer($gameId, $u2, 1);
+
+        $this->insertGameCard($gameId, 97, 'in_play', $p1); // p1's Passion -- asked first (turn order starts with p1)
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // Dignity, base value 3 -- p1's own, not a valid Passion target
+        $enthusiasmId = $this->insertGameCard($gameId, 116, 'in_play', $p2); // p2's Enthusiasm -- still outstanding below
+        $roundId = $this->insertGameRound($gameId, 1, $p1, $p1, 1);
+
+        $this->games->pass($gameId, $p1);
+        $result = $this->games->pass($gameId, $p2);
+        self::assertTrue($result['pending_decision'] ?? false, 'Passion\'s own scoring decision is now outstanding');
+
+        // Bypasses respondToDecision() entirely -- simulating a row that
+        // was already corrupted (e.g. written before this fix existed)
+        // rather than exercising the now-fixed submission path.
+        $batchId = (int) $this->pdo->query(
+            "SELECT id FROM game_pending_decision_batches WHERE game_round_id = {$roundId} AND resolved_at IS NULL ORDER BY id DESC LIMIT 1"
+        )->fetchColumn();
+        $this->pdo->prepare(
+            "UPDATE game_pending_decisions SET answer = :answer, resolved_at = NOW() WHERE batch_id = :batch_id"
+        )->execute(['answer' => json_encode(['target_mood_id' => 8]), 'batch_id' => $batchId]);
+        $this->pdo->prepare('UPDATE game_pending_decision_batches SET resolved_at = NOW() WHERE id = :id')
+            ->execute(['id' => $batchId]);
+
+        // Mirrors what respondToDecision() itself would have done next, had
+        // it not been bypassed above: queue p2's own still-outstanding
+        // Enthusiasm decision, so a decision is genuinely active while
+        // getState() recomputes the round's scoring_preview below -- that
+        // recompute is exactly what used to throw uncaught on the
+        // now-corrupted Passion row (see serializeScoringPreview()).
+        $registry = DefaultEffectRegistry::build();
+        $state = (new BoardStateRepository($registry))->load($gameId);
+        (new \ReflectionMethod($this->games, 'writeScoringDecisionBatch'))
+            ->invoke($this->games, $gameId, $roundId, $state, ['cardId' => $enthusiasmId, 'ownerId' => $p2, 'effectKey' => 'enthusiasm']);
+
+        $newState = $this->games->getState($gameId, $u1);
+        self::assertSame([$p1 => 3, $p2 => 0], $newState['round']['scoring_preview']['scores'], 'the corrupted Passion answer reads as declined (0 bonus), not a crash -- p1 keeps just Passion(0) + Dignity(3)');
+    }
+
+    /**
      * The whole point of this feature: Sneakiness swaps its owner's final
      * score with a chosen opponent's *without touching the opponent's own
      * total*, so p1's own post-swap score (p2's original total) is
@@ -7277,6 +8033,49 @@ final class GameServiceIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->expectExceptionMessage('partner');
         $this->games->createGame($u1, [$u1, $u2, $u3, $u4], 'team', 3, 'structure', null, null, null);
+    }
+
+    /**
+     * A real bug, caught live: 'draft' format used to seat players in
+     * whatever order $userIds itself arrived in -- the creator first,
+     * then opponents in whichever order they were selected in the New
+     * Game dialog -- exactly like every non-team format, which is
+     * harmless there (round 1's own leader is separately randomized, see
+     * startGame()) but wrong for a draft, where table position itself
+     * determines who's adjacent to whom in the snake/rotation order for
+     * the whole match. See GameService::shuffledSeatOrder()'s own
+     * docblock. With 4 possible seats for the creator's own partner-to-
+     * neighbor arrangement (and 4! = 24 full permutations), the odds of
+     * all 30 trials landing on the exact same seat_order by genuine
+     * chance are astronomically low, so any failure here means seating
+     * isn't actually randomized -- mirrors
+     * testCreateGameWithRandomTeamsVariesThePartnerAcrossGames()'s own
+     * pattern for the same class of regression.
+     */
+    public function testCreateGameDraftFormatVariesSeatOrderAcrossGames(): void
+    {
+        $userIds = $this->insertUsers('draftseat-vary-' . uniqid() . '-', 4);
+        $seatOrdersSeen = [];
+
+        for ($i = 0; $i < 30; $i++) {
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: 'draft',
+                deckType: 'quick_draft',
+                quickDraftPoolSource: 'random_48',
+            );
+
+            $stmt = $this->pdo->prepare(
+                'SELECT user_id FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'
+            );
+            $stmt->execute(['game_id' => $gameId]);
+            $seatOrdersSeen[] = implode(',', array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN)));
+
+            self::assertEqualsCanonicalizing($userIds, array_map(intval(...), explode(',', end($seatOrdersSeen))), 'every seat is still filled by exactly the same 4 players, just reordered');
+        }
+
+        self::assertGreaterThan(1, count(array_unique($seatOrdersSeen)), 'draft format should not deterministically seat players in the same order every time');
     }
 
     public function testCreateGameTeamFormatSeatsPartnersAdjacentAndAssignsTeamIds(): void
@@ -8433,7 +9232,7 @@ final class GameServiceIntegrationTest extends TestCase
         $bob = $this->insertUser('draft-nonquickdraft-bob');
 
         $this->expectException(GameStateException::class);
-        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft" deck types');
+        $this->expectExceptionMessage('only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft" deck types');
 
         $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'structure');
     }
@@ -9534,7 +10333,11 @@ final class GameServiceIntegrationTest extends TestCase
 
         $summary = $summaryFor($u1);
         self::assertNull($summary['current_turn_username']);
-        self::assertSame([$u1Username, $u2Username], $summary['awaiting_response_usernames'], 'nobody has submitted a draw-stage pick yet -- both owe one');
+        // Both players owe a response here -- an unordered set, not a
+        // sequence -- and 'draft' format now shuffles seat order (see
+        // GameService::shuffledSeatOrder()), so which of the two comes
+        // first is no longer guaranteed to be creation order.
+        self::assertEqualsCanonicalizing([$u1Username, $u2Username], $summary['awaiting_response_usernames'], 'nobody has submitted a draw-stage pick yet -- both owe one');
         self::assertTrue($summaryFor($u1)['is_awaiting_your_response']);
         self::assertTrue($summaryFor($u2)['is_awaiting_your_response']);
 
@@ -9548,7 +10351,7 @@ final class GameServiceIntegrationTest extends TestCase
         $pack = $this->games->getState($gameId, $u2)['quick_draft']['drafting']['pack'];
         $this->games->submitQuickDraftPick($gameId, $u2, 1, 1, [$pack[0]['card_id'], $pack[1]['card_id']]);
 
-        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'both have their draw-stage picks in -- the received stage is now open and owed by both');
+        self::assertEqualsCanonicalizing([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'both have their draw-stage picks in -- the received stage is now open and owed by both');
 
         $pack = $this->games->getState($gameId, $u1)['quick_draft']['drafting']['pack'];
         $this->games->submitQuickDraftPick($gameId, $u1, 1, 2, [$pack[0]['card_id'], $pack[1]['card_id']]);
@@ -9580,7 +10383,7 @@ final class GameServiceIntegrationTest extends TestCase
             self::fail("game {$gameId} missing from listGamesForUser()");
         };
 
-        self::assertSame([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'neither has submitted a deck yet');
+        self::assertEqualsCanonicalizing([$u1Username, $u2Username], $summaryFor($u1)['awaiting_response_usernames'], 'neither has submitted a deck yet');
 
         $this->submitFullQuickDraftDeck($gameId, $u1);
 
@@ -11650,6 +12453,42 @@ final class GameServiceIntegrationTest extends TestCase
     }
 
     /**
+     * A real bug, caught live: a 'standard' 3-4 player game's own
+     * "continue without them" resignation (resignGame()'s own
+     * skipTurnForResignedPlayer() path immediately above) leaves the
+     * game itself 'in_progress' -- correctly, since everyone else keeps
+     * playing -- but that meant it kept showing in the RESIGNING
+     * player's own main lobby list forever too, with nothing left for
+     * them to ever do there (a resigned player can never take another
+     * turn or win, see advanceTurn()'s active-player filtering). Fixed
+     * by excluding a game the caller has personally resigned from
+     * (game_players.resigned_at) from listGamesForUser(), moving it to
+     * listPastGamesForUser() instead -- regardless of the game's own
+     * overall status, which (unlike every other format/player-count
+     * resignation, already caught by the status-based check alone) stays
+     * 'in_progress' here. Every OTHER still-active player's own lobby
+     * view is untouched -- this is scoped per-viewer, not per-game.
+     */
+    public function testResigningFromAThreePlayerStandardGameMovesItToYourOwnPastGamesOnly(): void
+    {
+        ['gameId' => $gameId, 'p2' => $p2, 'u1' => $u1, 'u2' => $u2, 'u3' => $u3] = $this->buildThreePlayerFixture();
+
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u2), 'id'));
+
+        $this->games->resignGame($gameId, $p2);
+
+        self::assertSame('in_progress', $this->fetchGame($gameId)['status'], 'the game itself is still being played by u1/u3');
+        self::assertSame([], array_column($this->games->listGamesForUser($u2), 'id'), 'no longer in the resigned player\'s own main lobby list');
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u1), 'id'), 'still very much active for a player who has NOT resigned');
+        self::assertSame([$gameId], array_column($this->games->listGamesForUser($u3), 'id'), 'true for every other still-active player');
+
+        $pastSummary = $this->games->listPastGamesForUser($u2)[0];
+        self::assertSame($gameId, $pastSummary['id']);
+        self::assertSame('in_progress', $pastSummary['status'], 'the summary itself still reports the game\'s real, ongoing status');
+        self::assertSame([], array_column($this->games->listPastGamesForUser($u1), 'id'), 'not moved to Past games for anyone who hasn\'t resigned');
+    }
+
+    /**
      * "All of that player's cards leave play" -- only the 3-4 player
      * 'standard' "continue without them" path needs this, since that's the
      * only resignation outcome where the board keeps being played on by
@@ -13303,7 +14142,7 @@ final class GameServiceIntegrationTest extends TestCase
     // CardStatsServiceTest.php covers the aggregation math in isolation;
     // these confirm the real game-completion/pick-submission code paths
     // actually call into it -- one per hook point (recordGameCompletionStats(),
-    // and each of the three draft formats' own pick-submission methods).
+    // and each of the four draft formats' own pick-submission methods).
 
     private function fetchCardStatsRow(int $catalogCardId): ?array
     {
@@ -13409,6 +14248,25 @@ final class GameServiceIntegrationTest extends TestCase
         // cells at once) recorded exactly one recordGridDraftPick() pick.
         $totalPicks = (int) $this->pdo->query('SELECT SUM(grid_draft_pick_round_count) FROM card_stats')->fetchColumn();
         self::assertSame($draftedCount, $totalPicks);
+    }
+
+    public function testCompletedRotisserieDraftMatchRecordsPickPositions(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 26; $i++) {
+            $state = $this->fetchRotisserieState($draftMatchId);
+            $pool = json_decode((string) $state['pool_card_ids'], true);
+            $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+        }
+
+        // Every one of the 26 picks (13-card cutoff * 2 players) recorded
+        // exactly one recordRotisserieDraftPick() pick -- see
+        // submitRotisserieDraftPick().
+        $totalPicks = (int) $this->pdo->query('SELECT SUM(rotisserie_draft_pick_position_count) FROM card_stats')->fetchColumn();
+        self::assertSame(26, $totalPicks);
     }
 
     // -- "Default selections" mode (issue #274) -----------------------------
@@ -14323,6 +15181,466 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($this->games->getState($draftGameId, $userIds[0])['grid_draft']['drafting']['teams_drafted_so_far']);
     }
 
+    // -- Rotisserie Draft (issue #361) --------------------------------------
+
+    private function buildRotisserieDraftFixture(
+        int $playerCount = 2,
+        int $cutoffCount = 13,
+        string $poolSource = 'random_48',
+        ?string $customPoolText = null,
+    ): array {
+        $userIds = $this->insertUsers('rotdraft-' . uniqid() . '-', $playerCount);
+
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: $poolSource,
+            rotisserieDraftCustomPoolText: $customPoolText,
+            rotisserieDraftCutoffCount: $cutoffCount,
+        );
+
+        return ['gameId' => $gameId, 'userIds' => $userIds];
+    }
+
+    private function fetchRotisserieState(int $draftMatchId): array|false
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_rotisserie_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    /**
+     * The actual seated order a draft match's players ended up in --
+     * insertion order into draft_match_players, which createGame()
+     * populates from $seatedUserIds (see GameService::shuffledSeatOrder()),
+     * NOT necessarily the raw creation-order $userIds array a fixture's
+     * own insertUsers() call returns, since 'draft' format shuffles
+     * seating rather than seating players in array order like every other
+     * format does.
+     *
+     * @return int[]
+     */
+    private function fetchDraftMatchSeatOrder(int $draftMatchId): array
+    {
+        $stmt = $this->pdo->prepare('SELECT user_id FROM draft_match_players WHERE draft_match_id = :id ORDER BY id ASC');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    public function testCreateGameRejectsRotisserieDraftForNonDraftFormat(): void
+    {
+        $userIds = $this->insertUsers('rotformat-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+
+        $this->games->createGame($userIds[0], $userIds, format: 'standard', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48');
+    }
+
+    public function testCreateGameRejectsRotisserieDraftCutoffCountBelowMinimum(): void
+    {
+        $userIds = $this->insertUsers('rotcutofflow-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 13 and 20');
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 12);
+    }
+
+    public function testCreateGameRejectsRotisserieDraftCutoffCountAboveMaximum(): void
+    {
+        $userIds = $this->insertUsers('rotcutoffhigh-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('between 13 and 20');
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 21);
+    }
+
+    public function testCreateGameAcceptsRotisserieDraftCutoffCountAtBothBoundaries(): void
+    {
+        foreach ([13, 20] as $cutoff) {
+            $userIds = $this->insertUsers('rotcutoffok-' . uniqid() . '-', 2);
+            $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: $cutoff);
+            self::assertIsInt($gameId, "cutoff {$cutoff} should be accepted");
+        }
+    }
+
+    public function testCreateGameRotisserieDraftDefaultCutoffIsFourteen(): void
+    {
+        $userIds = $this->insertUsers('rotcutoffdefault-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48');
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertSame(14, (int) $this->fetchRotisserieState($draftMatchId)['cutoff_count']);
+    }
+
+    /**
+     * "N random cards, where N is the minimum pool size" -- the ONE pool
+     * source sized exactly to the floor, no leftover, unlike every other
+     * source below.
+     */
+    public function testCreateGameRotisserieDraftRandomPoolIsSizedExactlyToTheMinimum(): void
+    {
+        $userIds = $this->insertUsers('rotrandom-' . uniqid() . '-', 3);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 15);
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $pool = json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true);
+        self::assertCount(45, $pool, '15-card cutoff * 3 players');
+        self::assertSame(count($pool), count(array_unique($pool)), 'random_48 never duplicates a card');
+    }
+
+    /**
+     * 'structure' is doubled only when the floor itself (cutoff * players)
+     * exceeds a single 45-card copy -- a different condition from Quick/
+     * Winston Draft's own ">2 players" (see buildDraftPool()'s own
+     * doubleStructureForMultiplayer docblock).
+     */
+    public function testCreateGameRotisserieDraftStructurePoolDoublesOnlyWhenTheFloorExceedsFortyFive(): void
+    {
+        // 2 players * 13 cutoff = 26 <= 45 -- stays a single 45-card copy.
+        $userIds = $this->insertUsers('rotstructlow-' . uniqid() . '-', 2);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'structure', rotisserieDraftCutoffCount: 13);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(45, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+
+        // 3 players * 16 cutoff = 48 > 45 -- doubles to 90.
+        $userIds2 = $this->insertUsers('rotstructhigh-' . uniqid() . '-', 3);
+        $gameId2 = $this->games->createGame($userIds2[0], $userIds2, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'structure', rotisserieDraftCutoffCount: 16);
+        $draftMatchId2 = (int) $this->fetchGame($gameId2)['draft_match_id'];
+        self::assertCount(90, json_decode((string) $this->fetchRotisserieState($draftMatchId2)['pool_card_ids'], true));
+    }
+
+    /**
+     * A real bug, caught live: 'jceddys_75' used to swap up to the 150-card
+     * 'jceddys_150' pool at exactly 4 players, unconditionally -- correct
+     * for Quick/Winston/Grid Draft (their own 4-player targets always
+     * exceed 75), but wrong for Rotisserie Draft, whose own floor
+     * (cutoff * players) can land well under 75 even at 4 players. A
+     * 4-player, 14-card-cutoff match (the default cutoff) only needs 56,
+     * so it should stay on the 75-card pool -- only once the cutoff itself
+     * pushes the floor past 75 (19+ at 4 players) should it swap up. See
+     * buildDraftPool()'s own docblock.
+     */
+    public function testCreateGameRotisserieDraftJceddys75PoolOnlySwapsToJceddys150OnceTheFloorExceedsSeventyFive(): void
+    {
+        // 4 players * 14 cutoff (the default) = 56 <= 75 -- stays on the 75-card pool.
+        $userIds = $this->insertUsers('rotjceddyslow-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'jceddys_75', rotisserieDraftCutoffCount: 14);
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(75, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+
+        // 4 players * 19 cutoff = 76 > 75 -- swaps up to the 150-card pool.
+        $userIds2 = $this->insertUsers('rotjceddyshigh-' . uniqid() . '-', 4);
+        $gameId2 = $this->games->createGame($userIds2[0], $userIds2, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'jceddys_75', rotisserieDraftCutoffCount: 19);
+        $draftMatchId2 = (int) $this->fetchGame($gameId2)['draft_match_id'];
+        self::assertCount(150, json_decode((string) $this->fetchRotisserieState($draftMatchId2)['pool_card_ids'], true));
+    }
+
+    public function testCreateGameRotisserieDraftCustomPoolBelowMinimumIsRejected(): void
+    {
+        $userIds = $this->insertUsers('rotcustomlow-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('at least 26');
+
+        $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: "20 Charity\n",
+            rotisserieDraftCutoffCount: 13,
+        );
+    }
+
+    /**
+     * "A floor, not an exact match" (the maintainer's own words) -- unlike
+     * Quick/Winston/Grid Draft, which all truncate an oversized pool down
+     * to their own exact target before drafting starts, an oversized
+     * Rotisserie Draft pool is laid out in FULL; the leftover simply never
+     * gets drafted once every player reaches the cutoff.
+     */
+    public function testCreateGameRotisserieDraftCustomPoolAboveMinimumIsLaidOutInFullNotTruncated(): void
+    {
+        $userIds = $this->insertUsers('rotcustomhigh-' . uniqid() . '-', 2);
+        $poolText = implode("\n", array_fill(0, 40, '1 Charity')) . "\n"; // 40 cards, well above the 26-card minimum
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'custom',
+            rotisserieDraftCustomPoolText: $poolText,
+            rotisserieDraftCutoffCount: 13,
+        );
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        self::assertCount(40, json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true));
+    }
+
+    public function testRotisserieDraftDealsTheFullPoolFaceUpAndPicksARandomFirstPicker(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $state = $this->fetchRotisserieState($draftMatchId);
+
+        self::assertCount(26, json_decode((string) $state['pool_card_ids'], true));
+        self::assertSame(13, (int) $state['cutoff_count']);
+        self::assertSame(0, (int) $state['pick_index']);
+        self::assertContains((int) $state['current_turn_user_id'], $userIds);
+
+        $apiState = $this->games->getState($gameId, $userIds[0]);
+        self::assertSame('drafting', $apiState['rotisserie_draft']['status']);
+        self::assertCount(26, $apiState['rotisserie_draft']['drafting']['pool_cards']);
+        self::assertSame(13, $apiState['rotisserie_draft']['drafting']['cutoff_count']);
+        self::assertSame(0, $apiState['rotisserie_draft']['drafting']['picks_made']);
+        self::assertSame(26, $apiState['rotisserie_draft']['drafting']['total_picks_needed']);
+    }
+
+    public function testRotisserieDraftRejectsAPickFromWhoeverIsNotTheCurrentTurn(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture();
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+        $otherUserId = $currentTurnUserId === $userIds[0] ? $userIds[1] : $userIds[0];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("It's not your turn");
+
+        $this->games->submitRotisserieDraftPick($gameId, $otherUserId, 1);
+    }
+
+    public function testRotisserieDraftRejectsAPickOfACardNotInThePool(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture();
+        $gameId = $fixture['gameId'];
+
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('is not available in the pool');
+
+        $this->games->submitRotisserieDraftPick($gameId, $currentTurnUserId, 999999);
+    }
+
+    /**
+     * @dataProvider rotisseriePickOrderProvider
+     */
+    public function testRotisserieDraftPickOrderMatchesTheConfirmedSequence(int $playerCount, array $expectedSeatSequence): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: $playerCount, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // The actual seated order -- NOT $fixture['userIds']' own creation
+        // order, since 'draft' format shuffles seating (see
+        // GameService::shuffledSeatOrder()) -- is insertion order into
+        // draft_match_players, which createGame() populates from the
+        // shuffled $seatedUserIds, so $seatOrder[$seat] is exactly the
+        // seat sequence's own user id.
+        $seatOrder = $this->fetchDraftMatchSeatOrder($draftMatchId);
+
+        // initializeRotisserieDraft() also picks a random
+        // starter_seat_offset (migration 0134) that rotates every pick's
+        // seat index by a fixed amount for this match -- read it back and
+        // subtract it out below so the asserted sequence stays the
+        // confirmed shape regardless of which physical seat it happened
+        // to start at this run.
+        $starterSeatOffset = (int) $this->fetchRotisserieState($draftMatchId)['starter_seat_offset'];
+
+        $actualSeatSequence = [];
+        for ($i = 0; $i < count($expectedSeatSequence); $i++) {
+            $currentTurnUserId = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+            $seatIndex = array_search($currentTurnUserId, $seatOrder, true);
+            $actualSeatSequence[] = ($seatIndex - $starterSeatOffset + $playerCount) % $playerCount;
+
+            $pool = json_decode((string) $this->fetchRotisserieState($draftMatchId)['pool_card_ids'], true);
+            $this->games->submitRotisserieDraftPick($gameId, $currentTurnUserId, (int) $pool[0]);
+        }
+
+        self::assertSame($expectedSeatSequence, $actualSeatSequence);
+    }
+
+    public static function rotisseriePickOrderProvider(): array
+    {
+        return [
+            '2 players' => [2, [0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0]],
+            '3 players' => [3, [0, 1, 2, 2, 1, 0, 1, 2, 0, 0, 2, 1, 2, 0, 1, 1, 0, 2, 0, 1, 2, 2, 1, 0]],
+            '4 players' => [4, [0, 1, 2, 3, 3, 2, 1, 0, 1, 2, 3, 0, 0, 3, 2, 1, 2, 3, 0, 1, 1, 0, 3, 2]],
+        ];
+    }
+
+    /**
+     * cutoff_count (13) is odd, so the draft ends mid-double-round -- no
+     * special-casing needed anywhere (see rotisserieDraftPickUserId()'s
+     * own docblock), it's simply wherever pick_index reaches
+     * cutoff_count * playerCount.
+     */
+    public function testRotisserieDraftEndsExactlyAtCutoffTimesPlayerCountAndProceedsToDeckBuilding(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 26; $i++) {
+            $state = $this->fetchRotisserieState($draftMatchId);
+            self::assertNotFalse($state, "draft_rotisserie_state should still exist before pick " . ($i + 1));
+            $pool = json_decode((string) $state['pool_card_ids'], true);
+            $result = $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+
+            if ($i < 25) {
+                self::assertFalse($result['draft_completed'], "pick " . ($i + 1) . " should not complete the draft yet");
+            } else {
+                self::assertTrue($result['draft_completed'], 'the 26th pick should complete the draft');
+            }
+        }
+
+        self::assertFalse($this->fetchRotisserieState($draftMatchId), 'draft_rotisserie_state should be cleaned up once the draft completes');
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $draftedCardIds = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            self::assertCount(13, $draftedCardIds, "each player should have drafted exactly the 13-card cutoff");
+        }
+    }
+
+    public function testRotisserieDraftDeckBuildingUsesMinDeckSizeTwelve(): void
+    {
+        $fixture = $this->buildRotisserieDraftFixture(playerCount: 2, cutoffCount: 13);
+        $gameId = $fixture['gameId'];
+        $userIds = $fixture['userIds'];
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        for ($i = 0; $i < 26; $i++) {
+            $state = $this->fetchRotisserieState($draftMatchId);
+            $pool = json_decode((string) $state['pool_card_ids'], true);
+            $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+        }
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['rotisserie_draft']['deck_building'];
+        self::assertSame(12, $deckBuilding['min_deck_size']);
+        self::assertCount(13, $deckBuilding['drafted_cards']);
+    }
+
+    public function testCreateGameAcceptsRotisserieDraftWithThreeOrFourPlayers(): void
+    {
+        foreach ([3, 4] as $playerCount) {
+            $userIds = $this->insertUsers('rotmulti-' . uniqid() . '-', $playerCount);
+            $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48', rotisserieDraftCutoffCount: 13);
+            self::assertIsInt($gameId, "{$playerCount} players should be accepted");
+        }
+    }
+
+    public function testCreateGameRejectsRotisserieDraftWithMoreThanFourPlayers(): void
+    {
+        // 5 players trips the game-wide MAX_PLAYERS check before ever
+        // reaching Rotisserie Draft's own 2-4 player validation -- there's
+        // no way to reach a "2-4 players" message with more than
+        // MAX_PLAYERS (4) total players regardless of deck_type.
+        $userIds = $this->insertUsers('rottoomany-' . uniqid() . '-', 5);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('cannot have more than 4 players');
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'rotisserie_draft', rotisserieDraftPoolSource: 'random_48');
+    }
+
+    public function testOpenTeamRotisserieDraftGroupsDraftedCardsPerTeamInsteadOfPerPlayer(): void
+    {
+        $userIds = $this->insertUsers('otrd-' . uniqid() . '-', 4);
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'team',
+            deckType: 'rotisserie_draft',
+            partnerUserId: $userIds[1],
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13,
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        $state = $this->fetchRotisserieState($draftMatchId);
+        $pool = json_decode((string) $state['pool_card_ids'], true);
+        $this->games->submitRotisserieDraftPick($gameId, (int) $state['current_turn_user_id'], (int) $pool[0]);
+
+        $drafting = $this->games->getState($gameId, $userIds[0])['rotisserie_draft']['drafting'];
+        self::assertNotNull($drafting['teams_drafted_so_far']);
+        self::assertCount(2, $drafting['teams_drafted_so_far']);
+
+        $totalTeamsDraftedCount = array_sum(array_map(fn (array $t) => count($t['drafted_so_far']), $drafting['teams_drafted_so_far']));
+        self::assertSame(1, $totalTeamsDraftedCount);
+
+        // A non-team format never groups by team at all.
+        $draftGameId = $this->games->createGame(
+            $userIds[0],
+            [$userIds[0], $userIds[2]],
+            format: 'draft',
+            deckType: 'rotisserie_draft',
+            rotisserieDraftPoolSource: 'random_48',
+            rotisserieDraftCutoffCount: 13,
+        );
+        self::assertNull($this->games->getState($draftGameId, $userIds[0])['rotisserie_draft']['drafting']['teams_drafted_so_far']);
+    }
+
+    /**
+     * A real bug, caught live: seatOrderForTeamGame()/
+     * seatOrderForClosedTeamGame() deliberately seat the creator at a
+     * fixed seat 0 (so partners sit adjacent/across the table, unlike
+     * plain 'draft' format's own shuffledSeatOrder()) -- but
+     * rotisserieDraftPickUserId($userIds, 0) always resolves to
+     * $userIds[0], so before migration 0134's starter_seat_offset, the
+     * creator picked first in literally every 'team'/'closed_team'
+     * Rotisserie Draft match, no exceptions. Mirrors
+     * testCreateGameDraftFormatVariesSeatOrderAcrossGames()'s own
+     * "run N trials, assert more than one distinct outcome" pattern for
+     * the same class of regression.
+     *
+     * @dataProvider teamRotisserieDraftFormatProvider
+     */
+    public function testCreateGameTeamRotisserieDraftVariesFirstPickerAcrossGames(string $format): void
+    {
+        $userIds = $this->insertUsers('rotteamfirst-' . uniqid() . '-', 4);
+        $firstPickersSeen = [];
+
+        for ($i = 0; $i < 20; $i++) {
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: $format,
+                deckType: 'rotisserie_draft',
+                partnerUserId: $userIds[1],
+                rotisserieDraftPoolSource: 'random_48',
+                rotisserieDraftCutoffCount: 13,
+            );
+            $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+            $firstPickersSeen[] = (int) $this->fetchRotisserieState($draftMatchId)['current_turn_user_id'];
+        }
+
+        self::assertGreaterThan(1, count(array_unique($firstPickersSeen)), "{$format} Rotisserie Draft should not deterministically give the creator (or any other single player) first pick every time");
+    }
+
+    public static function teamRotisserieDraftFormatProvider(): array
+    {
+        return [
+            'Open Team Play' => ['team'],
+            'Closed Team Play' => ['closed_team'],
+        ];
+    }
+
     /**
      * Open Team Play's teammate visibility carries into deck-building too
      * (not just the picking phase) -- 'team_drafted_cards' there combines
@@ -14732,5 +16050,288 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertCount(2, $messages);
         self::assertSame('Deck-building chat.', $messages[0]['message_text']);
         self::assertSame('In-progress chat.', $messages[1]['message_text']);
+    }
+
+    // -- Tiered Rotisserie Draft (issue #361) --------------------------------
+
+    private function fetchTieredRotisserieState(int $draftMatchId): array|false
+    {
+        $stmt = $this->pdo->prepare('SELECT * FROM draft_tiered_rotisserie_state WHERE draft_match_id = :id');
+        $stmt->execute(['id' => $draftMatchId]);
+
+        return $stmt->fetch();
+    }
+
+    public function testCreateGameTieredRotisserieDraftRequiresATieringMode(): void
+    {
+        $userIds = $this->insertUsers('tiredmode-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('requires a "rarity" or "custom" tiering mode');
+
+        $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'tiered_rotisserie_draft');
+    }
+
+    public function testCreateGameCustomTieredRotisserieDraftRequiresBetweenTwoAndFourTiers(): void
+    {
+        $userIds = $this->insertUsers('tiredcount-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage('requires between 2 and 4 tiers');
+
+        $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'tiered_rotisserie_draft',
+            tieredRotisserieDraftMode: 'custom',
+            tieredRotisserieDraftTiers: [
+                ['pool_source' => 'custom', 'custom_pool_text' => "20 Charity\n", 'cutoff_count' => 12],
+            ],
+        );
+    }
+
+    public function testCreateGameCustomTieredRotisserieDraftRequiresCutoffsSummingToAtLeastTwelve(): void
+    {
+        $userIds = $this->insertUsers('tiredsum-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("tier cutoff counts must sum to at least 12");
+
+        $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'tiered_rotisserie_draft',
+            tieredRotisserieDraftMode: 'custom',
+            tieredRotisserieDraftTiers: [
+                ['pool_source' => 'custom', 'custom_pool_text' => "20 Charity\n", 'cutoff_count' => 5],
+                ['pool_source' => 'custom', 'custom_pool_text' => "20 Benevolence\n", 'cutoff_count' => 6],
+            ],
+        );
+    }
+
+    public function testCreateGameCustomTieredRotisserieDraftRejectsATierPoolBelowItsOwnFloor(): void
+    {
+        $userIds = $this->insertUsers('tiredfloor-' . uniqid() . '-', 2);
+
+        $this->expectException(GameStateException::class);
+        // Raised by parseDraftCustomPool() itself (buildDraftPool()'s own
+        // minimum-pool-size check, reused as-is for a custom tier's pool
+        // -- see buildTieredRotisserieDraftCustomTierPools()'s own
+        // docblock), before this tier's own $minPoolSize-vs-count() check
+        // in that same method ever gets a chance to fire.
+        $this->expectExceptionMessage('only 3 card(s), but at least 16 are required');
+
+        $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'tiered_rotisserie_draft',
+            tieredRotisserieDraftMode: 'custom',
+            tieredRotisserieDraftTiers: [
+                // 2 players x 8 cutoff = 16 needed, but only 3 supplied.
+                ['pool_source' => 'custom', 'custom_pool_text' => "3 Charity\n", 'cutoff_count' => 8],
+                ['pool_source' => 'custom', 'custom_pool_text' => "20 Benevolence\n", 'cutoff_count' => 6],
+            ],
+        );
+    }
+
+    /**
+     * Confirms the exact per-tier layout sizes issue #361's rarity
+     * scheme specifies -- each tier's own layout is exactly DOUBLE what
+     * it distributes (see TIERED_ROTISSERIE_DRAFT_RARITY_TIERS's own
+     * docblock): mythic 2N/rare 4N/uncommon 8N/common 16N for N players,
+     * with cutoffs 1/2/4/8.
+     */
+    public function testTieredRotisserieDraftRarityModeLaysOutTheConfirmedTierSizes(): void
+    {
+        $userIds = $this->insertUsers('tiredrarity-' . uniqid() . '-', 3);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'tiered_rotisserie_draft', tieredRotisserieDraftMode: 'rarity');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $tiers = json_decode((string) $this->fetchTieredRotisserieState($draftMatchId)['tiers'], true);
+
+        self::assertCount(4, $tiers);
+        self::assertSame(['mythic', 1, 6], [$tiers[0]['label'], $tiers[0]['cutoff_count'], count($tiers[0]['pool_card_ids'])]);
+        self::assertSame(['rare', 2, 12], [$tiers[1]['label'], $tiers[1]['cutoff_count'], count($tiers[1]['pool_card_ids'])]);
+        self::assertSame(['uncommon', 4, 24], [$tiers[2]['label'], $tiers[2]['cutoff_count'], count($tiers[2]['pool_card_ids'])]);
+        self::assertSame(['common', 8, 48], [$tiers[3]['label'], $tiers[3]['cutoff_count'], count($tiers[3]['pool_card_ids'])]);
+
+        // Every tier's own layout is drawn from cards of that rarity only.
+        $rowsById = (new \ReflectionClass($this->games))->getMethod('loadCardCatalog')->invoke($this->games)['rowsById'];
+        foreach ($tiers as $tier) {
+            foreach ($tier['pool_card_ids'] as $cardId) {
+                self::assertSame($tier['label'], $rowsById[$cardId]['rarity']);
+            }
+        }
+    }
+
+    /**
+     * Custom tiering's own per-tier pools, each independently sized/
+     * sourced -- confirms the 2-4 tier count and per-tier cutoff/pool
+     * shape createGame() built land in draft_tiered_rotisserie_state
+     * exactly as configured.
+     */
+    public function testTieredRotisserieDraftCustomModeBuildsEachTiersOwnPool(): void
+    {
+        $userIds = $this->insertUsers('tiredcustom-' . uniqid() . '-', 2);
+
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'tiered_rotisserie_draft',
+            tieredRotisserieDraftMode: 'custom',
+            tieredRotisserieDraftTiers: [
+                ['pool_source' => 'custom', 'custom_pool_text' => "20 Charity\n", 'cutoff_count' => 4],
+                ['pool_source' => 'custom', 'custom_pool_text' => "20 Benevolence\n", 'cutoff_count' => 4],
+                ['pool_source' => 'custom', 'custom_pool_text' => "20 Chivalry\n", 'cutoff_count' => 4],
+            ],
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $tiers = json_decode((string) $this->fetchTieredRotisserieState($draftMatchId)['tiers'], true);
+
+        self::assertCount(3, $tiers);
+        foreach ($tiers as $tier) {
+            self::assertNull($tier['label']);
+            self::assertSame(4, $tier['cutoff_count']);
+            self::assertCount(20, $tier['pool_card_ids']);
+        }
+    }
+
+    /**
+     * The whole point of the generalized mechanic (issue #361): pick
+     * order snakes CONTINUOUSLY across tier boundaries, never resetting
+     * to seat 0 when a new tier begins -- reusing
+     * rotisserieDraftPickUserId() fed the match's own never-reset global
+     * pick_index. Mirrors testRotisserieDraftPickOrderMatchesTheConfirmedSequence()'s
+     * own starter_seat_offset-normalization approach, since that offset
+     * is randomized per match.
+     */
+    public function testTieredRotisserieDraftPickOrderContinuesAcrossTierBoundaries(): void
+    {
+        $userIds = $this->insertUsers('tieredorder-' . uniqid() . '-', 3);
+
+        $gameId = $this->games->createGame(
+            $userIds[0],
+            $userIds,
+            format: 'draft',
+            deckType: 'tiered_rotisserie_draft',
+            tieredRotisserieDraftMode: 'custom',
+            tieredRotisserieDraftTiers: [
+                // 3 players x 1 cutoff = 3 picks (tier 0), then 3 players
+                // x 11 cutoff = 33 picks (tier 1) -- cutoffs summing to
+                // 12 to satisfy createGame()'s own floor. Only the first
+                // 9 of the resulting 36 total picks are actually
+                // exercised below, spanning a full "double round" (2 * 3
+                // = 6) plus a bit past the tier-0-to-tier-1 boundary
+                // (falling at global pick_index 3), so the continuation
+                // crosses the snake's own forward/reverse pivot too, not
+                // just the tier boundary.
+                ['pool_source' => 'custom', 'custom_pool_text' => "10 Charity\n", 'cutoff_count' => 1],
+                ['pool_source' => 'custom', 'custom_pool_text' => "40 Benevolence\n", 'cutoff_count' => 11],
+            ],
+        );
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+        $seatOrder = $this->fetchDraftMatchSeatOrder($draftMatchId);
+        $starterSeatOffset = (int) $this->fetchTieredRotisserieState($draftMatchId)['starter_seat_offset'];
+
+        $actualSeatSequence = [];
+        for ($i = 0; $i < 9; $i++) {
+            $state = $this->fetchTieredRotisserieState($draftMatchId);
+            $currentTurnUserId = (int) $state['current_turn_user_id'];
+            $seatIndex = array_search($currentTurnUserId, $seatOrder, true);
+            $actualSeatSequence[] = ($seatIndex - $starterSeatOffset + 3) % 3;
+
+            $tiers = json_decode((string) $state['tiers'], true);
+            $pickIndex = $i;
+            $cumulative = 0;
+            $tierIndex = 0;
+            foreach ($tiers as $index => $tier) {
+                $cumulative += $tier['cutoff_count'] * 3;
+                if ($pickIndex < $cumulative) {
+                    $tierIndex = $index;
+                    break;
+                }
+            }
+            $cardId = (int) $tiers[$tierIndex]['pool_card_ids'][0];
+            $this->games->submitTieredRotisserieDraftPick($gameId, $currentTurnUserId, $cardId);
+        }
+
+        // Same shape as base Rotisserie Draft's own 3-player confirmed
+        // sequence's first 9 picks (see rotisseriePickOrderProvider()) --
+        // a forward pass [0,1,2], then the double-round's own reverse
+        // pass [2,1,0] carrying straight through the tier-1-to-tier-2
+        // boundary (which falls between picks 3 and 4, mid-reverse-pass),
+        // then the next double-round's forward pass starting at the
+        // rotated starter seat [1,2,0].
+        self::assertSame([0, 1, 2, 2, 1, 0, 1, 2, 0], $actualSeatSequence);
+    }
+
+    public function testTieredRotisserieDraftRarityModeCompletesAndProceedsToDeckBuilding(): void
+    {
+        $userIds = $this->insertUsers('tieredcomplete-' . uniqid() . '-', 2);
+
+        $gameId = $this->games->createGame($userIds[0], $userIds, format: 'draft', deckType: 'tiered_rotisserie_draft', tieredRotisserieDraftMode: 'rarity');
+        $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+
+        // 2 players x (1+2+4+8) = 30 total picks.
+        for ($i = 0; $i < 30; $i++) {
+            $state = $this->fetchTieredRotisserieState($draftMatchId);
+            self::assertNotFalse($state, "draft_tiered_rotisserie_state should still exist before pick " . ($i + 1));
+            $currentTurnUserId = (int) $state['current_turn_user_id'];
+            $tiers = json_decode((string) $state['tiers'], true);
+            $tier = array_values(array_filter($tiers, fn (array $t): bool => $t['pool_card_ids'] !== []))[0] ?? null;
+            // Deliberately re-derive the active tier the same way getState() does,
+            // via the viewer-facing drafting state, rather than "first non-empty
+            // pool" (which can't tell a completed-but-not-yet-empty tier from an
+            // active one -- see this test class's own docblocks on the analogous
+            // base Rotisserie Draft loop).
+            $drafting = $this->games->getState($gameId, $currentTurnUserId)['tiered_rotisserie_draft']['drafting'];
+            $cardId = (int) $drafting['pool_cards'][0]['card_id'];
+
+            $result = $this->games->submitTieredRotisserieDraftPick($gameId, $currentTurnUserId, $cardId);
+            self::assertSame($i + 1 >= 30, $result['draft_completed']);
+        }
+
+        self::assertFalse($this->fetchTieredRotisserieState($draftMatchId), 'draft_tiered_rotisserie_state should be cleaned up once the draft completes');
+        self::assertSame('deck_building', $this->fetchDraftMatch($draftMatchId)['status']);
+
+        foreach ($userIds as $userId) {
+            $drafted = json_decode((string) $this->fetchDraftMatchPlayer($draftMatchId, $userId)['drafted_card_ids'], true);
+            self::assertCount(15, $drafted);
+        }
+
+        $deckBuilding = $this->games->getState($gameId, $userIds[0])['tiered_rotisserie_draft']['deck_building'];
+        self::assertSame(12, $deckBuilding['min_deck_size']);
+    }
+
+    /**
+     * Mirrors testCreateGameTeamRotisserieDraftVariesFirstPickerAcrossGames()'s
+     * own regression-test pattern (migration 0134's starter_seat_offset
+     * fix) -- Tiered Rotisserie Draft reuses rotisserieDraftPickUserId()
+     * unchanged, so it needed no separate fix of its own, but this
+     * confirms that's actually true rather than assumed.
+     */
+    public function testCreateGameTeamTieredRotisserieDraftVariesFirstPickerAcrossGames(): void
+    {
+        $userIds = $this->insertUsers('tieredteamfirst-' . uniqid() . '-', 4);
+        $firstPickersSeen = [];
+
+        for ($i = 0; $i < 20; $i++) {
+            $gameId = $this->games->createGame(
+                $userIds[0],
+                $userIds,
+                format: 'team',
+                deckType: 'tiered_rotisserie_draft',
+                partnerUserId: $userIds[1],
+                tieredRotisserieDraftMode: 'rarity',
+            );
+            $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];
+            $firstPickersSeen[] = (int) $this->fetchTieredRotisserieState($draftMatchId)['current_turn_user_id'];
+        }
+
+        self::assertGreaterThan(1, count(array_unique($firstPickersSeen)), 'Team Play Tiered Rotisserie Draft should not deterministically give the creator (or any other single player) first pick every time');
     }
 }

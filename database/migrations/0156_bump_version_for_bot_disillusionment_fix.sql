@@ -1,0 +1,19 @@
+-- Practice bots previously always declined Disillusionment's own
+-- per-player "choose a color" decision (chosen_color_{playerId}, an
+-- optional 'mode' field), since it wasn't in
+-- ALWAYS_FILLED_OPTIONAL_FIELDS -- every seated bot always passed,
+-- accomplishing nothing even when a genuinely free-value color was on
+-- offer. BotPlayerService::chooseDecisionAnswer() now special-cases
+-- decisionType 'disillusionment_choose_color' to a new
+-- disillusionmentSafeColor(): the first color that matches none of the
+-- RESPONDING bot's own moods currently in play, nor a teammate's, since
+-- DisillusionmentEffect::resolveDecisions() sweeps EVERY other mood of
+-- the chosen color to discard regardless of owner. Still declines (the
+-- same as before this fix) whenever every color would hit the bot's own
+-- or a teammate's own board -- there's no way to participate there
+-- without also hurting yourself/your team.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0155 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.12' WHERE id = 1;

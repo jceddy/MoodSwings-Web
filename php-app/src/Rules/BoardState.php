@@ -83,6 +83,43 @@ final class BoardState
     /** Vulnerability: "this mood's value is 7 if a card was put into the discard pile this round." A single round-wide flag rather than anything card-specific, since it has to reflect any discard by any player -- see moveHandToDiscard()/moveInPlayToDiscard() and discardedThisRound(). */
     private bool $discardedThisRound = false;
 
+    /**
+     * Awe: "After playing this mood, there is no scoring this round... you
+     * choose which player goes first next round." A round-wide flag rather
+     * than per-card effectState (like $discardedThisRound above), for the
+     * same underlying reason but a subtler one: this triggers *after
+     * playing* Awe, a one-time choice that's already fully locked in the
+     * instant it resolves -- unlike Honor's similarly-named but genuinely
+     * "while in play" firstPlayerOverride tag (see moodsInPlay-scoped
+     * effectState below), Awe's own choice was never conditional on Awe
+     * itself staying in play. Tagging it on Awe's own card meant it
+     * silently vanished if Awe left play (stolen, discarded, etc.) before
+     * the round it was played in actually finished scoring -- see
+     * markSkipScoringThisRound()/GameService::hasSkipScoringMarker()/
+     * skipScoringAndAdvance().
+     */
+    private bool $skipScoringThisRound = false;
+
+    /** The player Awe chose to go first next round -- only meaningful when $skipScoringThisRound is true. See $skipScoringThisRound's own docblock. */
+    private ?int $skipScoringFirstPlayerId = null;
+
+    /**
+     * The Awe card whose play set $skipScoringThisRound, and whoever
+     * played it -- only meaningful when $skipScoringThisRound is true.
+     * Purely for GameService::scoringEffectEntries()'s own "How scoring
+     * will be affected" display entry to attribute credit by (a bug
+     * caught live: that entry used to be built by scanning moodsInPlay()
+     * for the same per-card tag $skipScoringThisRound itself replaced,
+     * so it silently stopped appearing the instant Awe left play -- the
+     * same failure mode this whole round-level approach exists to fix
+     * for the underlying skip itself). Neither the skip nor the
+     * first-player choice depend on these two -- they're display-only.
+     */
+    private ?int $skipScoringSourceCardId = null;
+
+    /** See $skipScoringSourceCardId's own docblock. */
+    private ?int $skipScoringOwnerId = null;
+
     /** @var array<int, array<string, mixed>> cardId => effectState staged during payToPlayCost(), before the card exists as a MoodInPlay -- see stagePrePlayEffectState(). */
     private array $pendingEffectState = [];
 
@@ -177,16 +214,21 @@ final class BoardState
     private array $pendingDraws = [];
 
     /**
-     * @var array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
-     * One entry per mood whose suppression actually changed (newly
-     * suppressed via suppress(), or lifted via clearSuppressionsFrom()/
+     * @var array<int, array{card_id: int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>}>
+     * One entry per mood whose suppression list actually changed (a source
+     * added via suppress(), or removed via clearSuppressionsFrom()/
      * clearEndOfRoundSuppressions()) this play/response/scoring pass --
-     * suppression itself is otherwise tracked only as each MoodInPlay's own
-     * current field, with no historical trail (game_cards persists just the
-     * latest value, overwritten every save), so a completed game's replay
-     * (issue #240) needs this queue to reconstruct when a suppression
-     * started/ended. Same consume-before-logging convention as
-     * $pendingCardMoves/$pendingOwnershipChanges.
+     * each entry carries the mood's *entire* resulting suppression list
+     * (see MoodInPlay's own docblock for why it's a list, not a single
+     * expiry/source pair), since that's otherwise tracked only as each
+     * MoodInPlay's own current field, with no historical trail (game_cards
+     * persists just the latest value, overwritten every save), so a
+     * completed game's replay (issue #240) needs this queue to reconstruct
+     * when a suppression started/ended -- ReplayStateBuilder just replaces
+     * the target mood's list wholesale with whatever's recorded here, the
+     * same way it already did for the single-value version of this field.
+     * Same consume-before-logging convention as $pendingCardMoves/
+     * $pendingOwnershipChanges.
      */
     private array $pendingSuppressionChanges = [];
 
@@ -872,35 +914,47 @@ final class BoardState
     // mood is already in play, or the turn is already partway through, by
     // the time a request loads the state back from the database).
 
-    /** @param array<string, mixed> $effectState */
+    /**
+     * @param array<string, mixed> $effectState
+     * @param array<int, array{expiry: string, sourceCardId: ?int}> $suppressions
+     */
     public function restoreMoodInPlay(
         int $cardId,
         int $ownerId,
         ?int $copiedCardId,
-        bool $isSuppressed,
-        ?string $suppressionExpiry,
-        ?int $suppressionSourceCardId,
+        array $suppressions,
         array $effectState,
     ): void {
         $this->moodsInPlay[$cardId] = new MoodInPlay(
             $cardId,
             $ownerId,
             $copiedCardId,
-            $isSuppressed,
-            $suppressionExpiry,
-            $suppressionSourceCardId,
+            $suppressions,
             $effectState,
         );
     }
 
     /** @param array<int, ?array{type?: string, values?: int[], source?: string, onUseEffectState?: array<string, mixed>, sourceCardId?: int, requiresSourceInPlay?: bool}> $playGrants */
-    public function restoreTurnState(?int $currentPlayerId, array $playGrants, ?int $roundFirstPlayerId, ?int $currentRoundNumber = null, bool $discardedThisRound = false): void
-    {
+    public function restoreTurnState(
+        ?int $currentPlayerId,
+        array $playGrants,
+        ?int $roundFirstPlayerId,
+        ?int $currentRoundNumber = null,
+        bool $discardedThisRound = false,
+        bool $skipScoringThisRound = false,
+        ?int $skipScoringFirstPlayerId = null,
+        ?int $skipScoringSourceCardId = null,
+        ?int $skipScoringOwnerId = null,
+    ): void {
         $this->currentPlayerId = $currentPlayerId;
         $this->playGrants = $playGrants;
         $this->roundFirstPlayerId = $roundFirstPlayerId;
         $this->currentRoundNumber = $currentRoundNumber;
         $this->discardedThisRound = $discardedThisRound;
+        $this->skipScoringThisRound = $skipScoringThisRound;
+        $this->skipScoringFirstPlayerId = $skipScoringFirstPlayerId;
+        $this->skipScoringSourceCardId = $skipScoringSourceCardId;
+        $this->skipScoringOwnerId = $skipScoringOwnerId;
     }
 
     /** Vulnerability: whether any card has been put into the discard pile so far this round -- see moveHandToDiscard()/moveInPlayToDiscard(). */
@@ -909,24 +963,80 @@ final class BoardState
         return $this->discardedThisRound;
     }
 
+    /** Awe's own afterPlaying() trigger -- see $skipScoringThisRound's own docblock. */
+    public function skipScoringThisRound(): bool
+    {
+        return $this->skipScoringThisRound;
+    }
+
+    /** Only meaningful when skipScoringThisRound() is true. See $skipScoringFirstPlayerId's own docblock. */
+    public function skipScoringFirstPlayerId(): ?int
+    {
+        return $this->skipScoringFirstPlayerId;
+    }
+
+    /** Only meaningful when skipScoringThisRound() is true. See $skipScoringSourceCardId's own docblock. */
+    public function skipScoringSourceCardId(): ?int
+    {
+        return $this->skipScoringSourceCardId;
+    }
+
+    /** Only meaningful when skipScoringThisRound() is true. See $skipScoringSourceCardId's own docblock. */
+    public function skipScoringOwnerId(): ?int
+    {
+        return $this->skipScoringOwnerId;
+    }
+
+    /**
+     * Awe: "After playing this mood, there is no scoring this round...
+     * you choose which player goes first next round." Called from
+     * AweEffect::afterPlaying() -- see $skipScoringThisRound's own
+     * docblock for why this is tracked here rather than as per-card
+     * effectState the way Honor's own similarly-named ability is.
+     * $cardId/$ownerId are Awe's own card and whoever played it, purely
+     * for GameService::scoringEffectEntries()'s own display entry -- see
+     * $skipScoringSourceCardId's own docblock.
+     */
+    public function markSkipScoringThisRound(int $cardId, int $ownerId, int $firstPlayerId): void
+    {
+        $this->skipScoringSourceCardId = $cardId;
+        $this->skipScoringOwnerId = $ownerId;
+        $this->skipScoringThisRound = true;
+        $this->skipScoringFirstPlayerId = $firstPlayerId;
+    }
+
     // --- suppression ---
 
+    /**
+     * Adds $cardId's suppression by $sourceCardId (or, for Repentance's own
+     * sourceless "suppress a mood you don't control" ability, by nothing in
+     * particular -- see RepentanceEffect). Idempotent per source: calling
+     * this again for the same ($cardId, $sourceCardId) pair replaces that
+     * source's own entry (a fresh expiry, if it somehow changed) rather
+     * than appending a duplicate, but leaves every OTHER source's own
+     * still-active entry alone -- see MoodInPlay's own docblock for why a
+     * mood can be suppressed by more than one source at once, each with
+     * its own independent expiry.
+     */
     public function suppress(int $cardId, string $expiry, ?int $sourceCardId = null): void
     {
         $mood = $this->moodInPlay($cardId);
-        $mood->isSuppressed = true;
-        $mood->suppressionExpiry = $expiry;
-        $mood->suppressionSourceCardId = $sourceCardId;
-        $this->recordSuppressionChange($cardId, true, $expiry, $sourceCardId);
+        $mood->suppressions = [
+            ...array_filter($mood->suppressions, static fn (array $s) => $s['sourceCardId'] !== $sourceCardId),
+            ['expiry' => $expiry, 'sourceCardId' => $sourceCardId],
+        ];
+        $this->recordSuppressionChange($cardId, $mood->suppressions);
     }
 
-    private function recordSuppressionChange(int $cardId, bool $isSuppressed, ?string $expiry, ?int $sourceCardId): void
+    /** @param array<int, array{expiry: string, sourceCardId: ?int}> $suppressions */
+    private function recordSuppressionChange(int $cardId, array $suppressions): void
     {
         $this->pendingSuppressionChanges[] = [
             'card_id' => $cardId,
-            'is_suppressed' => $isSuppressed,
-            'suppression_expiry' => $expiry,
-            'suppression_source_card_id' => $sourceCardId,
+            'suppressions' => array_map(
+                static fn (array $s) => ['expiry' => $s['expiry'], 'suppression_source_card_id' => $s['sourceCardId']],
+                $suppressions,
+            ),
         ];
     }
 
@@ -937,7 +1047,7 @@ final class BoardState
      * consume-before-logging convention as consumeCardMoves()/
      * consumeOwnershipChanges().
      *
-     * @return array<int, array{card_id: int, is_suppressed: bool, suppression_expiry: ?string, suppression_source_card_id: ?int}>
+     * @return array<int, array{card_id: int, suppressions: array<int, array{expiry: string, suppression_source_card_id: ?int}>}>
      */
     public function consumeSuppressionChanges(): array
     {
@@ -949,16 +1059,24 @@ final class BoardState
 
     public function isSuppressed(int $cardId): bool
     {
-        return $this->moodInPlay($cardId)->isSuppressed;
+        return $this->moodInPlay($cardId)->suppressions !== [];
     }
 
     /**
-     * The reverse of a suppressed mood's own suppressionSourceCardId --
-     * every mood currently suppressed *by* $sourceCardId. Purely a UI
-     * reminder-text lookup (see GameService's "affecting" field on each
-     * in-play card's serialization): the target's own suppressionSourceCardId
-     * already drives the actual suppression, this just answers it from the
-     * source's side.
+     * @return array<int, array{expiry: string, sourceCardId: ?int}>
+     */
+    public function suppressionsFor(int $cardId): array
+    {
+        return $this->moodInPlay($cardId)->suppressions;
+    }
+
+    /**
+     * The reverse of a suppressed mood's own suppression sources -- every
+     * mood currently suppressed *by* $sourceCardId (among possibly several
+     * other sources it's also suppressed by). Purely a UI reminder-text
+     * lookup (see GameService's "affecting" field on each in-play card's
+     * serialization): the target's own suppressions list already drives
+     * the actual suppression, this just answers it from the source's side.
      *
      * @return int[]
      */
@@ -966,8 +1084,11 @@ final class BoardState
     {
         $result = [];
         foreach ($this->moodsInPlay as $cardId => $mood) {
-            if ($mood->isSuppressed && $mood->suppressionSourceCardId === $sourceCardId) {
-                $result[] = $cardId;
+            foreach ($mood->suppressions as $suppression) {
+                if ($suppression['sourceCardId'] === $sourceCardId) {
+                    $result[] = $cardId;
+                    break;
+                }
             }
         }
 
@@ -1063,29 +1184,38 @@ final class BoardState
     public function clearSuppressionsFrom(int $sourceCardId, ?string $onlyExpiry = null): void
     {
         foreach ($this->moodsInPlay as $mood) {
-            if ($mood->suppressionSourceCardId !== $sourceCardId) {
+            $remaining = array_values(array_filter(
+                $mood->suppressions,
+                static fn (array $s) => $s['sourceCardId'] !== $sourceCardId
+                    || ($onlyExpiry !== null && $s['expiry'] !== $onlyExpiry),
+            ));
+            if ($remaining === $mood->suppressions) {
                 continue;
             }
-            if ($onlyExpiry !== null && $mood->suppressionExpiry !== $onlyExpiry) {
-                continue;
-            }
-            $mood->isSuppressed = false;
-            $mood->suppressionExpiry = null;
-            $mood->suppressionSourceCardId = null;
-            $this->recordSuppressionChange($mood->cardId, false, null, null);
+            $mood->suppressions = $remaining;
+            $this->recordSuppressionChange($mood->cardId, $remaining);
         }
     }
 
-    /** Clears every suppression that only lasts "until the end of this round". */
+    /**
+     * Clears every suppression entry that lasts "until the end of this
+     * round" -- from every mood, regardless of source, so a mood suppressed
+     * by an 'end_of_round' source AND a still-active 'while_source_in_play'
+     * one (see MoodInPlay's own docblock) stays suppressed by the latter
+     * instead of losing its whole suppression list to this call.
+     */
     public function clearEndOfRoundSuppressions(): void
     {
         foreach ($this->moodsInPlay as $mood) {
-            if ($mood->suppressionExpiry === 'end_of_round') {
-                $mood->isSuppressed = false;
-                $mood->suppressionExpiry = null;
-                $mood->suppressionSourceCardId = null;
-                $this->recordSuppressionChange($mood->cardId, false, null, null);
+            $remaining = array_values(array_filter(
+                $mood->suppressions,
+                static fn (array $s) => $s['expiry'] !== 'end_of_round',
+            ));
+            if ($remaining === $mood->suppressions) {
+                continue;
             }
+            $mood->suppressions = $remaining;
+            $this->recordSuppressionChange($mood->cardId, $remaining);
         }
     }
 
@@ -1202,7 +1332,7 @@ final class BoardState
     public function valueOf(int $cardId): int
     {
         $mood = $this->moodInPlay($cardId);
-        if ($mood->isSuppressed) {
+        if ($mood->suppressions !== []) {
             return 0;
         }
         if (array_key_exists('valueOverride', $mood->effectState)) {
@@ -1366,23 +1496,27 @@ final class BoardState
     }
 
     /**
-     * Whoever should go first *next* round, per a currently-in-play mood
-     * that overrides the normal "round winner goes first" rule. Two
-     * distinct effectState keys feed this, since they have different
-     * lifetimes: Honor's 'firstPlayerOverride' is perpetual -- "while in
-     * play, the chosen player goes first each round" -- so it's simply
-     * never cleared, and is automatically self-correcting if Honor later
-     * leaves play, with nothing separate to clean up. Awe's
-     * 'oneTimeFirstPlayerOverride' only covers the round immediately after
-     * it's played ("you choose which player goes first next round"), so
-     * GameService::skipScoringAndAdvance() explicitly clears it once
-     * consumed -- otherwise Awe staying in play would keep overriding
-     * every future round too, which its text doesn't support. GameService
-     * checks this when starting a new round; the first override found
-     * wins (no defined tie-break if both happen to be in play at once).
+     * Whoever should go first *next* round, overriding the normal "round
+     * winner goes first" rule. Two sources feed this, with different
+     * lifetimes: Awe's own $skipScoringFirstPlayerId (see its own
+     * docblock) is checked first -- it's a one-time choice, already fully
+     * locked in the instant Awe resolves, so it takes priority regardless
+     * of whether Awe itself is even still in play. Honor's per-card
+     * 'firstPlayerOverride' is perpetual instead -- "while in play, the
+     * chosen player goes first each round" -- so it's simply never
+     * cleared, and is automatically self-correcting if Honor later leaves
+     * play, with nothing separate to clean up. The legacy per-card
+     * 'oneTimeFirstPlayerOverride' key is still checked too (lowest
+     * priority), purely for backward compatibility with a game whose Awe
+     * resolved before $skipScoringFirstPlayerId existed and is still
+     * sitting on a still-in-play Awe card.
      */
     public function firstPlayerOverride(): ?int
     {
+        if ($this->skipScoringFirstPlayerId !== null) {
+            return $this->skipScoringFirstPlayerId;
+        }
+
         foreach ($this->moodsInPlay as $mood) {
             if (array_key_exists('firstPlayerOverride', $mood->effectState)) {
                 return $mood->effectState['firstPlayerOverride'];

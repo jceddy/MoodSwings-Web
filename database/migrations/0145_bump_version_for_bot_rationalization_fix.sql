@@ -1,0 +1,16 @@
+-- Fixes a practice-bot bug (confirmed by the maintainer): Rationalization
+-- ("you may choose one: refresh your own hand, or rotate hands with the
+-- table") has two interdependent optional choice_fields, so the bot's
+-- own generic "optional fields are never filled" default meant it always
+-- played Rationalization for no effect at all -- a wasted card every
+-- time. BotPlayerService now always commits to a mode when it plays
+-- Rationalization (rationalizationChoices()): 'refresh' whenever its own
+-- remaining hand is weak, otherwise 'rotate' toward an overstuffed seat
+-- neighbor (at least 3 more cards than the bot's own), otherwise still
+-- 'refresh' as the safe default. It also no longer leads with
+-- Rationalization purely by printed value -- sortPriorityValue()
+-- deprioritizes it to be played last unless one of those two triggers is
+-- actually live. No schema change of its own -- this migration exists
+-- purely to keep schema_version in sync with the VERSION bump, the same
+-- way 0024/.../0144 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.1' WHERE id = 1;

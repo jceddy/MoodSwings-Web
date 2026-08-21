@@ -47,7 +47,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/health`       | —                                                                | Checks DB connectivity. Exempt from maintenance mode (see below) — always reflects real DB health, never `503` for a pending migration. |
 | POST   | `/migrate`      | —                                                                 | Requires an `X-Migration-Key` header matching the `MIGRATION_DEPLOY_KEY` secret (compared with `hash_equals()`); `403` if it's missing/wrong or the secret itself isn't configured. Applies any pending `database/migrations/*.sql` files via `MigrationRunner::applyPending()` -- called by `.github/workflows/deploy.yml`/`deploy-dev.yml` right after each deploy's file upload, since production/dev have no shell access of their own to run `bin/migrate.php` directly. Exempt from maintenance mode (see below), same reasoning as `/health`. Returns `{"applied": [string]}` (filenames actually applied this run, `[]` if already up to date); `500` with the underlying error message if a migration fails partway through. See "Auto-applying migrations on deploy" in `database/README.md`. |
 | POST   | `/register`     | `{"username", "email", "password", "phone_number"?}`             | Creates an unverified user and emails a verification link. Username: 3-32 chars (letters/numbers/`_`/`-`); email: valid format; password: 8-72 chars; phone (optional): 7-20 chars, digits/`+`/`-`/`.`/spaces/parens. `409` on duplicate username/email, `400` on validation failure, `502` if the verification email can't be sent (registration is rolled back so you can retry). |
-| GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with just a manual link (no auto-redirect) if the token is invalid/expired. |
+| GET    | `/verify-email` | query param `token`                                              | HTML page (not JSON). On success, auto-redirects to `/` after 5 seconds (plus a manual link). `400` with a manual link to `resend-verification.html` (no auto-redirect) if the token is invalid/expired, so an expired link doesn't lock the account out for good. |
 | POST   | `/resend-verification` | `{"email"}`                                                | Issues a fresh verification link, revoking any prior one, and emails it. Always returns the same generic `200` message regardless of whether the email exists, is already verified, or was rate-limited, so it can't be used to discover which addresses are registered. Limited to once per 60 seconds per account; `400` on invalid email format, `502` if sending fails. |
 | POST   | `/forgot-password` | `{"email"}`                                                   | Issues a password reset link (valid for 1 hour), revoking any prior one, and emails it -- regardless of the account's verification status. Always returns the same generic `200` message whether or not the email is registered, for the same enumeration-resistance reason as `/resend-verification`; also rate-limited to once per 60 seconds per account. `400` on invalid email format, `502` if sending fails. Unlike `/verify-email`, the emailed link points at the static `reset-password.html` page rather than a GET route here -- see "Password reset" below for why. |
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
@@ -96,7 +96,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/replay/state` | query params `game_id`, `event_id`, `code`?              | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/log` use). `400` if the game isn't `completed` yet, or `event_id` doesn't belong to it. The board exactly as it looked immediately after `event_id` finished -- same shape as `GET /games/spectate/state`, but with `current_turn_game_player_id`/`pending_decision`/`plays_remaining`/`play_grants`/team-and-draft fields all `null` (there's no "current round" for a past event) and every hand always revealed. See "Watch replay" below. |
 | GET    | `/games/draft-pool` | query params `game_id`, `code`?                             | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (same `canSpectateGame()` check `GET /games/log`/`GET /games/replay/state` use). `409` if `game_id` isn't part of a draft match, or its match hasn't `completed` yet. Returns `{"draft_match_id", "players": [{"user_id", "username", "cards": [...]}], "undrafted_cards": [...]}` -- the whole Quick/Winston/Grid Draft match's shared `pool_card_ids`, sectioned by which player's `drafted_card_ids` each card ended up in, plus whatever nobody drafted (issue #314). See "View draft pool" below. |
 | GET    | `/user/stats`   | —                                                                 | Requires auth. Returns `{"username", "stats": {"game_wins", "game_losses", "game_win_percentage", "match_wins", "match_losses", "match_win_percentage"}}` -- your own lifetime totals only (issue #106), all-zero (percentages `null`) for a user with no completed games/matches yet. See "Lifetime stats" below. |
-| GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
+| GET    | `/stats/cards`  | —                                                                 | Requires auth only -- server-wide aggregate data (issue #315), not tied to any one player, so no game/friendship check. Returns `{"cards": [{"catalog_card_id", "name", "set_code", "collector_number", "rarity", "color", "times_in_deck", "deck_win_rate", "times_played", "play_win_rate", "quick_draft": {"average", "count"}, "winston_draft": {...}, "grid_draft": {...}, "rotisserie_draft": {...}}, ...]}`, one entry per catalog card, all-zero/null defaults for a card nothing has happened to yet. See "Card statistics" below. |
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
@@ -328,8 +328,18 @@ before the round's winner is determined rather than after
 entirely this round" marker paired with a one-time (as opposed to
 Honor's perpetual) first-player override for next round only (Awe —
 `GameService::hasSkipScoringMarker()`/`skipScoringAndAdvance()`, and
-`BoardState::firstPlayerOverride()`'s `oneTimeFirstPlayerOverride` key),
-and an unconditional "the round's winner is awarded an extra win" tag
+`BoardState::firstPlayerOverride()`). Unlike every other effectState tag
+in this list, Awe's own pair isn't card-scoped at all — it's tracked as
+round-level state (`game_rounds.skip_scoring`/
+`skip_scoring_first_player_game_player_id`, see `BoardState::
+$skipScoringThisRound`'s own docblock), since the choice is already
+locked in the instant Awe resolves ("after playing," not "while in
+play" like Honor's), so it has to survive Awe itself leaving play before
+the round it was played in finishes scoring. The legacy per-card
+`oneTimeFirstPlayerOverride`/`skipScoringThisRound` effectState keys are
+still read as a fallback, purely for backward compatibility with a game
+whose Awe resolved before this round-level tracking existed. There's
+also an unconditional "the round's winner is awarded an extra win" tag
 that doubles `game_rounds.wins_awarded` regardless of who plays it or
 who wins (Corruption — `GameService::consumeExtraWinMarker()`). A
 separate, reusable "was this mood played this round" tag
@@ -902,9 +912,20 @@ Passion (likewise, since their "you may" option recurs every round), and
 Sneakiness/Awe/Corruption (only for as long as their one-time
 round-scoped `effectState` tag stays set — `swapScoreWithPlayerId`/
 `skipScoringThisRound`/`awardsExtraWin` — since `applyScoreSwaps()`/
-`skipScoringAndAdvance()`/`consumeExtraWinMarker()` each clear their own
-tag once the round it covers actually scores, so a stale Sneakiness from
-three rounds ago never lingers here). None of this is hidden information
+`consumeExtraWinMarker()` each clear their own tag once the round it
+covers actually scores, so a stale Sneakiness from three rounds ago never
+lingers here). A bug caught live, reported by a user: playing Sneakiness
+or Corruption in the SAME round as Awe used to leave that tag stuck
+forever, since `applyScoreSwaps()`/`consumeExtraWinMarker()` only ever
+run inside `finishScoringAndAdvance()`, and Awe's own skip-scoring path
+(`skipScoringAndAdvance()`) bypasses that method entirely — the round
+never actually scores, so neither one-time tag ever got the chance to
+fire *or* clear, leaving it to keep showing here indefinitely and then
+genuinely misfire on whatever LATER round finally did score normally.
+`skipScoringAndAdvance()` now clears both tags itself, alongside its own
+Awe-specific ones, matching "no one wins or loses this round" — if
+there's no scoring, there's nothing left for either effect to modify.
+None of this is hidden information
 — an in-play card and the choice it was played with are both already
 public — so every viewer sees the same list. The `effect_key` lookup goes
 through `BoardState::effectiveCardId()`, mirroring `RoundScorer::score()`'s
@@ -921,14 +942,30 @@ having to remember what they discarded.
 `round.board_effects` is `scoring_effects`' sibling for non-scoring
 board-wide reshaping: same `{card_id, card_name, owner_game_player_id,
 description}` shape, built by `GameService::boardEffectEntries()`, but for
-an in-play mood whose "while in play" ability changes what every mood *is*
-rather than what it's worth. Today that's just Imagination — "While in
-play, all moods are the chosen color and no other colors" — read from its
-own `color` `effectState` (set by `ImaginationEffect::afterPlaying()`, the
-same tag `BoardState::colorOf()` already consults for every color-counting
-effect); an in-play Imagination with no `color` tagged yet (a test-only
-state a real play can't produce) is simply omitted. The two lists are kept
-separate rather than merged because they answer different questions —
+an in-play mood currently affecting the board as a whole rather than what
+it's worth. Two cards feed this today:
+
+- Imagination — "While in play, all moods are the chosen color and no
+  other colors" — read from its own `color` `effectState` (set by
+  `ImaginationEffect::afterPlaying()`, the same tag `BoardState::colorOf()`
+  already consults for every color-counting effect); an in-play Imagination
+  with no `color` tagged yet (a test-only state a real play can't produce)
+  is simply omitted.
+- Doubt — "During the next round, players can't play moods that share a
+  color with any of the revealed cards" — previously enforced entirely
+  server-side (an illegal play targeting a banned color is just rejected,
+  see `BoardState::bannedColorsThisRound()`) with nothing telling a player
+  the ban was even active until they tried and failed. `doubtBoardDescription()`
+  reads the exact same `bannedColors`/`playedInRound` `effectState` tags
+  `DoubtEffect::afterPlaying()` stamps on it, gated on the same "only for
+  the single round immediately after it was played" window
+  `bannedColorsThisRound()` itself checks — so this entry disappears the
+  moment the ban actually lifts, and stays absent both before Doubt's own
+  choice was ever made (declined, or nothing revealed) and once the round
+  it applied to has passed.
+
+The two lists (`scoring_effects`/`board_effects`) are kept separate rather
+than merged because they answer different questions —
 `scoring_effects` is "how will this round's score come out,"
 `board_effects` is "what do the cards on the table actually look like
 right now" — so a future card that does both would appear in both lists,
@@ -1034,17 +1071,28 @@ dynamically once the panel is open and a candidate is chosen, via
 attempt still surfaces the usual server-side rejection at submit time
 regardless.
 
-Every in-play mood also carries `is_suppressed` plus, when suppressed,
-`suppression_expiry` (`'while_source_in_play'` or `'end_of_round'`) and
-`suppressed_by_card_id`/`suppressed_by_name` — the suppressing mood's id
-and name, resolved from `BoardState`'s `suppressionSourceCardId`/
-`GameService::cardNamesFor()`. A source is only ever present for a
-`'while_source_in_play'` suppression (Faith/Guilt/Meekness/Pacifism/Shame,
-and Scorn's own version, which uses `'end_of_round'` *with* a source);
-Repentance's blanket `'end_of_round'` suppression never tracks one, since
-the suppression doesn't need to watch for anything leaving play to know
-when to lift — it just expires at the round boundary regardless
-(`BoardState::clearEndOfRoundSuppressions()`).
+Every in-play mood also carries `is_suppressed` plus `suppressions` -- a
+*list*, since a mood can genuinely be suppressed by more than one source
+at once, each on its own independent expiry (e.g. Scorn suppressing an
+opponent's Loyalty `'end_of_round'` while a Shame the owner played earlier
+also suppresses it `'while_source_in_play'`; see `MoodInPlay`'s own
+docblock). `is_suppressed` is just whether that list is non-empty. Each
+entry is `{expiry, suppressed_by_card_id, suppressed_by_name}` --
+`suppressed_by_card_id`/`suppressed_by_name` are that one entry's own
+suppressing mood's id and name, resolved from `BoardState::
+suppressionsFor()`/`GameService::cardNamesFor()`. A source is only ever
+present for a `'while_source_in_play'` entry (Faith/Guilt/Meekness/
+Pacifism/Shame, and Scorn's own version, which uses `'end_of_round'`
+*with* a source); Repentance's blanket `'end_of_round'` suppression never
+tracks one, since the suppression doesn't need to watch for anything
+leaving play to know when to lift — it just expires at the round boundary
+regardless (`BoardState::clearEndOfRoundSuppressions()`, which now only
+strips the `'end_of_round'` *entries* out of each mood's list, leaving any
+other still-active `'while_source_in_play'` entry alone -- the bug this
+fixed: a second suppress() call used to silently overwrite the entire
+single suppression slot a mood used to have room for, so a later
+`'end_of_round'` source clobbering an earlier `'while_source_in_play'`
+one meant the round ending erased both, not just its own).
 
 `'while_source_in_play'`'s name is a slight misnomer: the card text on
 all five of Faith/Guilt/Meekness/Pacifism/Shame actually reads "for as
@@ -1085,7 +1133,8 @@ now carries `boosted_by_card_id`/`boosted_by_name` (the reverse of
 applies) and `affecting` -- an array of `{card_id, name, relationship}`
 naming every OTHER in-play mood this one is currently suppressing
 (`relationship: 'suppressed'`, via the new `BoardState::
-suppressedByCardId()`, the reverse lookup of `suppressionSourceCardId`) or
+suppressedByCardId()`, the reverse lookup across every mood's own
+suppressions list for one suppressing card) or
 dice-value-boosting (`relationship: 'dice_value'`, one entry for
 Encouragement's single target, several for Idealism's blanket one -- both
 fall out of the same `diceValueBoosterCardId()` check against every other
@@ -1996,6 +2045,29 @@ one where deck-acquisition data has to survive across up to 3 separate
 within one, so it gets its own match-level tables (migration `0027`)
 instead of columns on `games`/`game_players`.
 
+**Seating is shuffled, unlike every other format.** A real bug, caught
+live: `createGame()` used to seat every non-team format in whatever order
+`$userIds` itself arrived in -- the creator first, then opponents in
+whichever order they were selected in the New Game dialog -- which is
+harmless for `standard`/`duel` (round 1's own leader is separately
+randomized, see "Turn order" below) but wrong for `format: 'draft'`
+(shared by all four deck types above), whose own snake/rotation turn
+order makes table position itself matter in a way that randomization
+never fixed: who picks immediately before/after whom repeats every lap of
+every round, for the whole match, so a fixed creation-order seating meant
+the same two players were always neighbors, every single draft, however
+many times they played each other. `GameService::shuffledSeatOrder()`
+now seats a `'draft'`-format game's players in a genuinely random order
+instead -- this incidentally also fixes Rotisserie Draft's own separate
+problem of the creator always picking first (`rotisserieDraftPickUserId()`
+always starts at seat 0; Quick/Winston/Grid Draft already randomized
+*which* seat goes first via `array_rand()`, but never touched the
+underlying seating itself, so neighbor relationships stayed fixed
+regardless). `'team'`/`'closed_team'` are unaffected -- their own seating
+is already derived from `partner_user_id` (see "Open Team Play"/"Closed
+Team Play" below), not `$userIds`' own order, so shuffling would only
+break the adjacent/across-the-table seating those formats require.
+
 **Data model** -- `draft_matches` (one row per match: `pool_source`,
 `pool_card_ids` -- the shared up-to-48-card pool, `status`
 `'drafting'`/`'deck_building'`/`'completed'`, `current_round`,
@@ -2265,9 +2337,14 @@ their own sections below rather than repeated here):
   players, rounding up -- 45 for 2p, 90 for 3-4p -- matching exactly what
   the doubled built-in `structure` pool source now actually produces.
 - **jceddy's 150 Card deck** (`buildJceddys150DeckCardIds()`,
-  `JCEDDYS_150_DECK_RARITY_SPEC`) -- shared by Quick Draft's and Grid
-  Draft's own 4-player `jceddys_75` pool sourcing (both go through the
-  same `buildDraftPool()`). Not a literal doubling of jceddy's 75 Card
+  `JCEDDYS_150_DECK_RARITY_SPEC`) -- shared by every format's own
+  `jceddys_75` pool sourcing (Quick Draft, Winston Draft, Grid Draft, and
+  Rotisserie Draft all go through the same `buildDraftPool()`), swapped
+  in whenever the target pool size actually needed exceeds jceddy's 75
+  Card deck's own 75 cards (`JCEDDYS_75_DECK_SIZE`) -- always true at 4
+  players for Quick/Winston/Grid Draft, but for Rotisserie Draft only
+  once its own cutoff-count-times-player-count floor crosses that same
+  line (see "Rotisserie Draft" below). Not a literal doubling of jceddy's 75 Card
   deck's own 75-card pool (which would just duplicate the same 75 card
   ids) -- its own themed 150-card construction, every one of jceddy's 75
   Card deck's own per-color count/max-copies pairs doubled: 2 Mythics, 4
@@ -2622,6 +2699,271 @@ with `GRID_DRAFT_MIN_DECK_SIZE` (12) and no fixed max, same rationale as
 Winston Draft's own open-ended range -- and, for 3-4 players, the same
 `other_players` array Quick Draft's own multiplayer support added.
 
+### Rotisserie Draft
+
+`deck_type: 'rotisserie_draft'` (issue #361) is the fourth `format: 'draft'`
+deck type, reusing the same `draft_matches`/`draft_match_players` tables and
+best-of-three/deck-building infrastructure as the other three variants
+(`games.deck_type = 'rotisserie_draft'` is the only thing distinguishing it).
+What's genuinely different is the draft mechanic: the *entire* pool is dealt
+face-up once at the start of the match, and players take turns picking a
+single card from it in a fixed snake order until a per-player cutoff is
+reached -- there's no per-round dealing/refilling at all, unlike Quick
+Draft's packs, Winston Draft's piles, or Grid Draft's grid.
+
+**Cutoff count** -- the creator picks a `rotisserie_draft_cutoff_count`
+between `ROTISSERIE_DRAFT_MIN_CUTOFF` (13) and `ROTISSERIE_DRAFT_MAX_CUTOFF`
+(20) inclusive, defaulting to `ROTISSERIE_DRAFT_DEFAULT_CUTOFF` (14) --
+validated in `createGame()` before any pool building happens. This is how
+many cards *each* player ends up drafting; the draft ends the instant every
+seated player has picked exactly that many cards, regardless of how much of
+the shared pool is left over.
+
+**Pool building -- a floor, not an exact match** -- `buildRotisserieDraftPool()`
+computes `rotisserieDraftMinPoolSize($cutoffCount, $playerCount)` (simply
+`$cutoffCount * $playerCount`) and requires the chosen pool source to
+produce *at least* that many cards, throwing a `GameStateException` if it
+can't. This is the opposite of Quick/Winston/Grid Draft's own pool sizing,
+which always truncates down to an exact target -- Rotisserie Draft instead
+calls the shared `buildDraftPool()` helper with `truncateToTarget: false`,
+so any pool source larger than the minimum is laid out at its own natural
+full size, with the leftover, undrafted cards simply never dealt (mirroring
+Rarity Rotisserie's own precedent of discarding a remainder rather than
+forcing an exact count). The `random_48`-equivalent source (despite its
+name, sized however many cards are actually needed) is the only source
+sized *exactly* to the minimum -- it pulls that many unique random catalog
+cards outright. Every other source (`structure`, `jceddys_75`, `one_of_each`,
+`custom`, `saved_deck`) is laid out at whatever size it naturally is; a
+`structure` pool doubles to two structure decks only when the minimum pool
+size exceeds 45 (`doubleStructureForMultiplayer: $minPoolSize > 45` -- note
+this is a different condition from Quick/Winston Draft's own doubling rule,
+which is based on player count rather than the computed floor), and a
+`custom` pool is rejected if it's smaller than the minimum but otherwise
+used in full even when it's larger. `jceddys_75` similarly swaps up to
+jceddy's 150 Card deck (see "Multiplayer" in "Quick Draft" above) only
+when the minimum pool size itself exceeds `JCEDDYS_75_DECK_SIZE` (75) --
+a different condition from Quick/Winston/Grid Draft's own flat "at 4
+players" rule (those formats' own 4-player targets always exceed 75, so
+the two conditions happen to coincide there): a real bug, caught live,
+had this hardcoded to "exactly 4 players" here too, so a 4-player match
+with the default 14-card cutoff (floor 56, comfortably under 75) was
+needlessly bumped up to the 150-card pool; it now only swaps once the
+cutoff itself pushes the floor past 75. Since `cutoff * playerCount` is
+capped at `ROTISSERIE_DRAFT_MAX_CUTOFF * playerCount`, only a 4-player
+match can ever actually cross that line (a 19-20 cutoff, floor 76-80) --
+2-3 players max out at 40/60, both comfortably under 75, so they always
+stay on the 75-card pool regardless of cutoff.
+
+**Pick order -- snaking with a rotating starter, alternating every two
+rounds** -- `rotisserieDraftPickUserId($userIds, $pickIndex)` computes,
+from a 0-indexed global pick counter, which seat picks next. Every 2
+rounds (a "double-round" of `2 * $playerCount` picks) forms a matched pair:
+a forward pass starting from that double-round's "starter" seat, followed
+by an exact mirror-image reverse pass ending back on the starter -- a
+standard snake pair, except the seat at the pivot between the two passes
+picks twice in a row (once to end the forward pass, once to begin the
+reverse pass). For 3-4 players, the starter seat rotates by one position
+every double-round (`$doubleRoundIndex % $playerCount`), so first-pick duty
+for each pair of rounds is shared evenly around the table; for exactly 2
+players the starter never rotates (staying fixed at seat 0 throughout the
+match) since with only 2 seats a snake pair is already symmetric and
+rotating the starter would simply swap which one of two functionally
+identical orderings is used. Because `$cutoffCount` need not be even, a
+draft frequently ends mid-double-round -- no special-casing is needed for
+this, since the draft simply stops generating further picks once
+`pick_index` reaches `$cutoffCount * $playerCount`, whatever position that
+falls at within the in-progress double-round.
+
+`rotisserieDraftPickUserId()` also takes a `$starterSeatOffset` (migration
+`0134`), added to every resulting seat index before the `$userIds` lookup --
+a fix for a real bug, caught live: `$pickIndex = 0` always resolves to
+`$userIds[0]` for the very first pick, which is fine for plain `'draft'`
+format (`shuffledSeatOrder()` already randomizes seat 0 there), but
+`'team'`/`'closed_team'` deliberately seat the creator at a *fixed* seat 0
+instead (so partners sit adjacent/across the table -- see
+`seatOrderForTeamGame()`/`seatOrderForClosedTeamGame()`), so before this
+fix the creator picked first in literally every Team Play/Closed Team Play
+Rotisserie Draft match, no exceptions. `$starterSeatOffset` is chosen once,
+uniformly at random, in `initializeRotisserieDraft()`, and rotates which
+physical seat plays the role of "seat 0" for pick-order purposes only --
+same trick `array_rand($userIds)` already gives Quick/Winston/Grid Draft,
+without touching the actual seating/team assignment or disturbing the
+snake shape/neighbor relationships (a cyclic rotation preserves both).
+
+**State** -- `draft_rotisserie_state` (migration `0125`) holds the whole
+match's mechanic in one row: `pool_card_ids` (a JSON array, the shrinking
+face-up pool -- cards are removed from it as they're picked, never
+re-added), `cutoff_count`, `starter_seat_offset` (migration `0134`, see
+above -- fixed for the whole match), `pick_index` (the 0-based global
+counter -- simultaneously the single source of truth for whose turn it is,
+via `rotisserieDraftPickUserId()`, and for whether the draft is complete,
+via comparison against `cutoff_count * $playerCount`), and
+`current_turn_user_id` (a cached/derived value kept in sync on every pick,
+so turn-lookup queries don't need to recompute the pick-order formula).
+`initializeRotisserieDraft()` shuffles the pool once and inserts this row
+at `pick_index = 0`. `submitRotisserieDraftPick()` validates the caller is
+the current picker and the chosen card is still in the pool, removes it
+from `pool_card_ids`, appends it to the picker's `drafted_card_ids` (the
+same shared column every draft variant uses), and either advances
+`pick_index`/`current_turn_user_id` to the next pick or, once the cutoff is
+reached, deletes the `draft_rotisserie_state` row outright and transitions
+the match to `deck_building` -- there's nothing left to persist once every
+pick has been made, unlike Winston Draft's leftover deck/piles or Grid
+Draft's leftover grid cells.
+
+**Deck-building** uses the same shared `draftDeckBuildingStateFor()`/
+`submitDraftDeck()` infrastructure as the other three variants, with
+`ROTISSERIE_DRAFT_MIN_DECK_SIZE` (12) as the minimum -- fixed regardless of
+`cutoff_count`, unlike Quick Draft's guaranteed-per-player total, since the
+drafted pool is always exactly `cutoff_count` cards per player (13-20) and
+12 simply matches every other format's own floor.
+
+**State exposure** -- `getState()`'s `rotisserie_draft` field (`null` for
+every other deck_type) mirrors the other three draft variants' own shape
+(an always-present match scoreline, a `players` array, `games_to_win` via
+the shared `draftGamesToWin($playerCount)` helper, plus whichever of
+`drafting`/`deck_building` is currently live). `drafting`
+(`rotisserieDraftDraftingStateFor()`) is `is_your_turn`,
+`current_turn_username`, `cutoff_count`, `picks_made` (`pick_index`),
+`total_picks_needed` (`cutoff_count * $playerCount`), `pool_cards` (every
+card still in the pool, fully serialized -- unlike Grid Draft's grid, which
+can contain `null` gaps mid-round, Rotisserie Draft's face-up pool is
+always fully populated between picks, so there's nothing to hide or leave
+as a placeholder), `drafted_so_far` (the viewer's own accumulated picks),
+`opponent_drafted_so_far`/`other_players_drafted_so_far` (issue #189-style,
+mirroring Grid Draft's own multiplayer shape), and `teams_drafted_so_far`
+for Open Team Play (see below). Like Grid Draft, this is open information
+end to end -- every card any player has drafted was already visible to
+everyone else the moment the pool itself was dealt face-up, so there's no
+game-integrity reason to hide anyone's drafted list. `deck_building` is the
+same shared shape the other variants use, called with
+`ROTISSERIE_DRAFT_MIN_DECK_SIZE` and no fixed max.
+
+**Open Team Play** -- like Grid Draft, drafted cards are aggregated per
+team (`teams_drafted_so_far`) rather than per player when `format: 'team'`,
+reusing the same team-grouping helpers.
+
+### Tiered Rotisserie Draft
+
+Issue #361's own generalization of base Rotisserie Draft immediately above:
+N rounds ("tiers"), each drafting from its own distinct sub-pool with its
+own per-player pick count, before the next tier begins, rather than a
+single pool/cutoff for the whole match. Ships as its own `deck_type`,
+`'tiered_rotisserie_draft'`, with a `tiering_mode` field (`'rarity'` or
+`'custom'`) selecting between two schemes -- the same
+`quick_draft_pool_source`-style pattern of one deck_type selecting among
+several sourcing schemes, rather than two entirely separate deck_types.
+Otherwise reuses base Rotisserie Draft's infrastructure and match shape
+unchanged: same `draft` format/best-of-three structure, same
+`draftDeckBuildingStateFor()`/`submitDraftDeck()` deck-building step
+afterward, same 2-4 players and `draft`/`team`/`closed_team` format
+support.
+
+**Pick order -- continuous across tier boundaries.** The single most
+important design point: pick order snakes CONTINUOUSLY across ALL tiers,
+never resetting to seat 0 when a new tier begins. This is achieved by
+reusing `rotisserieDraftPickUserId($userIds, $pickIndex, $starterSeatOffset)`
+completely unchanged, fed an ever-incrementing GLOBAL `pick_index` that
+keeps counting across the whole match rather than resetting per tier --
+the exact same function base Rotisserie Draft itself uses for its own
+single pool. Tier boundaries are purely a bookkeeping concern layered on
+top (`tieredRotisserieDraftTierIndexFor()`): given each tier's own fixed
+`cutoff_count`, the cumulative sum of `cutoff_count * $playerCount` across
+tiers 0..N marks where tier N's own picks end and tier N+1's begin, and
+the draft is complete once `pick_index` reaches the sum across every
+configured tier. A tier boundary landing mid-double-round needs no
+special-casing, for the same reason base Rotisserie Draft's own odd
+`cutoff_count` doesn't (see `rotisserieDraftPickUserId()`'s own docblock)
+-- it's just another point in one continuous pick sequence.
+
+**Two tiering modes** (`buildTieredRotisserieDraftTierPools()`):
+
+- **`'rarity'`** (`TIERED_ROTISSERIE_DRAFT_RARITY_TIERS`) -- the fixed
+  reference scheme, confirmed by the maintainer: 4 tiers, one per rarity
+  in order Mythic → Rare → Uncommon → Common, cutoffs 1/2/4/8 picks per
+  player. Every tier's own layout size is exactly DOUBLE what it actually
+  distributes that tier (`layout = 2 * playerCount * cutoff_count`) --
+  mythic 2N, rare 4N, uncommon 8N, common 16N. Each player ends up with a
+  15-card pool (1+2+4+8) to build a 12-card deck from.
+  `tieredRotisserieDraftRarityLayout()` draws that many DISTINCT cards of
+  the tier's own rarity where the catalog has enough, otherwise laying
+  out every distinct card of that rarity once and filling the shortfall
+  with a second copy of a random subset (never a 3rd copy of any single
+  card) -- confirmed against the real catalog (133 cards: 15 mythic/30
+  rare/40 uncommon/48 common) at the worst case, 4 players: mythic needs
+  8 (of 15), rare 16 (of 30), uncommon 32 (of 40) -- comfortable margins,
+  never needing a 2nd copy -- while common needs 64 (of 48 distinct),
+  short by 16, covered by doubling 16 of the 48 commons once each; at 3
+  players the common tier is an exact zero-margin fit (48 needed, 48
+  available); at 2 players there's plenty of slack (32 of 48).
+- **`'custom'`** (`buildTieredRotisserieDraftCustomTierPools()`) -- the
+  creator configures `TIERED_ROTISSERIE_DRAFT_MIN_CUSTOM_TIERS`..
+  `TIERED_ROTISSERIE_DRAFT_MAX_CUSTOM_TIERS` (2-4) tiers themselves, each
+  with its own pool -- sourced from *either* a saved decklist or a pasted
+  custom list, the same `'custom'`/`'saved_deck'` pool sources
+  `buildDraftPool()` already offers, just restricted to those two (no
+  built-in random/structure/jceddy's-collection sources for a custom tier
+  -- the creator supplies every tier's own pool explicitly) -- and its own
+  pick cutoff count, independently configurable per tier. Each tier's own
+  pool must be at least `playerCount * that tier's own cutoff_count` cards
+  (the same floor base Rotisserie Draft's own custom pool enforces, just
+  computed per tier), and the configured tiers' own cutoffs must sum to at
+  least `ROTISSERIE_DRAFT_MIN_DECK_SIZE` (12) -- validated by `createGame()`
+  itself before any pool building starts, the same "validate before
+  building" order `parseCustomDecklist()`/`resolveDuelDeckRules()` already
+  establish. A single tier would just be base Rotisserie Draft, hence the
+  2-tier minimum.
+
+**State** -- `draft_tiered_rotisserie_state` (migration `0135`) holds the
+whole match's mechanic in one row: `tiering_mode`, `tiers` (a JSON array,
+ordered the same as they're drafted -- each element
+`{label, cutoff_count, pool_card_ids}`: `label` names which rarity a
+`'rarity'`-mode tier is, `null` for `'custom'` mode; `pool_card_ids` holds
+every card STILL available to pick in that tier specifically, shrinking as
+picks happen, exactly like `draft_rotisserie_state`'s own `pool_card_ids`
+just scoped per tier -- resolved and stored for every configured tier up
+front at creation time, not dealt lazily as each tier is reached),
+`starter_seat_offset`/`pick_index`/`current_turn_user_id` (mirroring
+`draft_rotisserie_state`'s own columns exactly). Which tier is currently
+active is deliberately NOT its own stored column -- it's derived on
+demand from `pick_index` and each tier's own `cutoff_count`
+(`tieredRotisserieDraftTierIndexFor()`), one less piece of mutable state
+that could drift out of sync with `pick_index` itself.
+`initializeTieredRotisserieDraft()` shuffles each tier's own layout in
+place and inserts this row at `pick_index = 0`.
+`submitTieredRotisserieDraftPick()` validates the caller is the current
+picker and the chosen card is still in the CURRENTLY ACTIVE tier's own
+pool (derived from the pre-pick `pick_index`), removes it from that
+tier's own `pool_card_ids`, appends it to the picker's `drafted_card_ids`
+(the same shared column every draft variant uses, spanning the whole
+match across every tier), and either advances `pick_index`/
+`current_turn_user_id` to the next pick or, once every tier's own picks
+are exhausted, deletes the `draft_tiered_rotisserie_state` row outright
+and transitions the match to `deck_building`.
+
+**Deck-building** reuses `ROTISSERIE_DRAFT_MIN_DECK_SIZE` (12) as the
+minimum for both tiering modes -- `'rarity'` mode's own 15-card pool
+always clears it, and `'custom'` mode's own tier cutoffs are already
+validated to sum to at least this same floor.
+
+**State exposure** -- `getState()`'s `tiered_rotisserie_draft` field
+mirrors `rotisserie_draft`'s own shape (`tieredRotisserieDraftStateFor()`),
+with `drafting` (`tieredRotisserieDraftDraftingStateFor()`) generalizing
+`rotisserieDraftDraftingStateFor()`'s own fields to the current tier:
+`current_tier_index`/`current_tier_label` name which tier is active,
+`tiers` gives every configured tier's own `label`/`cutoff_count`/`status`
+(`'completed'`/`'current'`/`'upcoming'`) for a stepper-style progress UI,
+`cutoff_count`/`picks_made_this_tier`/`total_picks_needed_this_tier` scope
+the same progress figures base Rotisserie Draft shows to the CURRENT tier
+only, `total_picks_made`/`total_picks_needed` give the whole match's own
+progress (the global `pick_index` and its total across every tier), and
+`pool_cards` is the current tier's own remaining face-up pool only (never
+a prior tier's now-discarded remainder, nor a later tier's not-yet-active
+pool). `drafted_so_far`/`opponent_drafted_so_far`/
+`other_players_drafted_so_far`/`teams_drafted_so_far` stay whole-match
+totals, unchanged in shape from base Rotisserie Draft -- a single running
+`drafted_card_ids` list already spans every tier.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next
@@ -2676,7 +3018,11 @@ holds a `phase` of `'propose'` or `'confirm'`: either teammate calls
 then the OTHER teammate must `action: 'confirm'` with `approve: true`
 (locks it in) or `false` (rejects, sending the row back to `'propose'`
 with the prior proposal cleared -- either teammate, including the
-original proposer, can propose again). The same `active_marker`
+original proposer, can propose again). A reject also records the
+rejected candidate into `rejected_game_player_id` (migration `0160`) --
+see "Practice bots" below for why: without it, a practice bot on the
+deciding team had no way to tell a rejection had just happened, and kept
+re-proposing the exact candidate a human just turned down. The same `active_marker`
 generated-column trick migration `0011` used for
 `game_pending_decision_batches` guarantees at most one open
 `game_team_decisions` row per round (`uq_team_decisions_one_open_per_round`),
@@ -4159,9 +4505,10 @@ Server-wide, 17lands-style aggregate data -- not tied to any one
 player -- per catalog card (`cards.id`, never a per-game instance id):
 how many completed games' decks it ended up in and how many of those
 were won, how many times it was actually played and how many of those
-games were won, and (for Quick/Winston/Grid Draft) an average
+games were won, and (for Quick/Winston/Grid/Rotisserie Draft) an average
 "how early was this taken" signal per format. Backed by a new
-`card_stats` table (migration `0070`) and a new `MoodSwings\Stats\
+`card_stats` table (migration `0070`, later extended by migration `0126`
+for Rotisserie Draft's own column pair) and a new `MoodSwings\Stats\
 CardStatsService` class -- deliberately its own small service (mirroring
 the `UserDecklistService`/`ReplayStateBuilder` precedent) rather than
 more private methods on the already-large `GameService`, and injected
@@ -4202,12 +4549,12 @@ hook point:
   game via Duplicity's repeat mechanic still only counts once).
 - **Draft pick-position signal**
   (`recordQuickDraftPick()`/`recordWinstonDraftPick()`/
-  `recordGridDraftPick()`) is knowable the instant a pick happens,
-  independent of the eventual game/match outcome (same as 17lands' own
-  ATA, a pure draft signal) -- and for Winston/Grid Draft, deferring
-  wouldn't even be possible, since their own pick state is gone by match
-  completion. Each is called directly from its own pick-submission
-  method instead:
+  `recordGridDraftPick()`/`recordRotisserieDraftPick()`) is knowable the
+  instant a pick happens, independent of the eventual game/match outcome
+  (same as 17lands' own ATA, a pure draft signal) -- and for
+  Winston/Grid Draft, deferring wouldn't even be possible, since their
+  own pick state is gone by match completion. Each is called directly
+  from its own pick-submission method instead:
   - Quick Draft (`submitQuickDraftPick()`): `(round_number - 1) *
     playerCount + stage_number` -- a genuine ATA-style ordinal, since
     `draft_pile_stage_picks` already records exactly which (round,
@@ -4223,8 +4570,13 @@ hook point:
   - Grid Draft (`submitGridDraftPick()`): the round the pick happened in
     (`draft_grid_state.current_round`, read before it's ever
     incremented).
+  - Rotisserie Draft (`submitRotisserieDraftPick()`): the draft's own
+    1-based global `pick_index` at the moment of the pick -- unlike the
+    other three, this is a genuine ordinal rather than a proxy, since the
+    whole pool is dealt face-up once and drafted in a single fixed snake
+    order with no rounds/piles/grid to derive a stand-in from.
 
-  These three numbers are on different scales and never compared across
+  These four numbers are on different scales and never compared across
   formats (same as 17lands' own ATA, which is always within-format), so
   each gets its own `*_sum`/`*_count` column pair on `card_stats` rather
   than one shared value.
@@ -4688,28 +5040,30 @@ populate its own bot picker -- see "New game dialog" in
 `web-static/README.md`.
 
 **Scope.** `GameService::botsSupportedFor(string $format, string
-$deckType): bool` -- every format except `draft`, and only for a
-deck_type that needs no PER-PLAYER setup of its own: `structure`,
-`power`, `jceddys_75`, `one_of_each`, and `custom`
-(`BOT_SUPPORTED_DECK_TYPES`), plus one special case: Duel with
-`custom_duel` (see "Practice bots in Duel with a custom decklist"
-below) -- `botsSupportedFor()` returns `true` for that combination
-outright, bypassing `BOT_SUPPORTED_DECK_TYPES` entirely, since a bot's
-decklist there is supplied by its creator up front rather than needing
-the bot to submit one itself the normal way. `custom` belongs in
-`BOT_SUPPORTED_DECK_TYPES` itself (not a `custom_duel`-style special
-case) despite needing a decklist at all: unlike `custom_duel`, it's a
-single TABLE-wide shared deck (`games.custom_deck_card_ids`, built once
-from the human creator's own `decklist_text`/`saved_decklist_id` before
-any seat -- bot or human -- is ever dealt from it; see
-`deckCardIdsFor()`'s `'custom'` branch) rather than a per-seat one, so a
-bot needs to do nothing whatsoever to "have" one -- exactly like
-`structure`/`power`/`jceddys_75`/`one_of_each`. `draft` stays excluded
-because it would need a bot to make its own draft picks
-(`quick_draft`/`winston_draft`/`grid_draft`), which this feature doesn't
-implement. `custom_duel` can never combine with `team`/`closed_team` at
-all (it's Duel-only, checked elsewhere), so its own special case above
-needs no team-format branch of its own. `createGame()` rejects
+$deckType): bool` -- as of issue #359, literally every `deck_type` this
+app has is bot-supported, via one of three routes: `structure`, `power`,
+`jceddys_75`, `one_of_each`, and `custom` (`BOT_SUPPORTED_DECK_TYPES`)
+need no PER-PLAYER setup of their own at all; `custom_duel` (Duel-only)
+gets its own special case (see "Practice bots in Duel with a custom
+decklist" below) since a bot's own decklist there is supplied by its
+creator up front rather than needing the bot to submit one itself the
+normal way; and every draft-based `deck_type` (`quick_draft`/
+`winston_draft`/`grid_draft`/`rotisserie_draft`/`tiered_rotisserie_draft`,
+`DRAFT_DECK_TYPES`) is supported regardless of `format` -- see "Practice
+bots in draft formats" below for how a bot makes its own picks there,
+entirely independent of this method and `createGame()` (nothing needs
+supplying up front the way `custom_duel`'s own decklist does). `custom`
+belongs in `BOT_SUPPORTED_DECK_TYPES` itself (not a `custom_duel`-style
+special case) despite needing a decklist at all: unlike `custom_duel`,
+it's a single TABLE-wide shared deck (`games.custom_deck_card_ids`,
+built once from the human creator's own
+`decklist_text`/`saved_decklist_id` before any seat -- bot or human --
+is ever dealt from it; see `deckCardIdsFor()`'s `'custom'` branch)
+rather than a per-seat one, so a bot needs to do nothing whatsoever to
+"have" one -- exactly like `structure`/`power`/`jceddys_75`/
+`one_of_each`. `custom_duel` can never combine with `team`/`closed_team`
+at all (it's Duel-only, checked elsewhere), so its own special case
+above needs no team-format branch of its own. `createGame()` rejects
 (`GameStateException`) any attempt to seat a bot outside this scope,
 checked once, up front, via `botUserIdAmong(array $userIds): ?int` (a
 single `is_bot` lookup against every id in `$userIds`, returning the
@@ -4740,11 +5094,20 @@ everything else here, via two new `GameService` helpers called from
   and `proposeTeamDecision()`; in `'confirm'`, always approves (never
   rejects) via `confirmTeamDecision()` if the seat that needs to confirm
   (never the proposer -- `confirmTeamDecision()` itself rejects that) is
-  a bot. A human confirmer who rejects a bot's proposal just sees the
-  exact same one proposed again next time, since the bot's own policy
-  never varies. Returns `null` (nothing to do) if there's no active
-  decision, or the seat that needs to act next belongs to a real player
-  instead.
+  a bot. **Rejection (confirmed by the maintainer, migration `0160`)**:
+  before this, a human confirmer who rejected a bot's proposal just saw
+  the exact same one proposed again next time, since the bot's own
+  policy never varies -- rejecting was a no-op whenever a bot sat on the
+  deciding team. `confirmTeamDecision()`'s own reject branch now records
+  the just-rejected candidate into `rejected_game_player_id` (see
+  "Propose/confirm" above), and `advanceBotTeamDecision()` checks it
+  before proposing: once set, the bot stops proposing for that decision
+  entirely and waits for a real player instead. Since a bot's own confirm
+  always approves, the decision still resolves on the human's very next
+  proposal (either candidate) -- there's no way to get permanently stuck.
+  Returns `null` (nothing to do) if there's no active decision, the bot
+  is deferring after a rejection, or the seat that needs to act next
+  belongs to a real player instead.
 - `advanceBotInitialCardPass(int $gameId, array $round, array
   $botGamePlayerIds): ?array` -- Closed Team Play's own round 1 only
   (checked via `$round['round_number']` before even checking the
@@ -4774,6 +5137,212 @@ AND confirm (or both members' own card passes) back to back, with no
 human ever needing to act. A bot may be the creator's own partner too,
 not just seated on the opposing team -- `partnerUserId`'s own validation
 (`createGame()`) never distinguished bot from human to begin with.
+
+**Practice bots in draft formats (issue #359).** Quick/Winston/Grid/
+Rotisserie/Tiered Rotisserie Draft were originally excluded from bot
+support entirely -- unlike every deck_type above, drafting needs each
+player to make a genuine SEQUENCE of their own decisions (which card(s)
+to keep/take/pick, then how to trim the result into a deck), not
+something a human creator can just supply once up front the way
+`custom_duel`'s own bot decklist works. Two new pieces make this work,
+kept deliberately separate from `BotChoiceResolver`'s own
+`BoardState`-driven policy immediately below, since drafting happens
+entirely BEFORE any `BoardState`/round exists for a game:
+
+- **Data.** `cards.draft_priority_score` (migration `0143`) is an
+  externally-curated general draft-strength ranking across all 133
+  cards (higher = better; tiered, not a strict ordering -- several
+  cards deliberately share a score), imported the same "literal SQL"
+  way migration `0003` seeded the catalog itself, since there's no
+  runtime import path in this codebase for one card set's worth of
+  reference data. `card_synergy_partners` (same migration) is a join
+  table pairing 5 build-around mythics (Validation/Exhilaration/Bliss/
+  Duplicity/Thrill) with 14 curated non-mythic partner cards each --
+  once a bot has drafted one of the 5, its own partners score
+  `SYNERGY_PARTNER_BONUS` (40, roughly the very top draft_priority_score
+  tier) higher for the rest of the draft, stacking once per drafted
+  mythic a card partners (rare in practice -- most formats only ever
+  award one mythic total). `CardStatsService::deckWinRatesByCardId()`
+  (a lighter sibling of `allCardStats()`, skipping the set/collector-number
+  join and every per-format pick-position column a bot's own scoring has
+  no use for) supplies a small, sample-size-gated (`MIN_DECK_STATS_SAMPLE`,
+  10 games) tiebreaker on top of both -- `DECK_WIN_RATE_WEIGHT` (0.9) is
+  kept under the smallest gap between two distinct draft_priority_score
+  tiers, so it can only ever separate two candidates the curated data
+  alone left tied, never override it. All three are combined by
+  `BotPlayerService::draftCardScore()` (private -- every public method
+  below is the actual entry point) and bundled once per driving call via
+  `GameService::draftBotScoringData(): array{rowsById, synergyPartnersByMythicId,
+  deckWinRatesByCardId}` (`CardCatalog::load()`/
+  `CardCatalog::loadSynergyPartnersByMythicId()`/
+  `$cardStats->deckWinRatesByCardId()`) rather than re-queried per
+  candidate.
+- **Policy: `BotPlayerService`'s draft-pick family.**
+  `chooseDraftCards(int[] $candidateCardIds, int $count, int[]
+  $draftedCardIds, array $draftScoringData): int[]` is the shared "pick
+  the $count highest-scored of these" primitive behind THREE of the 5
+  formats' own single-card-at-a-time picks (Quick Draft's per-stage pile
+  with `$count` = `QUICK_DRAFT_KEEP_PER_STAGE`; Rotisserie/Tiered
+  Rotisserie Draft's shared pool with `$count = 1`).
+  `chooseWinstonAction(int[] $pileCardIds, ...): string` answers
+  Winston Draft's own take/pass with 'take' whenever the active pile's
+  own best card beats the catalog-wide average `draft_priority_score`
+  (computed from the data itself, not a hardcoded cutoff) -- a pile only
+  ever grows as it's passed, so this never discards a merely-small pile,
+  only one that's genuinely not worth having yet. It only ever answers
+  the pure "is this pile good enough" question, though -- it has no view
+  of the shared deck or the OTHER piles, so it can't tell whether a
+  'pass' here is actually safe to act on right now. That's
+  `GameService::advanceBotWinstonDraftPick()`'s own job (confirmed by
+  the maintainer, a real bug reported live): once the shared deck itself
+  reads empty, `submitWinstonDraftPick()`'s own pile-3-decline branch
+  only fires its "mandatory" deck draw `if ($deck !== [])`, so with an
+  empty deck that draw silently does nothing -- a bot that blindly
+  followed `chooseWinstonAction()` through every remaining pile this
+  turn (none of which can ever grow again once the deck feeding them is
+  dry) could end its whole turn with zero cards despite a real, takeable
+  pile having been sitting right there. So whenever the deck is already
+  empty, `winstonDraftPassWouldForfeitTheWholeTurn()` checks whether any
+  LATER pile this turn (current+1..3) still has a card of its own to
+  fall back on; if none do, this is the bot's last chance and 'take' is
+  forced instead, regardless of what `chooseWinstonAction()` said the
+  pile was worth. An empty CURRENT pile is unaffected by any of this --
+  there's nothing to take either way, so it always just passes (see
+  `advanceBotWinstonDraftPick()`'s own docblock).
+  `chooseGridLine(array $candidateLines, ...): array{axis, index}` picks
+  Grid Draft's own row/column by highest TOTAL score across a line's
+  non-null cells (not an average -- a longer line of decent cards
+  legitimately beats one great card, same as what a human drafter
+  actually gets for taking it). `chooseDraftDeck(int[] $draftedCardIds,
+  int $minDeckSize, array $draftScoringData): int[]` trims a finished
+  draft down to exactly `$minDeckSize` highest-scored cards, scored
+  against the bot's own WHOLE final pool as its own `$draftedCardIds`
+  context (so a partner card correctly gets synergy credit for whatever
+  mythic ended up alongside it) -- resubmitted unchanged for every game
+  of a best-of-three match (deterministic, same pool in, same deck out;
+  no bot sideboarding).
+- **Wiring: `GameService::advanceBotDraftTurn(int $gameId): ?array`.**
+  Called unconditionally at the very top of `advanceAutomatedTurns()`'s
+  own loop, even before `advanceBotTeamDecision()` -- a still-drafting/
+  deck-building game has no `game_rounds` row at all yet (`games.status`
+  stays `'waiting'` until `startGame()` actually deals the match, well
+  after drafting AND deck-building both finish -- see
+  `submitDraftDeck()`'s own docblock), so `currentRound()` a few lines
+  down would just throw and `break` immediately for one, the same
+  deadlock class issue #360's own team-decision fix already solved for
+  a different frozen state. Dispatches on `draft_matches.status`:
+  `'drafting'` hands off to whichever of 5 `advanceBotXDraftPick()`
+  helpers matches `deck_type`, each reading just enough state to know
+  whether a seated bot needs to act (`draft_*_state.current_turn_user_id`/
+  `current_player_user_id` for Winston/Grid/Rotisserie/Tiered Rotisserie
+  -- a plain single-current-turn check; Quick Draft has no such column
+  at all -- `advanceBotQuickDraftPick()` finds the round's own current
+  STAGE first, then loops every bot seat checking `draft_pile_stage_picks`
+  for one that hasn't submitted yet, since every seated player picks
+  SIMULTANEOUSLY once a stage opens) and, if so, submitting through the
+  exact same public `submitXDraftPick()` method a human's own request
+  would hit -- this method itself never mutates draft state directly.
+  `'deck_building'` submits one not-yet-submitted bot's own trimmed deck
+  (via the ordinary `submitDraftDeck()`, `draftMinDeckSizeFor()` shared
+  with that method's own floor lookup, and -- see below -- `pickableDraftPoolFor()`
+  shared with that same method's own pool computation) if any bot still
+  needs one, or --
+  once every bot here already has one in -- calls
+  `tryAutoStartDraftGame()`, which tries `startGame()` and silently
+  swallows a `GameStateException` (not ready yet, some human still
+  hasn't submitted; or already started by a concurrent request) --
+  a bot-seated draft has no browser polling on the bot's own behalf to
+  do what the frontend's own `autoStartGameIfReady()` does for a human's
+  client, so this is that function's server-side analog.
+
+  **Open Team Play only** (confirmed by the maintainer):
+  `awaitingHumanTeammatesDraftDeck(int $gameId, int $draftMatchId,
+  string $format, int $botUserId): bool` gates that same `'deck_building'`
+  submission a step further -- a bot whose own `openTeamPlayTeammateUserId()`
+  is a HUMAN who hasn't submitted a deck yet is skipped over for now
+  (left with `deck_card_ids` still `NULL`, exactly like a bot already
+  handled or a human still drafting), rather than submitted immediately.
+  Without this, a bot would always beat its own human teammate to
+  deck-building -- `advanceBotDraftTurn()` runs the instant drafting
+  ends, long before any human could realistically act -- quietly
+  claiming cards from its own drafted pool before the human has had any
+  real chance to see what their own teammate ends up keeping. See
+  `submitDraftDeck()`'s own docblock for why submission ORDER actually
+  matters between two teammates: the second submitter's own pickable
+  pool is trimmed by whatever the first submitter's already-chosen deck
+  claims out of the team's shared pool, so submitting first is a real
+  advantage worth leaving to the human. A teammate who is ALSO a bot
+  never blocks this (two bots waiting on each other would deadlock
+  forever), and neither does a teammate -- human or bot -- who has
+  ALREADY submitted; `openTeamPlayTeammateUserId()` itself already
+  returns `null` for every format other than `'team'`, so this never
+  applies outside Open Team Play. Once the human's own deck lands
+  (`submitDraftDeck()` followed by the route's own `advanceAutomatedTurns()`
+  call, same as every other draft route), the very next
+  `advanceBotDraftTurn()` call finds the bot free to submit. `draftMatchBotUserIds(int
+  $draftMatchId): array` (queried against `draft_match_players` joined
+  to `users.is_bot`, since draft state throughout this file is keyed by
+  `user_id`, not `game_players.id` -- see `submitQuickDraftPick()`'s own
+  docblock for why) is this feature's own analog of `botGamePlayerIds()`.
+  Every one of the 6 draft routes (`POST /games/draft/pick`,
+  `/draft/deck`, `/draft/winston-pick`, `/draft/grid-pick`,
+  `/draft/rotisserie-pick`, `/draft/tiered-rotisserie-pick`) calls
+  `advanceAutomatedTurns()` right after its own human mutation succeeds,
+  same as `POST /games/play`/`/pass`/etc. already did -- and `GET
+  /games/state`'s own existing deadlock-safety-net poll covers a draft
+  game exactly the same way it always covered everything else, so an
+  all-bot-except-the-creator draft still advances on nothing more than
+  the creator's own client periodically checking in.
+
+  **The bot's own deck choice used to ignore the shared pool entirely --
+  caught live, from a real user report.** `advanceBotDraftDeck()` used
+  to build the bot's own deck straight from its raw `drafted_card_ids`
+  alone, passed directly to `BotPlayerService::chooseDraftDeck()` --
+  correct for every OTHER format, but wrong for Open Team Play: a card
+  the bot itself drafted can still end up *unavailable* if its human
+  teammate's own already-submitted deck claimed it first (the same
+  first-come-first-served pooling `submitDraftDeck()`'s own docblock
+  documents). Whenever that happened, the bot would confidently submit a
+  deck `submitDraftDeck()` itself immediately rejected with a
+  `GameStateException` -- and nothing anywhere in `advanceBotDraftDeck()`
+  or its own caller chain caught it, so the exception propagated all the
+  way out of `advanceAutomatedTurns()` uncaught. Before `GET /games/state`'s
+  own exception guard existed (see "Driving a bot's turn" above), this
+  surfaced as a hard 500 on every single poll; after that guard shipped,
+  the symptom flipped to something quieter but just as broken -- the
+  poll itself stopped crashing, but the bot's deck submission silently
+  and PERMANENTLY never succeeded, since `chooseDraftDeck()` is a pure
+  function of the same unchanged (and still wrong) pool every time this
+  ran. Fixed by extracting `submitDraftDeck()`'s own pool computation
+  into `pickableDraftPoolFor(int $draftMatchId, int $userId, ?int
+  $teammateUserId): array` -- the exact same "own drafted cards, or (Open
+  Team Play) the team's combined pool minus whatever the teammate's
+  CURRENT `deck_card_ids` already claimed" logic, now shared by both
+  `submitDraftDeck()`'s own validation and `advanceBotDraftDeck()`'s own
+  deck-building choice, so a bot's guess and what actually validates can
+  never disagree.
+
+  **`advanceBotFirstPlayerDecision()`** -- a follow-up fix, caught live
+  ("Waiting for BotAlice to decide who goes first..."): a best-of-three
+  draft match's own "who goes first" freeze (`setPlayFirstNextMatchGame()`,
+  game 2/3's own round 1 -- see that method's own docblock) is a
+  DIFFERENT frozen-round state from Closed Team Play's own blind pregame
+  card pass above (`current_turn_game_player_id` null either way, but
+  never both at once for the same game), and had no bot handling
+  whatsoever until this existed -- if the PREVIOUS game's loser happened
+  to be a bot, the round just stayed frozen forever, since
+  `advanceAutomatedTurns()`'s own frozen-round branch only ever tried
+  `advanceBotInitialCardPass()`. Tried right alongside it (both cost
+  nothing extra when they don't apply): finds the previous game's own
+  winner/loser the same way `firstPlayerDecisionStateFor()`/
+  `setPlayFirstNextMatchGame()` themselves do, and, if the loser's own
+  seat in THIS game belongs to a bot, calls `setPlayFirstNextMatchGame()`
+  with `$playFirst = false` -- the bot never opts to go first itself,
+  the same passive outcome as never answering at all
+  (`resolveFirstPlayerId()`'s own placeholder: the previous winner goes
+  first again), deliberately arbitrary and deterministic like
+  `chooseTeamDecisionProposal()`'s own precedent, since there's no clear
+  strategic bias toward going first or second here.
 
 **Picking a legal move: `MoodSwings\Bot\BotChoiceResolver`.** A
 server-side equivalent of `web-static/js/game.js`'s own `fieldOptions()`/
@@ -4879,14 +5448,51 @@ since it already holds that dependency):
   Fury ("each player chooses one of their highest value moods and puts
   it into the discard pile" -- every player, including whoever plays
   it, via `RequiresOpponentDecision`, so `CardChoiceSchema` has no entry
-  for it at all) is the one card on this list today: only worth playing
-  if at least one OPPONENT's own highest-value mood is worth MORE than
-  the bot's own highest-value mood (a player with no moods in play
-  counts as `-1`, matching `FuryEffect`'s own sentinel) -- otherwise
-  it's a pure loss, trading the bot's own best mood for something equal
-  or worse. Everything not on this list defaults to "always worth
-  playing," the unconditional "yes" every effect already got before
-  this method existed.
+  for it at all) is worth playing only if at least one OPPONENT's own
+  highest-value mood is worth MORE than the bot's own highest-value mood
+  (a player with no moods in play counts as `-1`, matching `FuryEffect`'s
+  own sentinel) -- otherwise it's a pure loss, trading the bot's own
+  best mood for something equal or worse.
+
+  Avoidance (confirmed by the maintainer) is the second card on this
+  list: unlike Fury it DOES have its own `choice_field` (a required
+  `direction`), but that field alone can't express "don't play this at
+  all" the way an unfilled optional field can, so it needs the same
+  whole-board veto Fury does on top of it.
+  `avoidanceHasAGoodReasonToPlay(BoardState $state, int
+  $botGamePlayerId): bool` -- "each seated player with at least one mood
+  in play (including whoever plays it) gives one of their own moods to
+  their neighbor in a single shared direction" is worth it either if the
+  bot's own cheapest mood to give up (`lowestMoodValueOwnedBy()`, the
+  mirror of `highestMoodValueOwnedBy()` above -- `0`, not `-1`, for a
+  player with no moods in play at all, since `AvoidanceEffect` itself
+  never even asks them for an answer, so there's genuinely nothing lost)
+  is cheap enough not to matter regardless of what comes back
+  (`AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD`, 2, the same reasoning
+  `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE` below already uses for an
+  analogous "is what I'd give up cheap enough" question), OR at least
+  one direction would route back a mood worth MORE than that
+  (`avoidanceReceivedValueFor()` -- since `AvoidanceEffect` moves every
+  giver's own mood to their neighbor IN the chosen direction, the seat
+  that gives TO the bot is the one on the OPPOSITE side, the same
+  `activeNeighbor()`-mirroring `rationalizationStealDirection()` below
+  already relies on for Rationalization's own `'rotate'`; each such
+  giver is assumed to give up their own cheapest mood too, the same
+  `lowestMoodValueOwnedBy()` reasoning applied to whichever neighbor is
+  asked). Otherwise Avoidance just trades the bot's own mood for
+  something equal or worse while also handing every OTHER seated player
+  a free swap they didn't ask for -- a pure loss (or at best a wash)
+  worth skipping. When it IS worth playing, `buildChoicesForCard()`
+  special-cases `effectKey === 'avoidance'` to
+  `avoidanceBestDirection()` rather than falling through to
+  `CardChoiceSchema`'s own generic "first option" default for a
+  required `'mode'` field (the same way `'rationalization'` is special-
+  cased below) -- whichever direction routes back the more valuable
+  mood, `'left'` winning any tie to match that same generic default.
+
+  Everything not on either card's own list above defaults to "always
+  worth playing," the unconditional "yes" every effect already got
+  before this method existed.
   `shouldAttemptValueBoostDiscard(BoardState $state, string $effectKey,
   string $fieldKey, int $cardId, int $botGamePlayerId): bool` is a
   similarly narrow, similarly whole-board policy, but decides WHETHER to
@@ -4930,15 +5536,282 @@ since it already holds that dependency):
   probabilistic middle band run many trials and assert the observed rate
   falls within a generous statistical tolerance, rather than asserting
   an exact outcome.
+
+  **Zeal** (confirmed by the maintainer) gets the same
+  `shouldAttemptValueBoostDiscard()`-shaped treatment
+  (`shouldAttemptZealCycle()`, feeding `buildChoicesForCard()`'s own
+  `$forced` the exact same way), but for "you may put a card from your
+  hand on the bottom of the deck; if you do, draw a card" rather than a
+  value boost -- worth attempting whenever the bot's own cheapest OTHER
+  hand card (excluding Zeal itself) is cheap enough
+  (`ZEAL_LOW_VALUE_HAND_CARD_THRESHOLD`, the same threshold/reasoning as
+  `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`/
+  `AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD`/`CYNICISM_LOW_VALUE_DISCARD_THRESHOLD`
+  elsewhere in this section) to be worth gambling on a random
+  replacement for. Once forced, `BotChoiceResolver`'s own generic
+  `'hand_card'` field policy already picks the LOWEST-value legal
+  candidate on its own, so `shouldAttemptZealCycle()` only ever decides
+  WHETHER to bother, never WHICH card -- no bespoke choice-building
+  method needed here the way Rationalization/Avoidance/Cynicism each
+  need their own. An empty remaining hand (Zeal was the bot's only
+  card) has nothing to cycle, so it stays unfilled -- "if it has one to
+  cycle" per the maintainer.
+
+  **Rationalization** (confirmed by the maintainer) gets its own
+  bespoke, two-part policy, since "you may choose one: refresh your own
+  hand, or rotate hands with the table" (`CardChoiceSchema`'s own
+  `mode: ['refresh', 'rotate']` plus a `direction` field that only means
+  anything once `mode` is `'rotate'`) can't be reduced to a single
+  optional-field decision the way `shouldAttemptValueBoostDiscard()`'s
+  own single boolean can -- leaving it unfilled (the generic optional-
+  field default) is a pure no-op, strictly worse than either real
+  option, so `buildChoicesForCard()` special-cases `effectKey ===
+  'rationalization'` to `rationalizationChoices()` entirely, bypassing
+  the generic per-field `CardChoiceSchema` loop for this one card:
+  - `rationalizationLowValueHand(BoardState $state, int $cardId, int
+    $botGamePlayerId): bool` -- `'refresh'` whenever the bot's own
+    remaining hand (every OTHER card still in hand once Rationalization
+    itself is played -- it's still sitting in hand at the point this
+    runs) averages `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE` (2, roughly
+    the real catalog's own overall average base value) or below --
+    including an empty remaining hand, which counts as trivially "low"
+    (refreshing nothing is free). Checked first: always safe (nothing is
+    ever given away), regardless of what any neighbor's hand looks like.
+  - Otherwise, `rationalizationStealDirection(BoardState $state, int
+    $botGamePlayerId): ?string` -- `'rotate'` toward whichever seat
+    neighbor currently holds at least
+    `RATIONALIZATION_STEAL_HAND_SIZE_ADVANTAGE` (3) more cards than the
+    bot's own current hand, so the bot ends up with that larger hand
+    once hands actually rotate. `'rotate'` moves EVERY seated player's
+    hand to their own neighbor in ONE shared direction (`RationalizationEffect`'s
+    own docblock), not a private trade with a single opponent, so the
+    neighbor the bot actually RECEIVES FROM under direction `$d` is
+    whichever one sits on the OPPOSITE side -- `activeNeighbor()`'s own
+    "`'left'` is index+1" rule means a neighbor at the bot's own
+    `'right'` is the one whose OWN `'left'` pass lands on the bot, and
+    vice versa. Whichever of the two neighbors qualifies AND holds the
+    larger hand wins if both do; `null` (falls through to `'refresh'`
+    below) if neither does, which a heads-up duel's own single shared
+    "neighbor" either direction resolves to always agrees with itself
+    on.
+  - Otherwise, still `'refresh'` -- the strictly safer of the two once
+    neither trigger applies, since it never gives anything away to an
+    opponent the way an unwarranted `'rotate'` would.
+
+  `chooseAction()`'s own highest-printed-value sort additionally treats
+  Rationalization specially via `sortPriorityValue()`: rather than
+  leading with it purely because of its own unremarkable printed value
+  (3), it's demoted to `PHP_INT_MIN` -- guaranteed last -- UNLESS
+  `rationalizationLowValueHand()` or `rationalizationStealDirection()`
+  already says it's worth playing right now (same two checks
+  `rationalizationChoices()` itself makes, just used here to decide
+  WHETHER/WHEN rather than HOW) -- "save it to play last" per the
+  maintainer, so a mediocre Rationalization never displaces a
+  genuinely useful play, but it's still never skipped outright: once
+  it's the only legal candidate left (or a trigger fires), it's played
+  the same as anything else, always committing to a real mode.
+- **Policy: Cynicism** (confirmed by the maintainer) -- "you may put a
+  card from the discard pile into an opponent's hand; if you do, this
+  mood's value becomes 6" (base 3, so a +3 swing). Its own two fields
+  (`discard_card_id`/`recipient_player_id`) are both optional but
+  genuinely interdependent (`CynicismEffect::afterPlaying()` throws if
+  one is set without the other), so `buildChoicesForCard()` special-cases
+  `effectKey === 'cynicism'` to `cynicismChoices()` entirely, bypassing
+  the generic per-field `CardChoiceSchema` loop the same way
+  `'rationalization'`/`'avoidance'` already are:
+  - `cynicismCheapDiscardCardId(BoardState $state): ?int` -- the
+    cheapest (lowest `baseValue()`) discard-pile card, or `null` if
+    either the pile is empty or its own cheapest card is still too
+    valuable (`CYNICISM_LOW_VALUE_DISCARD_THRESHOLD`, 2, same threshold/
+    reasoning as `RATIONALIZATION_LOW_VALUE_HAND_AVERAGE`/
+    `AVOIDANCE_LOW_VALUE_MOOD_THRESHOLD` above) to hand an opponent for
+    free.
+  - `cynicismFirstValidRecipient(BoardState $state, int
+    $botGamePlayerId): ?int` -- the first active player who isn't the
+    acting player or their teammate (`CynicismEffect`'s own validation),
+    matching `BotChoiceResolver`'s own generic "first legal candidate"
+    default for any other `'player'`/scope `'other'` field.
+  - `cynicismChoices()` boosts (fills both fields) only when BOTH of the
+    above resolve to a real value -- empty otherwise, playing Cynicism
+    for its own plain printed value with nothing given away.
+
+  `chooseAction()`'s own highest-printed-value sort additionally
+  demotes Cynicism to `PHP_INT_MIN` via `sortPriorityValue()`, the
+  identical "save it for when it actually pays off" treatment
+  Rationalization gets above, UNLESS
+  `cynicismHasAGoodReasonToPlayNow()` says otherwise: either a cheap
+  discard-pile card and a legal recipient both exist (the same check
+  `cynicismChoices()` itself makes, just used here to decide
+  WHETHER/WHEN rather than HOW -- a near-free +3 worth taking whenever
+  it's on offer), OR playing Cynicism for its own plain printed value
+  (no boost at all) would be the deciding difference between the bot's
+  own group NOT currently having the highest score this round and
+  having it (`wouldBecomeHighestScore()`, reused here with an
+  `$unboostedValue` of 0 -- "didn't play this" vs. "played this
+  unboosted", rather than that method's usual unboosted-vs-boosted
+  comparison) AND no OTHER currently playable card already offers as
+  big a swing on its own (`anotherPlayableCardOffersASufficientSwing()`
+  -- if something else already closes the same gap, Cynicism doesn't
+  need to be the one that does it) -- "fine to play Cynicism for no
+  extra value" per the maintainer. Like Rationalization, this only ever
+  deprioritizes WHEN, never skips it outright.
+
+  An addendum (confirmed by the maintainer) widens the last branch
+  above into its own third, round-score-independent condition: Cynicism
+  is ALSO a fine first play whenever no other currently playable card
+  offers a 3+-point swing on its own (`anotherPlayableCardOffersASufficientSwing()`
+  again) AND no other currently playable card interacts with an
+  opponent's hand at all
+  (`anotherPlayableCardInteractsWithOpponentsHand()` -- `compulsion`/
+  `intimidation`/`suspicion` specifically, not
+  `EARLY_PRIORITY_EFFECT_KEYS`' own extra-play entries) -- unlike the
+  round-deciding branch, this one doesn't require Cynicism to actually
+  decide anything, just that nothing more useful is on offer right now.
+
+  `EARLY_PRIORITY_EFFECT_KEYS` (the same addendum) is a flat priority
+  bonus (`EARLY_PRIORITY_BONUS`, 10 -- comfortably above the catalog's
+  own ~6-point printed-value ceiling, so a listed card always outranks
+  an unlisted one regardless of either one's own printed value, while
+  still ranking sensibly AMONG themselves by that value) added in
+  `sortPriorityValue()` for every card that steals from an opponent's
+  hand (Compulsion, Intimidation), forces one or more OTHER players to
+  discard from their own hand (Suspicion), or grants the acting player
+  an extra play -- unconditionally (Charity, Duplicity, Idealism,
+  Validation, Ambition, Bravado, Fear, Nostalgia, Gluttony, Insecurity,
+  Angst, Harmony, Grief, Thrill, Joy), conditionally on the next play
+  meeting some restriction (Benevolence, Eagerness, Friendliness,
+  Kindness, Pride, Intimidation's own restriction to the one card just
+  taken), or as an ongoing while-in-play grant rather than a one-time
+  one (Hope, Grace, Stubbornness). Generosity is deliberately excluded:
+  it grants its own extra play to a chosen OPPONENT, not the acting
+  player, so boosting it would help whoever's targeted instead of the
+  bot itself.
+
+  **Intimidation** (confirmed by the maintainer) gets a further, related
+  exception: `buildChoicesForCard()` special-cases `effectKey ===
+  'intimidation'` to `intimidationTargetPlayerId()` -- the first active,
+  non-teammate opponent who currently has at least one card in hand, or
+  `null` if none do -- rather than falling through to
+  `CardChoiceSchema`'s own generic per-field loop, which would otherwise
+  leave the optional `target_player_id` field unfilled (a pure no-op
+  play) the same way every other unforced optional field defaults to.
+  Deliberately skips an empty-handed opponent in favor of one who
+  actually has a card to reveal, rather than just the first legal
+  candidate in seat order the way `BotChoiceResolver`'s own generic
+  scope-`'other'`-player default would -- `IntimidationEffect`'s own
+  `pendingDecisionsFor()` silently no-ops against an empty hand, so
+  targeting one on purpose while another qualifying opponent sits right
+  there would waste the whole play. `sortPriorityValue()` demotes
+  Intimidation to `PHP_INT_MIN` (the same treatment Rationalization/
+  Cynicism get) whenever `intimidationTargetPlayerId()` returns `null`
+  -- no non-teammate opponent has a card at all, so playing it right now
+  would accomplish nothing -- "other plays should be prioritized above
+  it" per the maintainer; the instant at least one such opponent has a
+  card, Intimidation reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS`
+  boosted treatment above, with no separate "how good is this target"
+  scoring needed, since any qualifying opponent makes it worth its usual
+  priority.
+
+  **Paranoia** (confirmed by the maintainer, the same policy as
+  Intimidation) gets the identical treatment via its own
+  `paranoiaTargetPlayerId()`: `buildChoicesForCard()` special-cases
+  `effectKey === 'paranoia'` to it instead of falling through to
+  `CardChoiceSchema`'s generic per-field loop, and it returns the first
+  active, non-teammate opponent who currently has at least one card in
+  hand, or `null` if none do. `CardChoiceSchema`'s own `'paranoia'` field
+  is scope `'any'` (Paranoia's printed text allows targeting yourself,
+  unlike Intimidation's "another player"), so `BotChoiceResolver`'s own
+  generic default would happily let the bot target itself -- excluding
+  both the acting player and any teammate is deliberate, "an opponent"
+  per the maintainer means neither. Unlike `IntimidationEffect`, which
+  quietly no-ops against an empty-handed target,
+  `ParanoiaEffect::afterPlaying()` throws
+  (`$state->hand($targetPlayerId) !== []` is a hard precondition), so
+  `paranoiaTargetPlayerId()` here isn't just avoiding a wasted play, it's
+  avoiding an illegal one. `sortPriorityValue()` demotes Paranoia to
+  `PHP_INT_MIN` the same way whenever `paranoiaTargetPlayerId()` returns
+  `null`. Paranoia is deliberately absent from `EARLY_PRIORITY_EFFECT_KEYS`
+  above, though -- it bottoms the target's card rather than gaining the
+  acting player's own hand a card the way Compulsion/Intimidation do, and
+  never forces a discard the way Suspicion does -- so once a valid target
+  exists it reverts to plain `baseValue()`, no boost, just no longer
+  vetoed.
+
+  **Creativity** (confirmed by the maintainer) gets its own targeting
+  exception via `creativityBestCopyTargetId()`: `buildChoicesForCard()`
+  special-cases `effectKey === 'creativity'` to it instead of falling
+  through to `CardChoiceSchema`'s generic per-field loop (which, since
+  `copy_card_id` is optional and not in `ALWAYS_FILLED_OPTIONAL_FIELDS`,
+  would otherwise always leave Creativity unfilled -- just a blank blue
+  card worth 0). Generally the highest-value mood currently in play,
+  regardless of owner -- unlike Intimidation/Paranoia/Pacifism, there's
+  no opponent-only restriction here (`CardChoiceSchema`'s own field is
+  scope `'any'` with no `excludes_teammate`), so copying the bot's own
+  best mood is just as valid a pick as copying an opponent's. "Generally"
+  because it deliberately skips any candidate whose own printed ability
+  has a "to play" cost (Bliss, Envy, Exhilaration, Guile, Neurosis,
+  Regret, Self-Loathing) -- `MoodPlayService::playMood()` pays a
+  Creativity-copy's cost against the COPIED card's own
+  `canPayToPlayCost()`, not Creativity's (always payable, since
+  Creativity has no printed cost of its own), so picking one of these
+  without knowing whether the bot could actually pay it risks turning a
+  legal Creativity play into an illegal one. Resolved through
+  `effectiveCardId()` throughout (both the to-play-cost check and the
+  live `valueOf()` comparison), so copying a Creativity that's itself
+  already copying something targets -- and is scored as -- whatever THAT
+  card actually is, never blank Creativity. `null` (leaving
+  `copy_card_id` unfilled, the same default as before this policy
+  existed) only when nothing is in play yet, or every in-play mood has a
+  to-play cost.
+
+  **Harmony** (confirmed by the maintainer) gets a `sortPriorityValue()`
+  deprioritization, not a targeting exception -- it has no choice_fields
+  of its own at all (`HarmonyEffect::afterPlaying()` never reads
+  `$choices`), so `buildChoicesForCard()` needs no special case for it.
+  Its own extra play is restricted to a card sourced FROM the discard
+  pile (`BoardState::grantExtraPlay()`'s own `['source' => 'discard']`),
+  so with the discard pile completely empty that grant accomplishes
+  nothing -- `sortPriorityValue()` demotes it to `PHP_INT_MIN` (the same
+  treatment Rationalization/Cynicism/Intimidation/Paranoia/Pacifism get)
+  whenever `$state->discardPile() === []`, "avoid playing it until there
+  are cards in the discard pile to play" per the maintainer. Unlike
+  those four, this needs no dedicated "any legal candidate" helper of
+  its own -- Harmony's grant carries no color/value restriction beyond
+  the discard-pile sourcing itself, so a plain non-empty check on the
+  pile is enough. The instant the pile has even one card in it, Harmony
+  reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
-  $botGamePlayerId): array` -- `[]` (submits as a plain empty answer,
-  i.e. "declined") for an optional pending-decision field (Duplicity's
-  own repeat offer, Enthusiasm's/Passion's own scoring bonuses,
-  Disillusionment's optional color, Pride's optional player), or
-  `[$field['key'] => $value]` from the resolver for a required one
-  (Compulsion, Betrayal, Instability, Fury, Confusion, Suspicion,
-  Avoidance, Arrogance, Malice, Intimidation's own revealed-card grant,
-  the after-scoring order decision).
+  $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
+  as a plain empty answer, i.e. "declined") for an optional pending-
+  decision field (Duplicity's own repeat offer, Enthusiasm's/Passion's
+  own scoring bonuses, Pride's optional player), or `[$field['key'] =>
+  $value]` from the resolver for a required one (Compulsion, Betrayal,
+  Instability, Fury, Confusion, Suspicion, Avoidance, Arrogance, Malice,
+  Intimidation's own revealed-card grant, the after-scoring order
+  decision). `$decisionType` (the triggering `game_pending_decisions`
+  row's own `decision_type` column -- `advanceAutomatedTurns()`'s own
+  bot-decision branch reads it back via `activePendingDecision()` and
+  passes it straight through) exists purely so this method can
+  special-case `disillusionment_choose_color` below; every other
+  decision type ignores it and falls through to the generic
+  resolver-driven behavior above, same as before this parameter existed.
+
+  **Disillusionment** (confirmed by the maintainer) is the one exception
+  to "optional pending-decision field -- declined": every seated player
+  gets asked this once, not just whoever played it
+  (`DisillusionmentEffect::pendingDecisionsFor()`'s own `queueOrder()`),
+  so `$botGamePlayerId` here is whichever bot is currently being asked to
+  answer, not necessarily the one who played the mood.
+  `disillusionmentSafeColor()` picks the first color in `$field['options']`'s
+  own order that matches none of the RESPONDING bot's own moods currently
+  in play, nor a teammate's -- `DisillusionmentEffect::resolveDecisions()`
+  moves EVERY other mood of a chosen color to the discard pile regardless
+  of owner, so an unsafe pick would gladly thin out opponents' boards
+  while blowing up the bot's own (or its teammate's) at the same time.
+  `null` (decline, the same default every other optional field still
+  gets) whenever every color matches something the bot or a teammate
+  owns -- there's no way to participate here without also hurting
+  yourself/your team.
 
 **Driving a bot's turn: `GameService::advanceAutomatedTurns(int
 $gameId): ?array`.** Called immediately after a human's own
@@ -5000,6 +5873,32 @@ deliberately does NOT get the same treatment -- a spectator watching
 isn't a seated player's own action, and every *seated* game already
 gets this via its own `GET /games/state` poll regardless of whether
 anyone's spectating it too.
+
+**That same unguarded call could permanently break a game -- caught
+live, again, from a real user report.** `advanceAutomatedTurns()`'s
+own result at `GET /games/state`'s call site above is explicitly
+discarded regardless of success (`getState()` reads fresh state right
+after it either way), but nothing actually guarded against the call
+*throwing* -- unlike every other of the dozen-plus call sites for this
+same method elsewhere in `public/index.php`, each already wrapped in its
+own `try`/`catch (GameStateException $e)`. A `GameStateException` here
+(most plausibly `withGameLock()`'s own "busy" timeout from ordinary
+concurrent traffic on the same game -- two Open Team Play teammates
+polling at once, or a bot auto-submitting a draft deck mid-poll) fell
+straight through to `public/index.php`'s top-level `set_exception_handler()`,
+surfacing as a bare "Something went wrong. Please try again." with no
+seat-specific detail -- and because this is the ONE route a client polls
+continuously to read board state at all, a single such failure made the
+game look PERMANENTLY unloadable: every retry re-triggers the identical
+unguarded call, with no path back to a working state through ordinary
+use. Fixed by wrapping just the `advanceAutomatedTurns($gameId)` call
+in its own `try`/`catch (GameStateException)` that silently does
+nothing on failure -- matching this call's own already-documented
+"best-effort, result discarded either way" contract, and the exact
+pattern already used everywhere else this method is called. No
+PHPUnit coverage exists for `public/index.php`'s own routing glue --
+confirmed instead by a full suite run (unaffected) and code review
+against the dozen sibling call sites' identical `catch` block.
 
 **The `draw_recipient` half of that fix didn't actually work -- caught
 live, again, after shipping the fix above.** `advanceAutomatedTurns()`
@@ -5432,6 +6331,40 @@ which card caused it and who it returns to (e.g. "Returns to Alice after
 scoring (taken via Betrayal)."), so the player doesn't need to already
 know every card's printed rules text to make an informed choice between
 same-named or unfamiliar cards.
+
+Insecurity's own `return_to_hand` self-tag (unlike Gluttony's `discard`,
+Bashfulness's `bottom_and_draw`, or Recklessness's own) had a real bug,
+reported live: "put THAT MOOD into YOUR hand" means the hand of whoever
+actually played it via Insecurity's granted extra play -- a specific
+player, fixed the moment the grant is consumed -- not whoever happens to
+own the tagged card BY THE TIME scoring resolves. Those two normally
+coincide (a player can only ever play a card from their own hand in the
+first place), but diverge the instant something ELSE reassigns the
+tagged card's own ownership in between, most visibly Chaos ("shuffle all
+moods together... deal those moods out... to each player"): the previous
+`moveInPlayToHand($cardId)` call always resolved against `ownerOf($cardId)`
+*at scoring time*, so a mood Chaos handed to a different player after
+Insecurity tagged it would return to THAT player's hand instead of back
+to whoever actually played it -- silently rewarding the wrong side of the
+table. `MoodPlayService::playMood()` now folds a `'playerId'` key (the
+consuming player -- known for certain right there, unlike
+`InsecurityEffect::afterPlaying()` itself, which only ever knows who
+played INSECURITY, not necessarily who later spends the resulting extra
+play, even though those are the same player in every game today) into
+any `'afterScoring'` `onUseEffectState` payload that doesn't already
+carry one -- harmless for Gluttony's own `discard` action, which has no
+use for it either way. `applyAfterScoringHooks()`'s own `return_to_hand`
+branch now calls `moveInPlayToPlayersHand($cardId, $afterScoring['playerId']
+?? $ownerId)` (the same "take a mood directly into a specific player's
+hand regardless of who currently owns it" primitive Regret's own cost
+already uses) instead of `moveInPlayToHand()`, falling back to the
+current owner only for a hypothetical future self-tag that never records
+one. `afterScoringEffectDescription()`'s own order-decision text is
+updated to match: it only ever names a specific OTHER player ("Returns to
+Alice's hand after scoring.") once the recorded `playerId` actually
+differs from the tagged card's current owner -- the common case, where
+nothing reassigned it, still just reads "Returns to your hand after
+scoring." exactly as before.
 
 The pause is skipped outright, however, on whichever round actually
 finishes the game (`wins_needed` reached) -- there's no next round for a

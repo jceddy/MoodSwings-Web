@@ -369,9 +369,19 @@ too, proportional to the smaller card width.
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
   session (checked via `GET /app/me`), they're redirected straight to
-  `/game/`. Links to `register.html` and `forgot-password.html`.
+  `/game/`. Links to `register.html`, `forgot-password.html`, and
+  `resend-verification.html`.
 - `register.html` — Registration form. On success, shows a message to check
   email for the verification link (login is blocked until verified).
+- `resend-verification.html` — Takes an email address and calls
+  `POST /app/resend-verification`; always shows the same generic success
+  message (enumeration-resistant, same reasoning as `forgot-password.html`)
+  regardless of whether the address is registered, already verified, or
+  rate-limited. Exists so a user whose 24-hour verification link expired
+  (or who never received/misplaced the original email) isn't locked out of
+  their own unverified account forever -- also linked from `/verify-email`'s
+  own expired/invalid-token failure page (`php-app/README.md`'s
+  `respondHtml()`), not just from the login page.
 - `forgot-password.html` — Takes an email address and calls
   `POST /app/forgot-password`; always shows the same generic success
   message (enumeration-resistant, same reasoning as resending a
@@ -783,21 +793,26 @@ too, proportional to the smaller card width.
     bot checkbox has to be hidden/unchecked before `updateTeamFields()`
     reads "which opponents are currently checked" to populate the
     partner dropdown, or a bot could flash into that list for one tick
-    when switching into a format that doesn't support bots at all --
-    only `draft` today) hides the whole section -- and force-unchecks any
-    bot that was checked -- whenever the current format/deck_type
-    combination doesn't support one, mirroring
-    `GameService::botsSupportedFor()` exactly (client-side `deckType`
-    allow-list: `structure`/`power`/`jceddys_75`/`one_of_each`/`custom`,
-    plus the same `format === 'duel' && deckType === 'custom_duel'`
-    special case the server checks). Open/Closed Team Play support a bot
-    the same as every other non-`draft` format (issue #360) -- up to all
-    3 opponent seats, and a checked bot is a valid candidate in the
-    partner dropdown too (`updateTeamFields()`'s own "populate from
-    whichever opponents are checked" already treats it identically to a
-    checked human friend), so a human can play WITH a bot teammate, not
-    just against one. See "Practice bots" in `php-app/README.md` for the
-    full feature.
+    when switching between two deck_types where only one supports bots)
+    hides the whole section -- and force-unchecks any bot that was
+    checked -- whenever the current format/deck_type combination doesn't
+    support one, mirroring `GameService::botsSupportedFor()` exactly
+    (client-side `deckType` allow-list: `structure`/`power`/`jceddys_75`/
+    `one_of_each`/`custom`, plus the same `format === 'duel' && deckType
+    === 'custom_duel'` special case the server checks, plus every draft
+    deck_type -- `quick_draft`/`winston_draft`/`grid_draft`/
+    `rotisserie_draft`/`tiered_rotisserie_draft` -- regardless of format,
+    issue #359). As of issue #359 every deck_type this app has supports a
+    bot, so in practice this only still hides the section for
+    `custom_duel` without its own bot decklist filled in -- format alone
+    never disqualifies one anymore. Open/Closed Team Play support a bot
+    the same as every other format (issue #360) -- up to all 3 opponent
+    seats, and a checked bot is a valid candidate in the partner dropdown
+    too (`updateTeamFields()`'s own "populate from whichever opponents
+    are checked" already treats it identically to a checked human
+    friend), so a human can play WITH a bot teammate, not just against
+    one. See "Practice bots" in `php-app/README.md` for the full
+    feature.
 
     Checking a bot while `deckType` is `custom_duel` (issue #140's Duel
     extension -- see "Practice bots in Duel with a custom decklist" in
@@ -1507,6 +1522,106 @@ too, proportional to the smaller card width.
       bare, class-less `<ul>` (matching none of `style.css`'s own
       flex-wrap card-list rules), so "Your team's"/"Opposing team's
       drafted so far" both rendered as one huge vertical column instead.
+    - **Rotisserie Draft's own drafting phase** (`#rotisserie-draft-panel`
+      > `#rotisserie-draft-drafting`, `renderRotisserieDraftDrafting()`,
+      shown while `state.rotisserie_draft.status` is `'drafting'`) -- the
+      simplest of the four draft panels, since the entire pool is dealt
+      face-up once and never refilled or reshuffled: `#rotisserie-draft-
+      pool` renders every card in `drafting.pool_cards` (sorted by
+      `compareDraftPoolCards()`, the same color/rarity/name order issue
+      #314's own pool view uses, so the shared pool is easy to scan while
+      choosing rather than sitting in the server's shuffled order) as a
+      plain wrapping grid of clickable thumbnails (the reused
+      `.draft-pool-cards` class from issue #314's own pool view, no new CSS
+      needed). Clicking a card doesn't draft it immediately -- it opens
+      `openCardDetail()`'s own overlay for a proper look first, same as
+      every other card list in the app; when it's actually your turn, the
+      overlay's `actionButton` param (`{ label: 'Draft', onClick }`, a new
+      one-shot sibling to the existing toggle-style `selection` param used
+      by Closed Team Play's initial card pass) shows a "Draft" button that
+      calls `submitRotisserieDraftAction(cardId)`
+      (`submitRotisserieDraftPick()`, `POST /games/draft/rotisserie-pick`)
+      and closes the dialog -- "Close" alone, with no action button, backs
+      out without drafting anything. When it isn't your turn, the overlay
+      opens with no action button at all (same as any other read-only card
+      view), so opponents can still look cards over without risk of
+      mis-clicking a pick they can't even submit. There's no row/column/
+      pile selection like Grid Draft or Winston Draft, just a direct card
+      pick like Quick Draft's own, except from one shared pool instead of a
+      personal pack. The title (`#rotisserie-draft-drafting-title`) reads
+      "pick N of M" from
+      `drafting.picks_made + 1`/`drafting.total_picks_needed` (`cutoff_count
+      * playerCount`) rather than a round number, since there are no rounds
+      to speak of. The status line (`#rotisserie-draft-drafting-status`)
+      reads whose turn it is by `drafting.current_turn_username` when it
+      isn't yours, the same issue #189 convention Winston/Grid Draft's own
+      status lines use. Like Grid Draft, the pool is open information end
+      to end, so `#rotisserie-draft-drafted-so-far` (your own picks),
+      `#rotisserie-draft-other-players-drafted` (issue #189, one heading +
+      list per other seated player), and `#rotisserie-draft-teams-drafted`
+      (Open Team Play, issue #362 stage 2 -- hides the other-players list
+      when present, same as Grid Draft) all render exactly as Grid Draft's
+      own equivalents do. The New Game dialog's own
+      `#new-game-rotisserie-draft-fields` additionally exposes a
+      `#new-game-rotisserie-draft-cutoff-count` number input (13-20,
+      default 14) alongside the pool-source picker; its live value feeds
+      `currentRotisserieDraftMinPoolSize()`, which
+      `updateDraftPoolSourceOptionLabels()` uses to recompute the pool
+      source select's own option labels (e.g. "39 random cards") on every
+      change to either the cutoff count or the opponent selection, the
+      same dynamic-relabeling pattern Quick/Winston/Grid Draft's own pool
+      pickers already use.
+    - **Tiered Rotisserie Draft's own drafting phase** (`#tiered-rotisserie-
+      draft-panel` > `#tiered-rotisserie-draft-drafting`,
+      `renderTieredRotisserieDraftDrafting()`, shown while
+      `state.tiered_rotisserie_draft.status` is `'drafting'`) -- issue
+      #361's own generalization of Rotisserie Draft's panel immediately
+      above into several tiers drafted one after another, reusing nearly
+      everything about it unchanged (same card-thumbnail pool grid, same
+      "Draft" action-button-in-`openCardDetail()`-overlay click flow, same
+      open-information `#tiered-rotisserie-draft-drafted-so-far`/
+      `#tiered-rotisserie-draft-other-players-drafted`/
+      `#tiered-rotisserie-draft-teams-drafted` lists) -- the one new piece
+      is `#tiered-rotisserie-draft-tiers`, a stepper-style `<ol>` above the
+      pool showing every configured tier's own name
+      (`tieredRotisserieDraftTierDisplayName()` -- the rarity name
+      Title-Cased for `'rarity'` mode, or "Tier N" for `'custom'` mode's
+      unlabeled ones) and pick count, each `<li>` classed
+      `.tiered-rotisserie-draft-tier-step-{completed,current,upcoming}`
+      (`drafting.tiers[i].status`, `style.css`) so a player can see at a
+      glance which tiers are done, active, or still ahead without that
+      state being scattered only through the title text. The title
+      (`#tiered-rotisserie-draft-drafting-title`) reads "{tier name} — pick
+      N of M" using `drafting.picks_made_this_tier`/
+      `drafting.total_picks_needed_this_tier` -- scoped to the CURRENT
+      tier only, unlike base Rotisserie Draft's own whole-match
+      `picks_made`/`total_picks_needed` (`drafting.total_picks_made`/
+      `drafting.total_picks_needed` carry the whole-match equivalents,
+      unused by the title itself but available for a future overall
+      progress indicator). `#tiered-rotisserie-draft-pool` likewise
+      renders only `drafting.pool_cards` -- the CURRENT tier's own
+      remaining face-up pool, never a prior tier's now-discarded
+      remainder or a later tier's not-yet-active one. The New Game
+      dialog's own `#new-game-tiered-rotisserie-draft-fields` starts with
+      a `#new-game-tiered-rotisserie-draft-mode` select (`'rarity'` or
+      `'custom'`, `updateTieredRotisserieDraftModeVisibility()`): `'rarity'`
+      just shows a fixed description of the reference scheme (Mythic/
+      Rare/Uncommon/Common, no further fields needed); `'custom'` reveals
+      `#new-game-tiered-rotisserie-draft-tier-count` (2-4) plus up to 4
+      static per-tier blocks (`#new-game-tiered-rotisserie-draft-tier-1`
+      through `-4`, `updateTieredRotisserieDraftTierCountVisibility()`
+      shows/hides exactly as many as the count selects), each with its
+      own cutoff-count number input and a pool-source select restricted
+      to `'custom'`/`'saved_deck'` (a file-upload/paste-textarea pair or a
+      saved-decklist picker respectively, same
+      `updateTieredRotisserieDraftTierPoolSourceVisibility(n)` toggle
+      pattern as every other draft type's own pool-source fields) -- since
+      a custom-tiered match can have up to 4 different saved decks in
+      play across its tiers at once, each tier's own resolved
+      `saved_decklist_id` travels with that tier's own object in the
+      `tiered_rotisserie_draft_tiers` array sent to `POST /games`, rather
+      than through the single shared `saved_decklist_id` param every
+      other draft type's own pool source reuses.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
@@ -1754,9 +1869,12 @@ too, proportional to the smaller card width.
     while-in-play effect has changed it, its printed color too if
     Imagination has recolored it (or, for a Creativity copy, if that
     differs from whatever it's copying), owner, rules text, and — if it's
-    currently suppressed — an indicator naming the suppressing mood, if the
-    game tracks one, and whether the suppression lasts as long as that mood
-    stays in play or just until the end of the current round). An in-play
+    currently suppressed — one line per active suppression (a mood can be
+    suppressed by more than one source at once, each on its own timer, see
+    `MoodInPlay`'s own docblock in php-app/README.md) naming the
+    suppressing mood, if the game tracks one, and whether that particular
+    suppression lasts as long as that mood stays in play or just until the
+    end of the current round). An in-play
     Creativity that's actually copying something displays AS the copied
     mood rather than as Creativity everywhere on the board — its in-play
     list entry, and this detail view's name/rules text, all read as e.g.
@@ -1887,9 +2005,13 @@ too, proportional to the smaller card width.
 
     `round.board_effects` is `scoring_effects`' sibling section, rendered
     directly below it (`#board-effects`, `renderBoardEffects()`) for
-    in-play moods whose "while in play" ability reshapes the board itself
-    rather than how scoring works — today that's just Imagination, shown
-    as e.g. "Alice's Imagination — all moods are red." Hidden entirely
+    in-play moods currently affecting the board itself rather than how
+    scoring works — Imagination's "while in play" recolor, shown as e.g.
+    "Alice's Imagination — all moods are red," or Doubt's own lingering
+    color ban from the round it was played, shown as e.g. "Bob's Doubt —
+    blue moods can't be played this round" (only while that ban is
+    actually still active — see `GameService::doubtBoardDescription()`).
+    Hidden entirely
     (both sections independently collapse to nothing, via the same
     `container.hidden = entries.length === 0` pattern) whenever there's
     nothing to say, so an ordinary board with neither in play shows
@@ -2813,7 +2935,8 @@ using the same-origin `session_token` cookie for auth — see
   `getCardStats()` in `app.js` → `GET /stats/cards`) with one row per
   catalog card and a column each for Name/Set/#/Rarity/Color/Times in
   deck/Deck win rate/Times played/Play win rate/Quick Draft avg.
-  pick/Winston Draft avg. pile size/Grid Draft avg. round — server-wide
+  pick/Winston Draft avg. pile size/Grid Draft avg. round/Rotisserie
+  Draft avg. pick — server-wide
   aggregate data, not tied to any one player. Every `<th data-sort-key>`
   is clickable: a click sorts ascending by that column (and resets to
   page 1), a second click on the same header flips to descending, and a
@@ -2831,7 +2954,7 @@ using the same-origin `session_token` cookie for auth — see
   own return value directly, so a render never mutates the source
   `cards` array as a side effect (harmless in practice today, since
   `compareCards` is a valid deterministic order, but worth not relying
-  on). The three draft-format columns hold `{average,
+  on). The four draft-format columns hold `{average,
   count}` objects (see `CardStatsService::averagePick()` in
   `../php-app/README.md`) so a never-drafted card's `null` average
   always sorts last regardless of direction, instead of sorting

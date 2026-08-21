@@ -1,0 +1,18 @@
+-- Fixes a real bug reported live: Insecurity's own "put THAT mood into
+-- YOUR hand" after-scoring effect used to resolve via
+-- BoardState::moveInPlayToHand(), which always returns a mood to
+-- whoever owns it AT SCORING TIME -- not necessarily the player who
+-- actually played it via Insecurity's own granted extra play. Those two
+-- normally coincide, but diverge once something else (most visibly
+-- Chaos) reassigns the tagged mood's own ownership in between, in which
+-- case the card used to land in the WRONG player's hand.
+-- MoodPlayService::playMood() now folds a 'playerId' key (the player
+-- who actually consumed the grant) into the 'afterScoring' effectState
+-- it tags the played card with, and
+-- GameService::applyAfterScoringHooks()'s own 'return_to_hand' branch
+-- now uses BoardState::moveInPlayToPlayersHand() with that recorded
+-- player instead of the dynamic current-owner lookup. No schema change
+-- of its own -- this migration exists purely to keep schema_version in
+-- sync with the VERSION bump, the same way 0024/.../0151 already did
+-- for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.8' WHERE id = 1;

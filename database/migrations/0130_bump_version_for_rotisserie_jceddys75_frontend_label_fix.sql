@@ -1,0 +1,20 @@
+-- No schema change: migration 0129 fixed buildDraftPool()'s own
+-- 'jceddys_75' swap-to-'jceddys_150' condition for Rotisserie Draft, but
+-- missed a matching frontend bug -- the New Game dialog's own pool-source
+-- <option> label (web-static/js/game.js's jceddys75OptionLabel(), shared
+-- with Quick/Winston/Grid Draft) still hardcoded "swap at exactly 4
+-- players," so the dropdown kept showing "jceddy's 150 Card (150 cards)"
+-- for a 4-player Rotisserie Draft match even once the backend itself
+-- correctly stayed on the 75-card pool for a low enough cutoff. Added a
+-- Rotisserie-specific rotisserieJceddys75OptionLabel(), driven by the
+-- match's own floor (cutoff count times player count) instead of player
+-- count alone, mirroring rotisserieStructureOptionLabel()'s own
+-- analogous split from structureOptionLabel() -- and corrected the
+-- static description paragraph below the dropdown to match.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0129 already did for their own
+-- schema-less changes -- MaintenanceGate compares the deployed VERSION
+-- file against this table on every request, so a VERSION bump with no
+-- matching schema_version update would show maintenance mode after
+-- deploy even though nothing about the schema actually changed.
+UPDATE schema_version SET version = '1.25.5' WHERE id = 1;

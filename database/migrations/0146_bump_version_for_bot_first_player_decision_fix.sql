@@ -1,0 +1,13 @@
+-- Fixes a real deadlock reported live: a best-of-three draft match's own
+-- "who goes first" freeze (setPlayFirstNextMatchGame(), game 2/3's own
+-- round 1) had no practice-bot handling at all -- if the PREVIOUS game's
+-- loser happened to be a bot, nothing would ever answer the decision,
+-- and the round stayed frozen forever ("Waiting for BotAlice to decide
+-- who goes first..."). advanceAutomatedTurns()'s own frozen-round branch
+-- now also tries advanceBotFirstPlayerDecision(), which resolves it on
+-- the bot's behalf (never opting to go first itself -- the same passive
+-- default as never answering at all). No schema change of its own --
+-- this migration exists purely to keep schema_version in sync with the
+-- VERSION bump, the same way 0024/.../0145 already did for their own
+-- schema-less changes.
+UPDATE schema_version SET version = '1.28.2' WHERE id = 1;

@@ -60,6 +60,20 @@ use MoodSwings\Stats\CardStatsService;
 
 header('Content-Type: application/json');
 
+// Without this, an uncaught Throwable from any route (there's no per-route
+// try/catch for anything unexpected, only for specific, anticipated
+// exceptions like GameStateException) falls through to PHP's own fatal
+// error output -- plain text/HTML, not JSON. apiRequest() in app.js can't
+// parse that as JSON, so the caller (e.g. game.js's refreshBoard()) falls
+// back to a generic, undiagnosable "Could not load this game." with no
+// trace of what actually happened. This turns that into a proper JSON 500
+// and logs the real exception server-side so it's actually diagnosable.
+set_exception_handler(static function (Throwable $e): void {
+    error_log('Unhandled exception: ' . $e);
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'message' => 'Something went wrong. Please try again.']);
+});
+
 // __route is set by public/.htaccess when the app is deployed under a
 // subfolder (e.g. /app on shared hosting), so routing works regardless of
 // where the front controller is mounted.
@@ -90,9 +104,15 @@ function respond(int $status, array $body): never
  * Only used by /verify-email: unlike every other route, that one is meant
  * to be opened directly from an emailed link by a human, not called by our
  * own JS, so it renders a page instead of JSON. $redirectTo is an absolute
- * site path (e.g. "/"); when set, the page redirects there automatically.
+ * site path (e.g. "/"); when set, the page redirects there automatically
+ * and the manual link below it points there too ("Continue to login"),
+ * taking precedence over $linkTo/$linkText. Without a redirect, $linkTo/
+ * $linkText customize the manual link instead (e.g. the expired-token
+ * failure page below points at resend-verification.html rather than the
+ * default "Back to login" -> "/", since a token that expired without
+ * ever being used means there's nothing to log into yet).
  */
-function respondHtml(int $status, string $title, string $heading, string $message, ?string $redirectTo = null): never
+function respondHtml(int $status, string $title, string $heading, string $message, ?string $redirectTo = null, ?string $linkTo = null, string $linkText = 'Back to login'): never
 {
     header('Content-Type: text/html; charset=utf-8', true);
     http_response_code($status);
@@ -102,7 +122,7 @@ function respondHtml(int $status, string $title, string $heading, string $messag
         : '';
     $link = $redirectTo !== null
         ? sprintf('<p><a href="%s">Continue to login</a></p>', htmlspecialchars($redirectTo, ENT_QUOTES))
-        : '<p><a href="/">Back to login</a></p>';
+        : sprintf('<p><a href="%s">%s</a></p>', htmlspecialchars($linkTo ?? '/', ENT_QUOTES), htmlspecialchars($linkText, ENT_QUOTES));
 
     echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
         . '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
@@ -368,7 +388,15 @@ if ($path === '/verify-email' && $method === 'GET') {
             '/'
         );
     } catch (InvalidVerificationTokenException $e) {
-        respondHtml(400, 'Verification failed - MoodSwings-Web', 'Verification failed', $e->getMessage());
+        respondHtml(
+            400,
+            'Verification failed - MoodSwings-Web',
+            'Verification failed',
+            $e->getMessage(),
+            null,
+            '/resend-verification.html',
+            'Get a new verification email'
+        );
     }
 }
 
@@ -920,6 +948,34 @@ if ($path === '/games' && $method === 'POST') {
     // the creator's partner instead of requiring partner_user_id. See
     // createGame()'s own docblock.
     $randomTeams = (bool) ($body['random_teams'] ?? false);
+    // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
+    $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
+    $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
+    // 14 matches createGame()'s own ROTISSERIE_DRAFT_DEFAULT_CUTOFF, same as $winsNeeded's literal 3 above matching its own default.
+    $rotisserieDraftCutoffCount = isset($body['rotisserie_draft_cutoff_count']) ? (int) $body['rotisserie_draft_cutoff_count'] : 14;
+    // Only meaningful (and required) for deck_type 'tiered_rotisserie_draft' -- see createGame()'s own docblock.
+    $tieredRotisserieDraftMode = isset($body['tiered_rotisserie_draft_mode']) ? (string) $body['tiered_rotisserie_draft_mode'] : null;
+    // Only meaningful when $tieredRotisserieDraftMode is 'custom' -- each
+    // element's own pool_source/custom_pool_text/saved_decklist_id/
+    // cutoff_count keys are read straight through to createGame() as-is,
+    // the same shape it itself expects (see
+    // buildTieredRotisserieDraftCustomTierPools()'s own docblock);
+    // whatever a request actually sends for each field is cast the same
+    // way its single-tier analogs above are, individual tier validation
+    // (pool source, cutoff count) happening entirely inside createGame() itself.
+    $tieredRotisserieDraftTiers = null;
+    if (is_array($body['tiered_rotisserie_draft_tiers'] ?? null)) {
+        $tieredRotisserieDraftTiers = array_map(static function ($tier): array {
+            $tier = (array) $tier;
+
+            return [
+                'pool_source' => (string) ($tier['pool_source'] ?? ''),
+                'custom_pool_text' => isset($tier['custom_pool_text']) ? (string) $tier['custom_pool_text'] : null,
+                'saved_decklist_id' => isset($tier['saved_decklist_id']) ? (int) $tier['saved_decklist_id'] : null,
+                'cutoff_count' => (int) ($tier['cutoff_count'] ?? 0),
+            ];
+        }, $body['tiered_rotisserie_draft_tiers']);
+    }
 
     try {
         $gameId = $games->createGame(
@@ -942,6 +998,11 @@ if ($path === '/games' && $method === 'POST') {
             $botDecklistText,
             $botSavedDecklistId,
             $randomTeams,
+            $rotisserieDraftPoolSource,
+            $rotisserieDraftCustomPoolText,
+            $rotisserieDraftCutoffCount,
+            $tieredRotisserieDraftMode,
+            $tieredRotisserieDraftTiers,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1019,8 +1080,21 @@ if ($path === '/games/state' && $method === 'GET') {
     // cheap to call here even when nothing's actually stuck (two early-out
     // queries, see botGamePlayerIds()/autoPassEmptyHandGamePlayerIds()),
     // and its own result is simply discarded in favor of the fresh
-    // getState() read below either way.
-    $games->advanceAutomatedTurns($gameId);
+    // getState() read below either way. Unlike every other call site for
+    // this same method, this one is a plain GET with no natural place to
+    // surface a GameStateException to the caller -- and since the result
+    // is already thrown away regardless of success, a transient failure
+    // here (e.g. lock contention -- withGameLock()'s own "busy" timeout
+    // -- from a concurrent write elsewhere in this same game) must never
+    // block the state read that follows. Without this, a single such
+    // failure made the game PERMANENTLY unloadable via this route: every
+    // retry re-triggers the identical unguarded call, with no way for a
+    // human to recover through ordinary use.
+    try {
+        $games->advanceAutomatedTurns($gameId);
+    } catch (GameStateException) {
+        // Best-effort only -- see above. The next poll simply tries again.
+    }
     respond(200, ['status' => 'ok', ...$games->getState($gameId, (int) $currentUser['id'])]);
 }
 
@@ -1460,6 +1534,16 @@ if ($path === '/games/draft/pick' && $method === 'POST') {
 
     try {
         $result = $games->submitQuickDraftPick($gameId, (int) $currentUser['id'], $round, $stage, $cardIds);
+        // Practice bots (issue #359) -- if this pick handed the current
+        // stage/round to a bot (or finished the draft into deck_building
+        // for a bot to submit, or even started the game outright once
+        // every seat, bot or human, had a deck in), drive it right here.
+        // See GameService::advanceBotDraftTurn()'s own docblock; the
+        // human's own $result is left untouched either way -- unlike
+        // /games/play's identical pattern, a further bot pick never
+        // belongs in THIS response, only in whatever the human's own
+        // next poll/action sees.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1476,6 +1560,11 @@ if ($path === '/games/draft/deck' && $method === 'POST') {
 
     try {
         $games->submitDraftDeck($gameId, (int) $currentUser['id'], $cardIds);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical
+        // comment above. This is also what starts the game outright once
+        // this was the very last seat (human or bot) to submit a deck --
+        // see GameService::tryAutoStartDraftGame().
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok']);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1518,6 +1607,8 @@ if ($path === '/games/draft/winston-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitWinstonDraftPick($gameId, (int) $currentUser['id'], $action);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
@@ -1539,6 +1630,51 @@ if ($path === '/games/draft/grid-pick' && $method === 'POST') {
 
     try {
         $result = $games->submitGridDraftPick($gameId, (int) $currentUser['id'], $axis, $index);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/rotisserie-pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardId = (int) ($body['card_id'] ?? 0);
+
+    // Rotisserie Draft's own picks are keyed by user_id, not
+    // game_player_id (same rationale as /games/draft/pick above) --
+    // requireGamePlayer() here is purely the seated-in-this-game auth
+    // check every other route already uses.
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitRotisserieDraftPick($gameId, (int) $currentUser['id'], $cardId);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/draft/tiered-rotisserie-pick' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $cardId = (int) ($body['card_id'] ?? 0);
+
+    // Tiered Rotisserie Draft's own picks are keyed by user_id, not
+    // game_player_id, same as base Rotisserie Draft's own
+    // /games/draft/rotisserie-pick immediately above.
+    requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = $games->submitTieredRotisserieDraftPick($gameId, (int) $currentUser['id'], $cardId);
+        // Practice bots (issue #359) -- see /games/draft/pick's identical comment above.
+        $games->advanceAutomatedTurns($gameId);
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

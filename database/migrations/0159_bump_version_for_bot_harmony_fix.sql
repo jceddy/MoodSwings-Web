@@ -1,0 +1,16 @@
+-- Practice bots previously always played Harmony purely by its own
+-- EARLY_PRIORITY_EFFECT_KEYS boost, even with the discard pile
+-- completely empty -- Harmony's own extra play is restricted to a card
+-- sourced FROM the discard pile (BoardState::grantExtraPlay()'s own
+-- ['source' => 'discard'] restriction), so with nothing there to take
+-- advantage of, the grant accomplished nothing. BotPlayerService now
+-- deprioritizes Harmony (the same PHP_INT_MIN treatment Rationalization/
+-- Cynicism/Intimidation/Paranoia/Pacifism get) whenever the discard pile
+-- is empty, so other plays get prioritized above it instead -- reverting
+-- to its ordinary boosted treatment the instant the pile has even one
+-- card in it.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0158 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.15' WHERE id = 1;

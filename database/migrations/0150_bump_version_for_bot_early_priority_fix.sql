@@ -1,0 +1,20 @@
+-- Addendum to migration 0149's Cynicism policy (confirmed by the
+-- maintainer): Cynicism is now ALSO a fine first play, independent of
+-- the round's own score entirely, whenever nothing currently playable
+-- offers a 3+-point swing on its own OR interacts with an opponent's
+-- hand (cynicismHasAGoodReasonToPlayNow()'s own third condition).
+-- Separately, practice bots now also give a flat priority bonus
+-- (BotPlayerService::EARLY_PRIORITY_EFFECT_KEYS/EARLY_PRIORITY_BONUS)
+-- to any card that steals from an opponent's hand (Compulsion,
+-- Intimidation), forces one or more opponents to discard from their
+-- own hand (Suspicion), or grants the acting player an extra play
+-- (Charity, Duplicity, Idealism, Validation, Ambition, Bravado, Fear,
+-- Nostalgia, Gluttony, Insecurity, Angst, Harmony, Grief, Thrill,
+-- Benevolence, Eagerness, Friendliness, Kindness, Pride, Hope, Grace,
+-- Stubbornness, Joy) -- these previously competed for priority purely
+-- on their own printed value like any other card, regardless of how
+-- much tempo/hand advantage they actually granted. No schema change of
+-- its own -- this migration exists purely to keep schema_version in
+-- sync with the VERSION bump, the same way 0024/.../0149 already did
+-- for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.6' WHERE id = 1;
