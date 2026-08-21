@@ -1,0 +1,23 @@
+-- The four live per-pick draft card-stats writers
+-- (CardStatsService::recordQuickDraftPick()/recordWinstonDraftPick()/
+-- recordGridDraftPick()/recordRotisserieDraftPick(), called directly from
+-- GameService's own submitQuickDraftPick()/submitWinstonDraftPick()/
+-- submitGridDraftPick()/submitRotisserieDraftPick()) had no bot exclusion
+-- of their own -- unlike GameService::recordGameCompletionStats()'s own
+-- $containsBot check, which only covers lifetime stats and the
+-- deck-membership/played-card half of card statistics, both of which fire
+-- at game/match completion. These four fire live, from the pick itself,
+-- well before a game or match ever completes, so a practice-bot draft's
+-- picks (the bot's own, and a human co-drafter's) were still being
+-- recorded into the global card-stats pick-position signal.
+--
+-- Fixed by guarding each of the four call sites with the same
+-- draftMatchBotUserIds($draftMatchId) === [] check advanceBotDraftTurn()
+-- already uses to detect a bot seat in a draft match, matching the
+-- existing "a bot game doesn't count" policy already applied everywhere
+-- else.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0162 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.19' WHERE id = 1;
