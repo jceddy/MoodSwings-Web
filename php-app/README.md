@@ -3018,7 +3018,11 @@ holds a `phase` of `'propose'` or `'confirm'`: either teammate calls
 then the OTHER teammate must `action: 'confirm'` with `approve: true`
 (locks it in) or `false` (rejects, sending the row back to `'propose'`
 with the prior proposal cleared -- either teammate, including the
-original proposer, can propose again). The same `active_marker`
+original proposer, can propose again). A reject also records the
+rejected candidate into `rejected_game_player_id` (migration `0160`) --
+see "Practice bots" below for why: without it, a practice bot on the
+deciding team had no way to tell a rejection had just happened, and kept
+re-proposing the exact candidate a human just turned down. The same `active_marker`
 generated-column trick migration `0011` used for
 `game_pending_decision_batches` guarantees at most one open
 `game_team_decisions` row per round (`uq_team_decisions_one_open_per_round`),
@@ -5090,11 +5094,20 @@ everything else here, via two new `GameService` helpers called from
   and `proposeTeamDecision()`; in `'confirm'`, always approves (never
   rejects) via `confirmTeamDecision()` if the seat that needs to confirm
   (never the proposer -- `confirmTeamDecision()` itself rejects that) is
-  a bot. A human confirmer who rejects a bot's proposal just sees the
-  exact same one proposed again next time, since the bot's own policy
-  never varies. Returns `null` (nothing to do) if there's no active
-  decision, or the seat that needs to act next belongs to a real player
-  instead.
+  a bot. **Rejection (confirmed by the maintainer, migration `0160`)**:
+  before this, a human confirmer who rejected a bot's proposal just saw
+  the exact same one proposed again next time, since the bot's own
+  policy never varies -- rejecting was a no-op whenever a bot sat on the
+  deciding team. `confirmTeamDecision()`'s own reject branch now records
+  the just-rejected candidate into `rejected_game_player_id` (see
+  "Propose/confirm" above), and `advanceBotTeamDecision()` checks it
+  before proposing: once set, the bot stops proposing for that decision
+  entirely and waits for a real player instead. Since a bot's own confirm
+  always approves, the decision still resolves on the human's very next
+  proposal (either candidate) -- there's no way to get permanently stuck.
+  Returns `null` (nothing to do) if there's no active decision, the bot
+  is deferring after a rejection, or the seat that needs to act next
+  belongs to a real player instead.
 - `advanceBotInitialCardPass(int $gameId, array $round, array
   $botGamePlayerIds): ?array` -- Closed Team Play's own round 1 only
   (checked via `$round['round_number']` before even checking the

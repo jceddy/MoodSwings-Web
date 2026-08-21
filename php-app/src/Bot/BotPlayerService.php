@@ -405,8 +405,11 @@ final class BotPlayerService
      * always the first of $candidateGamePlayerIds, regardless of which of
      * the two members is proposing or whether either is itself a bot.
      * There's nothing about "who goes first" or "who gets the extra draw"
-     * this bot ever weighs differently, so a human confirmer who rejects
-     * a bot's proposal just sees the exact same one proposed again.
+     * this bot ever weighs differently -- but a human confirmer who
+     * REJECTS a bot's proposal never gets this same arbitrary pick handed
+     * back a second time; see `GameService::advanceBotTeamDecision()`'s
+     * own docblock (confirmed by the maintainer) for why that's handled a
+     * level up from this method, not here.
      *
      * @param int[] $candidateGamePlayerIds always exactly the deciding
      *     team's own two members

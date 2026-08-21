@@ -4604,6 +4604,26 @@ final class GameService
      * (whichever candidate hasn't proposed yet, or the OTHER candidate
      * once one has) belongs to a real player instead.
      *
+     * **Once a human has rejected one of this bot's own proposals for
+     * this decision (confirmed by the maintainer), the bot stops
+     * proposing for it entirely and waits for a real player instead** --
+     * see `rejected_game_player_id` (migration 0160), set by
+     * `confirmTeamDecision()`'s own reject branch. Before this, a
+     * rejection was a no-op whenever a bot sat on the deciding team:
+     * `chooseTeamDecisionProposal()` is deliberately non-strategic
+     * (always `candidateGamePlayerIds[0]`), so the very next automated
+     * drive -- this same request's own `advanceAutomatedTurns()` loop, or
+     * just the next `GET /games/state` poll -- saw an ordinary fresh
+     * 'propose' phase and had the bot immediately re-propose the exact
+     * candidate the human just turned down. `rejected_game_player_id`
+     * only ever gets set by an actual human rejection (a bot's own
+     * confirm always approves, just below), and each decision is a fresh
+     * row (`createTeamDecision()`), so this never needs resetting mid-row
+     * -- once a human is known to be involved, every later proposal in
+     * this same row comes from a human too (the confirming bot always
+     * approves, so the decision resolves on their very next proposal
+     * regardless of which candidate they pick).
+     *
      * @param int[] $botGamePlayerIds
      * @return array<string, mixed>|null
      */
@@ -4621,6 +4641,10 @@ final class GameService
         $candidateIds = array_map(intval(...), json_decode((string) $decision['candidate_game_player_ids'], true));
 
         if ($decision['phase'] === 'propose') {
+            if ($decision['rejected_game_player_id'] !== null) {
+                return null; // a human already rejected this bot's own proposal -- wait for a real player
+            }
+
             // Either of the team's own two members may propose -- act as
             // whichever candidate is a bot, if either is (their own
             // proposed answer is the same regardless of which one acts,
@@ -4643,9 +4667,9 @@ final class GameService
 
         // 'confirm' -- only the candidate who DIDN'T propose may confirm
         // (confirmTeamDecision() itself rejects the proposer trying to).
-        // Always approves; see chooseTeamDecisionProposal()'s own
-        // docblock for why rejecting a bot's proposal never gets a human
-        // confirmer anything different next time.
+        // Always approves -- a bot never itself rejects, so
+        // rejected_game_player_id above is only ever set by a genuine
+        // human decision.
         $proposerId = (int) $decision['proposer_game_player_id'];
         $confirmerId = $candidateIds[0] === $proposerId ? $candidateIds[1] : $candidateIds[0];
         if (!in_array($confirmerId, $botGamePlayerIds, true)) {
@@ -6051,7 +6075,12 @@ final class GameService
      * proposer themselves) -- approving locks it in and actually acts on
      * it (applyTurnOrderDecision()/applyDrawRecipientDecision()); rejecting
      * sends the decision back to 'propose' (clearing the previous
-     * proposal) so either teammate can try again.
+     * proposal) so either teammate can try again. Also records the
+     * rejected candidate into rejected_game_player_id (migration 0160) --
+     * see advanceBotTeamDecision()'s own docblock for why: without this,
+     * a human rejecting a bot's own proposal was a no-op, since the very
+     * next automated drive just saw an ordinary 'propose' phase again and
+     * had the bot immediately re-propose the identical candidate.
      *
      * @return array{round_scored: bool, game_completed: bool, winner_game_player_id?: int, pending_decision?: bool}
      */
@@ -6072,8 +6101,13 @@ final class GameService
             $pdo = Connection::get();
 
             if (!$approve) {
+                // rejected_game_player_id is assigned from proposed_game_player_id
+                // BEFORE that same column is cleared just below -- MySQL
+                // evaluates a multi-column SET left-to-right, so reversing
+                // this order would just copy the NULL it was about to
+                // become instead of the rejected candidate.
                 $pdo->prepare(
-                    'UPDATE game_team_decisions SET phase = :phase, proposer_game_player_id = NULL, proposed_game_player_id = NULL WHERE id = :id'
+                    'UPDATE game_team_decisions SET phase = :phase, rejected_game_player_id = proposed_game_player_id, proposer_game_player_id = NULL, proposed_game_player_id = NULL WHERE id = :id'
                 )->execute(['phase' => 'propose', 'id' => $decision['id']]);
 
                 return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
