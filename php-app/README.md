@@ -5844,6 +5844,32 @@ isn't a seated player's own action, and every *seated* game already
 gets this via its own `GET /games/state` poll regardless of whether
 anyone's spectating it too.
 
+**That same unguarded call could permanently break a game -- caught
+live, again, from a real user report.** `advanceAutomatedTurns()`'s
+own result at `GET /games/state`'s call site above is explicitly
+discarded regardless of success (`getState()` reads fresh state right
+after it either way), but nothing actually guarded against the call
+*throwing* -- unlike every other of the dozen-plus call sites for this
+same method elsewhere in `public/index.php`, each already wrapped in its
+own `try`/`catch (GameStateException $e)`. A `GameStateException` here
+(most plausibly `withGameLock()`'s own "busy" timeout from ordinary
+concurrent traffic on the same game -- two Open Team Play teammates
+polling at once, or a bot auto-submitting a draft deck mid-poll) fell
+straight through to `public/index.php`'s top-level `set_exception_handler()`,
+surfacing as a bare "Something went wrong. Please try again." with no
+seat-specific detail -- and because this is the ONE route a client polls
+continuously to read board state at all, a single such failure made the
+game look PERMANENTLY unloadable: every retry re-triggers the identical
+unguarded call, with no path back to a working state through ordinary
+use. Fixed by wrapping just the `advanceAutomatedTurns($gameId)` call
+in its own `try`/`catch (GameStateException)` that silently does
+nothing on failure -- matching this call's own already-documented
+"best-effort, result discarded either way" contract, and the exact
+pattern already used everywhere else this method is called. No
+PHPUnit coverage exists for `public/index.php`'s own routing glue --
+confirmed instead by a full suite run (unaffected) and code review
+against the dozen sibling call sites' identical `catch` block.
+
 **The `draw_recipient` half of that fix didn't actually work -- caught
 live, again, after shipping the fix above.** `advanceAutomatedTurns()`
 used to call `currentRound($gameId)` (a round with `status =
