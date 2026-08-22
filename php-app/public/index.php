@@ -854,6 +854,27 @@ if ($path === '/user/auto-pass-on-empty-hand-preference' && $method === 'POST') 
     respond(200, ['status' => 'ok']);
 }
 
+// "Auto-apply scoring bonuses" (issue #397) as a personal preference
+// (Settings dialog's "Game defaults" section) -- see
+// GameService::advanceAutomatedTurns() for the server-side behavior this
+// drives. Current value is already carried on GET /me's own user object,
+// so this route is write-only, same pattern as
+// /user/auto-pass-on-empty-hand-preference above.
+if ($path === '/user/auto-apply-scoring-bonuses-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('auto_apply_scoring_bonuses', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'auto_apply_scoring_bonuses is required.']);
+    }
+
+    (new UserRepository())->setAutoApplyScoringBonuses(
+        (int) $currentUser['id'],
+        (bool) $input['auto_apply_scoring_bonuses']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't

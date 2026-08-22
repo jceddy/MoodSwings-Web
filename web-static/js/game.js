@@ -237,6 +237,18 @@
             saveAutoPassOnEmptyHandPreference(autoPassCheckbox.checked);
         });
 
+        // "Auto-apply scoring bonuses" (issue #397) -- same wiring pattern
+        // as the two checkboxes above, another purely server-side
+        // behavior (GameService::advanceAutomatedTurns()'s own
+        // Enthusiasm/Passion auto-apply). Starts checked (on) by default,
+        // matching users.auto_apply_scoring_bonuses's own DEFAULT 1.
+        const autoApplyScoringBonusesCheckbox = document.getElementById('settings-auto-apply-scoring-bonuses-checkbox');
+        autoApplyScoringBonusesCheckbox.checked = user.auto_apply_scoring_bonuses;
+        autoApplyScoringBonusesCheckbox.addEventListener('change', () => {
+            user.auto_apply_scoring_bonuses = autoApplyScoringBonusesCheckbox.checked;
+            saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
+        });
+
         // The dialog itself (and its "not supported" message) must still be
         // reachable even when push isn't supported at all -- otherwise
         // clicking "Settings" would silently do nothing instead of
@@ -2528,15 +2540,46 @@
         };
     }
 
-    document.getElementById('new-game-button').addEventListener('click', async () => {
+    // Sets the four rarity rows' own limit/duplicate-limit/even-
+    // distribution fields from a duel_deck_rules object shaped like
+    // collectDuelDeckRules()'s own return value -- the exact reverse of
+    // collectRarityMap()/collectEvenColorDistributionRarities(). Only
+    // meaningful for preset 'user_defined' (every other preset's own
+    // fixed rules have no per-rarity fields to fill in); the preset
+    // select itself, and whether these fields are even visible, is the
+    // caller's job (openNewGameDialog()'s own rematch prefill below).
+    function populateDuelDeckRules(rules) {
+        document.getElementById('new-game-duel-min-cards').value = rules.min_cards;
+        for (const rarity of RARITIES) {
+            document.getElementById('new-game-duel-rarity-limit-' + rarity).value = rules.rarity_limits[rarity] ?? '';
+            document.getElementById('new-game-duel-duplicate-limit-' + rarity).value = rules.duplicate_limits[rarity] ?? '';
+            document.getElementById('new-game-duel-even-distribution-' + rarity).checked =
+                rules.even_color_distribution_rarities.includes(rarity);
+        }
+    }
+
+    // Opens #new-game-dialog, freshly reset -- the exact same setup
+    // whether opened via the plain "New game" button (prefill === null)
+    // or Rematch (issue #398, prefill from buildRematchPrefill() above).
+    // Deliberately reuses this one dialog/form rather than a second,
+    // parallel "rematch flow" -- it already has ~20 conditionally-shown
+    // field groups keyed off format/deck_type, and reimplementing that
+    // show/hide logic a second time would just be duplicated, fragile
+    // code (confirmed by the maintainer). Every prefilled field is still
+    // freely editable before submitting -- this only changes the dialog's
+    // OWN starting values, the same way the default_selections_mode
+    // checkbox already gets overridden from a personal preference below.
+    async function openNewGameDialog(prefill) {
         newGameError.hidden = true;
         newGameForm.reset();
         // Initialize this per-game checkbox's default state from the
-        // user's own personal preference (Settings dialog's "Game
-        // defaults" section) rather than always starting unchecked --
+        // just-finished game's own setting (a rematch) or the user's own
+        // personal preference (Settings dialog's "Game defaults" section,
+        // a plain new game) rather than always starting unchecked --
         // form.reset() above already restored every other field to its
         // plain HTML default, so this runs after it.
-        document.getElementById('new-game-default-selections').checked = user.default_selections_mode_preference;
+        document.getElementById('new-game-default-selections').checked =
+            prefill ? prefill.defaultSelectionsMode : user.default_selections_mode_preference;
         const submitButton = document.getElementById('new-game-submit-button');
         submitButton.disabled = false;
         submitButton.textContent = 'Create game';
@@ -2554,6 +2597,7 @@
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.value = friend.friend_id;
+            checkbox.checked = !!prefill && prefill.opponentUserIds.includes(friend.friend_id);
             checkbox.addEventListener('change', updateOpponentSelectionLimit);
             checkbox.addEventListener('change', updateTeamFields);
             label.appendChild(checkbox);
@@ -2580,6 +2624,7 @@
                 checkbox.type = 'checkbox';
                 checkbox.value = bot.user_id;
                 checkbox.dataset.isBot = 'true';
+                checkbox.checked = !!prefill && prefill.opponentUserIds.includes(bot.user_id);
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
@@ -2605,8 +2650,61 @@
         await populateSavedDecklistSelect(document.getElementById('new-game-rotisserie-draft-saved-decklist'), 'Choose a saved deck');
         await Promise.all([1, 2, 3, 4].map((n) =>
             populateSavedDecklistSelect(document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-saved-decklist'), 'Choose a saved deck')));
+
+        if (prefill) {
+            // Every opponent checkbox above is already checked, so
+            // dispatching these two 'change' events (rather than calling
+            // updateDeckTypeAvailability()/updateTeamFields()/etc.
+            // individually) reuses every field-group show/hide listener
+            // already wired to them exactly the way a real user picking
+            // these values would trigger it -- see the format/deck-type
+            // 'change' listeners below.
+            const formatSelect = document.getElementById('new-game-format');
+            formatSelect.value = prefill.format;
+            formatSelect.dispatchEvent(new Event('change'));
+
+            const deckTypeSelect = document.getElementById('new-game-deck-type');
+            deckTypeSelect.value = prefill.deckType;
+            deckTypeSelect.dispatchEvent(new Event('change'));
+
+            // updateTeamFields() (already re-run by the format 'change'
+            // dispatch above) rebuilds #new-game-partner's own options
+            // from the now-checked opponents, but has no way to know
+            // WHICH of them was the creator's own previous partner --
+            // only setting .value here, after those options exist, can.
+            if (prefill.partnerUserId !== null) {
+                document.getElementById('new-game-partner').value = prefill.partnerUserId;
+            }
+
+            if (prefill.duelDeckRules) {
+                const presetSelect = document.getElementById('new-game-duel-rules-preset');
+                presetSelect.value = prefill.duelDeckRules.preset;
+                presetSelect.dispatchEvent(new Event('change'));
+                if (prefill.duelDeckRules.preset === 'user_defined') {
+                    populateDuelDeckRules(prefill.duelDeckRules);
+                }
+            }
+
+            // The bot checkbox itself is already checked above (part of
+            // opponentUserIds), which is what
+            // updateBotDecklistFieldsVisibility() (already re-run by the
+            // deck-type 'change' dispatch above, via
+            // updateBotCheckboxAvailability()) needs to have shown this
+            // field at all -- reconstructed from
+            // players[].bot_decklist_cards (buildGameState()'s own
+            // creator-only field, see its docblock) via the same
+            // buildDecklistCardsText() the Decks dialog's own Edit/
+            // Download flows already use for a saved decklist's cards.
+            if (prefill.botDecklistCards) {
+                document.getElementById('new-game-bot-decklist-text').value =
+                    buildDecklistCardsText({ cards: prefill.botDecklistCards, sideboard_cards: [] });
+            }
+        }
+
         newGameDialog.showModal();
-    });
+    }
+
+    document.getElementById('new-game-button').addEventListener('click', () => openNewGameDialog(null));
 
     document.getElementById('new-game-close-button').addEventListener('click', () => {
         newGameDialog.close();
@@ -4090,6 +4188,7 @@
         renderChat(state);
 
         renderDraftMatchScoreline(state);
+        renderRematchButton(state);
 
         const inProgressArea = document.getElementById('in-progress-area');
 
@@ -4839,6 +4938,79 @@
     // (only when the underlying round/stage or game actually changes --
     // see showBoard()'s own reset and the two selection-key checks below),
     // so an in-progress selection survives an ordinary poll uneventfully.
+
+    // Rematch (issue #398): offered only to this game's own creator
+    // (games.created_by_user_id, GameService::buildGameState()'s own new
+    // 'game.created_by_user_id' field -- see php-app/README.md), once the
+    // game has genuinely finished on its own: status 'completed', nobody
+    // resigned (players[].resigned), and an actual winner was decided
+    // (winner_usernames non-empty -- an expired, 7+-day-stale game has
+    // neither). For a draft-based deck_type, ALSO only once the whole
+    // best-of-three match has completed (the same draftState.status ===
+    // 'completed' check renderDraftMatchScoreline() above already reads,
+    // via the same OR-chain across the 5 draft deck_types' own getState()
+    // fields) -- draft-match-next-game-button already owns the "this game
+    // finished but the match continues" case, and offering Rematch there
+    // too would just be confusing (there's already a next game to go
+    // play, not a new one to create). A resigned/expired game is
+    // deliberately excluded too (confirmed by the maintainer) -- Rematch
+    // is for a game that was actually played out, not one abandoned along
+    // the way.
+    function canRematch(state) {
+        if (isReadOnlyView() || user.id !== state.game.created_by_user_id) {
+            return false;
+        }
+        if (state.game.status !== 'completed') {
+            return false;
+        }
+        if (state.players.some((p) => p.resigned) || state.game.winner_usernames.length === 0) {
+            return false;
+        }
+
+        const draftState = state.quick_draft || state.winston_draft || state.grid_draft || state.rotisserie_draft || state.tiered_rotisserie_draft;
+
+        return !draftState || draftState.status === 'completed';
+    }
+
+    // Builds openNewGameDialog()'s own `prefill` argument from a finished
+    // game's own state -- every opponent other than the creator
+    // themselves (state.game.created_by_user_id), the same format/
+    // deck_type/default_selections_mode/duel_deck_rules already exposed
+    // for any viewer, the creator's own teammate (team/closed_team,
+    // derived from matching team_id -- there's no separate "who's your
+    // partner" field to read), and a bot opponent's own previous
+    // custom_duel decklist (players[].bot_decklist_cards, creator-only --
+    // see buildGameState()'s own docblock for why it's not just
+    // custom_deck_card_ids exposed raw). Deliberately narrow -- draft pool
+    // source choices, rotisserie cutoff count, tiered-draft tier config,
+    // and a HUMAN's own custom/custom_duel decklist text are all left for
+    // the creator to fill in fresh, the same blank state a brand new game
+    // starts from, since none of that is exposed to the frontend anywhere
+    // today (confirmed by the maintainer -- a later issue can widen this
+    // if it's worth the new backend exposure).
+    function buildRematchPrefill(state) {
+        const opponents = state.players.filter((p) => p.user_id !== state.game.created_by_user_id);
+        const you = state.players.find((p) => p.user_id === state.game.created_by_user_id);
+        const partner = you && you.team_id !== null ? opponents.find((p) => p.team_id === you.team_id) : null;
+        const botOpponent = opponents.find((p) => p.bot_decklist_cards);
+
+        return {
+            format: state.game.format,
+            deckType: state.game.deck_type,
+            defaultSelectionsMode: state.game.default_selections_mode,
+            opponentUserIds: opponents.map((p) => p.user_id),
+            partnerUserId: partner ? partner.user_id : null,
+            duelDeckRules: state.game.duel_deck_rules,
+            botDecklistCards: botOpponent ? botOpponent.bot_decklist_cards : null,
+        };
+    }
+
+    function renderRematchButton(state) {
+        const button = document.getElementById('rematch-button');
+        const show = canRematch(state);
+        button.hidden = !show;
+        button.onclick = show ? () => openNewGameDialog(buildRematchPrefill(state)) : null;
+    }
 
     // Shared scoreline for every draft-based deck_type's own match --
     // Quick Draft's, Winston Draft's, Grid Draft's, and Rotisserie

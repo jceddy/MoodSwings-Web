@@ -533,7 +533,16 @@ too, proportional to the smaller card width.
       client-side effect of its own at all; it purely drives
       `GameService::advanceAutomatedTurns()` server-side (see "Auto-pass
       on empty hand" in `../php-app/README.md`), so persisting the
-      value is the checkbox's whole job.
+      value is the checkbox's whole job. Right below THAT,
+      `#settings-auto-apply-scoring-bonuses-checkbox` ("Auto-apply
+      Enthusiasm/Passion's scoring bonus", issue #397) -- the identical
+      "no client-side effect, just persist it" wiring once more
+      (`user.auto_apply_scoring_bonuses`/`POST
+      /user/auto-apply-scoring-bonuses-preference`/
+      `saveAutoApplyScoringBonusesPreference()`), also CHECKED by
+      default, matching `users.auto_apply_scoring_bonuses`'s own
+      `DEFAULT 1`. See "Auto-apply scoring bonuses" in
+      `../php-app/README.md`.
     - **Notifications** (issue #108, unchanged from the old standalone
       Notifications dialog, just re-homed one level deeper):
       `service-worker.js` (a site-root file, not under `js/`, registered
@@ -1221,6 +1230,49 @@ too, proportional to the smaller card width.
     `onclick` is just `showBoard(next_game_id)` -- a direct, prominent
     link to the next game from a just-finished one, instead of making the
     player go back to the lobby and pick the new `waiting` row out by hand.
+    **Rematch (issue #398).** Right below `#draft-match-next-game-button`,
+    `#rematch-button` -- `renderRematchButton(state)`, called from
+    `renderBoard()` alongside `renderDraftMatchScoreline(state)`, hides it
+    unless `canRematch(state)` says yes: you're this game's own creator
+    (`user.id === state.game.created_by_user_id`, `GameService::
+    buildGameState()`'s own new field -- see "Rematch" in
+    `../php-app/README.md`), the game is genuinely `'completed'` (nobody
+    resigned, `winner_usernames` non-empty -- an expired game has
+    neither), and, for a draft-based deck_type, only once the whole match
+    itself has completed too (the same `draftState.status === 'completed'`
+    check `renderDraftMatchScoreline()` reads, via the identical
+    `state.quick_draft || state.winston_draft || ...` OR-chain) --
+    `#draft-match-next-game-button` already owns the "this game finished
+    but the match continues" case, so Rematch would just be redundant (or
+    confusing) sitting next to it there. Its own `onclick` is
+    `openNewGameDialog(buildRematchPrefill(state))` -- opens the *same*
+    `#new-game-dialog` the plain "New game" button does (deliberately, not
+    a second parallel creation flow -- that dialog already has ~20
+    conditionally-shown field groups keyed off format/deck_type, and
+    duplicating that show/hide logic a second time would just be fragile),
+    now accepting an optional `prefill` argument. Every opponent other
+    than the creator gets their own checkbox pre-checked, format/deck_type
+    are set and their own native `'change'` events dispatched (reusing
+    every existing field-group show/hide listener exactly the way a real
+    user picking those values would trigger it, rather than re-deriving
+    that logic a second time), `default_selections_mode`/duel deck rules
+    (`populateDuelDeckRules()`, the exact reverse of
+    `collectDuelDeckRules()`) get copied over, a team/closed_team
+    creator's own previous partner gets reselected (matched by shared
+    `team_id`, since there's no separate "who's your partner" field to
+    read), and a bot opponent's own previous `custom_duel` decklist gets
+    reconstructed into `#new-game-bot-decklist-text` from `players[].
+    bot_decklist_cards` (creator-only, see the php-app README) via
+    `buildDecklistCardsText()` -- the exact same helper the Decks dialog's
+    own Edit/Download flows already use to turn a saved decklist's cards
+    back into pasteable text. Deliberately narrow (confirmed by the
+    maintainer): draft pool source choices, rotisserie cutoff count,
+    tiered-draft tier config, and a HUMAN's own custom/custom_duel
+    decklist text are all left blank for the creator to fill in fresh,
+    same as a brand new game -- none of that is exposed to the frontend
+    anywhere today, and every prefilled field here is still freely
+    editable before submitting regardless.
+
     A `renderDraftPanel(state)` dispatcher
     (mutually exclusive with `#duel-deck-submission`, occupying the same
     waiting-room slot while `state.game.status` is `'waiting'`) shows
