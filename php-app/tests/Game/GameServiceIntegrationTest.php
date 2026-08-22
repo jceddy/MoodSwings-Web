@@ -558,6 +558,45 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertNull($fromCreator['bot_decklist_cards']);
     }
 
+    /**
+     * The same Rematch-prefill idea as bot_decklist_cards above, but for a
+     * HUMAN creator's own deck_type 'custom' decklist (an issue #398
+     * follow-up) -- unlike 'custom_duel', 'custom' is a single table-wide
+     * shared deck (games.custom_deck_card_ids, not a per-player
+     * game_players column), so it's reconstructed onto 'game.
+     * custom_decklist_cards' rather than a 'players[]' entry, still
+     * creator-only and still null for every other deck_type (only 'custom'
+     * ever writes games.custom_deck_card_ids at all).
+     */
+    public function testGetStateExposesTheCreatorsOwnCustomDecklistOnlyToThemselves(): void
+    {
+        $creator = $this->insertUser('rematch-creator4');
+        $opponent = $this->insertUser('rematch-opponent4');
+
+        $decklistText = "1 Altruism\n1 Benevolence\n1 Charity\n1 Chivalry\n1 Complacency\n1 Conviction\n1 Courage"
+            . "\n1 Dignity\n1 Discipline\n1 Disillusionment\n1 Encouragement\n1 Faith\n1 Friendliness\n1 Guilt\n1 Honor";
+        $gameId = $this->games->createGame($creator, [$creator, $opponent], deckType: 'custom', decklistText: $decklistText);
+
+        $fromCreator = $this->games->getState($gameId, $creator)['game'];
+        self::assertNotNull($fromCreator['custom_decklist_cards']);
+        self::assertCount(15, $fromCreator['custom_decklist_cards']);
+        self::assertContains('Charity', array_column($fromCreator['custom_decklist_cards'], 'name'));
+
+        $fromNonCreator = $this->games->getState($gameId, $opponent)['game'];
+        self::assertNull($fromNonCreator['custom_decklist_cards']);
+    }
+
+    /** Same visibility rule's other half -- every deck_type other than 'custom' leaves games.custom_deck_card_ids NULL, so even the creator's own view has nothing to reconstruct. */
+    public function testGetStateNeverExposesCustomDecklistCardsForANonCustomDeckType(): void
+    {
+        $creator = $this->insertUser('rematch-creator5');
+        $opponent = $this->insertUser('rematch-opponent5');
+
+        $gameId = $this->games->createGame($creator, [$creator, $opponent], deckType: 'structure');
+
+        self::assertNull($this->games->getState($gameId, $creator)['game']['custom_decklist_cards']);
+    }
+
     public function testCreateGameRejectsACustomDecklistForADuelGame(): void
     {
         $u1 = $this->insertUser('customduel1');

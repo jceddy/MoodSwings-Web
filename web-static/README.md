@@ -1260,18 +1260,26 @@ too, proportional to the smaller card width.
     `collectDuelDeckRules()`) get copied over, a team/closed_team
     creator's own previous partner gets reselected (matched by shared
     `team_id`, since there's no separate "who's your partner" field to
-    read), and a bot opponent's own previous `custom_duel` decklist gets
+    read), a bot opponent's own previous `custom_duel` decklist gets
     reconstructed into `#new-game-bot-decklist-text` from `players[].
     bot_decklist_cards` (creator-only, see the php-app README) via
-    `buildDecklistCardsText()` -- the exact same helper the Decks dialog's
-    own Edit/Download flows already use to turn a saved decklist's cards
-    back into pasteable text. Deliberately narrow (confirmed by the
-    maintainer): draft pool source choices, rotisserie cutoff count,
-    tiered-draft tier config, and a HUMAN's own custom/custom_duel
-    decklist text are all left blank for the creator to fill in fresh,
-    same as a brand new game -- none of that is exposed to the frontend
-    anywhere today, and every prefilled field here is still freely
-    editable before submitting regardless.
+    `buildDecklistCardsText()`, and, the same idea one deck_type wider, a
+    HUMAN creator's own previous `'custom'` decklist gets reconstructed
+    into `#new-game-decklist-text` from `game.custom_decklist_cards`
+    (also creator-only -- see "Rematch" in `../php-app/README.md`) via
+    that same `buildDecklistCardsText()` -- the exact same helper the
+    Decks dialog's own Edit/Download flows already use to turn a saved
+    decklist's cards back into pasteable text. Nothing needed to switch
+    `#new-game-saved-decklist` out of its default "paste/upload instead"
+    option first -- the New Game form's own submit handler already only
+    ever reads `#new-game-decklist-text` when that select is still at its
+    empty default, which prefill leaves untouched. Deliberately narrow
+    beyond that (confirmed by the maintainer): draft pool source choices,
+    rotisserie cutoff count, tiered-draft tier config, and a HUMAN's own
+    `custom_duel` decklist text are all left blank for the creator to
+    fill in fresh, same as a brand new game -- none of that is exposed to
+    the frontend anywhere today, and every prefilled field here is still
+    freely editable before submitting regardless.
 
     A `renderDraftPanel(state)` dispatcher
     (mutually exclusive with `#duel-deck-submission`, occupying the same

@@ -2685,6 +2685,17 @@
                 }
             }
 
+            // The creator's own deck_type 'custom' decklist, reconstructed
+            // from game.custom_decklist_cards (buildGameState()'s own
+            // creator-only field, see its docblock) the same way
+            // botDecklistCards below reconstructs a bot's own custom_duel
+            // one -- the deck-type 'change' dispatch above has already
+            // shown #new-game-decklist-text if deckType is 'custom'.
+            if (prefill.customDecklistCards) {
+                document.getElementById('new-game-decklist-text').value =
+                    buildDecklistCardsText({ cards: prefill.customDecklistCards, sideboard_cards: [] });
+            }
+
             // The bot checkbox itself is already checked above (part of
             // opponentUserIds), which is what
             // updateBotDecklistFieldsVisibility() (already re-run by the
@@ -4978,13 +4989,16 @@
     // deck_type/default_selections_mode/duel_deck_rules already exposed
     // for any viewer, the creator's own teammate (team/closed_team,
     // derived from matching team_id -- there's no separate "who's your
-    // partner" field to read), and a bot opponent's own previous
-    // custom_duel decklist (players[].bot_decklist_cards, creator-only --
-    // see buildGameState()'s own docblock for why it's not just
-    // custom_deck_card_ids exposed raw). Deliberately narrow -- draft pool
-    // source choices, rotisserie cutoff count, tiered-draft tier config,
-    // and a HUMAN's own custom/custom_duel decklist text are all left for
-    // the creator to fill in fresh, the same blank state a brand new game
+    // partner" field to read), a bot opponent's own previous custom_duel
+    // decklist (players[].bot_decklist_cards, creator-only -- see
+    // buildGameState()'s own docblock for why it's not just
+    // custom_deck_card_ids exposed raw), and the creator's own previous
+    // deck_type 'custom' decklist (game.custom_decklist_cards, the same
+    // creator-only reconstruction idea, one issue #398 follow-up wider).
+    // Still deliberately narrow beyond that -- draft pool source choices,
+    // rotisserie cutoff count, tiered-draft tier config, and a HUMAN
+    // creator's own custom_duel decklist text are all left for the
+    // creator to fill in fresh, the same blank state a brand new game
     // starts from, since none of that is exposed to the frontend anywhere
     // today (confirmed by the maintainer -- a later issue can widen this
     // if it's worth the new backend exposure).
@@ -5002,6 +5016,7 @@
             partnerUserId: partner ? partner.user_id : null,
             duelDeckRules: state.game.duel_deck_rules,
             botDecklistCards: botOpponent ? botOpponent.bot_decklist_cards : null,
+            customDecklistCards: state.game.custom_decklist_cards,
         };
     }
 
