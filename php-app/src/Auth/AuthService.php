@@ -224,7 +224,7 @@ final class AuthService
     }
 
     /**
-     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool}, expiresAt: DateTimeImmutable}|null
+     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
     {
@@ -264,6 +264,15 @@ final class AuthService
                 // their hand is empty. See UserRepository::
                 // setAutoPassOnEmptyHand().
                 'auto_pass_on_empty_hand' => (bool) $session['auto_pass_on_empty_hand'],
+                // "Auto-apply scoring bonuses" (issue #397) as a personal
+                // preference (Settings dialog's "Game defaults" section)
+                // -- drives GameService::advanceAutomatedTurns()'s own
+                // server-side auto-apply of Enthusiasm's/Passion's
+                // per-round scoring decision for this user, whenever the
+                // obviously-correct answer is safe to apply (see
+                // sneakinessPlayedThisRound()). See UserRepository::
+                // setAutoApplyScoringBonuses().
+                'auto_apply_scoring_bonuses' => (bool) $session['auto_apply_scoring_bonuses'],
             ],
             'expiresAt' => $expiresAt,
         ];

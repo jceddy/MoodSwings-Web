@@ -1,0 +1,17 @@
+-- Issue #398: a "Rematch" button, offered only to a completed game's own
+-- creator, opens the New Game dialog pre-filled from that game's own
+-- settings instead of making them rebuild it from scratch.
+--
+-- No new column needed -- games.created_by_user_id already existed
+-- (migration 0004), just never exposed to the frontend before now.
+-- GameService::buildGameState() now returns it as 'game.created_by_user_id'
+-- (plain public information), plus a new creator-only
+-- 'players[].bot_decklist_cards' field that reconstructs a practice bot's
+-- own previous custom_duel decklist (via CardCatalog::serialize() against
+-- game_players.custom_deck_card_ids, since the raw decklist TEXT itself
+-- is never persisted) for the Rematch dialog's own bot-decklist textarea.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0165 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.22' WHERE id = 1;

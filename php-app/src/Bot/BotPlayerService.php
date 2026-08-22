@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with thirteen deliberate
+ * field-filling policy this builds on -- with fourteen deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -93,7 +93,19 @@ use MoodSwings\Rules\RoundScorer;
  * own printed value is 0, self-targeting never costs anything against
  * that budget, so it's simply added on top rather than traded off
  * against the swing-maximizing targets; see angerTargetMoodIds()'s own
- * docblock for the full policy.
+ * docblock for the full policy; and sneakinessTargetPlayerId()/
+ * isWorthPlaying() once more (confirmed by the maintainer), which vetoes
+ * Sneakiness outright (the same treatment Fury/Avoidance get above)
+ * unless either a non-teammate opponent's own current round score is
+ * already MORE than Sneakiness's own printed value (5) ahead of the
+ * bot's -- swapping wins the round outright, the whole point of playing
+ * it, rather than playing it blind as just another high-value card the
+ * way it would be without this exception -- or the round's own scoring
+ * is already being skipped entirely (Awe or similar,
+ * BoardState::skipScoringOwnerId()), in which case the swap can never
+ * even apply this round, so it's played purely for the value it'll keep
+ * contributing every round after this one instead; see that method's
+ * own docblock for the full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -216,6 +228,7 @@ final class BotPlayerService
         return match ($effectKey) {
             'fury' => $this->furyIsWorthPlaying($state, $botGamePlayerId),
             'avoidance' => $this->avoidanceHasAGoodReasonToPlay($state, $botGamePlayerId),
+            'sneakiness' => $this->sneakinessTargetPlayerId($state, $botGamePlayerId) !== null,
             default => true,
         };
     }
@@ -918,6 +931,12 @@ final class BotPlayerService
             return ['target_mood_ids' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId)];
         }
 
+        if ($effectKey === 'sneakiness') {
+            $targetPlayerId = $this->sneakinessTargetPlayerId($state, $botGamePlayerId);
+
+            return $targetPlayerId !== null ? ['opponent_player_id' => $targetPlayerId] : null;
+        }
+
         $choices = [];
 
         foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
@@ -1463,6 +1482,84 @@ final class BotPlayerService
         }
 
         return null;
+    }
+
+    /**
+     * Sneakiness's own printed value -- see sneakinessTargetPlayerId()'s
+     * own docblock for why this specific number is the margin a rival
+     * needs to be ahead by, not just any arbitrary threshold.
+     */
+    private const SNEAKINESS_WIN_MARGIN = 5;
+
+    /**
+     * Sneakiness's own "who to target, and is it even worth playing at
+     * all" policy (confirmed by the maintainer) -- unlike Intimidation/
+     * Paranoia above, this is never played as a plain "highest printed
+     * value" opening play: "swap your own score with [a chosen
+     * opponent's] before determining who wins the round" only helps when
+     * either the swap alone would win the round outright, or nothing is
+     * actually at stake this round to begin with. Used both to decide
+     * WHETHER Sneakiness is worth playing (isWorthPlaying()) and, if so,
+     * WHO to target -- null from either branch below means "don't play
+     * it," the same veto Fury/Avoidance already get from isWorthPlaying().
+     *
+     * Two cases:
+     * - The round's own scoring is already being skipped entirely
+     *   (BoardState::skipScoringOwnerId() non-null -- Awe, or any future
+     *   card with the same "no one wins or loses this round" effect):
+     *   the swap can never actually apply this round regardless of who's
+     *   chosen (Awe's own printed text: "after-scoring effects don't
+     *   happen"), so there's nothing to lose by playing it anyway -- it
+     *   still sits in play as an ordinary 5-value mood contributing to
+     *   every round from now on. The specific opponent picked here is
+     *   arbitrary (the first active non-teammate one), since it's
+     *   inconsequential either way.
+     * - Otherwise: only worth it if some non-teammate opponent's own
+     *   CURRENT round score (RoundScorer::score() against the board as
+     *   it stands right now, before this play -- the same live-snapshot
+     *   approach wouldBecomeHighestScore() above already uses) is MORE
+     *   than SNEAKINESS_WIN_MARGIN (Sneakiness's own printed value, 5)
+     *   ahead of the bot's own. That specific margin isn't arbitrary:
+     *   Sneakiness itself is about to add its own 5 points to the bot's
+     *   PRE-swap total the instant it's played (it's an ordinary mood
+     *   card too, scored like any other before the swap ever applies),
+     *   so a margin of exactly 5 or less would already be closed by
+     *   Sneakiness's own value alone, with nothing left for the swap to
+     *   win -- only a margin genuinely GREATER than 5 guarantees the
+     *   chosen opponent is still ahead even after that addition, which is
+     *   exactly what makes swapping with them unambiguously correct. When
+     *   more than one non-teammate opponent clears that bar, the
+     *   HIGHEST-scoring one is targeted -- the biggest possible swap, not
+     *   just the first one that qualifies.
+     */
+    private function sneakinessTargetPlayerId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $opponentIds = array_values(array_filter(
+            $state->activePlayerOrder(),
+            fn (int $playerId): bool => $playerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $playerId),
+        ));
+        if ($opponentIds === []) {
+            return null;
+        }
+
+        if ($state->skipScoringOwnerId() !== null) {
+            return $opponentIds[0];
+        }
+
+        $scores = (new RoundScorer())->score($state);
+        $botScore = $scores[$botGamePlayerId] ?? 0;
+
+        $bestOpponentId = null;
+        $bestOpponentScore = -1;
+        foreach ($opponentIds as $opponentId) {
+            $opponentScore = $scores[$opponentId] ?? 0;
+            if ($opponentScore > $bestOpponentScore) {
+                $bestOpponentScore = $opponentScore;
+                $bestOpponentId = $opponentId;
+            }
+        }
+
+        return $bestOpponentScore - $botScore > self::SNEAKINESS_WIN_MARGIN ? $bestOpponentId : null;
     }
 
     /**

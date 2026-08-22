@@ -1,0 +1,15 @@
+-- Practice bots used to play Sneakiness (base value 5) purely because it
+-- was the highest-value card in hand -- a strategy-free "opening play"
+-- with no opponent meaningfully ahead to swap scores with. BotPlayerService
+-- now vetoes it (and, when it IS worth playing, targets whoever it should)
+-- via a new sneakinessTargetPlayerId(): swap only when a non-teammate
+-- opponent's own current round score is more than 5 points ahead of the
+-- bot's (winning the round outright), or this round's own scoring is
+-- already skipped by an effect like Awe (no risk, so it's played purely
+-- for its ongoing future value instead). See "Practice bots" ->
+-- "Sneakiness" in php-app/README.md for the full policy.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0166 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.23' WHERE id = 1;

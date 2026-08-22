@@ -4405,7 +4405,8 @@ final class GameService
     {
         $botGamePlayerIds = $this->botGamePlayerIds($gameId);
         $autoPassGamePlayerIds = $this->autoPassEmptyHandGamePlayerIds($gameId);
-        if ($botGamePlayerIds === [] && $autoPassGamePlayerIds === []) {
+        $autoApplyScoringBonusGamePlayerIds = $this->autoApplyScoringBonusGamePlayerIds($gameId);
+        if ($botGamePlayerIds === [] && $autoPassGamePlayerIds === [] && $autoApplyScoringBonusGamePlayerIds === []) {
             return null;
         }
 
@@ -4471,14 +4472,35 @@ final class GameService
             if ($batch !== null) {
                 $decision = $this->activePendingDecision((int) $batch['id']);
                 $targetGamePlayerId = $decision !== null ? (int) $decision['target_game_player_id'] : null;
-                if ($targetGamePlayerId === null || !in_array($targetGamePlayerId, $botGamePlayerIds, true)) {
-                    break; // waiting on a real player (or a batch with nothing left unresolved -- shouldn't happen)
+
+                if ($targetGamePlayerId !== null && in_array($targetGamePlayerId, $botGamePlayerIds, true)) {
+                    $field = json_decode((string) $decision['field'], true);
+                    $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type']);
+                    $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
+                    continue;
                 }
 
-                $field = json_decode((string) $decision['field'], true);
-                $answer = $this->bots->chooseDecisionAnswer($this->boardStates->load($gameId), $field, $targetGamePlayerId, (string) $decision['decision_type']);
-                $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
-                continue;
+                // Issue #397: an opted-in real player's own open
+                // Enthusiasm/Passion scoring decision gets the same
+                // obviously-correct treatment a bot would get for one of
+                // its own decisions -- see autoScoringDecisionAnswer()'s
+                // own docblock -- UNLESS Sneakiness was played this round
+                // by anyone, in which case this falls through to the
+                // ordinary "waiting on a real player" break below, same as
+                // if this preference were off.
+                if ($targetGamePlayerId !== null
+                    && in_array($decision['decision_type'], self::SCORING_DECISION_TYPES, true)
+                    && in_array($targetGamePlayerId, $autoApplyScoringBonusGamePlayerIds, true)
+                ) {
+                    $state = $this->boardStates->load($gameId);
+                    if (!$this->sneakinessPlayedThisRound($state)) {
+                        $answer = $this->autoScoringDecisionAnswer($state, (string) $decision['decision_type'], $targetGamePlayerId);
+                        $lastResult = $this->respondToDecision($gameId, $targetGamePlayerId, $answer);
+                        continue;
+                    }
+                }
+
+                break; // waiting on a real player (or a batch with nothing left unresolved -- shouldn't happen)
             }
 
             $currentTurnGamePlayerId = $round['current_turn_game_player_id'] !== null ? (int) $round['current_turn_game_player_id'] : null;
@@ -5293,6 +5315,109 @@ final class GameService
         $stmt->execute(['game_id' => $gameId]);
 
         return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * @return int[] every game_players.id in $gameId whose owning user
+     *     opted into "auto-apply scoring bonuses" (issue #397,
+     *     users.auto_apply_scoring_bonuses, migration 0165) -- whether
+     *     it's actually safe to auto-apply right now (see
+     *     sneakinessPlayedThisRound()) is checked separately in
+     *     advanceAutomatedTurns() itself, since that can change from one
+     *     round to the next.
+     */
+    private function autoApplyScoringBonusGamePlayerIds(int $gameId): array
+    {
+        $stmt = Connection::get()->prepare(
+            'SELECT gp.id FROM game_players gp JOIN users u ON u.id = gp.user_id WHERE gp.game_id = :game_id AND u.auto_apply_scoring_bonuses = 1'
+        );
+        $stmt->execute(['game_id' => $gameId]);
+
+        return array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
+    }
+
+    /**
+     * Issue #397's own safety check: Enthusiasm's/Passion's obviously-
+     * correct answer (always take the bonus; always take the highest-
+     * value opponent mood) stops being obviously correct the moment
+     * Sneakiness swaps the acting player's own final score away to
+     * whoever it targeted -- a higher score could work against them that
+     * specific round. Scoped to "played THIS round," not "currently in
+     * play" (a Sneakiness played in an earlier round already resolved its
+     * own swap and has no effect on this round's scoring, even though the
+     * physical card stays on the table afterward like any other mood) --
+     * the same "tag played-in-round, check against the current round
+     * number" pattern BoardState::bannedColorsThisRound() already uses
+     * for Doubt, rather than reading Sneakiness's own
+     * 'swapScoreWithPlayerId' effectState directly (which GameService::
+     * applyScoreSwaps() clears the instant it's actually applied at
+     * scoring time -- reusing it here would work today, but would tie
+     * this unrelated check to that clearing's own timing rather than
+     * expressing the real "played this round" condition directly).
+     * Deliberately whole-game, not per-player: ANY seated player's own
+     * Sneakiness played this round falls every opted-in player back to a
+     * manual answer for that round, the same reasoning Anger/Pacifism's
+     * own "an opponent means neither" policies don't apply here -- a
+     * 3-4 player game makes it possible to reason about exactly who a
+     * given Sneakiness can and can't touch, but that's judged not worth
+     * the complexity or risk of getting wrong (confirmed by the
+     * maintainer -- see issue #397's own "Scope" section).
+     */
+    private function sneakinessPlayedThisRound(BoardState $state): bool
+    {
+        $currentRound = $state->currentRoundNumber();
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] !== 'sneakiness') {
+                continue;
+            }
+            if ($state->effectState($mood->cardId, 'playedInRound') === $currentRound) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * The obviously-correct answer to an opted-in player's own open
+     * Enthusiasm/Passion scoring decision (issue #397), in the same
+     * `respondToDecision()`-ready shape `BotPlayerService::
+     * chooseDecisionAnswer()` already returns -- Enthusiasm's own
+     * `take_bonus` is unconditionally `true` (accepting can only ever
+     * raise the owner's own score -- see resolveScoringDecisionBonus(),
+     * which floors a bonus-less owner at 0 rather than negative);
+     * Passion's own `target_mood_id` is whichever OTHER player's own
+     * in-play mood currently has the highest value (ties broken by
+     * whichever is found first -- CardChoiceSchema's own field is scope
+     * 'other' with no `excludes_teammate`, so a teammate's mood is just
+     * as legal a target as a true opponent's, and just as free of
+     * downside: they still score it too regardless of who else also
+     * does), or `[]` (declined, same as a real player choosing not to
+     * answer) when nobody else has any mood in play to target at all.
+     *
+     * @return array<string, mixed>
+     */
+    private function autoScoringDecisionAnswer(BoardState $state, string $decisionType, int $ownerGamePlayerId): array
+    {
+        if ($decisionType === self::ENTHUSIASM_DECISION_TYPE) {
+            return ['take_bonus' => true];
+        }
+
+        $bestMoodId = null;
+        $bestValue = -1;
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->ownerId === $ownerGamePlayerId) {
+                continue;
+            }
+
+            $value = $state->valueOf($mood->cardId);
+            if ($value > $bestValue) {
+                $bestValue = $value;
+                $bestMoodId = $mood->cardId;
+            }
+        }
+
+        return $bestMoodId !== null ? ['target_mood_id' => $bestMoodId] : [];
     }
 
     /**
@@ -10764,8 +10889,40 @@ final class GameService
             }
         }
 
+        // Issue #398's own Rematch prompt: a bot's raw custom_duel
+        // decklist TEXT is never persisted (only its parsed
+        // custom_deck_card_ids, same as a human's), so pre-filling the
+        // Rematch dialog's own bot-decklist textarea needs it
+        // reconstructed from those ids -- CardCatalog::serialize() hydrates
+        // them into the exact {card_id, name, set_code, collector_number}
+        // shape web-static/js/game.js's own buildDecklistCardsText()
+        // already knows how to format back into text, the same helper the
+        // Decks dialog's Edit/Download flows use for a saved decklist.
+        // Creator-only (not exposed to the human opponent, or a spectator,
+        // viewing the same completed game) -- this exists purely to serve
+        // the creator's own Rematch prefill, not as a general-purpose
+        // "see any bot's decklist" feature.
+        $isCreator = $viewerUserId !== null && $viewerUserId === (int) $game['created_by_user_id'];
+
+        // The same Rematch prefill idea, for a HUMAN creator's own
+        // deck_type 'custom' decklist (issue #398 follow-up) -- unlike
+        // 'custom_duel', 'custom' is a single table-wide shared deck
+        // (games.custom_deck_card_ids, see BOT_SUPPORTED_DECK_TYPES's own
+        // docblock), so this lives on 'game' rather than a per-player
+        // 'players[]' entry the way bot_decklist_cards does. Creator-only,
+        // for the same reason -- the raw decklist TEXT itself is never
+        // persisted, only the parsed ids, so it's reconstructed here too.
+        $customDecklistCards = $isCreator && $game['deck_type'] === 'custom' && $game['custom_deck_card_ids'] !== null
+            ? CardCatalog::serialize(array_map(intval(...), json_decode((string) $game['custom_deck_card_ids'], true)))
+            : null;
+
         $players = [];
         foreach ($playerRows as $row) {
+            $botDecklistCards = null;
+            if ($isCreator && $game['deck_type'] === 'custom_duel' && $row['is_bot'] && $row['custom_deck_card_ids'] !== null) {
+                $botDecklistCards = CardCatalog::serialize(array_map(intval(...), json_decode((string) $row['custom_deck_card_ids'], true)));
+            }
+
             $players[] = [
                 'game_player_id' => (int) $row['id'],
                 'user_id' => (int) $row['user_id'],
@@ -10803,6 +10960,10 @@ final class GameService
                 // decklist contents before the game starts.
                 'custom_deck_name' => $row['custom_deck_name'],
                 'deck_submitted' => $row['custom_deck_card_ids'] !== null,
+                // See $botDecklistCards' own comment just above -- null for
+                // every seat except a bot's own in a custom_duel game, and
+                // even then only in the creator's own view of this state.
+                'bot_decklist_cards' => $botDecklistCards,
                 // Whether this seat has resigned -- see resignGame(). For
                 // a 2-player/team-format game a resignation always
                 // completes the whole game immediately, so this is really
@@ -10840,9 +11001,19 @@ final class GameService
         $response = [
             'game' => [
                 'id' => $gameId,
+                // Issue #398's own "Rematch" prompt (offered only to the
+                // creator once the game completes) is the only reason this
+                // is exposed at all -- createGame() itself has never
+                // needed the frontend's help distinguishing the creator,
+                // and no other feature has asked for this before now.
+                'created_by_user_id' => (int) $game['created_by_user_id'],
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],
+                // See $customDecklistCards' own comment above -- null for
+                // every deck_type other than 'custom', and even then only
+                // in the creator's own view.
+                'custom_decklist_cards' => $customDecklistCards,
                 'duel_deck_rules' => $game['deck_type'] === 'custom_duel' ? [
                     'preset' => $game['custom_duel_rules_preset'],
                     'min_cards' => (int) $game['custom_duel_min_cards'],

@@ -1,0 +1,13 @@
+-- Issue #398 follow-up: the Rematch prompt already reconstructed a
+-- practice bot's own previous custom_duel decklist for the creator; this
+-- widens that same idea to a HUMAN creator's own deck_type 'custom'
+-- decklist (a single table-wide shared deck, games.custom_deck_card_ids,
+-- unlike custom_duel's per-player one) -- GameService::buildGameState()
+-- now returns it as the creator-only 'game.custom_decklist_cards', and
+-- the Rematch dialog's own #new-game-decklist-text textarea is pre-filled
+-- from it the same way #new-game-bot-decklist-text already was.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0167 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.24' WHERE id = 1;

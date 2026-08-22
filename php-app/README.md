@@ -53,7 +53,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
-| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. |
+| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. |
 | GET    | `/friends`      | —                                                                 | Requires auth. Lists accepted friends (`friend_id`, `friend_username`, `created_at`, `presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below). |
 | GET    | `/friends/invites` | —                                                              | Requires auth. Returns `{"incoming": [...], "outgoing": [...]}`, each entry has `other_user_id`/`other_username`/`created_at`. |
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
@@ -77,7 +77,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress` game, plus a `completed`/`abandoned` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed`/`abandoned` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above still-current-`completed`/`abandoned` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`/`is_bot` -- issue #140, see "Practice bots" below), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), `default_selections_mode` (bool, issue #274 -- see "Default selections mode" below), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username", "players"}`, `winner_username` only set once the match's own status is `completed`, `players` -- issue #189 -- every seated player's own `user_id`/`username`/`wins`/`is_you`, the field a 3-4 player Quick Draft match's own scoreline should actually be read from since `your_wins`/`opponent_wins` only ever reflect the first non-viewer seat) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/past`   | —                                                                 | Requires auth. The complement of `GET /games` above: every `completed`/`abandoned` game NOT still tied to an undecided draft match -- i.e. exactly the games `GET /games` excludes. Same row shape as `GET /games` (`GameService::gameSummaryFor()` hydrates both), sorted most-recently-completed first rather than by actionability, since nothing here is actionable. See "Past games" below. |
-| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`is_bot`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat; `is_bot` is issue #140's own practice-bot flag, see "Practice bots" below), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `game.default_selections_mode` (bool, issue #274) is fixed for the game's whole lifetime; when `true`, `choice_fields` (and `round.pending_decision.field`, once one is open) come back with a `default` key pre-filled on some fields -- see "Default selections mode" below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `chat_messages` (issue #109) is the game's full in-game chat history so far, oldest first -- omitted entirely for a still-`waiting` game, the same early return that keeps `round`/`in_play`/etc. absent then too (chat only ever gets appended to via `POST /games/chat` once `in_progress`, see "In-game chat" below). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. |
+| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`is_bot`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat; `is_bot` is issue #140's own practice-bot flag, see "Practice bots" below), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `game.default_selections_mode` (bool, issue #274) is fixed for the game's whole lifetime; when `true`, `choice_fields` (and `round.pending_decision.field`, once one is open) come back with a `default` key pre-filled on some fields -- see "Default selections mode" below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `chat_messages` (issue #109) is the game's full in-game chat history so far, oldest first -- omitted entirely for a still-`waiting` game, the same early return that keeps `round`/`in_play`/etc. absent then too (chat only ever gets appended to via `POST /games/chat` once `in_progress`, see "In-game chat" below). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. Also includes `game.created_by_user_id` and, only for a bot's own seat in a `custom_duel` game and only in the game's own creator's view, `players[].bot_decklist_cards` (issue #398's own Rematch prompt) -- see "Rematch" below. |
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
@@ -100,6 +100,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
+| POST   | `/user/auto-apply-scoring-bonuses-preference` | `{"auto_apply_scoring_bonuses": bool}`               | Requires auth. Opts you in/out of automatically applying Enthusiasm's/Passion's own obviously-correct per-round scoring bonus (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_apply_scoring_bonuses` is missing. See "Auto-apply scoring bonuses" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
@@ -5843,6 +5844,43 @@ since it already holds that dependency):
     in play, unlike Harmony/Grief/Angst/Nostalgia's one-shot ones, making
     that opponent likely to reach it before the bot's own recursion ever
     gets a turn, regardless of who has more of it on paper.
+
+  **Sneakiness** gets a targeting exception of its own, via
+  `sneakinessTargetPlayerId()`, used by both `isWorthPlaying()` (a veto)
+  and `buildChoicesForCard()` (`opponent_player_id` is required and not
+  in `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver would
+  otherwise always fill it with the first legal candidate, playing
+  Sneakiness as a strategy-free "opening play" purely because its own
+  base value, 5, happened to be the highest card in hand). "swap final
+  scores with a chosen opponent at scoring time" (`SneakinessEffect`) is
+  only actually worth playing when either it would win the bot the
+  round, or nothing is at stake yet:
+  - With scoring not already skipped this round (`BoardState::
+    skipScoringOwnerId() === null` -- see the Awe case below), the bot
+    computes every seated player's own live score via
+    `(new RoundScorer())->score($state)` and finds the HIGHEST-scoring
+    non-teammate opponent (mirroring the "an opponent means neither"
+    exclusion Intimidation/Paranoia/Pacifism/Anger above already apply).
+    That opponent is only targeted if their score exceeds the bot's own
+    by MORE than `SNEAKINESS_WIN_MARGIN` (5) -- strictly greater, not
+    equal-or-greater, because Sneakiness's own base value (5) is about to
+    add itself to the bot's pre-swap total the instant it's played; an
+    exactly-5 margin is already closed by that contribution alone, so
+    only a strictly-greater margin guarantees the opponent is still ahead
+    after accounting for it. No opponent clearing that bar means
+    Sneakiness isn't worth playing at all this turn.
+  - With scoring already skipped this round (an Awe played earlier the
+    same round, `BoardState::skipScoringOwnerId() !== null` --
+    `AweEffect`'s own "no scoring this round... after-scoring effects
+    don't happen" nullifies any swap tagged this round outright, the
+    same bug
+    `testSneakinessDoesNotSwapAFutureRoundsScoreWhenItsOwnRoundWasSkippedByAwe`
+    in `GameServiceIntegrationTest` exists to catch),
+    there's no score-margin risk to weigh at all -- Sneakiness is played
+    purely for its ongoing future value (it commonly stays in play well
+    past the round it's played in, ready to swap in some later round
+    instead), targeting an arbitrary non-teammate opponent (the first one
+    found) since who gets tagged this round is inconsequential.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
@@ -6181,6 +6219,195 @@ own `{"resigned": true}` already rides alongside it.
 "{name} passed" -- one shared phrasing for both a bot's own pass and an
 opted-in human's, since both mean the exact same thing to a reader of
 this log ("nobody actually clicked Pass here").
+
+### Auto-apply scoring bonuses (issue #397)
+
+A personal preference (`users.auto_apply_scoring_bonuses`, migration
+`0165`, defaults to `1`/on -- the same "pure convenience, no real
+behavior change to opt into" reasoning "Auto-pass on empty hand" above
+already used). Surfaced in the Settings dialog's own "Game defaults"
+section (`web-static/game/index.html`'s `#settings-dialog`, alongside
+the other two checkboxes above) and written via `POST
+/user/auto-apply-scoring-bonuses-preference` (see the API table above),
+the same write-only, no-separate-GET pattern every preference on this
+page already established.
+
+Enthusiasm ("you may score one of your moods an extra time") and
+Passion ("you may score one of your opponents' moods as though it were
+yours") both pause every round either card is in play, asking their own
+owner to answer (`enthusiasm_extra_score`/`passion_score_opponent_mood`,
+`SCORING_DECISION_TYPES`) -- but each has an answer that's always at
+least as good as any other choice or declining: Enthusiasm's own bonus
+can only ever raise the owner's score (`resolveScoringDecisionBonus()`
+floors a declined bonus at 0, never negative), and Passion's own bonus
+never costs the target anything (`CardChoiceSchema`'s own field is
+scope `'other'` with no `excludes_teammate` -- a teammate's mood is just
+as legal and just as free of downside as a true opponent's, since "they
+also still score it" regardless of who else does too), so taking the
+single HIGHEST-value other mood is always at least as good as any other
+target or declining. Requiring a manual response every single round
+either card stays in play is pure friction for a decision with an
+obviously-correct answer -- driven server-side, the same
+`GameService::advanceAutomatedTurns()` loop "Auto-pass on empty hand"
+above already extended, rather than a client-side auto-click (which
+would need the tab open and JS running, and wouldn't help a player who
+stepped away).
+
+- `autoApplyScoringBonusGamePlayerIds(int $gameId): int[]` -- every
+  `game_players.id` whose owning user opted in, the exact mirror of
+  `autoPassEmptyHandGamePlayerIds()` just above it.
+- The loop's own pending-batch branch tries three things in order now,
+  where it used to try two: is the decision's own target a bot (drive it
+  via `BotPlayerService::chooseDecisionAnswer()`, unchanged); if not, is
+  it a `SCORING_DECISION_TYPES` decision targeting an opted-in real
+  player AND `sneakinessPlayedThisRound()` says no (below) -- if so,
+  answer it via `autoScoringDecisionAnswer()` and keep looping, exactly
+  like a bot's own answered decision does; otherwise, same as
+  today, `break` and wait on a real player.
+- `autoScoringDecisionAnswer(BoardState $state, string $decisionType,
+  int $ownerGamePlayerId): array` -- `['take_bonus' => true]`
+  unconditionally for Enthusiasm; for Passion, `['target_mood_id' =>
+  $bestMoodId]` for whichever OTHER player's own in-play mood currently
+  has the highest value (ties broken by whichever is found first), or
+  `[]` (declined, same as a real player choosing not to answer) when
+  nobody else has any mood in play to target at all. Same
+  `respondToDecision()`-ready shape `BotPlayerService::
+  chooseDecisionAnswer()` already returns.
+
+**The Sneakiness exception (confirmed by the maintainer).** Sneakiness
+("choose an opponent... after scoring, swap your score with that player
+before determining who wins the round") is an after-playing, one-time
+effect scoped to the round it was played in, not a while-in-play
+condition -- once it's been played THIS round, maximizing your own score
+stops being obviously correct, since the final score might get swapped
+away to whoever it targeted. `sneakinessPlayedThisRound(BoardState
+$state): bool` checks every in-play mood for `effectKey === 'sneakiness'`
+whose own `'playedInRound'` effectState tag (stamped onto every mood
+that enters play, regardless of card -- see `BoardState::
+playedInRoundTag()`/Doubt's own `bannedColorsThisRound()`, the
+established precedent this follows) matches `currentRoundNumber()` --
+deliberately "played THIS round," not "currently in play," so a
+Sneakiness played in an EARLIER round (its own swap already resolved,
+no effect on later rounds' own scoring) doesn't keep vetoing auto-apply
+forever just because the physical card stays on the table afterward
+like any other mood. Reads the tag directly rather than Sneakiness's own
+`'swapScoreWithPlayerId'` effectState (which `applyScoreSwaps()` clears
+the instant it's actually applied at scoring time, and would happen to
+give the same answer here today) -- that would tie this unrelated check
+to that clearing's own timing instead of expressing the real "played
+this round" condition on its own terms. Deliberately whole-game, not
+per-player: ANY seated player's own Sneakiness played this round falls
+EVERY opted-in player back to a manual answer that round, even one
+Sneakiness's own swap can't possibly touch in a 3-4 player game -- issue
+#397's own "Scope" section judged reasoning about exactly who a given
+Sneakiness can and can't affect not worth the complexity or risk of
+getting it wrong, the same call Anger's own bot-targeting policy makes
+differently for a different reason (see "Anger" in "Practice bots"
+above) -- here it's a blanket safety fallback, not a strategic choice.
+
+Scoped to `SCORING_DECISION_TYPES` only among pending-decision batches --
+issue #397 is deliberately narrow to Enthusiasm/Passion specifically,
+not a general "auto-answer any obviously-correct decision" framework;
+Sneakiness itself is hardcoded as the one exception rather than a
+generic "round-scoped score-altering effect" list, matching how every
+other per-card exception in this codebase (Fury's veto, Harmony's
+empty-discard-pile deprioritization, Anger's own targeting policy) is
+hardcoded to that specific card rather than built out for a need that
+doesn't exist yet.
+
+### Rematch (issue #398)
+
+A "Rematch" button (`web-static/js/game.js`'s own `renderRematchButton()`
+-- see "Rematch" in `web-static/README.md`), offered only to a completed
+game's own creator, opens the New Game dialog pre-filled from that
+game's own settings rather than making them rebuild it from scratch or
+reimplementing a second, parallel creation flow. Two small backend
+additions to `buildGameState()`'s response are the only server-side work
+this needed -- every other value the dialog pre-fills (`format`,
+`deck_type`, `default_selections_mode`, `duel_deck_rules`, each seated
+player's own `user_id`/`is_bot`/`team_id`) was already exposed there for
+an unrelated reason, and the frontend derives everything else (whether to
+show the button at all, who the opponents/partner were) from those
+existing fields:
+
+- `game.created_by_user_id` -- `games.created_by_user_id` (written by
+  `createGame()`, migration `0004`) was never actually exposed to the
+  frontend before now; nothing had needed to distinguish a game's own
+  creator from any other seated player until this. Plain public
+  information, visible to every viewer the same way `format`/`deck_type`
+  already are -- there's nothing sensitive about who created a game.
+- `players[].bot_decklist_cards` -- only for a practice bot's own seat in
+  a `custom_duel` game, and only in the CREATOR's own view of this state
+  (`$viewerUserId === $game['created_by_user_id']`). A bot's raw
+  `custom_duel` decklist TEXT is never persisted (only its parsed
+  `game_players.custom_deck_card_ids`, exactly like a human's own --
+  see `submitCustomDuelDeck()`), so reconstructing it for the Rematch
+  dialog's own bot-decklist textarea means hydrating those ids back
+  through `CardCatalog::serialize()` into the same
+  `{card_id, name, set_code, collector_number}` shape `GET /decklists/view`
+  already returns for a saved decklist -- `web-static/js/game.js`'s own
+  `buildDecklistCardsText()` (the Decks dialog's Edit/Download flows'
+  own helper) already knows how to format that back into text, so the
+  frontend does the actual text formatting, not a new PHP-side
+  duplicate of it. Creator-only rather than exposed to every viewer of a
+  completed game (the human opponent, a spectator) -- this exists purely
+  to serve the creator's own Rematch prefill, not as a general "see any
+  bot's decklist" feature, so it stays scoped to the one viewer who
+  actually has a use for it.
+- `game.custom_decklist_cards` -- the same reconstruction idea as
+  `bot_decklist_cards` above, but for a HUMAN creator's own `deck_type`
+  `'custom'` decklist (a follow-up widening the "Scope" section below
+  used to rule out). Unlike `custom_duel`, `'custom'` is a single
+  table-wide shared deck (`games.custom_deck_card_ids`, built once from
+  the creator's own `decklistText`/`savedDecklistId` before any seat is
+  dealt from it -- see `BOT_SUPPORTED_DECK_TYPES`'s own docblock), not a
+  per-player `game_players` column, so it lives on `game` rather than a
+  `players[]` entry. Same creator-only gating, same
+  `CardCatalog::serialize()` reconstruction, `null` for every other
+  `deck_type` (only `'custom'` ever writes `games.custom_deck_card_ids`
+  at all) or for a non-creator viewer.
+
+**Whether to even show the button** is computed entirely client-side
+(`canRematch(state)` in `web-static/js/game.js`) from fields already in
+`state` -- there's no dedicated backend "can this game be rematched"
+flag, since the action itself (`POST /games`, ordinary `createGame()`)
+is independently validated server-side regardless of what the button's
+own visibility logic decided, the same way `#draft-match-next-game-button`'s
+own visibility is just a convenience, not a security boundary. Gated on:
+`status === 'completed'`, no seated player `resigned` (a resignation
+always leaves `status: 'completed'` too -- see "Game timestamps" below
+for how resignation/expiry are actually distinguished, since there's no
+separate `'abandoned'` status for either), `winner_usernames` non-empty
+(an expired, 7+-day-stale game has neither a winner nor a resignation --
+see `expireStaleActiveGames()`), and, for a draft-based `deck_type`, the
+whole best-of-three MATCH must have completed too (`state.quick_draft`/
+`state.winston_draft`/etc.'s own `status` field, not just this one
+game's) -- an individual game can (and, for game 1/2 of 3, normally
+does) reach `status: 'completed'` while the match itself continues, and
+that case is already `#draft-match-next-game-button`'s own domain
+(confirmed by the maintainer -- offering Rematch there too would just be
+confusing, since there's already a next game to go play, not a new one
+to create).
+
+**Scope (confirmed by the maintainer):** deliberately limited to what's
+already exposed above -- format/deck_type/`wins_needed`/opponents/team
+pairing/`default_selections_mode`/`duel_deck_rules`/a bot's own
+`custom_duel` decklist/a HUMAN creator's own `custom` decklist. Draft
+pool source choices (`quick_draft_pool_source` et al.), the rotisserie
+cutoff count, tiered-draft tier config, and a HUMAN's own `custom_duel`
+decklist text are all still left for the creator to fill in fresh, same
+as a brand new game -- `draft_matches.pool_source` is written at
+creation but never read back anywhere, and `custom_duel`'s own
+per-player `game_players.custom_deck_card_ids` (unlike `'custom'`'s
+table-wide `games.custom_deck_card_ids`) belongs to whichever player
+actually submitted it, not the creator, so reconstructing a HUMAN
+opponent's own `custom_duel` decklist for the CREATOR's own Rematch
+prefill would mean exposing one player's decklist to another --
+different from a bot's own (nobody's decklist to protect) or a
+`'custom'` creator's own (already theirs). A later issue can widen this
+further if that's ever worth the added surface; every prefilled field
+stays freely editable before submitting regardless, so this is a
+starting point, not a silent one-click recreate.
 
 ### Duel: separate per-player decks
 
