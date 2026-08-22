@@ -117,6 +117,17 @@ final class GameServiceIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
+    private function insertBotUser(string $username): int
+    {
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO users (username, email, password_hash, email_verified_at, is_bot)
+             VALUES (:username, :email, 'hash', NOW(), 1)"
+        );
+        $stmt->execute(['username' => $username, 'email' => "{$username}@example.com"]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
     private function fetchUsername(int $userId): string
     {
         $stmt = $this->pdo->prepare('SELECT username FROM users WHERE id = :id');
@@ -474,6 +485,77 @@ final class GameServiceIntegrationTest extends TestCase
 
         sort($cardIds);
         self::assertSame(range(1, 15), $cardIds);
+    }
+
+    /**
+     * Issue #398's own Rematch prompt needs to know who created a game to
+     * offer the button only to them -- getState()'s own 'game.
+     * created_by_user_id' field, plain public information (unlike
+     * bot_decklist_cards just below), visible to every viewer the same
+     * way format/deck_type already are.
+     */
+    public function testGetStateExposesCreatedByUserIdToEveryViewer(): void
+    {
+        $creator = $this->insertUser('rematch-creator1');
+        $opponent = $this->insertUser('rematch-opponent1');
+        $gameId = $this->games->createGame($creator, [$creator, $opponent]);
+
+        self::assertSame($creator, $this->games->getState($gameId, $creator)['game']['created_by_user_id']);
+        self::assertSame($creator, $this->games->getState($gameId, $opponent)['game']['created_by_user_id']);
+    }
+
+    /**
+     * Issue #398's own Rematch prompt reconstructs a bot's previous
+     * custom_duel decklist from game_players.custom_deck_card_ids (its
+     * own raw TEXT is never persisted -- see submitCustomDuelDeck()) via
+     * CardCatalog::serialize(), but only for the game's own creator --
+     * checked here from the bot's own user id as a stand-in "non-creator
+     * viewer" (a bot never actually calls getState() itself in practice,
+     * but the server-side gating is exactly the same regardless of who's
+     * asking).
+     */
+    public function testGetStateExposesABotsReconstructedDecklistOnlyToTheGamesCreator(): void
+    {
+        $creator = $this->insertUser('rematch-creator2');
+        $bot = $this->insertBotUser('rematch-bot2');
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $bot],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+            botDecklistText: "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith",
+        );
+        $botPlayerId = $this->games->gamePlayerIdFor($gameId, $bot);
+
+        $fromCreator = self::findByGamePlayerId($this->games->getState($gameId, $creator)['players'], $botPlayerId);
+        self::assertNotNull($fromCreator['bot_decklist_cards']);
+        self::assertCount(7, $fromCreator['bot_decklist_cards']);
+        self::assertContains('Charity', array_column($fromCreator['bot_decklist_cards'], 'name'));
+
+        $fromNonCreator = self::findByGamePlayerId($this->games->getState($gameId, $bot)['players'], $botPlayerId);
+        self::assertNull($fromNonCreator['bot_decklist_cards']);
+    }
+
+    /** Same visibility rule, checked against the human opponent's own custom_duel decklist instead -- bot_decklist_cards is deliberately bot-only (a human's own decklist has nothing to reconstruct; game_players.custom_deck_card_ids already IS their submitted deck, no text round-trip needed). */
+    public function testGetStateNeverExposesBotDecklistCardsForAHumanPlayer(): void
+    {
+        $creator = $this->insertUser('rematch-creator3');
+        $opponent = $this->insertUser('rematch-opponent3');
+
+        $gameId = $this->games->createGame(
+            $creator,
+            [$creator, $opponent],
+            format: 'duel',
+            deckType: 'custom_duel',
+            duelDeckRules: ['preset' => 'user_defined', 'min_cards' => 7],
+        );
+        $this->games->submitCustomDuelDeck($gameId, $this->games->gamePlayerIdFor($gameId, $creator), "1 Charity\n1 Chivalry\n1 Complacency\n1 Benevolence\n1 Conviction\n1 Encouragement\n1 Faith");
+        $creatorPlayerId = $this->games->gamePlayerIdFor($gameId, $creator);
+
+        $fromCreator = self::findByGamePlayerId($this->games->getState($gameId, $creator)['players'], $creatorPlayerId);
+        self::assertNull($fromCreator['bot_decklist_cards']);
     }
 
     public function testCreateGameRejectsACustomDecklistForADuelGame(): void

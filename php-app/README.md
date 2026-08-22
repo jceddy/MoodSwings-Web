@@ -77,7 +77,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress` game, plus a `completed`/`abandoned` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed`/`abandoned` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above still-current-`completed`/`abandoned` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`/`is_bot` -- issue #140, see "Practice bots" below), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), `default_selections_mode` (bool, issue #274 -- see "Default selections mode" below), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username", "players"}`, `winner_username` only set once the match's own status is `completed`, `players` -- issue #189 -- every seated player's own `user_id`/`username`/`wins`/`is_you`, the field a 3-4 player Quick Draft match's own scoreline should actually be read from since `your_wins`/`opponent_wins` only ever reflect the first non-viewer seat) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/past`   | —                                                                 | Requires auth. The complement of `GET /games` above: every `completed`/`abandoned` game NOT still tied to an undecided draft match -- i.e. exactly the games `GET /games` excludes. Same row shape as `GET /games` (`GameService::gameSummaryFor()` hydrates both), sorted most-recently-completed first rather than by actionability, since nothing here is actionable. See "Past games" below. |
-| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`is_bot`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat; `is_bot` is issue #140's own practice-bot flag, see "Practice bots" below), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `game.default_selections_mode` (bool, issue #274) is fixed for the game's whole lifetime; when `true`, `choice_fields` (and `round.pending_decision.field`, once one is open) come back with a `default` key pre-filled on some fields -- see "Default selections mode" below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `chat_messages` (issue #109) is the game's full in-game chat history so far, oldest first -- omitted entirely for a still-`waiting` game, the same early return that keeps `round`/`in_play`/etc. absent then too (chat only ever gets appended to via `POST /games/chat` once `in_progress`, see "In-game chat" below). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. |
+| GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`is_bot`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat; `is_bot` is issue #140's own practice-bot flag, see "Practice bots" below), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `game.default_selections_mode` (bool, issue #274) is fixed for the game's whole lifetime; when `true`, `choice_fields` (and `round.pending_decision.field`, once one is open) come back with a `default` key pre-filled on some fields -- see "Default selections mode" below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `chat_messages` (issue #109) is the game's full in-game chat history so far, oldest first -- omitted entirely for a still-`waiting` game, the same early return that keeps `round`/`in_play`/etc. absent then too (chat only ever gets appended to via `POST /games/chat` once `in_progress`, see "In-game chat" below). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. Also includes `game.created_by_user_id` and, only for a bot's own seat in a `custom_duel` game and only in the game's own creator's view, `players[].bot_decklist_cards` (issue #398's own Rematch prompt) -- see "Rematch" below. |
 | GET    | `/games/log`    | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- same `canSpectateGame()` check `GET /games/spectate/state`/`GET /games/deck` use). The entire `game_events` log for this game, oldest first, unbounded (issue #98) -- unlike `/games/state`'s own `recent_events`, which is newest-first and capped at 15. Each entry is `{"id", "created_at", "round_number", "event_type", "acting_game_player_id", "acting_username", "card_id", "card_name", "details", "description"}` -- `description` is the same `describeEvent()`-rendered text `recent_events` itself uses; the rest is raw enough for a genuine offline export (see "Game log" below). No per-viewer filtering -- every event is already visible to every seated player (and now every spectator) regardless of who triggered it. See `GameService::fullEventLog()`. |
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
@@ -6277,6 +6277,83 @@ other per-card exception in this codebase (Fury's veto, Harmony's
 empty-discard-pile deprioritization, Anger's own targeting policy) is
 hardcoded to that specific card rather than built out for a need that
 doesn't exist yet.
+
+### Rematch (issue #398)
+
+A "Rematch" button (`web-static/js/game.js`'s own `renderRematchButton()`
+-- see "Rematch" in `web-static/README.md`), offered only to a completed
+game's own creator, opens the New Game dialog pre-filled from that
+game's own settings rather than making them rebuild it from scratch or
+reimplementing a second, parallel creation flow. Two small backend
+additions to `buildGameState()`'s response are the only server-side work
+this needed -- every other value the dialog pre-fills (`format`,
+`deck_type`, `default_selections_mode`, `duel_deck_rules`, each seated
+player's own `user_id`/`is_bot`/`team_id`) was already exposed there for
+an unrelated reason, and the frontend derives everything else (whether to
+show the button at all, who the opponents/partner were) from those
+existing fields:
+
+- `game.created_by_user_id` -- `games.created_by_user_id` (written by
+  `createGame()`, migration `0004`) was never actually exposed to the
+  frontend before now; nothing had needed to distinguish a game's own
+  creator from any other seated player until this. Plain public
+  information, visible to every viewer the same way `format`/`deck_type`
+  already are -- there's nothing sensitive about who created a game.
+- `players[].bot_decklist_cards` -- only for a practice bot's own seat in
+  a `custom_duel` game, and only in the CREATOR's own view of this state
+  (`$viewerUserId === $game['created_by_user_id']`). A bot's raw
+  `custom_duel` decklist TEXT is never persisted (only its parsed
+  `game_players.custom_deck_card_ids`, exactly like a human's own --
+  see `submitCustomDuelDeck()`), so reconstructing it for the Rematch
+  dialog's own bot-decklist textarea means hydrating those ids back
+  through `CardCatalog::serialize()` into the same
+  `{card_id, name, set_code, collector_number}` shape `GET /decklists/view`
+  already returns for a saved decklist -- `web-static/js/game.js`'s own
+  `buildDecklistCardsText()` (the Decks dialog's Edit/Download flows'
+  own helper) already knows how to format that back into text, so the
+  frontend does the actual text formatting, not a new PHP-side
+  duplicate of it. Creator-only rather than exposed to every viewer of a
+  completed game (the human opponent, a spectator) -- this exists purely
+  to serve the creator's own Rematch prefill, not as a general "see any
+  bot's decklist" feature, so it stays scoped to the one viewer who
+  actually has a use for it.
+
+**Whether to even show the button** is computed entirely client-side
+(`canRematch(state)` in `web-static/js/game.js`) from fields already in
+`state` -- there's no dedicated backend "can this game be rematched"
+flag, since the action itself (`POST /games`, ordinary `createGame()`)
+is independently validated server-side regardless of what the button's
+own visibility logic decided, the same way `#draft-match-next-game-button`'s
+own visibility is just a convenience, not a security boundary. Gated on:
+`status === 'completed'`, no seated player `resigned` (a resignation
+always leaves `status: 'completed'` too -- see "Game timestamps" below
+for how resignation/expiry are actually distinguished, since there's no
+separate `'abandoned'` status for either), `winner_usernames` non-empty
+(an expired, 7+-day-stale game has neither a winner nor a resignation --
+see `expireStaleActiveGames()`), and, for a draft-based `deck_type`, the
+whole best-of-three MATCH must have completed too (`state.quick_draft`/
+`state.winston_draft`/etc.'s own `status` field, not just this one
+game's) -- an individual game can (and, for game 1/2 of 3, normally
+does) reach `status: 'completed'` while the match itself continues, and
+that case is already `#draft-match-next-game-button`'s own domain
+(confirmed by the maintainer -- offering Rematch there too would just be
+confusing, since there's already a next game to go play, not a new one
+to create).
+
+**Scope (confirmed by the maintainer):** deliberately limited to what's
+already exposed above -- format/deck_type/`wins_needed`/opponents/team
+pairing/`default_selections_mode`/`duel_deck_rules`/a bot's own
+`custom_duel` decklist. Draft pool source choices (`quick_draft_pool_source`
+et al.), the rotisserie cutoff count, tiered-draft tier config, and a
+HUMAN's own `custom`/`custom_duel` decklist text are all left for the
+creator to fill in fresh, same as a brand new game -- `draft_matches.pool_source`
+is written at creation but never read back anywhere, and a human's own
+decklist text (unlike a bot's) is never persisted at all, so widening
+this further would need real new backend exposure rather than just
+reusing what's already there. A later issue can widen it if that's ever
+worth the added surface; every prefilled field stays freely editable
+before submitting regardless, so this is a starting point, not a
+silent one-click recreate.
 
 ### Duel: separate per-player decks
 

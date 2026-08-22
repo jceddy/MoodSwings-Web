@@ -10889,8 +10889,28 @@ final class GameService
             }
         }
 
+        // Issue #398's own Rematch prompt: a bot's raw custom_duel
+        // decklist TEXT is never persisted (only its parsed
+        // custom_deck_card_ids, same as a human's), so pre-filling the
+        // Rematch dialog's own bot-decklist textarea needs it
+        // reconstructed from those ids -- CardCatalog::serialize() hydrates
+        // them into the exact {card_id, name, set_code, collector_number}
+        // shape web-static/js/game.js's own buildDecklistCardsText()
+        // already knows how to format back into text, the same helper the
+        // Decks dialog's Edit/Download flows use for a saved decklist.
+        // Creator-only (not exposed to the human opponent, or a spectator,
+        // viewing the same completed game) -- this exists purely to serve
+        // the creator's own Rematch prefill, not as a general-purpose
+        // "see any bot's decklist" feature.
+        $isCreator = $viewerUserId !== null && $viewerUserId === (int) $game['created_by_user_id'];
+
         $players = [];
         foreach ($playerRows as $row) {
+            $botDecklistCards = null;
+            if ($isCreator && $game['deck_type'] === 'custom_duel' && $row['is_bot'] && $row['custom_deck_card_ids'] !== null) {
+                $botDecklistCards = CardCatalog::serialize(array_map(intval(...), json_decode((string) $row['custom_deck_card_ids'], true)));
+            }
+
             $players[] = [
                 'game_player_id' => (int) $row['id'],
                 'user_id' => (int) $row['user_id'],
@@ -10928,6 +10948,10 @@ final class GameService
                 // decklist contents before the game starts.
                 'custom_deck_name' => $row['custom_deck_name'],
                 'deck_submitted' => $row['custom_deck_card_ids'] !== null,
+                // See $botDecklistCards' own comment just above -- null for
+                // every seat except a bot's own in a custom_duel game, and
+                // even then only in the creator's own view of this state.
+                'bot_decklist_cards' => $botDecklistCards,
                 // Whether this seat has resigned -- see resignGame(). For
                 // a 2-player/team-format game a resignation always
                 // completes the whole game immediately, so this is really
@@ -10965,6 +10989,12 @@ final class GameService
         $response = [
             'game' => [
                 'id' => $gameId,
+                // Issue #398's own "Rematch" prompt (offered only to the
+                // creator once the game completes) is the only reason this
+                // is exposed at all -- createGame() itself has never
+                // needed the frontend's help distinguishing the creator,
+                // and no other feature has asked for this before now.
+                'created_by_user_id' => (int) $game['created_by_user_id'],
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],
