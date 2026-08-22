@@ -10904,6 +10904,18 @@ final class GameService
         // "see any bot's decklist" feature.
         $isCreator = $viewerUserId !== null && $viewerUserId === (int) $game['created_by_user_id'];
 
+        // The same Rematch prefill idea, for a HUMAN creator's own
+        // deck_type 'custom' decklist (issue #398 follow-up) -- unlike
+        // 'custom_duel', 'custom' is a single table-wide shared deck
+        // (games.custom_deck_card_ids, see BOT_SUPPORTED_DECK_TYPES's own
+        // docblock), so this lives on 'game' rather than a per-player
+        // 'players[]' entry the way bot_decklist_cards does. Creator-only,
+        // for the same reason -- the raw decklist TEXT itself is never
+        // persisted, only the parsed ids, so it's reconstructed here too.
+        $customDecklistCards = $isCreator && $game['deck_type'] === 'custom' && $game['custom_deck_card_ids'] !== null
+            ? CardCatalog::serialize(array_map(intval(...), json_decode((string) $game['custom_deck_card_ids'], true)))
+            : null;
+
         $players = [];
         foreach ($playerRows as $row) {
             $botDecklistCards = null;
@@ -10998,6 +11010,10 @@ final class GameService
                 'format' => $game['format'],
                 'deck_type' => $game['deck_type'],
                 'custom_deck_name' => $game['custom_deck_name'],
+                // See $customDecklistCards' own comment above -- null for
+                // every deck_type other than 'custom', and even then only
+                // in the creator's own view.
+                'custom_decklist_cards' => $customDecklistCards,
                 'duel_deck_rules' => $game['deck_type'] === 'custom_duel' ? [
                     'preset' => $game['custom_duel_rules_preset'],
                     'min_cards' => (int) $game['custom_duel_min_cards'],

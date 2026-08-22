@@ -6354,6 +6354,18 @@ existing fields:
   to serve the creator's own Rematch prefill, not as a general "see any
   bot's decklist" feature, so it stays scoped to the one viewer who
   actually has a use for it.
+- `game.custom_decklist_cards` -- the same reconstruction idea as
+  `bot_decklist_cards` above, but for a HUMAN creator's own `deck_type`
+  `'custom'` decklist (a follow-up widening the "Scope" section below
+  used to rule out). Unlike `custom_duel`, `'custom'` is a single
+  table-wide shared deck (`games.custom_deck_card_ids`, built once from
+  the creator's own `decklistText`/`savedDecklistId` before any seat is
+  dealt from it -- see `BOT_SUPPORTED_DECK_TYPES`'s own docblock), not a
+  per-player `game_players` column, so it lives on `game` rather than a
+  `players[]` entry. Same creator-only gating, same
+  `CardCatalog::serialize()` reconstruction, `null` for every other
+  `deck_type` (only `'custom'` ever writes `games.custom_deck_card_ids`
+  at all) or for a non-creator viewer.
 
 **Whether to even show the button** is computed entirely client-side
 (`canRematch(state)` in `web-static/js/game.js`) from fields already in
@@ -6380,17 +6392,22 @@ to create).
 **Scope (confirmed by the maintainer):** deliberately limited to what's
 already exposed above -- format/deck_type/`wins_needed`/opponents/team
 pairing/`default_selections_mode`/`duel_deck_rules`/a bot's own
-`custom_duel` decklist. Draft pool source choices (`quick_draft_pool_source`
-et al.), the rotisserie cutoff count, tiered-draft tier config, and a
-HUMAN's own `custom`/`custom_duel` decklist text are all left for the
-creator to fill in fresh, same as a brand new game -- `draft_matches.pool_source`
-is written at creation but never read back anywhere, and a human's own
-decklist text (unlike a bot's) is never persisted at all, so widening
-this further would need real new backend exposure rather than just
-reusing what's already there. A later issue can widen it if that's ever
-worth the added surface; every prefilled field stays freely editable
-before submitting regardless, so this is a starting point, not a
-silent one-click recreate.
+`custom_duel` decklist/a HUMAN creator's own `custom` decklist. Draft
+pool source choices (`quick_draft_pool_source` et al.), the rotisserie
+cutoff count, tiered-draft tier config, and a HUMAN's own `custom_duel`
+decklist text are all still left for the creator to fill in fresh, same
+as a brand new game -- `draft_matches.pool_source` is written at
+creation but never read back anywhere, and `custom_duel`'s own
+per-player `game_players.custom_deck_card_ids` (unlike `'custom'`'s
+table-wide `games.custom_deck_card_ids`) belongs to whichever player
+actually submitted it, not the creator, so reconstructing a HUMAN
+opponent's own `custom_duel` decklist for the CREATOR's own Rematch
+prefill would mean exposing one player's decklist to another --
+different from a bot's own (nobody's decklist to protect) or a
+`'custom'` creator's own (already theirs). A later issue can widen this
+further if that's ever worth the added surface; every prefilled field
+stays freely editable before submitting regardless, so this is a
+starting point, not a silent one-click recreate.
 
 ### Duel: separate per-player decks
 
