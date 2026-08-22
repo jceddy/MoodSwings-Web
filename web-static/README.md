@@ -533,7 +533,16 @@ too, proportional to the smaller card width.
       client-side effect of its own at all; it purely drives
       `GameService::advanceAutomatedTurns()` server-side (see "Auto-pass
       on empty hand" in `../php-app/README.md`), so persisting the
-      value is the checkbox's whole job.
+      value is the checkbox's whole job. Right below THAT,
+      `#settings-auto-apply-scoring-bonuses-checkbox` ("Auto-apply
+      Enthusiasm/Passion's scoring bonus", issue #397) -- the identical
+      "no client-side effect, just persist it" wiring once more
+      (`user.auto_apply_scoring_bonuses`/`POST
+      /user/auto-apply-scoring-bonuses-preference`/
+      `saveAutoApplyScoringBonusesPreference()`), also CHECKED by
+      default, matching `users.auto_apply_scoring_bonuses`'s own
+      `DEFAULT 1`. See "Auto-apply scoring bonuses" in
+      `../php-app/README.md`.
     - **Notifications** (issue #108, unchanged from the old standalone
       Notifications dialog, just re-homed one level deeper):
       `service-worker.js` (a site-root file, not under `js/`, registered

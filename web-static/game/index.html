@@ -921,6 +921,15 @@
                  this is a pure convenience with no real behavior change to
                  opt into (see GameService::advanceAutomatedTurns()). -->
             <label><input type="checkbox" id="settings-auto-pass-checkbox" checked> Auto-pass when your hand is empty on your turn</label>
+            <!-- Auto-apply scoring bonuses (issue #397): same starts-
+                 CHECKED reasoning as auto-pass above, matching
+                 users.auto_apply_scoring_bonuses's own DEFAULT 1 --
+                 Enthusiasm's/Passion's own per-round scoring decision
+                 always has an obviously-correct answer (see
+                 GameService::autoScoringDecisionAnswer()), except the one
+                 round Sneakiness swaps your score away, which this still
+                 correctly falls back to asking about manually. -->
+            <label><input type="checkbox" id="settings-auto-apply-scoring-bonuses-checkbox" checked> Auto-apply Enthusiasm/Passion's scoring bonus</label>
         </section>
 
         <hr>

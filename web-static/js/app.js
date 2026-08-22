@@ -274,6 +274,20 @@ function saveAutoPassOnEmptyHandPreference(autoPassOnEmptyHand) {
     });
 }
 
+// Auto-apply scoring bonuses (issue #397) as a personal preference
+// (Settings dialog's "Game defaults" section) -- write-only, same
+// reasoning as saveAutoPassOnEmptyHandPreference() above: the current
+// value already rides on getCurrentUser()'s own
+// user.auto_apply_scoring_bonuses field. Drives GameService::
+// advanceAutomatedTurns()'s own server-side behavior entirely -- there's
+// no client-side effect to apply beyond persisting it.
+function saveAutoApplyScoringBonusesPreference(autoApplyScoringBonuses) {
+    return apiRequest('/user/auto-apply-scoring-bonuses-preference', {
+        method: 'POST',
+        body: JSON.stringify({ auto_apply_scoring_bonuses: autoApplyScoringBonuses }),
+    });
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.

@@ -53,7 +53,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
-| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. |
+| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. |
 | GET    | `/friends`      | —                                                                 | Requires auth. Lists accepted friends (`friend_id`, `friend_username`, `created_at`, `presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below). |
 | GET    | `/friends/invites` | —                                                              | Requires auth. Returns `{"incoming": [...], "outgoing": [...]}`, each entry has `other_user_id`/`other_username`/`created_at`. |
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
@@ -100,6 +100,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/user/presence-preference` | `{"share_presence": bool}`                             | Requires auth. Opts you in/out of sharing your own online/offline status with friends and fellow game players (issue #110) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `share_presence` is missing. See "Online/presence indicator" below. |
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
+| POST   | `/user/auto-apply-scoring-bonuses-preference` | `{"auto_apply_scoring_bonuses": bool}`               | Requires auth. Opts you in/out of automatically applying Enthusiasm's/Passion's own obviously-correct per-round scoring bonus (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_apply_scoring_bonuses` is missing. See "Auto-apply scoring bonuses" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
@@ -6181,6 +6182,101 @@ own `{"resigned": true}` already rides alongside it.
 "{name} passed" -- one shared phrasing for both a bot's own pass and an
 opted-in human's, since both mean the exact same thing to a reader of
 this log ("nobody actually clicked Pass here").
+
+### Auto-apply scoring bonuses (issue #397)
+
+A personal preference (`users.auto_apply_scoring_bonuses`, migration
+`0165`, defaults to `1`/on -- the same "pure convenience, no real
+behavior change to opt into" reasoning "Auto-pass on empty hand" above
+already used). Surfaced in the Settings dialog's own "Game defaults"
+section (`web-static/game/index.html`'s `#settings-dialog`, alongside
+the other two checkboxes above) and written via `POST
+/user/auto-apply-scoring-bonuses-preference` (see the API table above),
+the same write-only, no-separate-GET pattern every preference on this
+page already established.
+
+Enthusiasm ("you may score one of your moods an extra time") and
+Passion ("you may score one of your opponents' moods as though it were
+yours") both pause every round either card is in play, asking their own
+owner to answer (`enthusiasm_extra_score`/`passion_score_opponent_mood`,
+`SCORING_DECISION_TYPES`) -- but each has an answer that's always at
+least as good as any other choice or declining: Enthusiasm's own bonus
+can only ever raise the owner's score (`resolveScoringDecisionBonus()`
+floors a declined bonus at 0, never negative), and Passion's own bonus
+never costs the target anything (`CardChoiceSchema`'s own field is
+scope `'other'` with no `excludes_teammate` -- a teammate's mood is just
+as legal and just as free of downside as a true opponent's, since "they
+also still score it" regardless of who else does too), so taking the
+single HIGHEST-value other mood is always at least as good as any other
+target or declining. Requiring a manual response every single round
+either card stays in play is pure friction for a decision with an
+obviously-correct answer -- driven server-side, the same
+`GameService::advanceAutomatedTurns()` loop "Auto-pass on empty hand"
+above already extended, rather than a client-side auto-click (which
+would need the tab open and JS running, and wouldn't help a player who
+stepped away).
+
+- `autoApplyScoringBonusGamePlayerIds(int $gameId): int[]` -- every
+  `game_players.id` whose owning user opted in, the exact mirror of
+  `autoPassEmptyHandGamePlayerIds()` just above it.
+- The loop's own pending-batch branch tries three things in order now,
+  where it used to try two: is the decision's own target a bot (drive it
+  via `BotPlayerService::chooseDecisionAnswer()`, unchanged); if not, is
+  it a `SCORING_DECISION_TYPES` decision targeting an opted-in real
+  player AND `sneakinessPlayedThisRound()` says no (below) -- if so,
+  answer it via `autoScoringDecisionAnswer()` and keep looping, exactly
+  like a bot's own answered decision does; otherwise, same as
+  today, `break` and wait on a real player.
+- `autoScoringDecisionAnswer(BoardState $state, string $decisionType,
+  int $ownerGamePlayerId): array` -- `['take_bonus' => true]`
+  unconditionally for Enthusiasm; for Passion, `['target_mood_id' =>
+  $bestMoodId]` for whichever OTHER player's own in-play mood currently
+  has the highest value (ties broken by whichever is found first), or
+  `[]` (declined, same as a real player choosing not to answer) when
+  nobody else has any mood in play to target at all. Same
+  `respondToDecision()`-ready shape `BotPlayerService::
+  chooseDecisionAnswer()` already returns.
+
+**The Sneakiness exception (confirmed by the maintainer).** Sneakiness
+("choose an opponent... after scoring, swap your score with that player
+before determining who wins the round") is an after-playing, one-time
+effect scoped to the round it was played in, not a while-in-play
+condition -- once it's been played THIS round, maximizing your own score
+stops being obviously correct, since the final score might get swapped
+away to whoever it targeted. `sneakinessPlayedThisRound(BoardState
+$state): bool` checks every in-play mood for `effectKey === 'sneakiness'`
+whose own `'playedInRound'` effectState tag (stamped onto every mood
+that enters play, regardless of card -- see `BoardState::
+playedInRoundTag()`/Doubt's own `bannedColorsThisRound()`, the
+established precedent this follows) matches `currentRoundNumber()` --
+deliberately "played THIS round," not "currently in play," so a
+Sneakiness played in an EARLIER round (its own swap already resolved,
+no effect on later rounds' own scoring) doesn't keep vetoing auto-apply
+forever just because the physical card stays on the table afterward
+like any other mood. Reads the tag directly rather than Sneakiness's own
+`'swapScoreWithPlayerId'` effectState (which `applyScoreSwaps()` clears
+the instant it's actually applied at scoring time, and would happen to
+give the same answer here today) -- that would tie this unrelated check
+to that clearing's own timing instead of expressing the real "played
+this round" condition on its own terms. Deliberately whole-game, not
+per-player: ANY seated player's own Sneakiness played this round falls
+EVERY opted-in player back to a manual answer that round, even one
+Sneakiness's own swap can't possibly touch in a 3-4 player game -- issue
+#397's own "Scope" section judged reasoning about exactly who a given
+Sneakiness can and can't affect not worth the complexity or risk of
+getting it wrong, the same call Anger's own bot-targeting policy makes
+differently for a different reason (see "Anger" in "Practice bots"
+above) -- here it's a blanket safety fallback, not a strategic choice.
+
+Scoped to `SCORING_DECISION_TYPES` only among pending-decision batches --
+issue #397 is deliberately narrow to Enthusiasm/Passion specifically,
+not a general "auto-answer any obviously-correct decision" framework;
+Sneakiness itself is hardcoded as the one exception rather than a
+generic "round-scoped score-altering effect" list, matching how every
+other per-card exception in this codebase (Fury's veto, Harmony's
+empty-discard-pile deprioritization, Anger's own targeting policy) is
+hardcoded to that specific card rather than built out for a need that
+doesn't exist yet.
 
 ### Duel: separate per-player decks
 

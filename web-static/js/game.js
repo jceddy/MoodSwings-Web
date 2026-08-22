@@ -237,6 +237,18 @@
             saveAutoPassOnEmptyHandPreference(autoPassCheckbox.checked);
         });
 
+        // "Auto-apply scoring bonuses" (issue #397) -- same wiring pattern
+        // as the two checkboxes above, another purely server-side
+        // behavior (GameService::advanceAutomatedTurns()'s own
+        // Enthusiasm/Passion auto-apply). Starts checked (on) by default,
+        // matching users.auto_apply_scoring_bonuses's own DEFAULT 1.
+        const autoApplyScoringBonusesCheckbox = document.getElementById('settings-auto-apply-scoring-bonuses-checkbox');
+        autoApplyScoringBonusesCheckbox.checked = user.auto_apply_scoring_bonuses;
+        autoApplyScoringBonusesCheckbox.addEventListener('change', () => {
+            user.auto_apply_scoring_bonuses = autoApplyScoringBonusesCheckbox.checked;
+            saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
+        });
+
         // The dialog itself (and its "not supported" message) must still be
         // reachable even when push isn't supported at all -- otherwise
         // clicking "Settings" would silently do nothing instead of
