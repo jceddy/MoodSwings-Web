@@ -1304,19 +1304,31 @@ final class BoardState
 
     /**
      * A mood's color, honoring Imagination ("While in play, all moods are
-     * the chosen color and no other colors") if one is in play. Imagination
+     * the chosen color and no other colors") if one is in play AND
+     * $cardId is itself currently in play -- confirmed by the maintainer:
+     * Imagination's own "all moods" only ever means moods actually on the
+     * board, not a card sitting in anyone's hand, discard pile, or deck,
+     * so a card there keeps reading as its own printed color regardless
+     * of what color Imagination chose. Without this in-play check, a
+     * color-restricted discard-sourced grant like Grace's ("shares a
+     * color with one of your moods") would trivially pass for literally
+     * any discard-pile card while Imagination is in play, since both
+     * sides of the comparison would resolve to the same Imagination-
+     * chosen color regardless of either card's own real color. Imagination
      * itself never changes a card's *printed* color, only what other
      * color-counting effects perceive -- see the catalog row's own color
      * for the printed value.
      */
     public function colorOf(int $cardId): string
     {
-        foreach ($this->moodsInPlay as $mood) {
-            $row = $this->catalogRow($this->effectiveCardId($mood->cardId));
-            if ($row['effectKey'] === 'imagination') {
-                $color = $mood->effectState['color'] ?? null;
-                if ($color !== null) {
-                    return $color;
+        if ($this->isInPlay($cardId)) {
+            foreach ($this->moodsInPlay as $mood) {
+                $row = $this->catalogRow($this->effectiveCardId($mood->cardId));
+                if ($row['effectKey'] === 'imagination') {
+                    $color = $mood->effectState['color'] ?? null;
+                    if ($color !== null) {
+                        return $color;
+                    }
                 }
             }
         }

@@ -1,0 +1,17 @@
+-- Bug fix, confirmed by the maintainer: Imagination's own "While in
+-- play, all moods are the chosen color and no other colors" only ever
+-- applies to moods actually IN PLAY -- a card sitting in a hand, the
+-- discard pile, or a deck keeps reading as its own printed color
+-- regardless of what color Imagination chose, even while Imagination
+-- itself is in play. BoardState::colorOf() now checks isInPlay($cardId)
+-- before ever consulting Imagination's own chosen color. Previously it
+-- returned Imagination's chosen color for ANY card id it was asked
+-- about regardless of zone, which meant a color-restricted discard-
+-- sourced grant like Grace's ("shares a color with one of your moods")
+-- would trivially pass for literally any discard-pile card while
+-- Imagination was in play.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0168 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.25' WHERE id = 1;
