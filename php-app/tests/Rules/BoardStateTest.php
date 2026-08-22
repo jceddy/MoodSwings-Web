@@ -553,6 +553,41 @@ final class BoardStateTest extends TestCase
         self::assertSame('green', $state->colorOf(42));
     }
 
+    /**
+     * Confirmed by the maintainer: Imagination's own "While in play, all
+     * moods are the chosen color" only ever means moods actually ON THE
+     * BOARD -- a card sitting in a hand, the discard pile, or a deck keeps
+     * reading as its own printed color regardless of what color
+     * Imagination chose, even while Imagination itself is in play. Without
+     * checking isInPlay($cardId) first, colorOf() used to return
+     * Imagination's chosen color for ANY card id it was asked about,
+     * zone irrelevant -- which meant a color-restricted discard-sourced
+     * grant like Grace's ("shares a color with one of your moods") would
+     * trivially pass for literally any discard-pile card while Imagination
+     * was in play, since both sides of the comparison resolved to the
+     * same Imagination-chosen color regardless of either card's own real
+     * color.
+     */
+    public function testColorOfWithImaginationInPlayLeavesAHandCardAtItsPrintedColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [42, 56]]);
+        $state->moveHandToInPlay(1, 42); // Imagination
+        $state->setEffectState(42, 'color', 'green');
+        // Betrayal (56, printed black) stays in hand -- never moved into play.
+
+        self::assertSame('black', $state->colorOf(56));
+    }
+
+    /** Same idea, for a card sitting in the discard pile instead of a hand. */
+    public function testColorOfWithImaginationInPlayLeavesADiscardPileCardAtItsPrintedColor(): void
+    {
+        $state = $this->boardState(hands: [1 => [42]], discard: [56]); // Betrayal, printed black, already discarded
+        $state->moveHandToInPlay(1, 42); // Imagination
+        $state->setEffectState(42, 'color', 'green');
+
+        self::assertSame('black', $state->colorOf(56));
+    }
+
     public function testValueOverrideTakesPrecedenceOverBaseValue(): void
     {
         $state = $this->boardState(hands: [1 => [8]]);

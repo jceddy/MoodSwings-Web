@@ -4141,6 +4141,36 @@ final class MoodPlayServiceTest extends TestCase
         $this->plays->playMood($state, 1, 9, new PlayerChoices([]));
     }
 
+    /**
+     * A real bug report, confirmed by the maintainer: Imagination's own
+     * "While in play, all moods are the chosen color" only ever means
+     * moods actually ON THE BOARD -- BoardState::colorOf() used to return
+     * Imagination's chosen color for ANY card id asked about, zone
+     * irrelevant, which meant Grace's grant could be satisfied by a
+     * discard-pile card that shared NEITHER its own printed color NOR
+     * Grace's own printed color with anything -- both sides of the
+     * comparison just resolved to whatever Imagination chose. Here,
+     * Imagination (blue, picked red) recolors Grace (printed green,
+     * in play) to red, but Nostalgia (printed green) is sitting in the
+     * discard pile, never moved into play, so it keeps reading as green
+     * -- red and green don't match, so Grace's grant must NOT cover it.
+     */
+    public function testGraceIgnoresAnImaginationRecoloredDiscardPileCard(): void
+    {
+        $state = $this->boardState(hands: [1 => [121, 42]], discard: [128]); // Grace (green), Imagination (blue) in hand; Nostalgia (green) in discard
+        $state->moveHandToInPlay(1, 42); // Imagination, placed directly -- its own play isn't under test here
+        $state->setEffectState(42, 'color', 'red');
+        $state->startTurn(1);
+
+        $this->plays->playMood($state, 1, 121, new PlayerChoices([])); // Grace, granting its own same-turn discard-sourced play
+
+        self::assertSame('red', $state->colorOf(121), "Grace itself is in play, so Imagination's recoloring applies to it");
+        self::assertSame('green', $state->colorOf(128), 'Nostalgia is still in the discard pile, so it keeps its own printed color');
+
+        $this->expectException(IllegalPlayException::class);
+        $this->plays->playMood($state, 1, 128, new PlayerChoices([]));
+    }
+
     public function testStubbornnessHasNoImmediateEffect(): void
     {
         $state = $this->boardState(hands: [1 => [102]]);
