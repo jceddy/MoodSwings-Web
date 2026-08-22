@@ -1841,6 +1841,136 @@ final class BotGameplayIntegrationTest extends TestCase
     }
 
     /**
+     * End-to-end coverage of BotPlayerService::sneakinessTargetPlayerId()
+     * (see BotPlayerServiceTest for the policy itself in isolation) through
+     * the FULL advanceAutomatedTurns() -> playMood() ->
+     * SneakinessEffect::afterPlaying() request lifecycle. Issue report:
+     * bots used to play Sneakiness (base value 5) purely because it was the
+     * highest-value card in hand -- an "opening play" with no opponent
+     * meaningfully ahead to swap with. Here the human opponent's own
+     * in-play total is only 2 (Guilt), nowhere near
+     * SNEAKINESS_WIN_MARGIN points ahead of the bot's own 0, so Sneakiness
+     * should be vetoed and the bot should fall back to its next-highest
+     * card (Charity, value 1) instead.
+     */
+    public function testBotDoesNotPlaySneakinessWhenNoOpponentIsFarEnoughAhead(): void
+    {
+        $u1 = $this->insertUser('human20');
+        $botUserId = $this->insertBotUser('bot18');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 51, 'hand', $botPlayerId); // Sneakiness, value 5
+        $this->insertGameCard($gameId, 3, 'hand', $botPlayerId); // Charity, value 1 -- the fallback play
+        $this->insertGameCard($gameId, 14, 'in_play', $p1); // human's own Guilt, value 2 -- nowhere near 5+ ahead
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInHand($gameId, 51, $botUserId), 'Sneakiness should NOT have been played as an opening play');
+        self::assertTrue($this->cardIsInPlay($gameId, 3), 'the bot should have fallen back to its next-highest card instead');
+    }
+
+    /**
+     * The other half of sneakinessTargetPlayerId(): the human opponent's
+     * own in-play total (Discipline 6 + Guilt 2 = 8) is more than
+     * SNEAKINESS_WIN_MARGIN (5) points ahead of the bot's own 0, so
+     * trading scores at scoring time would win the bot the round --
+     * Sneakiness should be played, tagging that opponent for the swap.
+     */
+    public function testBotPlaysSneakinessAgainstAnOpponentFarEnoughAhead(): void
+    {
+        $u1 = $this->insertUser('human21');
+        $botUserId = $this->insertBotUser('bot19');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $sneakinessId = $this->insertGameCard($gameId, 51, 'hand', $botPlayerId); // Sneakiness, value 5
+        $this->insertGameCard($gameId, 9, 'in_play', $p1); // human's own Discipline, value 6
+        $this->insertGameCard($gameId, 14, 'in_play', $p1); // human's own Guilt, value 2 -- 8 total, 8 > 5 ahead
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 51), 'Sneakiness should have been played -- the human opponent is more than 5 points ahead');
+
+        $stmt = $this->pdo->prepare('SELECT effect_state FROM game_cards WHERE id = :id');
+        $stmt->execute(['id' => $sneakinessId]);
+        $effectState = json_decode((string) $stmt->fetchColumn(), true) ?? [];
+        self::assertSame($p1, $effectState['swapScoreWithPlayerId'] ?? null, 'Sneakiness should have tagged the human opponent for the score swap');
+    }
+
+    /**
+     * The exact-margin boundary: the human opponent's own in-play total
+     * (Dignity 3 + Courage 1 + Charity 1 = 5) is exactly
+     * SNEAKINESS_WIN_MARGIN points ahead of the bot's own 0 -- since
+     * Sneakiness itself contributes its own 5 points to the bot's
+     * pre-swap total the instant it's played, an exactly-5 margin is
+     * already closed by that contribution alone, so the swap must be
+     * strictly greater than 5 to be worth it. The bot should fall back to
+     * its next-highest card (Guilt, value 2) instead.
+     */
+    public function testBotDoesNotPlaySneakinessWhenExactlyAtTheWinMargin(): void
+    {
+        $u1 = $this->insertUser('human22');
+        $botUserId = $this->insertBotUser('bot20');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $this->insertGameCard($gameId, 51, 'hand', $botPlayerId); // Sneakiness, value 5
+        $this->insertGameCard($gameId, 14, 'hand', $botPlayerId); // Guilt, value 2 -- the fallback play
+        $this->insertGameCard($gameId, 8, 'in_play', $p1); // human's own Dignity, value 3
+        $this->insertGameCard($gameId, 7, 'in_play', $p1); // human's own Courage, value 1
+        $this->insertGameCard($gameId, 3, 'in_play', $p1); // human's own Charity, value 1 -- 5 total, exactly at the margin
+        $this->insertGameCard($gameId, 15, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInHand($gameId, 51, $botUserId), 'Sneakiness should NOT have been played -- an exactly-5 margin is already closed by Sneakiness\'s own value');
+        self::assertTrue($this->cardIsInPlay($gameId, 14), 'the bot should have fallen back to its next-highest card instead');
+    }
+
+    /**
+     * The Awe half of sneakinessTargetPlayerId(): no opponent is anywhere
+     * near ahead (the human has nothing in play), but this round's
+     * scoring is already skipped by an Awe played earlier -- since
+     * applyScoreSwaps() is only ever reached when scoring actually
+     * happens (see GameService::applyScoreSwaps()'s own callers), there is
+     * no risk in playing Sneakiness purely for its ongoing future value:
+     * once Awe leaves play, Sneakiness will be ready to swap in some later
+     * round instead.
+     */
+    public function testBotPlaysSneakinessWhenThisRoundsScoringIsAlreadySkippedByAwe(): void
+    {
+        $u1 = $this->insertUser('human23');
+        $botUserId = $this->insertBotUser('bot21');
+        $gameId = $this->insertGame('standard', 'structure', $u1);
+        $p1 = $this->insertGamePlayer($gameId, $u1, 0);
+        $botPlayerId = $this->insertGamePlayer($gameId, $botUserId, 1);
+
+        $aweId = $this->insertGameCard($gameId, 107, 'in_play', $botPlayerId); // Awe, already resolved this round
+        $this->insertGameCard($gameId, 51, 'hand', $botPlayerId); // Sneakiness, value 5
+        $this->insertGameCard($gameId, 8, 'hand', $p1); // human needs a non-empty hand too
+        $this->insertGameRound($gameId, 1, $botPlayerId, $botPlayerId, 1);
+
+        $this->pdo->prepare(
+            'UPDATE game_rounds SET skip_scoring = 1, skip_scoring_first_player_game_player_id = :first_player,
+                skip_scoring_source_card_id = :card, skip_scoring_owner_game_player_id = :owner
+             WHERE game_id = :game_id AND round_number = 1'
+        )->execute(['first_player' => $p1, 'card' => $aweId, 'owner' => $botPlayerId, 'game_id' => $gameId]);
+
+        self::assertNotNull($this->games->advanceAutomatedTurns($gameId));
+
+        self::assertTrue($this->cardIsInPlay($gameId, 51), "Sneakiness should have been played -- this round's scoring is already skipped by Awe, so there is no risk in playing it for future value");
+    }
+
+    /**
      * Issue #359 exposed a real deadlock, reported live: a best-of-three
      * draft match's own "who goes first" freeze (setPlayFirstNextMatchGame(),
      * game 2/3's own round 1 -- see that method's own docblock) had no
