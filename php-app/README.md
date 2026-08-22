@@ -5844,6 +5844,43 @@ since it already holds that dependency):
     in play, unlike Harmony/Grief/Angst/Nostalgia's one-shot ones, making
     that opponent likely to reach it before the bot's own recursion ever
     gets a turn, regardless of who has more of it on paper.
+
+  **Sneakiness** gets a targeting exception of its own, via
+  `sneakinessTargetPlayerId()`, used by both `isWorthPlaying()` (a veto)
+  and `buildChoicesForCard()` (`opponent_player_id` is required and not
+  in `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver would
+  otherwise always fill it with the first legal candidate, playing
+  Sneakiness as a strategy-free "opening play" purely because its own
+  base value, 5, happened to be the highest card in hand). "swap final
+  scores with a chosen opponent at scoring time" (`SneakinessEffect`) is
+  only actually worth playing when either it would win the bot the
+  round, or nothing is at stake yet:
+  - With scoring not already skipped this round (`BoardState::
+    skipScoringOwnerId() === null` -- see the Awe case below), the bot
+    computes every seated player's own live score via
+    `(new RoundScorer())->score($state)` and finds the HIGHEST-scoring
+    non-teammate opponent (mirroring the "an opponent means neither"
+    exclusion Intimidation/Paranoia/Pacifism/Anger above already apply).
+    That opponent is only targeted if their score exceeds the bot's own
+    by MORE than `SNEAKINESS_WIN_MARGIN` (5) -- strictly greater, not
+    equal-or-greater, because Sneakiness's own base value (5) is about to
+    add itself to the bot's pre-swap total the instant it's played; an
+    exactly-5 margin is already closed by that contribution alone, so
+    only a strictly-greater margin guarantees the opponent is still ahead
+    after accounting for it. No opponent clearing that bar means
+    Sneakiness isn't worth playing at all this turn.
+  - With scoring already skipped this round (an Awe played earlier the
+    same round, `BoardState::skipScoringOwnerId() !== null` --
+    `AweEffect`'s own "no scoring this round... after-scoring effects
+    don't happen" nullifies any swap tagged this round outright, the
+    same bug
+    `testSneakinessDoesNotSwapAFutureRoundsScoreWhenItsOwnRoundWasSkippedByAwe`
+    in `GameServiceIntegrationTest` exists to catch),
+    there's no score-margin risk to weigh at all -- Sneakiness is played
+    purely for its ongoing future value (it commonly stays in play well
+    past the round it's played in, ready to swap in some later round
+    instead), targeting an arbitrary non-teammate opponent (the first one
+    found) since who gets tagged this round is inconsequential.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
