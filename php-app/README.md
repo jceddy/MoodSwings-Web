@@ -951,7 +951,20 @@ it's worth. Two cards feed this today:
   `ImaginationEffect::afterPlaying()`, the same tag `BoardState::colorOf()`
   already consults for every color-counting effect); an in-play Imagination
   with no `color` tagged yet (a test-only state a real play can't produce)
-  is simply omitted.
+  is simply omitted. **"all moods" means every mood currently IN PLAY,
+  never a card sitting in a hand, the discard pile, or a deck** (confirmed
+  by the maintainer, a real bug report) -- `colorOf()` checks
+  `isInPlay($cardId)` before ever consulting Imagination's own chosen
+  color, falling straight through to the catalog's own printed color
+  otherwise. Without that check, `colorOf()` used to return Imagination's
+  chosen color for ANY card id it was asked about regardless of zone,
+  which meant a color-restricted discard-sourced grant like Grace's
+  ("shares a color with one of your moods," `BoardState::sharesColorWithOwnMoods()`)
+  would trivially pass for literally any discard-pile card while
+  Imagination was in play -- both sides of the comparison resolved to the
+  same Imagination-chosen color regardless of either card's own real
+  color, even though Imagination itself was in play and the discard card
+  obviously wasn't.
 - Doubt — "During the next round, players can't play moods that share a
   color with any of the revealed cards" — previously enforced entirely
   server-side (an illegal play targeting a banned color is just rejected,
