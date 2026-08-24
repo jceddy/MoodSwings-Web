@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with nineteen deliberate
+ * field-filling policy this builds on -- with twenty deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -93,7 +93,12 @@ use MoodSwings\Rules\RoundScorer;
  * own printed value is 0, self-targeting never costs anything against
  * that budget, so it's simply added on top rather than traded off
  * against the swing-maximizing targets; see angerTargetMoodIds()'s own
- * docblock for the full policy; and sneakinessTargetPlayerId()/
+ * docblock for the full policy; and sortPriorityValue() once more for
+ * Anger (confirmed by the maintainer), the same PHP_INT_MIN treatment
+ * as Pacifism above, whenever angerTargetMoodIds() itself comes back
+ * empty -- Anger's own printed value is 0, so with nothing to discard
+ * it's just a worthless opening play, not worth leading with the way a
+ * genuinely swing-maximizing target set would be; and sneakinessTargetPlayerId()/
  * isWorthPlaying() once more (confirmed by the maintainer), which vetoes
  * Sneakiness outright (the same treatment Fury/Avoidance get above)
  * unless either a non-teammate opponent's own current round score is
@@ -703,6 +708,9 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'pacifism' && $this->pacifismTargetMoodIds($state, $botGamePlayerId) === []) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'anger' && $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId) === []) {
             return PHP_INT_MIN;
         }
         if ($effectKey === 'harmony' && $state->discardPile() === []) {
@@ -2263,6 +2271,12 @@ final class BotPlayerService
      * CardChoiceSchema's own `includes_self` docblock for `anger`), so
      * including it never eats into the 5-point budget the opponent-owned
      * targets are competing for.
+     *
+     * Also reused directly by sortPriorityValue() (confirmed by the
+     * maintainer): an empty return here means Anger has nothing to
+     * discard at all, so it's deprioritized (the same PHP_INT_MIN
+     * treatment Pacifism gets) rather than led with purely as a
+     * worthless 0-point opening play.
      *
      * @return int[]
      */

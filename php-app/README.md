@@ -5905,6 +5905,16 @@ since it already holds that dependency):
     that opponent likely to reach it before the bot's own recursion ever
     gets a turn, regardless of who has more of it on paper.
 
+  Anger also gets a `sortPriorityValue()` veto (confirmed by the
+  maintainer, the same `PHP_INT_MIN` "deprioritized WHEN, never skipped
+  outright" treatment Pacifism gets above): whenever `angerTargetMoodIds()`
+  itself comes back completely empty -- no opponent mood worth
+  discarding AND `angerShouldAlsoTargetItself()` also says no -- Anger is
+  deprioritized behind everything else, rather than led with purely as a
+  worthless 0-point opening play with nothing to actually discard. The
+  instant a legal target exists (either kind), Anger reverts to plain
+  `baseValue()` ordering (0) like any other unboosted card.
+
   **Sneakiness** gets a targeting exception of its own, via
   `sneakinessTargetPlayerId()`, used by both `isWorthPlaying()` (a veto)
   and `buildChoicesForCard()` (`opponent_player_id` is required and not

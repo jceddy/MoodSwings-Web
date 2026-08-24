@@ -1360,6 +1360,55 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    // -- Anger (confirmed by the maintainer) ---------------------------------
+
+    /**
+     * With no opponent moods in play, angerTargetMoodIds() (id 80) comes
+     * back empty, so Anger is deprioritized behind Wrath (id 105) --
+     * both are worth 0 printed value, so without the veto a stable sort
+     * would keep Anger first (its own original position in
+     * $playableCardIds); the veto is what pushes it below Wrath instead.
+     */
+    public function testChooseActionDeprioritizesAngerWithNoTargets(): void
+    {
+        $state = $this->boardState(hands: [1 => [80, 105]]);
+
+        $action = $this->bot->chooseAction($state, [80, 105], 1);
+
+        self::assertSame(105, $action['card_id']);
+    }
+
+    /**
+     * Player 2 has Apathy (id 55, value 4) in play -- a legal Anger
+     * target, so angerTargetMoodIds() is no longer empty and the veto
+     * doesn't apply; Anger is played with that mood as its target.
+     */
+    public function testChooseActionPlaysAngerWithAnOpponentTarget(): void
+    {
+        $state = $this->boardState(hands: [1 => [80, 105], 2 => [55]]);
+        $state->moveHandToInPlay(2, 55);
+
+        $action = $this->bot->chooseAction($state, [80, 105], 1);
+
+        self::assertSame(80, $action['card_id']);
+        self::assertSame(['target_mood_ids' => [55]], $action['choices']);
+    }
+
+    /**
+     * With nothing else playable, Anger is still played -- deprioritized
+     * WHEN, never skipped outright, the same policy every other
+     * sortPriorityValue() veto in this class already follows.
+     */
+    public function testChooseActionStillPlaysAngerWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [80]]);
+
+        $action = $this->bot->chooseAction($state, [80], 1);
+
+        self::assertSame(80, $action['card_id']);
+        self::assertSame(['target_mood_ids' => []], $action['choices']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();
