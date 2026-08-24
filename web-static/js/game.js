@@ -3976,9 +3976,6 @@
     // needs -- so a future stat would add its own entry here rather than
     // this doubling as a general-purpose icon library.
     const PLAYER_STAT_ICON_PATHS = {
-        // A seat at the table: a backed bench on two legs.
-        seat: '<rect x="6" y="4" width="12" height="9" rx="1"/>'
-            + '<rect x="7" y="13" width="2" height="6"/><rect x="15" y="13" width="2" height="6"/>',
         // Score: a plain 5-point star.
         points: '<polygon points="12,2 14.4,8.8 21.5,8.9 15.8,13.2 17.9,20.1 '
             + '12,16 6.1,20.1 8.2,13.2 2.5,8.9 9.6,8.8"/>',
@@ -4349,7 +4346,7 @@
                 iconsEl.className = 'player-icons';
                 li.appendChild(iconsEl);
 
-                // Issue #143: seat/points/wins/hand-count each become an
+                // Issue #143: points/wins/hand-count each become an
                 // icon with a numeric badge overlay instead of a plain
                 // "N thing(s)" clause; went-first/on-turn become an
                 // icon-only flag (nothing to count) instead of an appended
@@ -4386,7 +4383,11 @@
                         isSameTeamAsViewer ? 'player-flag--teamMate' : 'player-flag--teamOpponent'
                     ));
                 }
-                iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
+                // The seat-number icon (issue #143's original "bench" icon)
+                // was removed here per issue #417 -- a player's seat is
+                // already unambiguous from this list's own top-to-bottom
+                // ordering, and the icon itself read as too similar to the
+                // hand-count icon just below it at a glance.
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
                 iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));

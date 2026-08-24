@@ -1,0 +1,18 @@
+-- Issue #417's own "Bigger and more distinct icons at the top" item,
+-- confirmed by the maintainer: the top-of-board players list
+-- (#players-list) own .player-stat/.player-flag icons were small and read
+-- as similar to each other at a glance. The same min-width: 1280px media
+-- query that already doubles .card-thumb on desktop (migration 0170) now
+-- also doubles #players-list's own icons and their overlaid
+-- .player-stat__badge numeral there, scoped to #players-list specifically
+-- so the Decks dialog's/lobby's own reuse of these same classes elsewhere
+-- is untouched. Also removes the seat-number icon entirely (the
+-- maintainer's own follow-up ask in the same turn) -- a player's seat is
+-- already unambiguous from this list's own top-to-bottom ordering, and the
+-- icon itself read as too similar to the hand-count icon next to it. See
+-- "Bigger top-of-board icons on desktop" in web-static/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0170 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.28' WHERE id = 1;

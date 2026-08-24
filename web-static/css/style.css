@@ -1199,12 +1199,11 @@ body.game-page {
 
 /* A little color per stat/flag kind, echoing what each icon actually
    depicts, rather than every one defaulting to the same muted gray --
-   seat/hand icons in brown (bench, cards), points/wins in gold (star,
+   the hand icon in brown (a hand of cards), points/wins in gold (star,
    trophy), and the went-first pennant in red. The badge overlaid on each
    .player-stat icon keeps its own neutral --color-text/--color-surface
    styling regardless (see .player-stat__badge above) so the number stays
    legible no matter what color its icon is. */
-.player-stat--seat,
 .player-stat--hand {
     color: var(--color-brown);
 }
@@ -1240,7 +1239,7 @@ body.game-page {
    (--color-success, this app's established "good/active" color, same as
    the on-turn flag above); offline is left at the default --color-muted
    (no override needed) since a plain gray dot reads as "nothing special"
-   the same way the seat/hand icons' own neutral default does elsewhere.
+   the same way the hand icon's own neutral default does elsewhere.
    .player-flag--presenceHidden gets no color override either -- its own
    distinct eye-slash SHAPE (see buildPresenceFlag() in game.js) is what
    sets it apart from "offline", not a different color. */
@@ -2043,5 +2042,39 @@ dialog#deck-builder-dialog[open] {
        next, now that every card in the stack is twice as tall too. */
     .discard-stack__column .card-thumb:not(:last-child) {
         margin-bottom: -13.2rem;
+    }
+
+    /* Issue #417's own "bigger and more distinct icons at the top" item --
+       doubles the board's top-of-page players list (#players-list, the
+       "top-of-board icon row" the issue means) own .player-stat/
+       .player-flag icons, the same doubling treatment as .card-thumb
+       above. Scoped to #players-list specifically -- .player-stat/
+       .player-flag are also reused elsewhere (the Decks dialog's own
+       friends-shared/card-count icons, the lobby's play-arrow/waiting
+       icons) that the issue isn't asking to change, so a bare
+       `.player-stat`/`.player-flag` rule here would have doubled those
+       too. The numeric badge overlaid on each .player-stat icon
+       (.player-stat__badge) is doubled right along with it -- unlike
+       .card-thumb's own corner badges, which stay a fixed size at any
+       card size (see the comment above), this badge IS the actual
+       information the icon conveys, so leaving it small against a
+       doubled icon would undercut the "more distinct" goal this exists
+       for. */
+    #players-list .player-stat {
+        width: 3rem;
+        height: 3rem;
+    }
+
+    #players-list .player-flag {
+        width: 2.5rem;
+        height: 2.5rem;
+    }
+
+    #players-list .player-stat__badge {
+        right: -0.6rem;
+        bottom: -0.6rem;
+        min-width: 2rem;
+        padding: 0 0.4rem;
+        font-size: 1.3rem;
     }
 }

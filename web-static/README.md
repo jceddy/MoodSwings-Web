@@ -416,6 +416,17 @@ comment cross-reference instead). Badge font-size/padding and the plain
 shrink's own precedent -- those already read fine at any card size, so
 there's nothing to scale.
 
+**Bigger top-of-board icons on desktop.** Issue #417's own "bigger and
+more distinct icons at the top" item -- the same `min-width: 1280px`
+block also doubles `#players-list`'s own `.player-stat`/`.player-flag`
+icons (`1.5rem`/`1.25rem` → `3rem`/`2.5rem`) and their overlaid
+`.player-stat__badge` numeral (see "Players list" below), scoped to
+`#players-list` specifically rather than a bare `.player-stat`/
+`.player-flag` rule, since those same classes are also reused for the
+Decks dialog's own friends-shared/card-count icons and the lobby's own
+play-arrow/waiting-hourglass icons -- neither of which the issue is
+asking to resize.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
@@ -2518,13 +2529,13 @@ there's nothing to scale.
     "(you)"/"(resigned)" tags -- and the lobby's own opponent-list line
     (`appendPlayersWithFlags()`, `buildGameRow()`) appends the same
     `" (bot)"` as plain text there instead, since that whole line is
-    already just comma-joined plain text with no per-name styling. It also shows each player's seat,
+    already just comma-joined plain text with no per-name styling. It also shows each player's
     current point total, win count, and hand size as small inline SVG
-    icons (issue #143) rather than spelled-out text — a bench (seat), a
-    star (points), a trophy (wins), and two overlapping cards (hand size)
+    icons (issue #143) rather than spelled-out text — a star (points), a
+    trophy (wins), and two overlapping cards (hand size)
     — each colored to match what it depicts rather than every one
-    defaulting to the same muted gray: seat/hand-count in brown
-    (`--color-brown`, a bench and a hand of cards), points/wins in gold
+    defaulting to the same muted gray: hand-count in brown
+    (`--color-brown`, a hand of cards), points/wins in gold
     (`--color-gold`, a star and a trophy), and the went-first pennant in
     red (reusing `--color-error`, already theme-tuned for both light and
     dark). The on-turn triangle keeps its own existing green
@@ -2536,12 +2547,16 @@ there's nothing to scale.
     than solid, so the icon underneath is still partly visible through it
     instead of being almost entirely hidden behind an opaque plate — the
     number is the point of the badge, not full coverage of the icon it
-    sits on. `player.total_score` is
+    sits on. There used to be a fourth icon here too, a "seat" bench
+    showing `player.seat_order` -- removed per issue #417 (a player's seat
+    is already unambiguous from this list's own top-to-bottom ordering,
+    and the icon itself read as too similar to the hand-count icon right
+    next to it). `player.total_score` is
     a live sum of what's actually on the board right now, i.e. what each
     player would score if the round ended this instant, not anything
     accumulated from earlier rounds; distinct from `total_wins`, which only
     counts outright round victories. Every icon keeps its full original
-    text (e.g. "12 point(s)", "Seat 0") as both a `title` tooltip and an
+    text (e.g. "12 point(s)") as both a `title` tooltip and an
     `aria-label` on its wrapping `<span role="img">`, so a screen reader or
     a sighted user hovering for a reminder still gets the exact same
     information the old plain-text clauses gave (see `buildPlayerStat()`/
