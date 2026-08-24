@@ -468,16 +468,29 @@ the lobby's own play-arrow/waiting-hourglass icons, neither of which
 this slider is meant to resize. The Settings dialog's own label was
 renamed from "Card size" to "Card/icon size" to reflect the wider scope.
 
-The suppressed-badge repositioning offsets (`.card-thumb--suppressed
-.card-thumb__badge--value`/`--suppressed`, `top`/`bottom: calc(0.25rem +
-<N>px)`) split their own `calc()` differently from the plain width rules
-above: only the `<N>px` clearance term is wrapped in `* var(--card-scale,
-1)`, while the `0.25rem` corner inset stays bare -- matching "Bigger
-default card size on desktop"'s own established precedent that the plain
-corner insets never scale with card size, just now applied to a
-continuous multiplier instead of a fixed doubling. The plain corner
-badges (`.card-thumb__badge` and its `--value`/`--copy`/`--recolored*`
-variants) are left alone entirely, same reasoning.
+**The corner badges scale too (follow-up, confirmed by the maintainer,
+reversing an earlier call in this same section).** "The points/copy/
+color badges on cards need their sizes to scale with the sizes of the
+cards" -- `.card-thumb__badge` and its own `--value`/`--copy`/
+`--recolored*`/`--suppressed` variants now wrap their own font-size,
+padding, and every corner-inset position in `* var(--card-scale, 1)`
+too, at both the plain base size and (a NEW doubled block inside the
+`min-width: 1280px` rule, since these badges previously had no
+desktop-specific override at all) the desktop-doubled size -- see
+`.card-thumb__badge`'s own definition in `style.css` for the exact
+numbers (0.25rem→0.5rem, 0.65rem→1.3rem, 0.1rem/0.35rem→0.2rem/0.7rem,
+20px/22px→40px/44px). This is a direct reversal of "Bigger default card
+size on desktop"'s own original call to leave these badges (and the
+plain `0.25rem` corner insets generally) a fixed size at any card size
+-- at extreme slider settings a flat 0.65rem badge on an otherwise tiny
+or huge card read as either dominating the art or unreadably small, so
+the whole badge scales together instead now. The suppressed-badge
+repositioning offsets (`.card-thumb--suppressed .card-thumb__badge--value`/
+`--suppressed`, `top`/`bottom: calc((0.25rem + <N>px) * var(--card-scale,
+1))`) were updated to match -- their own `0.25rem` corner-inset term is
+now wrapped in the same `calc()` as the `<N>px` clearance term, rather
+than sitting outside it unscaled, so they stay consistent with the base
+`.card-thumb__badge--value`/`--suppressed` rules they layer on top of.
 
 A purely client-side, per-device preference -- no per-game behavior for
 the server to know about, so unlike `default_selections_mode_preference`/

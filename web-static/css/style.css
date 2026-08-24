@@ -29,11 +29,12 @@
        uses for --color-* above, just a plain custom property here instead
        of a data-theme attribute), so a fresh visitor (or one with
        localStorage unavailable) sees every card/icon at exactly its
-       normal, already-tuned size with zero JS involvement. Deliberately
-       NOT applied to the plain corner badges (.card-thumb__badge and its
-       --value/--copy/--recolored* variants) -- consistent with the
-       "already read fine at any card size" precedent the 1280px desktop
-       double above established for those same badges. */
+       normal, already-tuned size with zero JS involvement. Also applied
+       to every corner badge (.card-thumb__badge and its own --value/
+       --copy/--recolored*/--suppressed variants, issue #417 follow-up)
+       -- this reverses an earlier call in this same file to leave those
+       badges a fixed size at any card size; see .card-thumb__badge's own
+       definition further down for why. */
     --card-scale: 1;
     --color-bg: #fff;
     --color-surface: #fff;
@@ -934,11 +935,11 @@ body.game-page {
     }
 
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--value {
-        top: calc(0.25rem + 15px * var(--card-scale, 1));
+        top: calc((0.25rem + 15px) * var(--card-scale, 1));
     }
 
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--suppressed {
-        bottom: calc(0.25rem + 15px * var(--card-scale, 1));
+        bottom: calc((0.25rem + 15px) * var(--card-scale, 1));
     }
 
     /* A saved/shared deck's full card list (issue #197) can run to well
@@ -1054,27 +1055,35 @@ body.game-page {
 }
 
 .card-thumb--suppressed .card-thumb__badge--value {
-    top: calc(0.25rem + 20px * var(--card-scale, 1));
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
 }
 
 .card-thumb--suppressed .card-thumb__badge--suppressed {
-    bottom: calc(0.25rem + 20px * var(--card-scale, 1));
+    bottom: calc((0.25rem + 20px) * var(--card-scale, 1));
 }
 
+/* Card size slider follow-up (issue #417) -- every corner badge below
+   (value/copy/recolored/suppressed) now scales by var(--card-scale, 1)
+   the same way the rest of the card does, reversing this project's own
+   earlier "badges stay a fixed size at any card size" call: at extreme
+   slider settings a flat 0.65rem badge on an otherwise tiny or huge card
+   read as either dominating the art or unreadably small, so the whole
+   badge -- font-size, padding, AND its own corner-inset position (below,
+   and on --copy/--recolored/--suppressed) -- scales together instead. */
 .card-thumb__badge {
     position: absolute;
-    font-size: 0.65rem;
+    font-size: calc(0.65rem * var(--card-scale, 1));
     font-weight: bold;
     line-height: 1.2;
-    padding: 0.1rem 0.35rem;
+    padding: calc(0.1rem * var(--card-scale, 1)) calc(0.35rem * var(--card-scale, 1));
     border-radius: 999px;
     background: rgba(0, 0, 0, 0.75);
     color: #fff;
 }
 
 .card-thumb__badge--value {
-    top: 0.25rem;
-    right: 0.25rem;
+    top: calc(0.25rem * var(--card-scale, 1));
+    right: calc(0.25rem * var(--card-scale, 1));
 }
 
 /* Nudged down ~20px from the other corner badges (see .card-thumb__badge
@@ -1082,14 +1091,14 @@ body.game-page {
    printed on the art, while a bit further down only covers non-functional
    background art. */
 .card-thumb__badge--copy {
-    top: calc(0.25rem + 20px);
-    left: 0.25rem;
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
+    left: calc(0.25rem * var(--card-scale, 1));
     background: #0a5b8a;
 }
 
 .card-thumb__badge--recolored {
-    top: calc(0.25rem + 20px);
-    left: 0.25rem;
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
+    left: calc(0.25rem * var(--card-scale, 1));
 }
 
 /* Tints the recolored badge to the mood color it's actually declaring
@@ -1129,13 +1138,13 @@ body.game-page {
    selector drops the recolored badge below it instead of the two
    overlapping in the same corner. */
 .card-thumb__badge--copy + .card-thumb__badge--recolored {
-    top: calc(0.25rem + 20px + 22px);
+    top: calc((0.25rem + 20px + 22px) * var(--card-scale, 1));
 }
 
 .card-thumb__badge--suppressed {
-    left: 0.25rem;
-    right: 0.25rem;
-    bottom: 0.25rem;
+    left: calc(0.25rem * var(--card-scale, 1));
+    right: calc(0.25rem * var(--card-scale, 1));
+    bottom: calc(0.25rem * var(--card-scale, 1));
     text-align: center;
     background: #b00020;
 }
@@ -2091,10 +2100,11 @@ dialog#deck-builder-dialog[open] {
    rule above that's actually proportional to .card-thumb's own width --
    the same relationship the phone shrink above already establishes for
    .card-thumb--suppressed's own rotation-clearance offsets (scaled down
-   there; scaled up here). Badge font-size/padding and the plain 0.25rem
-   corner insets are deliberately left alone, matching the phone shrink's
-   own precedent -- those already read fine at any card size, so there's
-   nothing to scale. */
+   there; scaled up here). Badge font-size/padding and corner insets are
+   ALSO doubled here (issue #417 follow-up, reversing this file's own
+   earlier "those already read fine at any card size" call) -- see
+   .card-thumb__badge and its own siblings further up for the un-doubled
+   1x versions of every rule doubled below. */
 @media (min-width: 1280px) {
     .card-thumb,
     .card-thumb__art {
@@ -2106,11 +2116,46 @@ dialog#deck-builder-dialog[open] {
     }
 
     .card-thumb--suppressed .card-thumb__badge--value {
-        top: calc(0.25rem + 40px * var(--card-scale, 1));
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
     }
 
     .card-thumb--suppressed .card-thumb__badge--suppressed {
-        bottom: calc(0.25rem + 40px * var(--card-scale, 1));
+        bottom: calc((0.5rem + 40px) * var(--card-scale, 1));
+    }
+
+    /* Doubled counterparts of .card-thumb__badge and its own siblings
+       further up (0.25rem -> 0.5rem, 0.65rem -> 1.3rem, 0.1rem/0.35rem ->
+       0.2rem/0.7rem, 20px/22px -> 40px/44px) -- issue #417 follow-up,
+       "the points/copy/color badges on cards need their sizes to scale
+       with the sizes of the cards." */
+    .card-thumb__badge {
+        font-size: calc(1.3rem * var(--card-scale, 1));
+        padding: calc(0.2rem * var(--card-scale, 1)) calc(0.7rem * var(--card-scale, 1));
+    }
+
+    .card-thumb__badge--value {
+        top: calc(0.5rem * var(--card-scale, 1));
+        right: calc(0.5rem * var(--card-scale, 1));
+    }
+
+    .card-thumb__badge--copy {
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
+        left: calc(0.5rem * var(--card-scale, 1));
+    }
+
+    .card-thumb__badge--recolored {
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
+        left: calc(0.5rem * var(--card-scale, 1));
+    }
+
+    .card-thumb__badge--copy + .card-thumb__badge--recolored {
+        top: calc((0.5rem + 40px + 44px) * var(--card-scale, 1));
+    }
+
+    .card-thumb__badge--suppressed {
+        left: calc(0.5rem * var(--card-scale, 1));
+        right: calc(0.5rem * var(--card-scale, 1));
+        bottom: calc(0.5rem * var(--card-scale, 1));
     }
 
     /* Doubled counterpart of .grid-draft-cell/.grid-draft-cell--empty's
