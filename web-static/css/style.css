@@ -7,22 +7,30 @@
    needing to restyle each one by hand. */
 :root {
     color-scheme: light;
-    /* Card size slider (issue #417) -- a plain multiplier every .card-thumb
-       (and everything sized proportionally to it -- .card-thumb--suppressed,
-       its suppressed-badge repositioning, .grid-draft-cell/--empty, the
-       discard pile's own stacking overlap) is wrapped in a
-       `calc(<value> * var(--card-scale, 1))` for, at every breakpoint this
-       file already has its own fixed size for (phone in-play-zone/deck-
-       view/draft-pool shrinks, the plain base size, the 1280px+ desktop
-       double). 1 (100%, no change) here in the CSS is the source of truth
+    /* Card/icon size slider (issue #417) -- a plain multiplier every
+       .card-thumb (and everything sized proportionally to it --
+       .card-thumb--suppressed, its suppressed-badge repositioning,
+       .grid-draft-cell/--empty, the discard pile's own stacking overlap)
+       is wrapped in a `calc(<value> * var(--card-scale, 1))` for, at every
+       breakpoint this file already has its own fixed size for (phone
+       in-play-zone/deck-view/draft-pool shrinks, the plain base size, the
+       1280px+ desktop double). Also applied, per the slider's own later
+       "Card/icon size" rename, to the board's top-of-page players list
+       (#players-list) own .player-stat/.player-flag icons and their
+       overlaid .player-stat__badge numeral, at both this same base size
+       and their own 1280px+ desktop double -- see the #players-list-
+       scoped rules further down (both the base ones right after
+       .player-stat__badge's own definition, and the desktop-doubled ones
+       in the min-width: 1280px block at the end of this file) for exactly
+       where. 1 (100%, no change) here in the CSS is the source of truth
        for "the slider was never touched" -- initCardScaleSlider() in
        game.js only ever overrides this via an inline style on
        documentElement (same mechanism initThemeSelect() in app.js already
        uses for --color-* above, just a plain custom property here instead
        of a data-theme attribute), so a fresh visitor (or one with
-       localStorage unavailable) sees every card at exactly its normal,
-       already-tuned size with zero JS involvement. Deliberately NOT
-       applied to the plain corner badges (.card-thumb__badge and its
+       localStorage unavailable) sees every card/icon at exactly its
+       normal, already-tuned size with zero JS involvement. Deliberately
+       NOT applied to the plain corner badges (.card-thumb__badge and its
        --value/--copy/--recolored* variants) -- consistent with the
        "already read fine at any card size" precedent the 1280px desktop
        double above established for those same badges. */
@@ -1240,6 +1248,36 @@ body.game-page {
     text-align: center;
 }
 
+/* Card/icon size slider (issue #417 follow-up) -- extends the same
+   --card-scale multiplier the card size slider already applies to
+   .card-thumb (see its own definition at the top of this file) to the
+   board's top-of-page players list (#players-list) own .player-stat/
+   .player-flag icons and their overlaid .player-stat__badge numeral,
+   at THIS (non-desktop) breakpoint's own un-doubled starting sizes --
+   see the min-width: 1280px block below for the same multiplier applied
+   to the desktop-doubled sizes instead. Scoped to #players-list
+   specifically, not a bare `.player-stat`/`.player-flag` rule -- those
+   same classes are also reused for the Decks dialog's own friends-
+   shared/card-count icons and the lobby's own play-arrow/waiting-
+   hourglass icons, neither of which this slider is meant to resize. */
+#players-list .player-stat {
+    width: calc(1.5rem * var(--card-scale, 1));
+    height: calc(1.5rem * var(--card-scale, 1));
+}
+
+#players-list .player-flag {
+    width: calc(1.25rem * var(--card-scale, 1));
+    height: calc(1.25rem * var(--card-scale, 1));
+}
+
+#players-list .player-stat__badge {
+    right: calc(-0.3rem * var(--card-scale, 1));
+    bottom: calc(-0.3rem * var(--card-scale, 1));
+    min-width: calc(1rem * var(--card-scale, 1));
+    padding: 0 calc(0.2rem * var(--card-scale, 1));
+    font-size: calc(0.65rem * var(--card-scale, 1));
+}
+
 /* Matches the board round status's/lobby's own "your turn" convention
    (bold, --color-success) elsewhere on this page -- the one flag most
    worth standing out from the rest at a glance. */
@@ -2109,22 +2147,26 @@ dialog#deck-builder-dialog[open] {
        card size (see the comment above), this badge IS the actual
        information the icon conveys, so leaving it small against a
        doubled icon would undercut the "more distinct" goal this exists
-       for. */
+       for. Also multiplied by var(--card-scale, 1) (issue #417 follow-up,
+       "Card/icon size" slider) the same way .card-thumb's own desktop
+       double is above -- see the base (non-desktop) #players-list rules
+       further up for that same multiplier applied to THIS block's own
+       un-doubled 1.5rem/1.25rem/etc. starting point. */
     #players-list .player-stat {
-        width: 3rem;
-        height: 3rem;
+        width: calc(3rem * var(--card-scale, 1));
+        height: calc(3rem * var(--card-scale, 1));
     }
 
     #players-list .player-flag {
-        width: 2.5rem;
-        height: 2.5rem;
+        width: calc(2.5rem * var(--card-scale, 1));
+        height: calc(2.5rem * var(--card-scale, 1));
     }
 
     #players-list .player-stat__badge {
-        right: -0.6rem;
-        bottom: -0.6rem;
-        min-width: 2rem;
-        padding: 0 0.4rem;
-        font-size: 1.3rem;
+        right: calc(-0.6rem * var(--card-scale, 1));
+        bottom: calc(-0.6rem * var(--card-scale, 1));
+        min-width: calc(2rem * var(--card-scale, 1));
+        padding: 0 calc(0.4rem * var(--card-scale, 1));
+        font-size: calc(1.3rem * var(--card-scale, 1));
     }
 }
