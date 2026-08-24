@@ -1243,6 +1243,123 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame(3, $action['card_id']);
     }
 
+    // -- Contempt (confirmed by the maintainer) ------------------------------
+
+    /**
+     * No opponent has a green or white mood in play, and playing Contempt
+     * (id 59, value 1) for its own plain value wouldn't decide the round
+     * (every score is 0) -- deprioritized behind Wrath (id 105, value 0,
+     * no ability), proving the veto actively suppresses Contempt below
+     * even a LOWER-value alternative, not just something that would
+     * already outrank it by plain baseValue().
+     */
+    public function testChooseActionDeprioritizesContemptWithNoTargetAndNoRoundToWin(): void
+    {
+        $state = $this->boardState(hands: [1 => [59, 105]]);
+
+        $action = $this->bot->chooseAction($state, [59, 105], 1);
+
+        self::assertSame(105, $action['card_id']);
+    }
+
+    /**
+     * Player 2 has Complacency (id 5, white, value 4) in play -- a legal
+     * target, so Contempt is played (outranking Wrath once the veto
+     * lifts) and targets it in single mode.
+     */
+    public function testChooseActionTargetsAnOpponentsQualifyingMoodWhenPlayingContempt(): void
+    {
+        $state = $this->boardState(hands: [1 => [59, 105], 2 => [5]]);
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [59, 105], 1);
+
+        self::assertSame(59, $action['card_id']);
+        self::assertSame(['mode' => 'single', 'target_mood_id' => 5], $action['choices']);
+    }
+
+    /**
+     * The bot's OWN Complacency doesn't count as a legal target --
+     * ContemptEffect's own field has no owner restriction, so
+     * BotChoiceResolver's generic default would happily let the bot
+     * discard its own mood, but "an opponent" per the maintainer means
+     * it never does. With no opponent mood either, and no round to win,
+     * Contempt is deprioritized behind Wrath exactly as if the bot had
+     * no moods in play at all.
+     */
+    public function testChooseActionDoesNotTargetTheBotsOwnQualifyingMoodWhenPlayingContempt(): void
+    {
+        $state = $this->boardState(hands: [1 => [59, 105, 5]]);
+        $state->moveHandToInPlay(1, 5);
+
+        $action = $this->bot->chooseAction($state, [59, 105], 1);
+
+        self::assertSame(105, $action['card_id']);
+    }
+
+    /**
+     * Player 2 has Intimidation (id 67, black, value 1) in play -- not a
+     * legal Contempt target (wrong color), so contemptTargetMoodId()
+     * finds nothing. But the bot's own round total is currently 0 while
+     * player 2's is 1, and playing Contempt for its own plain value (1,
+     * no ability) would bring the bot's own total to 1, tying/clearing
+     * player 2's -- the deciding difference between losing and winning
+     * the round, so Contempt is played anyway, purely for its own value
+     * (no legal target to fill in).
+     */
+    public function testChooseActionPlaysContemptForItsOwnValueWhenItWouldWinTheRound(): void
+    {
+        $state = $this->boardState(hands: [1 => [59, 105], 2 => [67]]);
+        $state->moveHandToInPlay(2, 67);
+
+        $action = $this->bot->chooseAction($state, [59, 105], 1);
+
+        self::assertSame(59, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * A teammate's own Complacency doesn't count as a legal target
+     * either (the same "an opponent" exclusion as
+     * testChooseActionDoesNotTargetTheBotsOwnQualifyingMoodWhenPlayingContempt()
+     * above) -- and since it already contributes to the bot's own
+     * GROUP total (Open Team Play), the bot's group is already ahead of
+     * player 3's empty board before Contempt is even played, so the
+     * round-winning exception doesn't apply either. Contempt is
+     * deprioritized behind Wrath exactly as if no one had any qualifying
+     * mood in play at all.
+     */
+    public function testChooseActionDoesNotTargetATeammatesQualifyingMoodWhenPlayingContempt(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [59, 105], 2 => [5]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 5);
+
+        $action = $this->bot->chooseAction($state, [59, 105], 1);
+
+        self::assertSame(105, $action['card_id']);
+    }
+
+    /**
+     * With nothing else playable, Contempt is still played -- deprioritized
+     * WHEN, never skipped outright, the same policy every other
+     * sortPriorityValue() veto in this class already follows.
+     */
+    public function testChooseActionStillPlaysContemptWhenNothingElseIsPlayable(): void
+    {
+        $state = $this->boardState(hands: [1 => [59]]);
+
+        $action = $this->bot->chooseAction($state, [59], 1);
+
+        self::assertSame(59, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void
     {
         $state = $this->boardState();

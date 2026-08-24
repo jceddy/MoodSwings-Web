@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with eighteen deliberate
+ * field-filling policy this builds on -- with nineteen deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -155,7 +155,17 @@ use MoodSwings\Rules\RoundScorer;
  * extra play (EXTRA_PLAY_GRANTING_EFFECT_KEYS) and some other
  * currently-playable card is worth 4 or more, in which case playing it
  * "enables" that bigger play the very same turn, worth the same Envy
- * risk either way; see that method's own docblock for the full policy.
+ * risk either way; see that method's own docblock for the full policy;
+ * and contemptHasAGoodReasonToPlayNow()/sortPriorityValue() once more
+ * (confirmed by the maintainer, the same treatment as Cynicism above),
+ * which deprioritizes Contempt unless either a non-teammate opponent
+ * currently has a green or white mood in play for it to remove
+ * (contemptTargetMoodId()), or playing it for its own plain printed
+ * value (1, no ability at all) would be the deciding difference between
+ * the bot's own group NOT currently having the highest score this round
+ * and having it (wouldBecomeHighestScore(), reused with an
+ * $unboostedValue of 0); see that method's own docblock for the full
+ * policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -683,6 +693,9 @@ final class BotPlayerService
         if ($effectKey === 'cynicism' && !$this->cynicismHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId, $playableCardIds)) {
             return PHP_INT_MIN;
         }
+        if ($effectKey === 'contempt' && !$this->contemptHasAGoodReasonToPlayNow($state, $cardId, $botGamePlayerId)) {
+            return PHP_INT_MIN;
+        }
         if ($effectKey === 'intimidation' && $this->intimidationTargetPlayerId($state, $botGamePlayerId) === null) {
             return PHP_INT_MIN;
         }
@@ -1129,6 +1142,12 @@ final class BotPlayerService
             $discardCardId = $this->nostalgiaDiscardCardId($state, $botGamePlayerId);
 
             return $discardCardId !== null ? ['discard_card_id' => $discardCardId] : [];
+        }
+
+        if ($effectKey === 'contempt') {
+            $targetMoodId = $this->contemptTargetMoodId($state, $botGamePlayerId);
+
+            return $targetMoodId !== null ? ['mode' => 'single', 'target_mood_id' => $targetMoodId] : [];
         }
 
         if ($effectKey === 'sneakiness') {
@@ -1805,6 +1824,70 @@ final class BotPlayerService
         }
 
         return $bestCardId;
+    }
+
+    /**
+     * Contempt's own "who/what to target" policy (confirmed by the
+     * maintainer) -- the highest-value green or white mood currently
+     * owned by a non-teammate opponent, or null if none qualifies.
+     * Deliberately excludes both the acting player itself and any
+     * teammate -- ContemptEffect's own field is scope 'any' (Contempt's
+     * printed text says "put A green or white mood" with no restriction
+     * against the acting player or a teammate), so BotChoiceResolver's
+     * own generic default would happily let the bot discard its own or a
+     * teammate's mood, but "an opponent" per the maintainer means
+     * neither. Only ever picks the single-mood mode -- ContemptEffect's
+     * OWN "all green and white moods" option would just as happily
+     * sweep up the bot's own qualifying moods alongside any opponent's
+     * (allQualifyingMoods() has no owner filter of its own), so it's
+     * left unused here rather than risking that.
+     *
+     * Used both to decide WHETHER Contempt is worth playing right now
+     * (see contemptHasAGoodReasonToPlayNow()'s own docblock) and, if so,
+     * WHO to actually target.
+     */
+    private function contemptTargetMoodId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        $bestMoodId = null;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                if (!in_array($state->colorOf($mood->cardId), ['green', 'white'], true)) {
+                    continue;
+                }
+                if ($bestMoodId === null || $state->valueOf($mood->cardId) > $state->valueOf($bestMoodId)) {
+                    $bestMoodId = $mood->cardId;
+                }
+            }
+        }
+
+        return $bestMoodId;
+    }
+
+    /**
+     * Contempt's own "should this be played at all right now" policy
+     * (confirmed by the maintainer): worth playing whenever either
+     * contemptTargetMoodId() finds a legal opponent target to remove, OR
+     * -- with no such target -- playing $cardId for its own plain
+     * printed value (1, no ability at all) would be the deciding
+     * difference between the bot's own group NOT currently having the
+     * highest score this round and having it
+     * (wouldBecomeHighestScore(), reused here with an $unboostedValue of
+     * 0, the same "didn't play this" vs "played this for its own value"
+     * comparison cynicismHasAGoodReasonToPlayNow() already reuses it
+     * for). Otherwise PHP_INT_MIN via sortPriorityValue() -- deprioritized
+     * behind everything else, the same "save it for when it actually
+     * pays off" treatment Rationalization/Cynicism already get.
+     */
+    private function contemptHasAGoodReasonToPlayNow(BoardState $state, int $cardId, int $botGamePlayerId): bool
+    {
+        if ($this->contemptTargetMoodId($state, $botGamePlayerId) !== null) {
+            return true;
+        }
+
+        return $this->wouldBecomeHighestScore($state, $botGamePlayerId, 0, $this->baseValue($state, $cardId));
     }
 
     /**

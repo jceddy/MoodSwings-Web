@@ -6052,6 +6052,26 @@ since it already holds that dependency):
   class, this is "deprioritized WHEN, never skipped outright" -- a
   low-value card still gets played if it's genuinely the only legal
   option once `chooseAction()`'s own loop runs out of anything better.
+- **Contempt's own "don't play it blind" policy** (confirmed by the
+  maintainer), via `contemptHasAGoodReasonToPlayNow()`/
+  `contemptTargetMoodId()`/`sortPriorityValue()` once more: the same
+  `PHP_INT_MIN` deprioritization as Cynicism above, unless either a
+  non-teammate opponent currently has a green or white mood in play for
+  Contempt to remove (`contemptTargetMoodId()` -- the highest-value
+  qualifying mood among non-teammate opponents only; ContemptEffect's
+  own field has no owner restriction, so the bot's own or a teammate's
+  qualifying mood is deliberately excluded the same way Pacifism's own
+  targeting already excludes them), OR playing it for its own plain
+  printed value (1, no ability at all) would be the deciding difference
+  between the bot's own group NOT currently having the highest score
+  this round and having it (`wouldBecomeHighestScore()`, reused with an
+  `$unboostedValue` of 0, the identical reuse `cynicismHasAGoodReasonToPlayNow()`
+  already makes of it). When a legal target exists,
+  `buildChoicesForCard()` always plays it in `'single'` mode against
+  that one mood -- never `'all'`, since `ContemptEffect`'s own "all
+  green and white moods" option has no owner filter of its own and
+  would just as happily sweep up the bot's own qualifying moods
+  alongside any opponent's.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
