@@ -6001,6 +6001,28 @@ since it already holds that dependency):
   own printed value (1) is ordinary enough that leading with it purely
   by `baseValue()` the way most cards do is still a reasonable default
   then.
+- **Nostalgia's own discard-pickup targeting** (confirmed by the
+  maintainer), via `nostalgiaDiscardCardId()`: always takes the
+  highest-`baseValue()` card currently in the discard pile when playing
+  Nostalgia, filling its own optional `discard_card_id` field -- unlike
+  every other optional field this class leaves unfilled by default (see
+  `BotChoiceResolver`'s own docblock), Nostalgia's pickup is a pure
+  benefit with no cost, so there's no reason not to take the best
+  available card. The one exception: if the bot already has a Sadness-
+  or Wonder-family mood (`DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS` --
+  `SadnessEffect` scales its own value +2 per card in the discard pile
+  unconditionally, `WonderEffect` scales +2 per in-play mood AND per
+  discard-pile card matching whichever color was chosen after playing
+  it) currently in play, `discard_card_id` is left unfilled instead --
+  taking a card out of the pile would shrink the very resource that
+  mood's own `whileInPlay` value depends on, undoing part of what it's
+  already contributing. This is a pure targeting policy, distinct from
+  `sortPriorityValue()`'s own "deprioritize Nostalgia when the discard
+  pile is completely empty" check above -- that decides WHETHER/WHEN to
+  lead with playing Nostalgia at all; this decides what to do with the
+  optional field once it's actually being played, and returns `null`
+  (leaving the field unfilled) both when the pile is empty and when a
+  Sadness/Wonder-family mood is guarding it.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-

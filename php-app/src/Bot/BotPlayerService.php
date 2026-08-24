@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with sixteen deliberate
+ * field-filling policy this builds on -- with seventeen deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -136,7 +136,15 @@ use MoodSwings\Rules\RoundScorer;
  * ability all over again, since MoodPlayService re-runs a mood's own
  * afterPlaying() hook in full every time it's played, with no once-per-
  * game memory of it; see denialTargetMoodIds()'s own docblock for the
- * full policy.
+ * full policy; and nostalgiaDiscardCardId() (confirmed by the
+ * maintainer), which always takes the highest-baseValue() card
+ * currently in the discard pile when playing Nostalgia, UNLESS the bot
+ * already has a Sadness- or Wonder-family mood
+ * (DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS) in play -- one of those
+ * depends on the discard pile staying full for its own whileInPlay
+ * value, so the pickup is skipped entirely rather than undoing part of
+ * that mood's own contribution -- see that method's own docblock for
+ * the full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -186,6 +194,28 @@ final class BotPlayerService
      * @var string[]
      */
     private const RECURSION_EFFECT_KEYS = ['harmony', 'grief', 'angst', 'grace', 'melancholy', 'nostalgia'];
+
+    /**
+     * Every effect key whose own whileInPlay value scales with the
+     * discard pile's own SIZE -- Sadness (SadnessEffect: +2 per card in
+     * the discard pile, unconditional, any color) and Wonder
+     * (WonderEffect: +2 per in-play mood AND per discard-pile card
+     * matching whichever color was chosen after playing it). Used only
+     * by nostalgiaDiscardCardId() below (confirmed by the maintainer) --
+     * a bot with one of these already in play depends on the discard
+     * pile staying full, so Nostalgia's own discard pickup would shrink
+     * it right back down and undo part of its own investment; every
+     * other discard-pile-referencing card in the catalog either checks
+     * a THRESHOLD instead of scaling with size (Misery), checks whether
+     * a card was discarded THIS ROUND rather than the pile's own size
+     * (Vulnerability), or PUTS cards into the discard pile as part of
+     * its own effect rather than reading from it (Altruism, Courage,
+     * Cynicism, Rejection, Anger, Fury, Hostility, Infatuation, Rage,
+     * Rebellion, Shock, Spite), so none of those belong here.
+     *
+     * @var string[]
+     */
+    private const DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS = ['sadness', 'wonder'];
 
     public function __construct(
         private readonly BotChoiceResolver $resolver,
@@ -992,6 +1022,12 @@ final class BotPlayerService
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
+        if ($effectKey === 'nostalgia') {
+            $discardCardId = $this->nostalgiaDiscardCardId($state, $botGamePlayerId);
+
+            return $discardCardId !== null ? ['discard_card_id' => $discardCardId] : [];
+        }
+
         if ($effectKey === 'sneakiness') {
             $targetPlayerId = $this->sneakinessTargetPlayerId($state, $botGamePlayerId);
 
@@ -1621,6 +1657,51 @@ final class BotPlayerService
         }
 
         return $bestOpponentScore - $botScore > self::SNEAKINESS_WIN_MARGIN ? $bestOpponentId : null;
+    }
+
+    /**
+     * Nostalgia's own "what to pick up" policy (confirmed by the
+     * maintainer): always take the highest-baseValue() card currently in
+     * the discard pile, UNLESS the bot itself already has a
+     * DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood (Sadness, Wonder) in
+     * play right now, in which case null is returned instead -- shrinking
+     * the discard pile it depends on would undo part of the value that
+     * mood is already contributing, so the pickup is skipped entirely
+     * and the discard pile is left alone (Nostalgia's own separate
+     * extra-play grant is unaffected either way -- see
+     * NostalgiaEffect::afterPlaying()). This is purely a TARGETING
+     * policy, distinct from sortPriorityValue()'s own "deprioritize
+     * Nostalgia when the discard pile is completely empty" check above
+     * -- that decides WHETHER/WHEN to lead with playing Nostalgia at
+     * all; this decides what to do with the optional discard_card_id
+     * field once it's actually being played. A Sadness/Wonder-holding
+     * bot can still legally play Nostalgia (e.g. purely for the extra
+     * play), it just never volunteers to empty the discard pile while
+     * doing so.
+     *
+     * Returns null both when there's a Sadness/Wonder-family mood in
+     * play (don't pick up at all) and when the discard pile is simply
+     * empty (nothing legal to pick up) -- buildChoicesForCard() treats
+     * either the same way, an empty choices array rather than a filled
+     * discard_card_id.
+     */
+    private function nostalgiaDiscardCardId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (in_array($effectKey, self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true)) {
+                return null;
+            }
+        }
+
+        $bestCardId = null;
+        foreach ($state->discardPile() as $discardCardId) {
+            if ($bestCardId === null || $this->baseValue($state, $discardCardId) > $this->baseValue($state, $bestCardId)) {
+                $bestCardId = $discardCardId;
+            }
+        }
+
+        return $bestCardId;
     }
 
     /**

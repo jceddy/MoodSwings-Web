@@ -945,6 +945,74 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    /**
+     * With more than one card in the discard pile and nothing in play
+     * that depends on it, Nostalgia targets the HIGHEST-baseValue()
+     * discard card (Chaos, id 85, value 6) over the lower-value one
+     * (Apathy, id 55, value 4) -- confirmed by the maintainer.
+     */
+    public function testChooseActionTargetsTheHighestValueDiscardCardWhenPlayingNostalgia(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [128]],
+            discard: [55, 85],
+        );
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame(['discard_card_id' => 85], $action['choices']);
+    }
+
+    /**
+     * Sadness (id 74) already in play for the acting bot depends on the
+     * discard pile staying full for its own whileInPlay value -- taking
+     * a card out of it would undo part of that, so Nostalgia's own
+     * discard_card_id field is left unfilled even though the pile has a
+     * perfectly good candidate sitting in it. Confirmed by the
+     * maintainer.
+     */
+    public function testChooseActionSkipsTheDiscardPickupWhenPlayingNostalgiaWithSadnessInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [128, 74]],
+            discard: [55],
+        );
+        $state->moveHandToInPlay(1, 74);
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Same policy, Wonder (id 133) -- the other DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS
+     * card. Confirmed by the maintainer.
+     */
+    public function testChooseActionSkipsTheDiscardPickupWhenPlayingNostalgiaWithWonderInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [128, 133]],
+            discard: [55],
+        );
+        $state->moveHandToInPlay(1, 133);
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Denial (confirmed by the maintainer) -------------------------------
 
     /**

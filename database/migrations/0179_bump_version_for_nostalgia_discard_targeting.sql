@@ -1,0 +1,22 @@
+-- Practice bots (issue #140), confirmed by the maintainer: "bots should
+-- always target a card in discard when playing Nostalgia, unless they
+-- have a card like Sadness in play whose score is pumped by cards in
+-- discard." Adds BotPlayerService::nostalgiaDiscardCardId(), a targeting
+-- policy for Nostalgia's own optional discard_card_id field (previously
+-- always left unfilled, the generic "don't volunteer for an optional
+-- field" default): always take the highest-baseValue() card currently
+-- in the discard pile, UNLESS the bot already has a Sadness- or
+-- Wonder-family mood (DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS) in play,
+-- whose own whileInPlay value scales with the discard pile's own size --
+-- taking a card out of the pile would undo part of what that mood is
+-- already contributing, so the pickup is skipped entirely in that case.
+-- Distinct from sortPriorityValue()'s own existing "deprioritize
+-- Nostalgia when the discard pile is empty" check, which decides
+-- whether/when to lead with playing Nostalgia at all, not what to do
+-- with the optional field once it's played. See "Practice bots" in
+-- php-app/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0178 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.35' WHERE id = 1;
