@@ -1749,23 +1749,58 @@ without a reload.
       ** 2` cells of `drafting.grid_cards` (always fully visible to every
       seated player -- unlike Winston Draft's face-down piles, a dealt
       grid is face-up on the table) in the same row-major order
-      `getState()` reports them in, via a CSS grid whose
-      `grid-template-columns` `renderGridDraftDrafting()` sets inline from
-      `drafting.grid_size` on every render (`#grid-draft-grid`'s own CSS
-      rule only supplies the common 3-column default -- `grid_size` is 4,
-      not 3, for exactly 4 players, see `GameService::gridDraftGridSize()`);
-      a cell already taken and not yet refilled this round (`null` in
-      `grid_cards`) renders as a plain dashed placeholder
-      (`.grid-draft-cell--empty`) instead of a card thumbnail.
-      `#grid-draft-picks` renders 2 * `drafting.grid_size` buttons (Row
-      1-N, Column 1-N), each labeled with however many cells are actually
-      still non-null along that line (`gridDraftLineCells(axis, index,
+      `getState()` reports them in; a cell already taken and not yet
+      refilled this round (`null` in `grid_cards`) renders as a plain
+      dashed placeholder (`.grid-draft-cell--empty`) instead of a card
+      thumbnail.
+
+      **Row/column pick buttons (issue #417).** Rather than two
+      disconnected button rows below the grid (the pre-#417 layout --
+      `#grid-draft-picks`, "Row 1 (3 cards)"/"Column 1 (2 cards)", etc.,
+      now removed), confirmed by the maintainer: every pick button now
+      lives INSIDE `#grid-draft-grid` itself, as an arrow pointing at the
+      exact row/column it drafts -- one down the grid's own left edge per
+      row (pointing right, into that row) and one along its own bottom
+      edge per column (pointing up, into that column). One CSS grid does
+      the alignment: `grid-template-columns`/`grid-template-rows`
+      (`renderGridDraftDrafting()` sets both inline from
+      `drafting.grid_size` on every render, since `grid_size` is 4, not
+      3, for exactly 4 players -- see `GameService::gridDraftGridSize()`)
+      each gain one extra `min-content` track beyond the `grid_size` cell
+      tracks -- a leading column for row arrows, a trailing row for
+      column arrows -- and every cell's own `grid-column` is offset by 1
+      (`buildGridDraftArrowButton()`/the `grid_cards.forEach` below it
+      set each element's `style.gridColumn`/`style.gridRow` explicitly,
+      rather than relying on source order, since row buttons/cells/column
+      buttons are appended in three separate passes). Placing a button in
+      the SAME row/column track as its own cells means it stretches to
+      that track's size automatically (CSS grid's own default
+      `stretch`), so a row button's height always matches its row's
+      tallest cell and a column button's width always matches its
+      column's own card width, at any card-scale/breakpoint, with no
+      separate fixed-size rule to keep in sync -- unlike the old
+      `.grid-draft-pick-button`'s own hardcoded `width: 5rem`, which this
+      replaces.
+
+      Each button (`.grid-draft-arrow-button`, built by
+      `buildGridDraftArrowButton(axis, index, glyph)`) shows a large
+      direction glyph (`→` for a row button, `↑` for a column button,
+      `.grid-draft-arrow-button__glyph`) over a small remaining-count
+      readout (`.grid-draft-arrow-button__count`) -- both `aria-hidden`,
+      since the button's own `title`/`aria-label` ("Draft row 2 (3 cards
+      left)") already carries the full meaning, the same title/
+      aria-label-on-the-wrapper convention `buildPlayerStat()`'s own
+      icon+badge established elsewhere on this page. The remaining count
+      itself still comes from `gridDraftLineCells(axis, index,
       gridSize)`, a client-side mirror of
-      `GameService::submitGridDraftPick()`'s own cell-counting logic) --
-      "Row 2 (3 cards)", "Column 1 (2 cards)", etc. A line with 0 cards
-      left renders disabled rather than being sent to the server only to
-      be rejected. Clicking a button calls `submitGridDraftAction(axis,
-      index)` (`submitGridDraftPick()`, `POST /games/draft/grid-pick`).
+      `GameService::submitGridDraftPick()`'s own cell-counting logic; a
+      line with 0 cards left still renders disabled rather than being
+      sent to the server only to be rejected, and clicking an enabled one
+      still calls the exact same `submitGridDraftAction(axis, index)`
+      (`submitGridDraftPick()`, `POST /games/draft/grid-pick`) as before
+      -- issue #417 only changed where/how the button renders, not what
+      clicking it does.
+
       The status line (`#grid-draft-drafting-status`) reads whose turn it
       is by `drafting.current_turn_username` when it isn't yours (issue
       #189 -- for a 3-4 player match, "not your turn" alone doesn't say

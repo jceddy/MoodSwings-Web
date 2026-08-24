@@ -660,21 +660,35 @@ body.game-page {
 }
 
 /* Grid Draft's own grid (3x3 for 2-3 players, 4x4 for exactly 4 -- see
-   GameService::gridDraftGridSize()), laid out in the same row-major order
-   (index = row * grid_size + column) getState() reports grid_cards in, so
-   no client-side re-ordering is needed between the two. grid-template-columns
-   below is only the 3-column default; renderGridDraftDrafting() overrides it
-   inline with drafting.grid_size on every render, so a 4-player match's 4x4
-   grid gets 4 columns instead. Columns are sized to their content (not
-   1fr/minmax(0,1fr)) so the grid hugs its own card-widths plus gaps rather
-   than stretching to fill whatever width its container happens to have --
-   otherwise each column would grow to fill the extra space, spreading the
-   cards apart instead of keeping them snug. An empty cell (its card already
-   taken this round) gets a plain dashed placeholder instead of a card
-   thumbnail. */
+   GameService::gridDraftGridSize()). Issue #417's own "change Grid
+   Draft's button placement to make it clearer what cards you're taking"
+   item, confirmed by the maintainer: this single grid now holds the
+   row/column arrow buttons too (renderGridDraftDrafting() in game.js),
+   not just the NxN cells -- a leading min-content column (row arrows,
+   pointing right into their own row) and a trailing min-content row
+   (column arrows, pointing up into their own column), so
+   grid-template-columns/-rows both get one extra track beyond the N cell
+   tracks the base NxN grid needs. The cell tracks are still laid out in
+   the same row-major order (index = row * grid_size + column)
+   getState() reports grid_cards in -- game.js just offsets every cell's
+   own grid-column by 1 to make room for the row-arrow column, and
+   assigns each arrow button an explicit grid-column/grid-row of its own
+   (rather than relying on source order) since the row buttons, cells,
+   and column buttons are appended in three separate passes, not
+   interleaved. Both dimensions below are only the 3x3 default;
+   renderGridDraftDrafting() overrides them inline with drafting.grid_size
+   on every render, so a 4-player match's 4x4 grid gets 4 cell columns/
+   rows instead. Every track is sized to its own content (not
+   1fr/minmax(0,1fr)) so the grid hugs its own card widths/arrow-button
+   sizes plus gaps rather than stretching to fill whatever width its
+   container happens to have -- otherwise each column would grow to fill
+   the extra space, spreading the cards apart instead of keeping them
+   snug. An empty cell (its card already taken this round) gets a plain
+   dashed placeholder instead of a card thumbnail. */
 #grid-draft-grid {
     display: grid;
-    grid-template-columns: repeat(3, min-content);
+    grid-template-columns: min-content repeat(3, min-content);
+    grid-template-rows: repeat(3, min-content) min-content;
     gap: 0.5rem;
     /* A grid container's own width is otherwise "auto" -- it fills its
        containing block just like an ordinary block element, regardless
@@ -705,35 +719,51 @@ body.game-page {
     height: calc(7.8rem * var(--card-scale, 1));
 }
 
-/* Row buttons and Column buttons are each their own flex-wrap row
-   (.grid-draft-picks-row), stacked vertically inside #grid-draft-picks --
-   so Column always starts on its own line below Row, rather than the two
-   sets wrapping together based on available width. The margin-top on
-   #grid-draft-picks itself separates the button rows from the grid of
-   cards above them. */
-#grid-draft-picks {
+/* A row/column's own pick button (issue #417) -- placed by game.js in the
+   SAME grid row (for a row button) or grid column (for a column button)
+   as the cells it picks, so it automatically stretches to match that
+   row's height or that column's width, at any card-scale/breakpoint,
+   with no separate fixed-size rule (unlike the old .grid-draft-pick-
+   button this replaced) needed to keep the two in sync -- CSS grid does
+   that sizing for free once two items share a track. `align-items:
+   stretch`/`justify-items: stretch` are the grid default, so no explicit
+   width/height/stretch rule is needed here at all. */
+.grid-draft-arrow-button {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
-    margin-top: 1rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.15rem;
+    border: 1px solid var(--color-border);
+    border-radius: 0.4rem;
+    background: var(--color-surface);
+    color: var(--color-text);
+    cursor: pointer;
+    padding: 0.25rem;
 }
 
-/* Fixed width (rather than each button sizing to its own text) so every
-   button in both rows lines up into a neat grid instead of jagged edges
-   from "Row 1 (3)" vs. "Col 2 (0)"'s differing lengths. Wide enough for
-   the longest label ("Row/Col N (N)", grid_size never exceeds 4) with a
-   little breathing room -- narrowed from the wider fixed width the old
-   "Row/Col N (N cards)" label needed, most noticeable at 4 players where
-   8 buttons (4 rows + 4 columns) share the picks panel a 3x3 grid's 6
-   buttons already do. */
-.grid-draft-pick-button {
-    width: 5rem;
+.grid-draft-arrow-button:disabled {
+    cursor: default;
+    opacity: 0.5;
 }
 
-.grid-draft-picks-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
+/* The direction glyph itself (aria-hidden -- the button's own aria-label
+   already carries the full "Draft row 2 (3 cards left)" meaning, the
+   same title/aria-label-on-the-wrapper convention buildPlayerStat()'s
+   icon+badge already established). Sized well above the plain body text
+   around it so it reads clearly as an arrow, not a stray character. */
+.grid-draft-arrow-button__glyph {
+    font-size: 1.5rem;
+    line-height: 1;
+}
+
+/* The remaining-card-count readout underneath the glyph -- same
+   .player-stat__badge-style "small muted number" role, just inline text
+   here rather than an absolutely-positioned overlay, since there's no
+   icon shape underneath this one that a badge would need to overlay. */
+.grid-draft-arrow-button__count {
+    font-size: 0.75rem;
+    color: var(--color-muted);
 }
 
 /* A pixel or two of breathing room between a card pack/picker above and

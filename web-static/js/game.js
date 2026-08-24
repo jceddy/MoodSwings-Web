@@ -5573,14 +5573,80 @@
             ? (drafting.picks_this_round === 0 ? 'Your turn -- choose a row or column to take.' : 'Your turn -- choose a row or column of what\'s left.')
             : 'Waiting for ' + (drafting.current_turn_username || "your opponent") + "'s turn.";
 
+        // Issue #417's own "change Grid Draft's button placement to make it
+        // clearer what cards you're taking" item, confirmed by the
+        // maintainer: rather than two disconnected rows of "Row N (N)"/
+        // "Col N (N)" buttons below the grid (#grid-draft-picks, removed),
+        // every row/column's own pick button now lives INSIDE this same
+        // grid, right where it visually points -- an arrow button down the
+        // left edge of each row (pointing right, into that row) and one
+        // along the bottom of each column (pointing up, into that column).
+        // One CSS grid (grid-template-columns/-rows both gain a leading/
+        // trailing min-content track beyond the N cell tracks) does the
+        // alignment work that used to need a fixed .grid-draft-pick-button
+        // width -- a button placed in the same row/column track as its own
+        // cells stretches to that track's own size for free, so a row
+        // button's height always matches its row's tallest cell and a
+        // column button's width always matches its column's own cell
+        // width, at any card-scale/breakpoint, with no separate sizing
+        // rule to keep in sync. See buildGridDraftArrowButton() below and
+        // "Grid Draft" in web-static/README.md.
         const gridContainer = document.getElementById('grid-draft-grid');
         gridContainer.innerHTML = '';
-        // style.css hardcodes a 3-column layout for the common 3x3 grid;
-        // override it inline for the 4x4 grid dealt to a 4-player match.
-        gridContainer.style.gridTemplateColumns = 'repeat(' + drafting.grid_size + ', min-content)';
-        drafting.grid_cards.forEach((card) => {
+        const gridSize = drafting.grid_size;
+        // Column 1 / row (gridSize + 1) are the arrow-button tracks;
+        // columns 2..gridSize+1 / rows 1..gridSize are the cells
+        // themselves, in the same row-major order grid_cards reports.
+        gridContainer.style.gridTemplateColumns = 'min-content repeat(' + gridSize + ', min-content)';
+        gridContainer.style.gridTemplateRows = 'repeat(' + gridSize + ', min-content) min-content';
+
+        function buildGridDraftArrowButton(axis, index, glyph) {
+            const cellsRemaining = gridDraftLineCells(axis, index, gridSize)
+                .filter((cell) => drafting.grid_cards[cell] !== null).length;
+            const label = (axis === 'row' ? 'Draft row ' : 'Draft column ') + (index + 1)
+                + ' (' + cellsRemaining + ' card' + (cellsRemaining === 1 ? '' : 's') + ' left)';
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'grid-draft-arrow-button';
+            button.title = label;
+            button.setAttribute('aria-label', label);
+            button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
+            button.addEventListener('click', () => submitGridDraftAction(axis, index));
+
+            // aria-hidden on both -- the button's own aria-label above
+            // already carries the full meaning ("Draft row 2 (3 cards
+            // left)"), the same title/aria-label-on-the-wrapper convention
+            // buildPlayerStat()'s icon+badge already established.
+            const glyphEl = document.createElement('span');
+            glyphEl.className = 'grid-draft-arrow-button__glyph';
+            glyphEl.textContent = glyph;
+            glyphEl.setAttribute('aria-hidden', 'true');
+            button.appendChild(glyphEl);
+
+            const countEl = document.createElement('span');
+            countEl.className = 'grid-draft-arrow-button__count';
+            countEl.textContent = String(cellsRemaining);
+            countEl.setAttribute('aria-hidden', 'true');
+            button.appendChild(countEl);
+
+            return button;
+        }
+
+        for (let row = 0; row < gridSize; row++) {
+            const button = buildGridDraftArrowButton('row', row, '→');
+            button.style.gridColumn = '1';
+            button.style.gridRow = String(row + 1);
+            gridContainer.appendChild(button);
+        }
+
+        drafting.grid_cards.forEach((card, i) => {
+            const row = Math.floor(i / gridSize);
+            const col = i % gridSize;
             const cellEl = document.createElement('div');
             cellEl.className = 'grid-draft-cell';
+            cellEl.style.gridColumn = String(col + 2);
+            cellEl.style.gridRow = String(row + 1);
             if (card) {
                 cellEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
             } else {
@@ -5589,29 +5655,12 @@
             gridContainer.appendChild(cellEl);
         });
 
-        const picksContainer = document.getElementById('grid-draft-picks');
-        picksContainer.innerHTML = '';
-        // Row buttons and Column buttons each get their own row div (rather
-        // than one shared flex-wrap container) so Column always starts a
-        // new line below Row, regardless of how much horizontal space is
-        // available to wrap into.
-        ['row', 'column'].forEach((axis) => {
-            const axisRow = document.createElement('div');
-            axisRow.className = 'grid-draft-picks-row';
-            for (let index = 0; index < drafting.grid_size; index++) {
-                const cellsRemaining = gridDraftLineCells(axis, index, drafting.grid_size)
-                    .filter((cell) => drafting.grid_cards[cell] !== null).length;
-
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'grid-draft-pick-button';
-                button.textContent = (axis === 'row' ? 'Row ' : 'Col ') + (index + 1) + ' (' + cellsRemaining + ')';
-                button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
-                button.addEventListener('click', () => submitGridDraftAction(axis, index));
-                axisRow.appendChild(button);
-            }
-            picksContainer.appendChild(axisRow);
-        });
+        for (let col = 0; col < gridSize; col++) {
+            const button = buildGridDraftArrowButton('column', col, '↑');
+            button.style.gridColumn = String(col + 2);
+            button.style.gridRow = String(gridSize + 1);
+            gridContainer.appendChild(button);
+        }
 
         document.getElementById('grid-draft-remaining-deck-count').textContent =
             drafting.remaining_deck_count + ' card' + (drafting.remaining_deck_count === 1 ? '' : 's') + ' left in the pool.';
