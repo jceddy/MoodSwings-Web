@@ -875,6 +875,34 @@ if ($path === '/user/auto-apply-scoring-bonuses-preference' && $method === 'POST
     respond(200, ['status' => 'ok']);
 }
 
+// "Board layout" (issue #417) as a personal preference (Settings dialog's
+// "Display" section) -- 'above_play_area' (default) leaves the
+// Round/Score/Players section exactly where it's always rendered;
+// 'below_hand' has game.js relocate it after "Your hand" and the
+// "selected card to play" panel instead. Current value is already
+// carried on GET /me's own user object, so this route is write-only,
+// same pattern as /user/auto-apply-scoring-bonuses-preference above.
+// Validated against the column's own two ENUM values here (rather than
+// just letting a bad value hit the database) so a typo'd/tampered
+// request gets a clean 400 instead of a raw SQL error.
+if ($path === '/user/board-layout-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('board_layout_preference', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'board_layout_preference is required.']);
+    }
+    if (!in_array($input['board_layout_preference'], ['above_play_area', 'below_hand'], true)) {
+        respond(400, ['status' => 'error', 'message' => 'board_layout_preference must be one of: above_play_area, below_hand.']);
+    }
+
+    (new UserRepository())->setBoardLayoutPreference(
+        (int) $currentUser['id'],
+        $input['board_layout_preference']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't
@@ -969,6 +997,10 @@ if ($path === '/games' && $method === 'POST') {
     // the creator's partner instead of requiring partner_user_id. See
     // createGame()'s own docblock.
     $randomTeams = (bool) ($body['random_teams'] ?? false);
+    // Issue #417's own "let the bot go first" item -- only meaningful for
+    // a non-team format with at least one practice bot seated. See
+    // createGame()'s own docblock.
+    $botGoesFirst = (bool) ($body['bot_goes_first'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1024,6 +1056,7 @@ if ($path === '/games' && $method === 'POST') {
             $rotisserieDraftCutoffCount,
             $tieredRotisserieDraftMode,
             $tieredRotisserieDraftTiers,
+            $botGoesFirst,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {

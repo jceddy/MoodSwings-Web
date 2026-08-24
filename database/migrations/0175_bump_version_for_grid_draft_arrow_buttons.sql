@@ -1,0 +1,16 @@
+-- Issue #417's own "Change Grid Draft's button placement to make it
+-- clearer what cards you're taking" item, confirmed by the maintainer:
+-- the two disconnected "Row N (N)"/"Column N (N)" button rows below
+-- #grid-draft-grid (the old #grid-draft-picks/.grid-draft-pick-button,
+-- both removed) are replaced by arrow buttons INSIDE the grid itself --
+-- one down its left edge per row (pointing right, into that row) and
+-- one along its bottom edge per column (pointing up, into that column).
+-- #grid-draft-grid's own CSS grid gains one extra min-content track in
+-- each dimension for these arrow buttons; game.js positions every cell
+-- and arrow button with an explicit grid-column/grid-row rather than
+-- relying on source order. See "Grid Draft" in web-static/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0174 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.31' WHERE id = 1;

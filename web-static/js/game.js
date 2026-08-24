@@ -125,6 +125,89 @@
         return outputArray;
     }
 
+    // Card size slider (issue #417) -- a pure client-side, per-device
+    // rendering preference, same localStorage-backed mechanism as
+    // app.js's own THEME_STORAGE_KEY/initThemeSelect() (a plain custom
+    // property here, --card-scale, instead of a data-theme attribute; see
+    // its own definition in style.css for the full list of rules it
+    // scales). Read by both initSettings() below (to apply it, and keep
+    // the slider/readout in sync) and discardStackCardWidthPx() (so the
+    // discard pile's own column-count math still reflects whatever size
+    // is actually rendered, not just the unscaled breakpoint default).
+    const CARD_SCALE_STORAGE_KEY = 'cardScalePreference';
+
+    function getCardScale() {
+        try {
+            const stored = Number(localStorage.getItem(CARD_SCALE_STORAGE_KEY));
+            // Guards against a corrupted/hand-edited localStorage value
+            // (0, negative, NaN, or wildly out of the slider's own
+            // 50-200% range) rendering every card at a broken size --
+            // falls back to 100% (no scaling) instead.
+            if (stored >= 0.5 && stored <= 2) {
+                return stored;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls
+            // back to 100% below, same as app.js's own theme preference.
+        }
+        return 1;
+    }
+
+    function applyCardScale(scale) {
+        document.documentElement.style.setProperty('--card-scale', String(scale));
+    }
+
+    // Applied immediately (not deferred until the Settings dialog is
+    // first opened) since cards can render well before that -- the
+    // slider/readout inside the dialog are only synced to this same
+    // value once initSettings() itself runs, right below.
+    applyCardScale(getCardScale());
+
+    // "Board layout" (issue #417) -- unlike card size above, this IS a
+    // real server-synced preference (users.board_layout_preference,
+    // migration 0174), since where this section renders is meaningful
+    // enough to want it to follow the player across devices. Relocates
+    // the Round/Score/Players section (#board-round-status +
+    // #board-status-group, see that element's own docblock in
+    // index.html for why it's two pieces rather than one) to sit right
+    // after #choices-panel -- "Your hand" and the "selected card to
+    // play" panel, per the maintainer's own explicit clarification --
+    // instead of its default position between the top banners and the
+    // draft/in-play area. Pure DOM relocation (insertAdjacentElement),
+    // not a CSS reorder -- #board-view interleaves this section with a
+    // lot of unrelated content (draft panels, in-play board, etc.) that
+    // must NOT move, so giving the whole section a CSS `order` would
+    // require assigning one to every sibling instead of just these two
+    // pieces. Idempotent in both directions: calling either branch again
+    // when already in that state is a harmless no-op (insertAdjacentElement
+    // just re-confirms the current position), so this is safe to call on
+    // every preference change with no "was it already applied" tracking
+    // needed.
+    function applyBoardLayoutPreference(preference) {
+        const boardRoundStatus = document.getElementById('board-round-status');
+        const boardStatusGroup = document.getElementById('board-status-group');
+
+        if (preference === 'below_hand') {
+            const choicesPanel = document.getElementById('choices-panel');
+            choicesPanel.insertAdjacentElement('afterend', boardRoundStatus);
+            boardRoundStatus.insertAdjacentElement('afterend', boardStatusGroup);
+        } else {
+            // 'above_play_area' (the default) and any unrecognized value
+            // (e.g. a future rollback) both fall back to the original,
+            // always-safe layout rather than leaving the section wherever
+            // a previous 'below_hand' call last put it.
+            const boardTitle = document.getElementById('board-title');
+            const pendingDecisionBanner = document.getElementById('pending-decision-banner');
+            boardTitle.insertAdjacentElement('afterend', boardRoundStatus);
+            pendingDecisionBanner.insertAdjacentElement('afterend', boardStatusGroup);
+        }
+    }
+
+    // Applied immediately, same reasoning as applyCardScale() above --
+    // the board can render (and this section along with it) before the
+    // Settings dialog is ever opened.
+    applyBoardLayoutPreference(user.board_layout_preference);
+
     // Settings dialog (formerly a standalone Notifications dialog, issue
     // #108) -- now also hosts the "Default selections mode" personal
     // preference (see settings-default-selections-checkbox's own wiring
@@ -247,6 +330,57 @@
         autoApplyScoringBonusesCheckbox.addEventListener('change', () => {
             user.auto_apply_scoring_bonuses = autoApplyScoringBonusesCheckbox.checked;
             saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
+        });
+
+        // Card size slider (issue #417) -- a client-only preference (see
+        // CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale() above,
+        // already applied once at page load independent of this dialog
+        // ever being opened); this just keeps the slider/readout in sync
+        // with that same value and reacts to it changing, the same
+        // "sync on open, save on change" shape as the two server-synced
+        // preferences above -- just to localStorage instead of the
+        // server. 'input' (not 'change') so the readout/cards update live
+        // while dragging, matching how a slider control is normally
+        // expected to behave. The discard pile is explicitly re-rendered
+        // afterward -- unlike every other .card-thumb on the page, it
+        // doesn't just reflow for free on a CSS-only size change, since
+        // discardStackColumnCount() (see its own definition below) bakes
+        // the card width into a column count computed in JS, and nothing
+        // else would otherwise prompt that to recompute until the next
+        // window resize or board poll.
+        const cardSizeSlider = document.getElementById('settings-card-size-slider');
+        const cardSizeValueEl = document.getElementById('settings-card-size-value');
+        const initialCardSizePercent = Math.round(getCardScale() * 100);
+        cardSizeSlider.value = String(initialCardSizePercent);
+        cardSizeValueEl.textContent = initialCardSizePercent + '%';
+        cardSizeSlider.addEventListener('input', () => {
+            const percent = Number(cardSizeSlider.value);
+            const scale = percent / 100;
+            cardSizeValueEl.textContent = percent + '%';
+            applyCardScale(scale);
+            try {
+                localStorage.setItem(CARD_SCALE_STORAGE_KEY, String(scale));
+            } catch (e) {
+                // ignore -- the selection just won't persist across reloads
+            }
+            renderDiscardPile(lastDiscardPile, lastDiscardCanAct);
+        });
+
+        // Board layout (issue #417) -- a real server-synced preference
+        // (see saveBoardLayoutPreference()/user.board_layout_preference),
+        // same "sync on open, save on change" shape as
+        // default_selections_mode_preference/auto_pass_on_empty_hand/
+        // auto_apply_scoring_bonuses above, just also re-applying the
+        // layout itself immediately (applyBoardLayoutPreference() already
+        // ran once at page load with whatever value getCurrentUser()
+        // returned; this keeps it in sync with any change made here
+        // without needing a reload).
+        const boardLayoutSelect = document.getElementById('settings-board-layout-select');
+        boardLayoutSelect.value = user.board_layout_preference;
+        boardLayoutSelect.addEventListener('change', () => {
+            user.board_layout_preference = boardLayoutSelect.value;
+            applyBoardLayoutPreference(boardLayoutSelect.value);
+            saveBoardLayoutPreference(boardLayoutSelect.value);
         });
 
         // The dialog itself (and its "not supported" message) must still be
@@ -2342,6 +2476,25 @@
             !show || document.getElementById('new-game-bot-saved-decklist').value !== '';
     }
 
+    // Issue #417's own "let the bot go first" item -- only meaningful
+    // when at least one bot is checked AND the format isn't 'team'/
+    // 'closed_team' (Open/Closed Team Play's own "who actually takes the
+    // opening turn" is a separate, later turn_order decision this can't
+    // influence -- see GameService::resolveFirstPlayerId()'s own
+    // docblock). Unchecked (not just hidden) whenever it goes out of
+    // view, same as a bot checkbox itself above, so a stale "true" from
+    // an earlier format/bot selection never gets submitted for a
+    // combination where it wouldn't do anything.
+    function updateBotGoesFirstFieldVisibility() {
+        const format = document.getElementById('new-game-format').value;
+        const isTeamFormat = format === 'team' || format === 'closed_team';
+        const show = anyBotChecked() && !isTeamFormat;
+        document.getElementById('new-game-bot-goes-first-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-bot-goes-first').checked = false;
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -2365,6 +2518,7 @@
 
         updateOpponentSelectionLimit();
         updateBotDecklistFieldsVisibility();
+        updateBotGoesFirstFieldVisibility();
     }
 
     function updateOpponentSelectionLimit() {
@@ -2628,6 +2782,7 @@
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
+                checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
                 label.appendChild(checkbox);
                 label.append(' ' + bot.username + ' (practice bot)');
                 opponentCheckboxes.appendChild(label);
@@ -2826,6 +2981,12 @@
         const botDecklistText = botCheckedForCustomDuel && botSavedDecklistId === undefined
             ? document.getElementById('new-game-bot-decklist-text').value
             : undefined;
+        // Only meaningful for a non-team format with a bot checked -- see
+        // updateBotGoesFirstFieldVisibility() for when this field is
+        // actually shown to the creator; #new-game-bot-goes-first is
+        // itself unchecked whenever hidden, so reading .checked
+        // unconditionally here already reflects that.
+        const botGoesFirst = document.getElementById('new-game-bot-goes-first').checked;
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -2850,6 +3011,7 @@
             rotisserieDraftCutoffCount,
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
+            botGoesFirst,
         );
 
         if (!ok) {
@@ -3266,18 +3428,33 @@
     // pile's own vertical footprint as small as the current viewport
     // allows at all times, including e.g. a phone rotating from portrait
     // to landscape mid-game.
-    const DISCARD_STACK_CARD_WIDTH_PX = 5.5 * 16; // .card-thumb's own fixed 5.5rem width
     const DISCARD_STACK_GAP_PX = 0.5 * 16; // #discard-list's own flex gap
 
-    // Both pixel constants above assume the default 16px root font-size
-    // the rest of this file's own rem/px math already assumes (no page
-    // here overrides it) -- clientWidth itself is only ever available in
-    // pixels, so there's no way to ask for "how many 5.5rem slots fit"
-    // directly.
+    // #discard-list is never touched by the phone-narrow shrink (that one
+    // only ever targets .in-play-zone/deck-view/draft-pool cards, see
+    // style.css), so .card-thumb's own base width applies here at every
+    // viewport EXCEPT the desktop doubling below min-width: 1280px (issue
+    // #417's own "Bigger default card size on desktop" item) -- matched
+    // here by the same 1280px breakpoint, since CSS media queries and
+    // this JS have no way to share one literal source of truth. Both
+    // pixel constants assume the default 16px root font-size the rest of
+    // this file's own rem/px math already assumes (no page here overrides
+    // it) -- clientWidth itself is only ever available in pixels, so
+    // there's no way to ask for "how many rem-sized slots fit" directly.
+    // Also scaled by getCardScale() (issue #417's own card size slider) --
+    // style.css's own --card-scale multiplies .card-thumb's actual
+    // rendered width the exact same way, so this has to match or the
+    // column count would drift from what's really on screen the moment
+    // the slider leaves its 100% default.
+    function discardStackCardWidthPx() {
+        return (window.innerWidth >= 1280 ? 11 : 5.5) * 16 * getCardScale();
+    }
+
     function discardStackColumnCount() {
         const availableWidth = document.getElementById('discard-list').clientWidth;
+        const cardWidthPx = discardStackCardWidthPx();
         const columns = Math.floor(
-            (availableWidth + DISCARD_STACK_GAP_PX) / (DISCARD_STACK_CARD_WIDTH_PX + DISCARD_STACK_GAP_PX)
+            (availableWidth + DISCARD_STACK_GAP_PX) / (cardWidthPx + DISCARD_STACK_GAP_PX)
         );
         return Math.max(1, columns);
     }
@@ -3938,9 +4115,6 @@
     // needs -- so a future stat would add its own entry here rather than
     // this doubling as a general-purpose icon library.
     const PLAYER_STAT_ICON_PATHS = {
-        // A seat at the table: a backed bench on two legs.
-        seat: '<rect x="6" y="4" width="12" height="9" rx="1"/>'
-            + '<rect x="7" y="13" width="2" height="6"/><rect x="15" y="13" width="2" height="6"/>',
         // Score: a plain 5-point star.
         points: '<polygon points="12,2 14.4,8.8 21.5,8.9 15.8,13.2 17.9,20.1 '
             + '12,16 6.1,20.1 8.2,13.2 2.5,8.9 9.6,8.8"/>',
@@ -4311,7 +4485,7 @@
                 iconsEl.className = 'player-icons';
                 li.appendChild(iconsEl);
 
-                // Issue #143: seat/points/wins/hand-count each become an
+                // Issue #143: points/wins/hand-count each become an
                 // icon with a numeric badge overlay instead of a plain
                 // "N thing(s)" clause; went-first/on-turn become an
                 // icon-only flag (nothing to count) instead of an appended
@@ -4348,7 +4522,11 @@
                         isSameTeamAsViewer ? 'player-flag--teamMate' : 'player-flag--teamOpponent'
                     ));
                 }
-                iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
+                // The seat-number icon (issue #143's original "bench" icon)
+                // was removed here per issue #417 -- a player's seat is
+                // already unambiguous from this list's own top-to-bottom
+                // ordering, and the icon itself read as too similar to the
+                // hand-count icon just below it at a glance.
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
                 iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
@@ -5395,14 +5573,80 @@
             ? (drafting.picks_this_round === 0 ? 'Your turn -- choose a row or column to take.' : 'Your turn -- choose a row or column of what\'s left.')
             : 'Waiting for ' + (drafting.current_turn_username || "your opponent") + "'s turn.";
 
+        // Issue #417's own "change Grid Draft's button placement to make it
+        // clearer what cards you're taking" item, confirmed by the
+        // maintainer: rather than two disconnected rows of "Row N (N)"/
+        // "Col N (N)" buttons below the grid (#grid-draft-picks, removed),
+        // every row/column's own pick button now lives INSIDE this same
+        // grid, right where it visually points -- an arrow button down the
+        // left edge of each row (pointing right, into that row) and one
+        // along the bottom of each column (pointing up, into that column).
+        // One CSS grid (grid-template-columns/-rows both gain a leading/
+        // trailing min-content track beyond the N cell tracks) does the
+        // alignment work that used to need a fixed .grid-draft-pick-button
+        // width -- a button placed in the same row/column track as its own
+        // cells stretches to that track's own size for free, so a row
+        // button's height always matches its row's tallest cell and a
+        // column button's width always matches its column's own cell
+        // width, at any card-scale/breakpoint, with no separate sizing
+        // rule to keep in sync. See buildGridDraftArrowButton() below and
+        // "Grid Draft" in web-static/README.md.
         const gridContainer = document.getElementById('grid-draft-grid');
         gridContainer.innerHTML = '';
-        // style.css hardcodes a 3-column layout for the common 3x3 grid;
-        // override it inline for the 4x4 grid dealt to a 4-player match.
-        gridContainer.style.gridTemplateColumns = 'repeat(' + drafting.grid_size + ', min-content)';
-        drafting.grid_cards.forEach((card) => {
+        const gridSize = drafting.grid_size;
+        // Column 1 / row (gridSize + 1) are the arrow-button tracks;
+        // columns 2..gridSize+1 / rows 1..gridSize are the cells
+        // themselves, in the same row-major order grid_cards reports.
+        gridContainer.style.gridTemplateColumns = 'min-content repeat(' + gridSize + ', min-content)';
+        gridContainer.style.gridTemplateRows = 'repeat(' + gridSize + ', min-content) min-content';
+
+        function buildGridDraftArrowButton(axis, index, glyph) {
+            const cellsRemaining = gridDraftLineCells(axis, index, gridSize)
+                .filter((cell) => drafting.grid_cards[cell] !== null).length;
+            const label = (axis === 'row' ? 'Draft row ' : 'Draft column ') + (index + 1)
+                + ' (' + cellsRemaining + ' card' + (cellsRemaining === 1 ? '' : 's') + ' left)';
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'grid-draft-arrow-button';
+            button.title = label;
+            button.setAttribute('aria-label', label);
+            button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
+            button.addEventListener('click', () => submitGridDraftAction(axis, index));
+
+            // aria-hidden on both -- the button's own aria-label above
+            // already carries the full meaning ("Draft row 2 (3 cards
+            // left)"), the same title/aria-label-on-the-wrapper convention
+            // buildPlayerStat()'s icon+badge already established.
+            const glyphEl = document.createElement('span');
+            glyphEl.className = 'grid-draft-arrow-button__glyph';
+            glyphEl.textContent = glyph;
+            glyphEl.setAttribute('aria-hidden', 'true');
+            button.appendChild(glyphEl);
+
+            const countEl = document.createElement('span');
+            countEl.className = 'grid-draft-arrow-button__count';
+            countEl.textContent = String(cellsRemaining);
+            countEl.setAttribute('aria-hidden', 'true');
+            button.appendChild(countEl);
+
+            return button;
+        }
+
+        for (let row = 0; row < gridSize; row++) {
+            const button = buildGridDraftArrowButton('row', row, '→');
+            button.style.gridColumn = '1';
+            button.style.gridRow = String(row + 1);
+            gridContainer.appendChild(button);
+        }
+
+        drafting.grid_cards.forEach((card, i) => {
+            const row = Math.floor(i / gridSize);
+            const col = i % gridSize;
             const cellEl = document.createElement('div');
             cellEl.className = 'grid-draft-cell';
+            cellEl.style.gridColumn = String(col + 2);
+            cellEl.style.gridRow = String(row + 1);
             if (card) {
                 cellEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
             } else {
@@ -5411,29 +5655,12 @@
             gridContainer.appendChild(cellEl);
         });
 
-        const picksContainer = document.getElementById('grid-draft-picks');
-        picksContainer.innerHTML = '';
-        // Row buttons and Column buttons each get their own row div (rather
-        // than one shared flex-wrap container) so Column always starts a
-        // new line below Row, regardless of how much horizontal space is
-        // available to wrap into.
-        ['row', 'column'].forEach((axis) => {
-            const axisRow = document.createElement('div');
-            axisRow.className = 'grid-draft-picks-row';
-            for (let index = 0; index < drafting.grid_size; index++) {
-                const cellsRemaining = gridDraftLineCells(axis, index, drafting.grid_size)
-                    .filter((cell) => drafting.grid_cards[cell] !== null).length;
-
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'grid-draft-pick-button';
-                button.textContent = (axis === 'row' ? 'Row ' : 'Col ') + (index + 1) + ' (' + cellsRemaining + ')';
-                button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
-                button.addEventListener('click', () => submitGridDraftAction(axis, index));
-                axisRow.appendChild(button);
-            }
-            picksContainer.appendChild(axisRow);
-        });
+        for (let col = 0; col < gridSize; col++) {
+            const button = buildGridDraftArrowButton('column', col, '↑');
+            button.style.gridColumn = String(col + 2);
+            button.style.gridRow = String(gridSize + 1);
+            gridContainer.appendChild(button);
+        }
 
         document.getElementById('grid-draft-remaining-deck-count').textContent =
             drafting.remaining_deck_count + ' card' + (drafting.remaining_deck_count === 1 ? '' : 's') + ' left in the pool.';
