@@ -125,6 +125,44 @@
         return outputArray;
     }
 
+    // Card size slider (issue #417) -- a pure client-side, per-device
+    // rendering preference, same localStorage-backed mechanism as
+    // app.js's own THEME_STORAGE_KEY/initThemeSelect() (a plain custom
+    // property here, --card-scale, instead of a data-theme attribute; see
+    // its own definition in style.css for the full list of rules it
+    // scales). Read by both initSettings() below (to apply it, and keep
+    // the slider/readout in sync) and discardStackCardWidthPx() (so the
+    // discard pile's own column-count math still reflects whatever size
+    // is actually rendered, not just the unscaled breakpoint default).
+    const CARD_SCALE_STORAGE_KEY = 'cardScalePreference';
+
+    function getCardScale() {
+        try {
+            const stored = Number(localStorage.getItem(CARD_SCALE_STORAGE_KEY));
+            // Guards against a corrupted/hand-edited localStorage value
+            // (0, negative, NaN, or wildly out of the slider's own
+            // 50-200% range) rendering every card at a broken size --
+            // falls back to 100% (no scaling) instead.
+            if (stored >= 0.5 && stored <= 2) {
+                return stored;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls
+            // back to 100% below, same as app.js's own theme preference.
+        }
+        return 1;
+    }
+
+    function applyCardScale(scale) {
+        document.documentElement.style.setProperty('--card-scale', String(scale));
+    }
+
+    // Applied immediately (not deferred until the Settings dialog is
+    // first opened) since cards can render well before that -- the
+    // slider/readout inside the dialog are only synced to this same
+    // value once initSettings() itself runs, right below.
+    applyCardScale(getCardScale());
+
     // Settings dialog (formerly a standalone Notifications dialog, issue
     // #108) -- now also hosts the "Default selections mode" personal
     // preference (see settings-default-selections-checkbox's own wiring
@@ -247,6 +285,40 @@
         autoApplyScoringBonusesCheckbox.addEventListener('change', () => {
             user.auto_apply_scoring_bonuses = autoApplyScoringBonusesCheckbox.checked;
             saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
+        });
+
+        // Card size slider (issue #417) -- a client-only preference (see
+        // CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale() above,
+        // already applied once at page load independent of this dialog
+        // ever being opened); this just keeps the slider/readout in sync
+        // with that same value and reacts to it changing, the same
+        // "sync on open, save on change" shape as the two server-synced
+        // preferences above -- just to localStorage instead of the
+        // server. 'input' (not 'change') so the readout/cards update live
+        // while dragging, matching how a slider control is normally
+        // expected to behave. The discard pile is explicitly re-rendered
+        // afterward -- unlike every other .card-thumb on the page, it
+        // doesn't just reflow for free on a CSS-only size change, since
+        // discardStackColumnCount() (see its own definition below) bakes
+        // the card width into a column count computed in JS, and nothing
+        // else would otherwise prompt that to recompute until the next
+        // window resize or board poll.
+        const cardSizeSlider = document.getElementById('settings-card-size-slider');
+        const cardSizeValueEl = document.getElementById('settings-card-size-value');
+        const initialCardSizePercent = Math.round(getCardScale() * 100);
+        cardSizeSlider.value = String(initialCardSizePercent);
+        cardSizeValueEl.textContent = initialCardSizePercent + '%';
+        cardSizeSlider.addEventListener('input', () => {
+            const percent = Number(cardSizeSlider.value);
+            const scale = percent / 100;
+            cardSizeValueEl.textContent = percent + '%';
+            applyCardScale(scale);
+            try {
+                localStorage.setItem(CARD_SCALE_STORAGE_KEY, String(scale));
+            } catch (e) {
+                // ignore -- the selection just won't persist across reloads
+            }
+            renderDiscardPile(lastDiscardPile, lastDiscardCanAct);
         });
 
         // The dialog itself (and its "not supported" message) must still be
@@ -3307,8 +3379,13 @@
     // this file's own rem/px math already assumes (no page here overrides
     // it) -- clientWidth itself is only ever available in pixels, so
     // there's no way to ask for "how many rem-sized slots fit" directly.
+    // Also scaled by getCardScale() (issue #417's own card size slider) --
+    // style.css's own --card-scale multiplies .card-thumb's actual
+    // rendered width the exact same way, so this has to match or the
+    // column count would drift from what's really on screen the moment
+    // the slider leaves its 100% default.
     function discardStackCardWidthPx() {
-        return (window.innerWidth >= 1280 ? 11 : 5.5) * 16;
+        return (window.innerWidth >= 1280 ? 11 : 5.5) * 16 * getCardScale();
     }
 
     function discardStackColumnCount() {

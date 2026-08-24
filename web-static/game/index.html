@@ -945,6 +945,23 @@
 
         <hr>
 
+        <!-- Card size slider (issue #417) -- a pure client-side, per-device
+             rendering preference (localStorage, see initCardSizeSlider() in
+             game.js), unlike the two server-synced preferences above --
+             there's no gameplay behavior for the server to know about here,
+             just how big every card thumbnail renders for this browser.
+             Resizes every .card-thumb on the page (hand, in-play, discard,
+             the Decks dialog's own deck builder/saved/shared-deck views,
+             the draft pool), not just the live board's own cards -- see
+             "Card size slider" in web-static/README.md. -->
+        <section id="settings-display-section">
+            <h3>Display</h3>
+            <label for="settings-card-size-slider">Card size (<span id="settings-card-size-value">100%</span>)</label>
+            <input type="range" id="settings-card-size-slider" min="50" max="200" step="10" value="100">
+        </section>
+
+        <hr>
+
         <!-- Browser push notifications (issue #108) -- see initNotifications()
              in game.js and NotificationService.php. The same notify-me-when
              preferences fieldset applies to every linked channel at once

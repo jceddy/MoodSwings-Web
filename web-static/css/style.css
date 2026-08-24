@@ -7,6 +7,26 @@
    needing to restyle each one by hand. */
 :root {
     color-scheme: light;
+    /* Card size slider (issue #417) -- a plain multiplier every .card-thumb
+       (and everything sized proportionally to it -- .card-thumb--suppressed,
+       its suppressed-badge repositioning, .grid-draft-cell/--empty, the
+       discard pile's own stacking overlap) is wrapped in a
+       `calc(<value> * var(--card-scale, 1))` for, at every breakpoint this
+       file already has its own fixed size for (phone in-play-zone/deck-
+       view/draft-pool shrinks, the plain base size, the 1280px+ desktop
+       double). 1 (100%, no change) here in the CSS is the source of truth
+       for "the slider was never touched" -- initCardScaleSlider() in
+       game.js only ever overrides this via an inline style on
+       documentElement (same mechanism initThemeSelect() in app.js already
+       uses for --color-* above, just a plain custom property here instead
+       of a data-theme attribute), so a fresh visitor (or one with
+       localStorage unavailable) sees every card at exactly its normal,
+       already-tuned size with zero JS involvement. Deliberately NOT
+       applied to the plain corner badges (.card-thumb__badge and its
+       --value/--copy/--recolored* variants) -- consistent with the
+       "already read fine at any card size" precedent the 1280px desktop
+       double above established for those same badges. */
+    --card-scale: 1;
     --color-bg: #fff;
     --color-surface: #fff;
     --color-text: #222;
@@ -675,14 +695,14 @@ body.game-page {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-height: 7.8rem;
+    min-height: calc(7.8rem * var(--card-scale, 1));
 }
 
 .grid-draft-cell--empty {
     border: 1px dashed var(--border-color, #999);
     border-radius: 4px;
-    width: 5.5rem;
-    height: 7.8rem;
+    width: calc(5.5rem * var(--card-scale, 1));
+    height: calc(7.8rem * var(--card-scale, 1));
 }
 
 /* Row buttons and Column buttons are each their own flex-wrap row
@@ -865,22 +885,22 @@ body.game-page {
 
     .in-play-zone .card-thumb,
     .in-play-zone .card-thumb__art {
-        width: 4rem;
+        width: calc(4rem * var(--card-scale, 1));
     }
 
     /* Scaled-down counterparts of the same-named rules under
        .card-thumb--suppressed above, proportional to the smaller card
        width here (4/5.5 of the original 30px/20px). */
     .in-play-zone .card-thumb--suppressed {
-        width: calc(4rem + 22px);
+        width: calc((4rem + 22px) * var(--card-scale, 1));
     }
 
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--value {
-        top: calc(0.25rem + 15px);
+        top: calc(0.25rem + 15px * var(--card-scale, 1));
     }
 
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--suppressed {
-        bottom: calc(0.25rem + 15px);
+        bottom: calc(0.25rem + 15px * var(--card-scale, 1));
     }
 
     /* A saved/shared deck's full card list (issue #197) can run to well
@@ -900,7 +920,7 @@ body.game-page {
     #shared-deck-cards .card-thumb__art,
     .deck-builder-card-grid .card-thumb,
     .deck-builder-card-grid .card-thumb__art {
-        width: 4rem;
+        width: calc(4rem * var(--card-scale, 1));
     }
 
     /* The draft pool view (issue #314 follow-up) specifically wants four
@@ -916,7 +936,7 @@ body.game-page {
        even more room on every wider phone this same media query covers. */
     #draft-pool-sections .card-thumb,
     #draft-pool-sections .card-thumb__art {
-        width: 3.75rem;
+        width: calc(3.75rem * var(--card-scale, 1));
     }
 }
 
@@ -927,7 +947,7 @@ body.game-page {
     flex-direction: column;
     align-items: center;
     gap: 0.15rem;
-    width: 5.5rem;
+    width: calc(5.5rem * var(--card-scale, 1));
     position: relative;
     background: none;
     border: none;
@@ -944,7 +964,7 @@ body.game-page {
        horizontal breathing room around a rotated card, not to make the art
        itself bigger; 100% here would have scaled (and, via height: auto,
        stretched taller) the art to match. */
-    width: 5.5rem;
+    width: calc(5.5rem * var(--card-scale, 1));
     height: auto;
     border: 1px solid var(--color-border);
     border-radius: 0.4rem;
@@ -992,15 +1012,15 @@ body.game-page {
    visually overlap a neighboring card thumb in the same flex-wrap row.
    Widen a suppressed card's own slot and nudge its badges to compensate. */
 .card-thumb--suppressed {
-    width: calc(5.5rem + 30px);
+    width: calc((5.5rem + 30px) * var(--card-scale, 1));
 }
 
 .card-thumb--suppressed .card-thumb__badge--value {
-    top: calc(0.25rem + 20px);
+    top: calc(0.25rem + 20px * var(--card-scale, 1));
 }
 
 .card-thumb--suppressed .card-thumb__badge--suppressed {
-    bottom: calc(0.25rem + 20px);
+    bottom: calc(0.25rem + 20px * var(--card-scale, 1));
 }
 
 .card-thumb__badge {
@@ -1113,7 +1133,7 @@ body.game-page {
    to a column's own last card, so it alone renders in full, uncovered by
    anything after it. */
 .discard-stack__column .card-thumb:not(:last-child) {
-    margin-bottom: -6.6rem;
+    margin-bottom: calc(-6.6rem * var(--card-scale, 1));
 }
 
 /* -- Players list icons (issue #143) ---------------------------------
@@ -2010,38 +2030,38 @@ dialog#deck-builder-dialog[open] {
 @media (min-width: 1280px) {
     .card-thumb,
     .card-thumb__art {
-        width: 11rem;
+        width: calc(11rem * var(--card-scale, 1));
     }
 
     .card-thumb--suppressed {
-        width: calc(11rem + 60px);
+        width: calc((11rem + 60px) * var(--card-scale, 1));
     }
 
     .card-thumb--suppressed .card-thumb__badge--value {
-        top: calc(0.25rem + 40px);
+        top: calc(0.25rem + 40px * var(--card-scale, 1));
     }
 
     .card-thumb--suppressed .card-thumb__badge--suppressed {
-        bottom: calc(0.25rem + 40px);
+        bottom: calc(0.25rem + 40px * var(--card-scale, 1));
     }
 
     /* Doubled counterpart of .grid-draft-cell/.grid-draft-cell--empty's
        own 5.5rem/7.8rem sizing above (same fixed 744:1039 art aspect
        ratio, just twice as wide). */
     .grid-draft-cell {
-        min-height: 15.6rem;
+        min-height: calc(15.6rem * var(--card-scale, 1));
     }
 
     .grid-draft-cell--empty {
-        width: 11rem;
-        height: 15.6rem;
+        width: calc(11rem * var(--card-scale, 1));
+        height: calc(15.6rem * var(--card-scale, 1));
     }
 
     /* Doubled counterpart of the discard pile's own -6.6rem overlap
        above -- keeps the same fraction of each card visible under the
        next, now that every card in the stack is twice as tall too. */
     .discard-stack__column .card-thumb:not(:last-child) {
-        margin-bottom: -13.2rem;
+        margin-bottom: calc(-13.2rem * var(--card-scale, 1));
     }
 
     /* Issue #417's own "bigger and more distinct icons at the top" item --

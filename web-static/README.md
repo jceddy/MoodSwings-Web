@@ -427,6 +427,75 @@ Decks dialog's own friends-shared/card-count icons and the lobby's own
 play-arrow/waiting-hourglass icons -- neither of which the issue is
 asking to resize.
 
+### Card size slider (issue #417)
+
+A `--card-scale` custom property (default `1`, defined on the plain
+`:root` block at the very top of `style.css`, alongside the `--color-*`
+tokens) that every width-dependent `.card-thumb`-related rule in the file
+is now wrapped in a `calc(<value> * var(--card-scale, 1))` for --
+`.card-thumb`/`.card-thumb__art` at every breakpoint (the phone-narrow
+shrinks, the plain base size, the 1280px+ desktop double from "Bigger
+default card size on desktop" above), `.card-thumb--suppressed`'s own
+rotation-clearance width, `.grid-draft-cell`/`.grid-draft-cell--empty`,
+and the discard pile's own stacking overlap margin. A player's chosen
+scale (50%-200%, in 10% steps) therefore resizes literally everywhere
+`.card-thumb` appears -- hand, in-play, discard, the deck builder, the
+draft pool, saved/shared deck views -- confirmed by the maintainer over
+the narrower alternative of only resizing the live board's own hand/
+in-play/discard cards.
+
+The suppressed-badge repositioning offsets (`.card-thumb--suppressed
+.card-thumb__badge--value`/`--suppressed`, `top`/`bottom: calc(0.25rem +
+<N>px)`) split their own `calc()` differently from the plain width rules
+above: only the `<N>px` clearance term is wrapped in `* var(--card-scale,
+1)`, while the `0.25rem` corner inset stays bare -- matching "Bigger
+default card size on desktop"'s own established precedent that the plain
+corner insets never scale with card size, just now applied to a
+continuous multiplier instead of a fixed doubling. The plain corner
+badges (`.card-thumb__badge` and its `--value`/`--copy`/`--recolored*`
+variants) are left alone entirely, same reasoning.
+
+A purely client-side, per-device preference -- no per-game behavior for
+the server to know about, so unlike `default_selections_mode_preference`/
+`auto_pass_on_empty_hand`/`auto_apply_scoring_bonuses` above (each a real
+`users` column, round-tripped via its own `POST /user/...` route) this is
+`localStorage`-only (key `cardScalePreference`, storing the raw
+`0.5`-`2` multiplier), the same mechanism `app.js`'s own
+`THEME_STORAGE_KEY`/`initThemeSelect()` already established for the
+theme preference -- confirmed by the maintainer over adding a new
+`users` column + API round-trip for what's purely cosmetic. `getCardScale()`/
+`applyCardScale()` in `game.js` read/write it and the `--card-scale`
+custom property respectively (a plain inline style on
+`document.documentElement`, the same "set a custom property on the root
+element" mechanism `initThemeSelect()` uses for its own `data-theme`
+attribute, just a numeric property instead); `getCardScale()` clamps a
+missing/corrupted/out-of-range stored value back to `1` (100%, i.e. no
+scaling) rather than letting a bad value render every card at a broken
+size. Applied once, unconditionally, as soon as `game.js` runs -- not
+deferred until the Settings dialog is first opened -- since cards can
+render on the very first board view long before a player ever opens
+Settings.
+
+The control itself (`#settings-card-size-slider`, a plain `<input
+type="range" min="50" max="200" step="10">`, plus a live `#settings-card-
+size-value` percentage readout) lives in the Settings dialog's own new
+"Display" section (`#settings-display-section`, right after "Game
+defaults") -- confirmed by the maintainer over an always-visible control
+on the board itself. Wired on `'input'` (not `'change'`) so both the
+readout and every on-screen card resize live while dragging, matching
+ordinary slider expectations. One thing does need an explicit nudge on
+every change, though: the discard pile's own `discardStackColumnCount()`
+bakes the card's rendered pixel width into a column count computed in
+`game.js` (see "Discard pile stacking" below), so unlike every other
+`.card-thumb` on the page -- which just reflows for free under the new
+CSS -- nothing would otherwise prompt that count to recompute until the
+next window resize or board poll; the slider's own `'input'` handler
+calls `renderDiscardPile(lastDiscardPile, lastDiscardCanAct)` directly to
+force it. `discardStackCardWidthPx()` itself now also multiplies by
+`getCardScale()`, so that computed column count matches what's actually
+on screen at any slider position, not just the unscaled breakpoint
+default.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
