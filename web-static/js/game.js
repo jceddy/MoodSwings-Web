@@ -3266,18 +3266,28 @@
     // pile's own vertical footprint as small as the current viewport
     // allows at all times, including e.g. a phone rotating from portrait
     // to landscape mid-game.
-    const DISCARD_STACK_CARD_WIDTH_PX = 5.5 * 16; // .card-thumb's own fixed 5.5rem width
     const DISCARD_STACK_GAP_PX = 0.5 * 16; // #discard-list's own flex gap
 
-    // Both pixel constants above assume the default 16px root font-size
-    // the rest of this file's own rem/px math already assumes (no page
-    // here overrides it) -- clientWidth itself is only ever available in
-    // pixels, so there's no way to ask for "how many 5.5rem slots fit"
-    // directly.
+    // #discard-list is never touched by the phone-narrow shrink (that one
+    // only ever targets .in-play-zone/deck-view/draft-pool cards, see
+    // style.css), so .card-thumb's own base width applies here at every
+    // viewport EXCEPT the desktop doubling below min-width: 1280px (issue
+    // #417's own "Bigger default card size on desktop" item) -- matched
+    // here by the same 1280px breakpoint, since CSS media queries and
+    // this JS have no way to share one literal source of truth. Both
+    // pixel constants assume the default 16px root font-size the rest of
+    // this file's own rem/px math already assumes (no page here overrides
+    // it) -- clientWidth itself is only ever available in pixels, so
+    // there's no way to ask for "how many rem-sized slots fit" directly.
+    function discardStackCardWidthPx() {
+        return (window.innerWidth >= 1280 ? 11 : 5.5) * 16;
+    }
+
     function discardStackColumnCount() {
         const availableWidth = document.getElementById('discard-list').clientWidth;
+        const cardWidthPx = discardStackCardWidthPx();
         const columns = Math.floor(
-            (availableWidth + DISCARD_STACK_GAP_PX) / (DISCARD_STACK_CARD_WIDTH_PX + DISCARD_STACK_GAP_PX)
+            (availableWidth + DISCARD_STACK_GAP_PX) / (cardWidthPx + DISCARD_STACK_GAP_PX)
         );
         return Math.max(1, columns);
     }

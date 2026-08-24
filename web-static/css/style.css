@@ -1968,3 +1968,65 @@ dialog#deck-builder-dialog[open] {
     margin: 0;
     color: var(--color-muted);
 }
+
+/* Issue #417's own "Bigger default card size on desktop" item, confirmed
+   by the maintainer: .card-thumb's plain 5.5rem width (the only size
+   anywhere from phone widths on up, aside from the narrower shrinks near
+   the top of this file) reads fine held close on a phone, but small and
+   hard to read from further away on a large desktop monitor. At
+   min-width: 1280px -- genuinely wide desktop/laptop displays; tablets
+   and smaller laptops in the 600-1280px range keep today's size -- every
+   .card-thumb doubles to 11rem, everywhere the class is used (hand,
+   in-play, discard, deck builder, draft pool, saved/shared decks): none
+   of those containers constrain their own card grid to a fixed column
+   count (each is a plain flex-wrap row/grid sized to its own content,
+   see e.g. .deck-builder-card-grid's own comment above), so a wider card
+   just means fewer per row, not broken layout. Deliberately placed at
+   the very end of the file (after every rule it doubles, all of which
+   share this same class-selector specificity) so it wins the cascade on
+   source order alone, rather than needing !important or a heavier
+   selector. Below, doubled counterparts of every OTHER width-dependent
+   rule above that's actually proportional to .card-thumb's own width --
+   the same relationship the phone shrink above already establishes for
+   .card-thumb--suppressed's own rotation-clearance offsets (scaled down
+   there; scaled up here). Badge font-size/padding and the plain 0.25rem
+   corner insets are deliberately left alone, matching the phone shrink's
+   own precedent -- those already read fine at any card size, so there's
+   nothing to scale. */
+@media (min-width: 1280px) {
+    .card-thumb,
+    .card-thumb__art {
+        width: 11rem;
+    }
+
+    .card-thumb--suppressed {
+        width: calc(11rem + 60px);
+    }
+
+    .card-thumb--suppressed .card-thumb__badge--value {
+        top: calc(0.25rem + 40px);
+    }
+
+    .card-thumb--suppressed .card-thumb__badge--suppressed {
+        bottom: calc(0.25rem + 40px);
+    }
+
+    /* Doubled counterpart of .grid-draft-cell/.grid-draft-cell--empty's
+       own 5.5rem/7.8rem sizing above (same fixed 744:1039 art aspect
+       ratio, just twice as wide). */
+    .grid-draft-cell {
+        min-height: 15.6rem;
+    }
+
+    .grid-draft-cell--empty {
+        width: 11rem;
+        height: 15.6rem;
+    }
+
+    /* Doubled counterpart of the discard pile's own -6.6rem overlap
+       above -- keeps the same fraction of each card visible under the
+       next, now that every card in the stack is twice as tall too. */
+    .discard-stack__column .card-thumb:not(:last-child) {
+        margin-bottom: -13.2rem;
+    }
+}

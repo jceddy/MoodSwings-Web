@@ -248,10 +248,15 @@ into columns, rendered as `<li class="discard-stack__column">` elements
 holding `buildCardThumb()` buttons directly (no per-card `<li>` needed,
 unlike hand/in-play). How many columns exist is recomputed on every render
 from `discardStackColumnCount()` -- `#discard-list`'s own current
-`clientWidth` divided by `.card-thumb`'s fixed 5.5rem width plus the list's
-own 0.5rem gap (both hardcoded in pixels assuming the default 16px root
-font-size the rest of this file's own rem/px math already assumes)  --
-rather than a fixed cards-per-column cap, so however many columns actually
+`clientWidth` divided by `.card-thumb`'s own current width (`discardStackCardWidthPx()`,
+`11 * 16` at `window.innerWidth >= 1280`, `5.5 * 16` otherwise -- matching
+style.css's own desktop-doubling breakpoint, see "Bigger default card size
+on desktop" above; `#discard-list` is never touched by the phone-narrow
+shrink, so `.card-thumb`'s base width already applied here at every OTHER
+viewport even before that) plus the list's own 0.5rem gap (both hardcoded
+in pixels assuming the default 16px root font-size the rest of this file's
+own rem/px math already assumes) -- rather than a fixed cards-per-column
+cap, so however many columns actually
 fit side by side is however many there are: cards are dealt round-robin
 across them (card 0 into column 0, card 1 into column 1, ..., wrapping
 back to column 0 once every column has one), filling the available width
@@ -364,6 +369,52 @@ inside `.in-play-zone` only (hand/discard cards keep their normal size
 everywhere) -- enough for two cards to fit per row again. The suppressed-card
 width/badge-offset overrides (see above) get scaled-down counterparts here
 too, proportional to the smaller card width.
+
+### Bigger default card size on desktop (issue #417)
+
+`.card-thumb`'s plain `5.5rem` width (the size everywhere from phone widths
+on up, aside from the narrower phone-only shrinks above) reads fine held
+close on a phone, but small and hard to make out on a large desktop
+monitor viewed from further away -- confirmed by the maintainer, along
+with the actual mechanism: a `min-width: 1280px` (genuinely wide
+desktop/laptop displays; tablets and smaller laptops in the 600-1280px
+range keep today's size) media query, deliberately placed at the very end
+of `style.css` -- after every rule it doubles, all sharing the same
+class-selector specificity -- so it wins the cascade on source order
+alone rather than needing `!important` or a heavier selector (an earlier
+draft of this same block placed near the top of the file, before the base
+`.card-thumb` rule, silently lost the cascade to that later-appearing
+rule at the same specificity). `min-width` was picked over trying to key
+off the device's own physical panel resolution -- a CSS width media query
+already operates on CSS/layout pixels (post-`devicePixelRatio` scaling,
+via the `<meta name="viewport" content="width=device-width">` tag every
+page already carries -- see e.g. `game/index.html`), not a phone's raw
+physical pixel count, so a modern phone with a dense panel still reports
+a narrow CSS viewport width (typically ~390-430px) well under the 1280px
+threshold regardless of how many physical pixels it packs into that
+space.
+
+Doubles `.card-thumb`/`.card-thumb__art` to `11rem` everywhere the class
+is used at all -- hand, in-play, discard, the deck builder's catalog/deck
+grids, the draft pool dialog, saved/shared deck views -- since none of
+those containers constrain their own card grid to a fixed column count
+(each is a plain `flex-wrap` row/grid sized to its own content), so a
+wider card just means fewer per row, never broken layout. Alongside that,
+doubled counterparts of every OTHER width-dependent rule that's actually
+proportional to `.card-thumb`'s own width, the same relationship the
+phone shrink above already establishes for `.card-thumb--suppressed`'s
+own rotation-clearance offsets (scaled down there; scaled up here) and
+`.grid-draft-cell`/`.grid-draft-cell--empty`'s own sizing (an empty
+Grid Draft cell's placeholder, see `#grid-draft-grid` below) -- plus a
+doubled `.discard-stack__column .card-thumb:not(:last-child)`
+overlap margin (see "Discard pile stacking" below, and its own
+`discardStackCardWidthPx()` companion in `game.js`, which has to know
+about this same `1280px` breakpoint too -- there's no way for CSS and JS
+to share one literal source of truth here, so the two are kept in sync by
+comment cross-reference instead). Badge font-size/padding and the plain
+`0.25rem` corner insets are deliberately left alone, matching the phone
+shrink's own precedent -- those already read fine at any card size, so
+there's nothing to scale.
 
 ## Pages
 
