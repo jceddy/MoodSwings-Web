@@ -5839,6 +5839,26 @@ since it already holds that dependency):
   pile is enough. The instant the pile has even one card in it, Harmony
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 
+  **Nostalgia** (confirmed by the maintainer) gets the identical
+  `sortPriorityValue()` `PHP_INT_MIN` treatment as Harmony above,
+  "save it until there's something in the discard pile for it to
+  target" -- its own "you may put a card from the discard pile into
+  your hand" half of the effect has nothing to take from with the pile
+  completely empty, the same dead-half situation Harmony's own
+  discard-sourced grant is in. Unlike Harmony, though, Nostalgia's OWN
+  extra-play grant (`NostalgiaEffect::afterPlaying()`'s own
+  `grantExtraPlay(sourceCardId: $cardId)`, with no `['source' =>
+  'discard']` restriction) is unconditional and completely
+  unrestricted, so deprioritizing it here never gives up anything but
+  the already-worthless discard pickup -- the extra play itself is
+  exactly as good with an empty pile as a full one, and `chooseAction()`'s
+  own "deprioritized WHEN, never skipped outright" ordering still plays
+  Nostalgia purely for that extra play whenever nothing better is
+  available. The instant the discard pile has even one card in it,
+  Nostalgia reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS`
+  boosted treatment (it's already listed there, alongside Charity/
+  Duplicity/Harmony/Grief and the rest of the extra-play family).
+
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
   special-cases `effectKey === 'anger'` the same way it does
@@ -5921,6 +5941,66 @@ since it already holds that dependency):
     past the round it's played in, ready to swap in some later round
     instead), targeting an arbitrary non-teammate opponent (the first one
     found) since who gets tagged this round is inconsequential.
+
+  **Denial** (confirmed by the maintainer) gets a targeting exception via
+  `denialTargetMoodIds()` -- `buildChoicesForCard()` special-cases
+  `effectKey === 'denial'` the same way it does `'pacifism'`/`'anger'`
+  above, since `target_mood_ids` is optional and not in
+  `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver would
+  otherwise always leave it unfilled. "Put two chosen moods that share a
+  color or value into their players' hands" is used for one of two
+  purposes, tried in order, both constrained to a legal
+  same-color-or-value pair the same way `DenialEffect` itself validates
+  (`sameColorOrValuePairs()`, shared by both):
+  - `denialWinningTargetMoodIds()` -- targeting opponent card(s) to
+    remove them from play and win the round outright. Every pair of
+    non-teammate opponents' own in-play moods that satisfies the
+    color-or-value constraint (either one opponent's own two, or one
+    each from two different ones -- unlike Pacifism, this field has no
+    `distinct_owners` constraint) is a candidate; each target's own live
+    value is subtracted from ITS owner's live round score
+    (`(new RoundScorer())->score($state)`, the same grouped-by-team
+    approach `wouldBecomeHighestScore()` uses for a value boost,
+    generalized here to a per-owner removal instead of an add-to-self),
+    Denial's own base value is added to the bot's own group (still an
+    ordinary mood contributing to the bot's own total once played),
+    and only a pair that moves the bot's group to AT OR ABOVE the best
+    remaining rival group's total is played -- the highest-combined-value
+    qualifying pair, when more than one exists, same "maximize the
+    swing" preference Anger's own knapsack applies. `skipScoringOwnerId()
+    !== null` (Awe or similar) short-circuits straight to "no winning
+    pair," the same "nothing to win this round regardless of who's
+    targeted" guard `sneakinessTargetPlayerId()` already applies.
+  - Failing that, `denialReplayTargetMoodIds()` -- picking up one of the
+    bot's OWN low-point (`DENIAL_REPLAY_MAX_VALUE`, 0-2) moods with its
+    own "after playing this mood" ability to re-play: `DenialEffect`
+    returns a targeted mood to its own OWNER's hand (`BoardState::
+    moveInPlayToHand()`, not the discard pile -- contrast Rejection's
+    identical qualifying condition, which discards instead), and
+    `MoodPlayService` re-runs a mood's own `afterPlaying()` hook in full
+    every time it's played, with no once-per-game memory of it -- so a
+    mood cheap enough to be worth sacrificing the board presence of is
+    effectively a second copy of its own ability for a play. Every one
+    of the bot's own in-play moods meeting that value/ability bar is a
+    replay candidate; a pair of TWO such candidates satisfying the
+    color-or-value constraint is preferred first (a double payoff --
+    both return to hand and can both be replayed), before falling back
+    to pairing a single candidate with whatever else qualifies
+    (`bestDenialReplayPartner()`) -- a non-teammate opponent's own mood
+    (preferring their highest-value one, since the bot loses nothing by
+    touching it) over a SECOND one of the bot's own moods, so the
+    "filler" second target never costs the bot a good card of its own
+    just to enable one cheap replay.
+
+  Returns `[]` (Denial still legally playable as a plain 1-point blue
+  mood, per `DenialEffect`'s own `if ($targets === []) { return; }`)
+  when NEITHER priority finds a qualifying pair -- unlike Harmony/
+  Nostalgia/Pacifism above, this doesn't deprioritize Denial itself via
+  `sortPriorityValue()` in that case; a same-color-or-value pair
+  genuinely doesn't always exist among whatever's in play, and Denial's
+  own printed value (1) is ordinary enough that leading with it purely
+  by `baseValue()` the way most cards do is still a reasonable default
+  then.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
