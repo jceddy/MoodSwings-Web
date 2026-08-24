@@ -6023,6 +6023,35 @@ since it already holds that dependency):
   optional field once it's actually being played, and returns `null`
   (leaving the field unfilled) both when the pile is empty and when a
   Sadness/Wonder-family mood is guarding it.
+- **Envy's own "don't feed it for free" veto** (confirmed by the
+  maintainer), via `envyDiscouragesPlayingThisCard()`/
+  `sortPriorityValue()`: deprioritizes (the same `PHP_INT_MIN` treatment
+  as Rationalization/Cynicism/Intimidation/Paranoia/Pacifism above) any
+  card worth `ENVY_AVOIDANCE_MAX_VALUE` (1) or less whenever a
+  non-teammate opponent currently has Envy in play. `EnvyEffect::
+  computeValue()` scales Envy's own value +2 for each mood the
+  "moodiest" opponent (relative to ITS OWN owner) has in play, so
+  growing the acting bot's own in-play mood count for next to nothing
+  risks making the bot itself that moodiest opponent, indirectly pumping
+  an Envy-holding opponent's own value -- a genuinely valuable play (2+)
+  is still worth that risk, but a near-worthless one (0-1) generally
+  isn't. Checked only against non-teammate opponents, mirroring
+  `EnvyEffect::computeValue()` itself, which only ever counts a
+  non-teammate's own mood total toward "moodiest opponent" (see
+  `BoardState::isTeammate()`).
+
+  The one exception: a card whose own effect grants an extra play
+  (`EXTRA_PLAY_GRANTING_EFFECT_KEYS` -- just the "grants the acting
+  player an extra play" third of `EARLY_PRIORITY_EFFECT_KEYS` above,
+  its own hand-steal and forced-discard entries excluded) is exempt
+  whenever at least one OTHER currently-playable card is worth 4 or
+  more -- playing the cheap card "enables" that bigger play the very
+  same turn (the extra play it grants is what makes room for it) in
+  exchange for the very same one point of Envy risk either way, a trade
+  worth making. Like every other `sortPriorityValue()` veto in this
+  class, this is "deprioritized WHEN, never skipped outright" -- a
+  low-value card still gets played if it's genuinely the only legal
+  option once `chooseAction()`'s own loop runs out of anything better.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-

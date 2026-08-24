@@ -1,0 +1,21 @@
+-- Practice bots (issue #140), confirmed by the maintainer: "bots should
+-- avoid playing 0-1 points cards if an opponent has Envy in play, unless
+-- playing that card enables another 4+-point play." Adds
+-- BotPlayerService::envyDiscouragesPlayingThisCard(), a
+-- sortPriorityValue() veto (the same PHP_INT_MIN "deprioritized WHEN,
+-- never skipped outright" treatment every other card-specific veto in
+-- that class already uses) for any card worth 0-1 points whenever a
+-- non-teammate opponent currently has Envy in play --
+-- EnvyEffect::computeValue() scales +2 per mood the "moodiest" opponent
+-- (relative to ITS OWN owner) has in play, so growing the acting bot's
+-- own mood count for next to nothing risks indirectly pumping that
+-- opponent's own Envy value. Exempt whenever the low-value card itself
+-- grants an extra play (EXTRA_PLAY_GRANTING_EFFECT_KEYS) and some other
+-- currently-playable card is worth 4+ -- playing it then "enables" that
+-- bigger play the same turn, worth the same Envy risk either way. See
+-- "Practice bots" in php-app/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0179 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.36' WHERE id = 1;
