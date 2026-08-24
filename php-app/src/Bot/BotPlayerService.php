@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with fourteen deliberate
+ * field-filling policy this builds on -- with sixteen deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -105,7 +105,38 @@ use MoodSwings\Rules\RoundScorer;
  * BoardState::skipScoringOwnerId()), in which case the swap can never
  * even apply this round, so it's played purely for the value it'll keep
  * contributing every round after this one instead; see that method's
- * own docblock for the full policy.
+ * own docblock for the full policy; and sortPriorityValue() once more
+ * for Nostalgia (confirmed by the maintainer), the same PHP_INT_MIN
+ * treatment as Harmony above, whenever the discard pile is completely
+ * empty -- its own "you may put a card from the discard pile into your
+ * hand" half of the effect has nothing to take from, and playing it
+ * purely for its own separate (unconditional, unrestricted) extra-play
+ * grant is exactly what leading with it via EARLY_PRIORITY_EFFECT_KEYS
+ * already does whenever the pile ISN'T empty, so deprioritizing it here
+ * only ever gives up the discard-pickup half, never the extra play
+ * itself, which chooseAction()'s own "deprioritized WHEN, never skipped
+ * outright" ordering still plays if nothing better is available; and
+ * denialTargetMoodIds() (confirmed by the maintainer), which targets
+ * two same-color-or-same-value in-play moods for Denial, in priority
+ * order: first, any pair of non-teammate opponents' own moods (either
+ * one opponent's two, or one each from two different opponents) whose
+ * combined removal would win the round outright for the bot's own
+ * group (denialWinningTargetMoodIds()/denialWouldWinRoundByRemoving(),
+ * the same RoundScorer()-based group-scoring approach
+ * wouldBecomeHighestScore() above already uses, just subtracting each
+ * target's own live value from ITS owner's group instead of adding to
+ * the bot's) -- preferring the highest-combined-value qualifying pair
+ * over the first one found; failing that, one of the bot's own
+ * low-printed-value (0-2) moods with its own "after playing this mood"
+ * ability, paired with whatever else qualifies (denialReplayTargetMoodIds(),
+ * preferring a SECOND own low-value after-playing mood over any other
+ * partner, for a double payoff, then an opponent's mood over sacrificing
+ * a different one of the bot's own moods as filler) -- returning both
+ * to their owners' hands lets the bot replay its own cheap card for its
+ * ability all over again, since MoodPlayService re-runs a mood's own
+ * afterPlaying() hook in full every time it's played, with no once-per-
+ * game memory of it; see denialTargetMoodIds()'s own docblock for the
+ * full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -580,6 +611,27 @@ final class BotPlayerService
      * for it the way those three do). The instant the discard pile has
      * even one card in it, Harmony reverts to its ordinary
      * EARLY_PRIORITY_EFFECT_KEYS boosted treatment above.
+     *
+     * Nostalgia (confirmed by the maintainer) gets the identical
+     * PHP_INT_MIN treatment as Harmony above, whenever the discard pile
+     * is completely empty -- NostalgiaEffect's own "you may put a card
+     * from the discard pile into your hand" half of the effect has
+     * nothing to take from then, the same "the pickup half is dead"
+     * situation Harmony's own discard-sourced grant is in. Unlike
+     * Harmony, though, Nostalgia's OWN extra-play grant is unconditional
+     * and unrestricted (BoardState::grantExtraPlay(sourceCardId: $cardId)
+     * with no ['source' => 'discard'] restriction -- see
+     * NostalgiaEffect::afterPlaying()), so deprioritizing it here never
+     * gives up anything but the (already worthless) discard pickup --
+     * the extra play itself is exactly as good with an empty pile as a
+     * full one, and chooseAction()'s own "deprioritized WHEN, never
+     * skipped outright" ordering still plays Nostalgia purely for that
+     * extra play whenever nothing better is available (see
+     * testChooseActionStillPlaysHarmonyWhenNothingElseIsPlayable's own
+     * Nostalgia counterpart). The instant the discard pile has even one
+     * card in it, Nostalgia reverts to its ordinary
+     * EARLY_PRIORITY_EFFECT_KEYS boosted treatment above (it's already
+     * listed there).
      */
     private function sortPriorityValue(BoardState $state, int $cardId, int $botGamePlayerId, array $playableCardIds): int
     {
@@ -600,6 +652,9 @@ final class BotPlayerService
             return PHP_INT_MIN;
         }
         if ($effectKey === 'harmony' && $state->discardPile() === []) {
+            return PHP_INT_MIN;
+        }
+        if ($effectKey === 'nostalgia' && $state->discardPile() === []) {
             return PHP_INT_MIN;
         }
 
@@ -929,6 +984,12 @@ final class BotPlayerService
 
         if ($effectKey === 'anger') {
             return ['target_mood_ids' => $this->angerTargetMoodIds($state, $cardId, $botGamePlayerId)];
+        }
+
+        if ($effectKey === 'denial') {
+            $targetMoodIds = $this->denialTargetMoodIds($state, $cardId, $botGamePlayerId);
+
+            return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
         }
 
         if ($effectKey === 'sneakiness') {
@@ -1610,6 +1671,270 @@ final class BotPlayerService
         usort($bestMoodIdByOpponent, fn (int $a, int $b) => $state->valueOf($b) <=> $state->valueOf($a));
 
         return array_slice($bestMoodIdByOpponent, 0, 2);
+    }
+
+    /**
+     * The highest printed value a mood can have and still count as
+     * "cheap enough to sacrifice for a replay" for
+     * denialReplayTargetMoodIds() below -- confirmed by the maintainer.
+     * Denial returns a targeted mood to its OWNER's hand, from which it
+     * can simply be played again (MoodPlayService re-runs a mood's own
+     * afterPlaying() hook in full every time it's played, with no
+     * once-per-game memory of it), so the whole point of targeting one
+     * of the bot's own moods this way is the re-triggered ability, not
+     * the mood's own scoring contribution -- a genuinely expensive mood
+     * (a real point total worth keeping in play) isn't worth giving up
+     * for that, but a cheap one essentially is that ability for free.
+     */
+    private const DENIAL_REPLAY_MAX_VALUE = 2;
+
+    /**
+     * Denial's own "what to target" policy (confirmed by the
+     * maintainer) -- two priorities, tried in order, both constrained to
+     * a legal same-color-or-same-value pair (CardChoiceSchema's own
+     * `'same_color_or_value'` constraint for this field) the same way
+     * DenialEffect itself validates:
+     *
+     * 1. denialWinningTargetMoodIds() -- a pair of non-teammate
+     *    opponents' own in-play moods (either one opponent's own two, or
+     *    one each from two different opponents -- Denial's own field has
+     *    no `distinct_owners` constraint the way Pacifism's does) whose
+     *    combined removal (back to their owners' hands, off the board
+     *    entirely for scoring purposes -- see BoardState::
+     *    moveInPlayToHand()) would win the round outright for the bot's
+     *    own group. "Remove them from play" is worth doing for its own
+     *    sake even without an immediate win, but ONLY chasing an outright
+     *    win here (rather than any positive swing at all) keeps this a
+     *    deliberate, decisive play rather than the bot fishing for
+     *    marginal opponent setbacks with no real payoff -- the same
+     *    "only when it actually wins" discipline sneakinessTargetPlayerId()
+     *    already applies for the identical reason.
+     * 2. Failing that, denialReplayTargetMoodIds() -- one of the bot's
+     *    own moods cheap enough (DENIAL_REPLAY_MAX_VALUE) to give up for
+     *    a replay of its own "after playing this mood" ability, paired
+     *    with whatever else qualifies.
+     *
+     * Returns [] (Denial still legally playable as a plain 1-point blue
+     * mood, per DenialEffect's own `if ($targets === []) { return; }`)
+     * when NEITHER priority finds a qualifying pair -- unlike Pacifism/
+     * Harmony/Nostalgia above, this doesn't deprioritize Denial itself
+     * via sortPriorityValue() when that happens; a same-color-or-value
+     * pair genuinely doesn't always exist among whatever's in play, and
+     * Denial's own printed value is ordinary enough (1) that leading
+     * with it purely by baseValue() the way most cards do is still a
+     * perfectly reasonable default in that case.
+     */
+    private function denialTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): array
+    {
+        $winningTargetMoodIds = $this->denialWinningTargetMoodIds($state, $cardId, $botGamePlayerId);
+        if ($winningTargetMoodIds !== null) {
+            return $winningTargetMoodIds;
+        }
+
+        return $this->denialReplayTargetMoodIds($state, $botGamePlayerId) ?? [];
+    }
+
+    /**
+     * @see denialTargetMoodIds()'s own docblock, priority 1. null (not
+     * []) specifically means "don't play this way" -- distinguished from
+     * denialReplayTargetMoodIds()'s own identical null-vs-[] convention
+     * only by which caller consults it. skipScoringOwnerId() non-null
+     * (Awe or similar) short-circuits straight to null, the same
+     * "nothing to win this round regardless of who's targeted" guard
+     * sneakinessTargetPlayerId() already applies -- there's no round
+     * outcome removing a mood's value could possibly change right now.
+     *
+     * @return ?int[]
+     */
+    private function denialWinningTargetMoodIds(BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    {
+        if ($state->skipScoringOwnerId() !== null) {
+            return null;
+        }
+
+        $opponentMoodIds = [];
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($mood->ownerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                $opponentMoodIds[] = $mood->cardId;
+            }
+        }
+
+        $pairs = $this->sameColorOrValuePairs($state, $opponentMoodIds);
+        usort(
+            $pairs,
+            fn (array $a, array $b) => ($state->valueOf($b[0]) + $state->valueOf($b[1])) <=> ($state->valueOf($a[0]) + $state->valueOf($a[1])),
+        );
+
+        foreach ($pairs as $pair) {
+            if ($this->denialWouldWinRoundByRemoving($state, $cardId, $botGamePlayerId, $pair)) {
+                return $pair;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether removing $targetCardIds (each back to its own owner's
+     * hand, per DenialEffect -- see denialTargetMoodIds()'s own
+     * docblock) would move the bot's own group from BELOW the best
+     * remaining rival group's current round score to AT OR ABOVE it.
+     * The same RoundScorer()-based group-scoring approach
+     * wouldBecomeHighestScore() above already uses for a value BOOST,
+     * generalized here for an arbitrary per-owner REMOVAL instead: each
+     * target's own live value is subtracted from its owner's score
+     * before regrouping, rather than added to the bot's. Denial's own
+     * base value (still an ordinary mood contributing to the bot's own
+     * total once played, same as any other card) is added in by hand
+     * the same "not reflected on the board yet" reasoning
+     * wouldBecomeHighestScore() documents, via baseValue($cardId)
+     * rather than a hardcoded constant so a future card sharing this
+     * effect key at a different printed value would still be handled
+     * correctly.
+     *
+     * @param int[] $targetCardIds
+     */
+    private function denialWouldWinRoundByRemoving(BoardState $state, int $cardId, int $botGamePlayerId, array $targetCardIds): bool
+    {
+        $scores = (new RoundScorer())->score($state);
+        foreach ($targetCardIds as $targetCardId) {
+            $ownerId = $state->ownerOf($targetCardId);
+            $scores[$ownerId] = ($scores[$ownerId] ?? 0) - $state->valueOf($targetCardId);
+        }
+
+        $activeIds = $state->activePlayerOrder();
+        $myGroupIds = array_values(array_filter(
+            $activeIds,
+            fn (int $id): bool => $id === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $id),
+        ));
+        $myTotal = array_sum(array_map(fn (int $id) => $scores[$id] ?? 0, $myGroupIds)) + $this->baseValue($state, $cardId);
+
+        $rivalIds = array_values(array_diff($activeIds, $myGroupIds));
+        $groupedRivalIds = [];
+        $rivalBest = 0;
+        foreach ($rivalIds as $id) {
+            if (in_array($id, $groupedRivalIds, true)) {
+                continue;
+            }
+            $group = array_values(array_filter(
+                $rivalIds,
+                fn (int $other): bool => $other === $id || $state->isTeammate($id, $other),
+            ));
+            $groupedRivalIds = array_merge($groupedRivalIds, $group);
+            $rivalBest = max($rivalBest, array_sum(array_map(fn (int $gid) => $scores[$gid] ?? 0, $group)));
+        }
+
+        return $myTotal >= $rivalBest;
+    }
+
+    /**
+     * @see denialTargetMoodIds()'s own docblock, priority 2. Every one of
+     * the bot's own in-play moods cheap enough (DENIAL_REPLAY_MAX_VALUE)
+     * with its own "after playing this mood" ability is a replay
+     * candidate; among those, a pair of TWO such candidates that
+     * satisfies the same-color-or-value constraint is tried first (a
+     * double payoff -- both return to hand and can both be replayed),
+     * before falling back to pairing a single candidate with whatever
+     * else qualifies (bestDenialReplayPartner()). null (not []) means no
+     * candidate qualifies at all, distinguished from
+     * denialWinningTargetMoodIds()'s own identical convention only by
+     * which caller consults it.
+     *
+     * @return ?int[]
+     */
+    private function denialReplayTargetMoodIds(BoardState $state, int $botGamePlayerId): ?array
+    {
+        $replayCandidateIds = [];
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            if ($this->qualifiesForDenialReplay($state, $mood->cardId)) {
+                $replayCandidateIds[] = $mood->cardId;
+            }
+        }
+
+        foreach ($this->sameColorOrValuePairs($state, $replayCandidateIds) as $pair) {
+            return $pair;
+        }
+
+        foreach ($replayCandidateIds as $candidateId) {
+            $partnerId = $this->bestDenialReplayPartner($state, $botGamePlayerId, $candidateId);
+            if ($partnerId !== null) {
+                return [$candidateId, $partnerId];
+            }
+        }
+
+        return null;
+    }
+
+    private function qualifiesForDenialReplay(BoardState $state, int $cardId): bool
+    {
+        $catalogRow = $state->catalogRow($state->effectiveCardId($cardId));
+
+        return $catalogRow['hasAfterPlaying'] && $catalogRow['baseValue'] <= self::DENIAL_REPLAY_MAX_VALUE;
+    }
+
+    /**
+     * The best partner for $forCardId (one of the bot's own
+     * denialReplayTargetMoodIds() candidates that found no matching
+     * SECOND candidate to pair with) among every OTHER in-play mood
+     * satisfying the same-color-or-value constraint: a non-teammate
+     * opponent's own mood (preferring their highest-value one -- the
+     * bot loses nothing by touching it, and the higher its value the
+     * more it's worth knocking back to their hand) over any other one of
+     * the bot's own moods, so the "filler" second target never costs the
+     * bot a second good card just to enable one cheap replay.
+     */
+    private function bestDenialReplayPartner(BoardState $state, int $botGamePlayerId, int $forCardId): ?int
+    {
+        $bestOpponentId = null;
+        $bestOpponentValue = -1;
+        $fallbackOwnId = null;
+
+        foreach ($state->moodsInPlay() as $mood) {
+            $candidateId = $mood->cardId;
+            if ($candidateId === $forCardId || !$this->sameColorOrValue($state, $forCardId, $candidateId)) {
+                continue;
+            }
+
+            if ($mood->ownerId !== $botGamePlayerId && !$state->isTeammate($botGamePlayerId, $mood->ownerId)) {
+                if ($state->valueOf($candidateId) > $bestOpponentValue) {
+                    $bestOpponentValue = $state->valueOf($candidateId);
+                    $bestOpponentId = $candidateId;
+                }
+            } elseif ($fallbackOwnId === null) {
+                $fallbackOwnId = $candidateId;
+            }
+        }
+
+        return $bestOpponentId ?? $fallbackOwnId;
+    }
+
+    private function sameColorOrValue(BoardState $state, int $a, int $b): bool
+    {
+        return $state->colorOf($a) === $state->colorOf($b) || $state->valueOf($a) === $state->valueOf($b);
+    }
+
+    /**
+     * Every distinct pair from $cardIds satisfying Denial's own
+     * same-color-or-value constraint, used by both
+     * denialWinningTargetMoodIds() and denialReplayTargetMoodIds()'s own
+     * two-own-candidates case above.
+     *
+     * @param int[] $cardIds
+     * @return int[][]
+     */
+    private function sameColorOrValuePairs(BoardState $state, array $cardIds): array
+    {
+        $pairs = [];
+        $count = count($cardIds);
+        for ($i = 0; $i < $count; $i++) {
+            for ($j = $i + 1; $j < $count; $j++) {
+                if ($this->sameColorOrValue($state, $cardIds[$i], $cardIds[$j])) {
+                    $pairs[] = [$cardIds[$i], $cardIds[$j]];
+                }
+            }
+        }
+
+        return $pairs;
     }
 
     /**
