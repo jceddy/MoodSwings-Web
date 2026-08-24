@@ -1,0 +1,14 @@
+-- Issue #417's own card size slider, confirmed by the maintainer over a
+-- follow-up: the same --card-scale multiplier now also applies to the
+-- top-of-board players list's own #players-list .player-stat/.player-flag
+-- icons and their overlaid .player-stat__badge numeral (both at their
+-- base size and their own 1280px+ desktop double), not just .card-thumb.
+-- The Settings dialog's own slider label was renamed from "Card size" to
+-- "Card/icon size" to match, and its step size narrowed from 10% to 5%
+-- for finer control over the final size. See "Card/icon size slider" in
+-- web-static/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0176 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.33' WHERE id = 1;

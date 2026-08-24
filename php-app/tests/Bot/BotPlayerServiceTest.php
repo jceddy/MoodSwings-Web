@@ -945,6 +945,74 @@ final class BotPlayerServiceTest extends TestCase
         self::assertSame([], $action['choices']);
     }
 
+    /**
+     * With more than one card in the discard pile and nothing in play
+     * that depends on it, Nostalgia targets the HIGHEST-baseValue()
+     * discard card (Chaos, id 85, value 6) over the lower-value one
+     * (Apathy, id 55, value 4) -- confirmed by the maintainer.
+     */
+    public function testChooseActionTargetsTheHighestValueDiscardCardWhenPlayingNostalgia(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [128]],
+            discard: [55, 85],
+        );
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame(['discard_card_id' => 85], $action['choices']);
+    }
+
+    /**
+     * Sadness (id 74) already in play for the acting bot depends on the
+     * discard pile staying full for its own whileInPlay value -- taking
+     * a card out of it would undo part of that, so Nostalgia's own
+     * discard_card_id field is left unfilled even though the pile has a
+     * perfectly good candidate sitting in it. Confirmed by the
+     * maintainer.
+     */
+    public function testChooseActionSkipsTheDiscardPickupWhenPlayingNostalgiaWithSadnessInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [128, 74]],
+            discard: [55],
+        );
+        $state->moveHandToInPlay(1, 74);
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
+    /**
+     * Same policy, Wonder (id 133) -- the other DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS
+     * card. Confirmed by the maintainer.
+     */
+    public function testChooseActionSkipsTheDiscardPickupWhenPlayingNostalgiaWithWonderInPlay(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2],
+            hands: [1 => [128, 133]],
+            discard: [55],
+        );
+        $state->moveHandToInPlay(1, 133);
+
+        $action = $this->bot->chooseAction($state, [128], 1);
+
+        self::assertSame(128, $action['card_id']);
+        self::assertSame([], $action['choices']);
+    }
+
     // -- Denial (confirmed by the maintainer) -------------------------------
 
     /**
@@ -1091,6 +1159,88 @@ final class BotPlayerServiceTest extends TestCase
 
         self::assertSame(34, $action['card_id']);
         self::assertSame(['target_mood_ids' => [3, 20]], $action['choices']);
+    }
+
+    // -- Envy (confirmed by the maintainer) ----------------------------------
+
+    /**
+     * Same setup as testChooseActionDoesNotExemptAnExtraPlayGrantingLowValueCardWhenNoOther4PointPlayExistsDespiteEnvy()
+     * below, but Wrath is the bot's only playable card -- deprioritized
+     * WHEN, never skipped outright, the same policy every other
+     * sortPriorityValue() veto in this class already follows.
+     */
+    public function testChooseActionStillPlaysALowValueCardWhenNothingElseIsPlayableDespiteEnvy(): void
+    {
+        $state = $this->boardState(hands: [1 => [105], 2 => [64]]);
+        $state->moveHandToInPlay(2, 64);
+
+        $action = $this->bot->chooseAction($state, [105], 1);
+
+        self::assertSame(105, $action['card_id']);
+    }
+
+    /**
+     * Charity (id 3, value 1, grants an extra play) is exempt from the
+     * Envy veto because Apathy (id 55, value 4) is also playable --
+     * playing Charity "enables" that bigger play the same turn, worth
+     * the same one point of Envy risk either way. Charity's own
+     * EARLY_PRIORITY_EFFECT_KEYS boost (1 + 10 = 11) then outranks
+     * Apathy's plain 4.
+     */
+    public function testChooseActionExemptsAnExtraPlayGrantingLowValueCardFromTheEnvyVetoWhenItEnablesA4PointPlay(): void
+    {
+        $state = $this->boardState(hands: [1 => [3, 55], 2 => [64]]);
+        $state->moveHandToInPlay(2, 64);
+
+        $action = $this->bot->chooseAction($state, [3, 55], 1);
+
+        self::assertSame(3, $action['card_id']);
+    }
+
+    /**
+     * Same Charity, but the only other playable card is Doubt (id 36,
+     * value 2) -- below the 4-point bar, so the exception doesn't apply
+     * and Charity is deprioritized like any other low-value card despite
+     * its own extra-play grant.
+     */
+    public function testChooseActionDoesNotExemptAnExtraPlayGrantingLowValueCardWhenNoOther4PointPlayExistsDespiteEnvy(): void
+    {
+        $state = $this->boardState(hands: [1 => [3, 36], 2 => [64]]);
+        $state->moveHandToInPlay(2, 64);
+
+        $action = $this->bot->chooseAction($state, [3, 36], 1);
+
+        self::assertSame(36, $action['card_id']);
+    }
+
+    /**
+     * A teammate's own Envy is never the target of this policy --
+     * EnvyEffect::computeValue() itself only ever counts a non-teammate's
+     * own mood total toward "moodiest opponent", so the acting bot's own
+     * low-value plays can never pump a TEAMMATE's Envy. Same Charity
+     * (id 3) + Doubt (id 36) setup as
+     * testChooseActionDoesNotExemptAnExtraPlayGrantingLowValueCardWhenNoOther4PointPlayExistsDespiteEnvy()
+     * above -- there, Charity is deprioritized behind Doubt because
+     * player 2's Envy belongs to a non-teammate opponent; here, player 2
+     * is on the bot's own team (Open Team Play), so the veto never
+     * engages at all and Charity's own EARLY_PRIORITY_EFFECT_KEYS boost
+     * (1 + 10 = 11) wins outright over Doubt's plain 2, exactly as if
+     * Envy didn't exist.
+     */
+    public function testChooseActionDoesNotApplyTheEnvyVetoForATeammatesEnvy(): void
+    {
+        $state = new BoardState(
+            $this->sampleCatalog(),
+            DefaultEffectRegistry::build(),
+            [1, 2, 3],
+            hands: [1 => [3, 36], 2 => [64]],
+            teamIdByPlayer: [1 => 0, 2 => 0, 3 => 1],
+        );
+        $state->moveHandToInPlay(2, 64);
+
+        $action = $this->bot->chooseAction($state, [3, 36], 1);
+
+        self::assertSame(3, $action['card_id']);
     }
 
     public function testChooseDecisionAnswerReturnsEmptyForAnOptionalField(): void

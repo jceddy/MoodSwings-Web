@@ -125,15 +125,18 @@
         return outputArray;
     }
 
-    // Card size slider (issue #417) -- a pure client-side, per-device
+    // Card/icon size slider (issue #417) -- a pure client-side, per-device
     // rendering preference, same localStorage-backed mechanism as
     // app.js's own THEME_STORAGE_KEY/initThemeSelect() (a plain custom
     // property here, --card-scale, instead of a data-theme attribute; see
     // its own definition in style.css for the full list of rules it
-    // scales). Read by both initSettings() below (to apply it, and keep
-    // the slider/readout in sync) and discardStackCardWidthPx() (so the
-    // discard pile's own column-count math still reflects whatever size
-    // is actually rendered, not just the unscaled breakpoint default).
+    // scales, including -- per this slider's own later rename -- the
+    // top-of-board players list's own .player-stat/.player-flag icons,
+    // not just .card-thumb). Read by both initSettings() below (to apply
+    // it, and keep the slider/readout in sync) and
+    // discardStackCardWidthPx() (so the discard pile's own column-count
+    // math still reflects whatever size is actually rendered, not just
+    // the unscaled breakpoint default).
     const CARD_SCALE_STORAGE_KEY = 'cardScalePreference';
 
     function getCardScale() {
@@ -332,16 +335,19 @@
             saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
         });
 
-        // Card size slider (issue #417) -- a client-only preference (see
-        // CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale() above,
-        // already applied once at page load independent of this dialog
-        // ever being opened); this just keeps the slider/readout in sync
-        // with that same value and reacts to it changing, the same
+        // Card/icon size slider (issue #417) -- a client-only preference
+        // (see CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale()
+        // above, already applied once at page load independent of this
+        // dialog ever being opened); this just keeps the slider/readout in
+        // sync with that same value and reacts to it changing, the same
         // "sync on open, save on change" shape as the two server-synced
         // preferences above -- just to localStorage instead of the
-        // server. 'input' (not 'change') so the readout/cards update live
-        // while dragging, matching how a slider control is normally
-        // expected to behave. The discard pile is explicitly re-rendered
+        // server. 'input' (not 'change') so the readout/cards/icons
+        // update live while dragging, matching how a slider control is
+        // normally expected to behave; 5% steps (the slider's own HTML
+        // step="5") for finer control than the original 10% over the
+        // final size, read straight from the element rather than
+        // hardcoded here. The discard pile is explicitly re-rendered
         // afterward -- unlike every other .card-thumb on the page, it
         // doesn't just reflow for free on a CSS-only size change, since
         // discardStackColumnCount() (see its own definition below) bakes

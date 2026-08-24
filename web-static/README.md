@@ -425,9 +425,11 @@ icons (`1.5rem`/`1.25rem` → `3rem`/`2.5rem`) and their overlaid
 `.player-flag` rule, since those same classes are also reused for the
 Decks dialog's own friends-shared/card-count icons and the lobby's own
 play-arrow/waiting-hourglass icons -- neither of which the issue is
-asking to resize.
+asking to resize. These same icons are ALSO scaled by the "Card/icon
+size" slider below, on top of this fixed desktop double -- see that
+section's own follow-up paragraph.
 
-### Card size slider (issue #417)
+### Card/icon size slider (issue #417)
 
 A `--card-scale` custom property (default `1`, defined on the plain
 `:root` block at the very top of `style.css`, alongside the `--color-*`
@@ -438,22 +440,57 @@ shrinks, the plain base size, the 1280px+ desktop double from "Bigger
 default card size on desktop" above), `.card-thumb--suppressed`'s own
 rotation-clearance width, `.grid-draft-cell`/`.grid-draft-cell--empty`,
 and the discard pile's own stacking overlap margin. A player's chosen
-scale (50%-200%, in 10% steps) therefore resizes literally everywhere
-`.card-thumb` appears -- hand, in-play, discard, the deck builder, the
-draft pool, saved/shared deck views -- confirmed by the maintainer over
-the narrower alternative of only resizing the live board's own hand/
-in-play/discard cards.
+scale (50%-200%, in 5% steps -- 10% originally, narrowed for finer
+control per the maintainer's own follow-up) therefore resizes literally
+everywhere `.card-thumb` appears -- hand, in-play, discard, the deck
+builder, the draft pool, saved/shared deck views -- confirmed by the
+maintainer over the narrower alternative of only resizing the live
+board's own hand/in-play/discard cards.
 
-The suppressed-badge repositioning offsets (`.card-thumb--suppressed
-.card-thumb__badge--value`/`--suppressed`, `top`/`bottom: calc(0.25rem +
-<N>px)`) split their own `calc()` differently from the plain width rules
-above: only the `<N>px` clearance term is wrapped in `* var(--card-scale,
-1)`, while the `0.25rem` corner inset stays bare -- matching "Bigger
-default card size on desktop"'s own established precedent that the plain
-corner insets never scale with card size, just now applied to a
-continuous multiplier instead of a fixed doubling. The plain corner
-badges (`.card-thumb__badge` and its `--value`/`--copy`/`--recolored*`
-variants) are left alone entirely, same reasoning.
+**Also the top-of-board players list's own icons (follow-up, confirmed
+by the maintainer).** The same `--card-scale` multiplier now ALSO applies
+to `#players-list`'s own `.player-stat`/`.player-flag` icons and their
+overlaid `.player-stat__badge` numeral -- the same "Bigger and more
+distinct icons at the top" icons from issue #417's own desktop-doubling
+item above, now user-adjustable via this one slider instead of only
+ever doubling at the 1280px breakpoint. Two new `#players-list`-scoped
+rule blocks apply it: one right after `.player-stat__badge`'s own base
+definition (multiplying THIS file's un-doubled 1.5rem/1.25rem/etc.
+starting sizes), and another inside the existing `min-width: 1280px`
+block's own `#players-list` rules (multiplying the ALREADY-doubled
+3rem/2.5rem/etc. sizes instead) -- so a desktop viewer's icons are both
+doubled AND scaled by the slider, exactly mirroring how `.card-thumb`
+itself already stacks the two. Scoped to `#players-list` specifically,
+not a bare `.player-stat`/`.player-flag` rule, for the same reason the
+original desktop-doubling rule was -- those same classes are also
+reused for the Decks dialog's own friends-shared/card-count icons and
+the lobby's own play-arrow/waiting-hourglass icons, neither of which
+this slider is meant to resize. The Settings dialog's own label was
+renamed from "Card size" to "Card/icon size" to reflect the wider scope.
+
+**The corner badges scale too (follow-up, confirmed by the maintainer,
+reversing an earlier call in this same section).** "The points/copy/
+color badges on cards need their sizes to scale with the sizes of the
+cards" -- `.card-thumb__badge` and its own `--value`/`--copy`/
+`--recolored*`/`--suppressed` variants now wrap their own font-size,
+padding, and every corner-inset position in `* var(--card-scale, 1)`
+too, at both the plain base size and (a NEW doubled block inside the
+`min-width: 1280px` rule, since these badges previously had no
+desktop-specific override at all) the desktop-doubled size -- see
+`.card-thumb__badge`'s own definition in `style.css` for the exact
+numbers (0.25rem→0.5rem, 0.65rem→1.3rem, 0.1rem/0.35rem→0.2rem/0.7rem,
+20px/22px→40px/44px). This is a direct reversal of "Bigger default card
+size on desktop"'s own original call to leave these badges (and the
+plain `0.25rem` corner insets generally) a fixed size at any card size
+-- at extreme slider settings a flat 0.65rem badge on an otherwise tiny
+or huge card read as either dominating the art or unreadably small, so
+the whole badge scales together instead now. The suppressed-badge
+repositioning offsets (`.card-thumb--suppressed .card-thumb__badge--value`/
+`--suppressed`, `top`/`bottom: calc((0.25rem + <N>px) * var(--card-scale,
+1))`) were updated to match -- their own `0.25rem` corner-inset term is
+now wrapped in the same `calc()` as the `<N>px` clearance term, rather
+than sitting outside it unscaled, so they stay consistent with the base
+`.card-thumb__badge--value`/`--suppressed` rules they layer on top of.
 
 A purely client-side, per-device preference -- no per-game behavior for
 the server to know about, so unlike `default_selections_mode_preference`/
@@ -477,9 +514,10 @@ render on the very first board view long before a player ever opens
 Settings.
 
 The control itself (`#settings-card-size-slider`, a plain `<input
-type="range" min="50" max="200" step="10">`, plus a live `#settings-card-
-size-value` percentage readout) lives in the Settings dialog's own new
-"Display" section (`#settings-display-section`, right after "Game
+type="range" min="50" max="200" step="5">`, plus a live `#settings-card-
+size-value` percentage readout, labeled "Card/icon size") lives in the
+Settings dialog's own new "Display" section (`#settings-display-section`,
+right after "Game
 defaults") -- confirmed by the maintainer over an always-visible control
 on the board itself. Wired on `'input'` (not `'change'`) so both the
 readout and every on-screen card resize live while dragging, matching
@@ -510,16 +548,16 @@ explicitly opt in) or `'below_hand'` (the section instead renders after
 "below hand" alone would have left it sitting awkwardly above the very
 panel a player uses to actually play the card they just picked).
 
-Unlike the card size slider above, this IS a real server-synced
+Unlike the card/icon size slider above, this IS a real server-synced
 preference (`users.board_layout_preference`, `POST
 /user/board-layout-preference`, mirroring `default_selections_mode_preference`/
 `auto_pass_on_empty_hand`/`auto_apply_scoring_bonuses`'s own "sync on
 open, save on change" shape exactly) rather than `localStorage` --
 confirmed by the maintainer: where this section renders is meaningful
 enough to want it to follow the player across devices, unlike a purely
-cosmetic card size. The control (`#settings-board-layout-select`, a
-plain two-option `<select>`) lives right below the card size slider in
-the same Settings dialog "Display" section.
+cosmetic card/icon size. The control (`#settings-board-layout-select`, a
+plain two-option `<select>`) lives right below the card/icon size slider
+in the same Settings dialog "Display" section.
 
 **The move itself** (`applyBoardLayoutPreference()` in `game.js`) is a
 real DOM relocation (`insertAdjacentElement`), not a CSS reorder --

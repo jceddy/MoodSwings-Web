@@ -964,19 +964,23 @@
 
         <hr>
 
-        <!-- Card size slider (issue #417) -- a pure client-side, per-device
-             rendering preference (localStorage, see initCardSizeSlider() in
-             game.js), unlike the two server-synced preferences above --
-             there's no gameplay behavior for the server to know about here,
-             just how big every card thumbnail renders for this browser.
-             Resizes every .card-thumb on the page (hand, in-play, discard,
-             the Decks dialog's own deck builder/saved/shared-deck views,
-             the draft pool), not just the live board's own cards -- see
-             "Card size slider" in web-static/README.md. -->
+        <!-- Card/icon size slider (issue #417) -- a pure client-side,
+             per-device rendering preference (localStorage, see
+             initCardSizeSlider() in game.js), unlike the two server-synced
+             preferences above -- there's no gameplay behavior for the
+             server to know about here, just how big every card thumbnail
+             (and, per its own follow-up, the top-of-board players list's
+             own icons) renders for this browser. Resizes every .card-thumb
+             on the page (hand, in-play, discard, the Decks dialog's own
+             deck builder/saved/shared-deck views, the draft pool) plus
+             #players-list's own .player-stat/.player-flag icons, not just
+             the live board's own cards -- see "Card/icon size slider" in
+             web-static/README.md. 5% steps (rather than 10%) for finer
+             control over the final size. -->
         <section id="settings-display-section">
             <h3>Display</h3>
-            <label for="settings-card-size-slider">Card size (<span id="settings-card-size-value">100%</span>)</label>
-            <input type="range" id="settings-card-size-slider" min="50" max="200" step="10" value="100">
+            <label for="settings-card-size-slider">Card/icon size (<span id="settings-card-size-value">100%</span>)</label>
+            <input type="range" id="settings-card-size-slider" min="50" max="200" step="5" value="100">
 
             <!-- Board layout (issue #417, migration 0174) -- a real
                  server-synced preference (unlike the card size slider

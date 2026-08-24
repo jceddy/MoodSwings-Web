@@ -1,0 +1,17 @@
+-- Issue #417's own "Card/icon size" slider follow-up, confirmed by the
+-- maintainer: "the points/copy/color badges on cards need their sizes to
+-- scale with the sizes of the cards." Reverses this project's own earlier
+-- call (made when the desktop card-size double first shipped) to leave
+-- .card-thumb's own corner badges -- .card-thumb__badge and its
+-- --value/--copy/--recolored*/--suppressed variants -- a fixed size at
+-- any card size. Every one now wraps its own font-size, padding, and
+-- corner-inset position in the same `calc(<value> * var(--card-scale,
+-- 1))` multiplier the rest of .card-thumb already uses, at both the
+-- plain base size and a new doubled block inside the 1280px+ desktop
+-- media query (these badges previously had no desktop-specific override
+-- at all). See "Card/icon size slider" in web-static/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0177 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.34' WHERE id = 1;

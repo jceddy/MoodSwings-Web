@@ -15,7 +15,7 @@ use MoodSwings\Rules\RoundScorer;
  * Team Play (issue #360), its own turn-order/draw-recipient team-decision
  * proposal and Closed Team Play's blind pregame card pass. Deliberately
  * "legal, not strategic" -- see BotChoiceResolver's own docblock for the
- * field-filling policy this builds on -- with sixteen deliberate
+ * field-filling policy this builds on -- with eighteen deliberate
  * exceptions: shouldAttemptValueBoostDiscard() below, a scoring-aware,
  * partly probabilistic policy for Dignity/Embarrassment/Cheer/Delight's
  * own "you may discard a card to boost this mood's value" choice; the
@@ -136,7 +136,26 @@ use MoodSwings\Rules\RoundScorer;
  * ability all over again, since MoodPlayService re-runs a mood's own
  * afterPlaying() hook in full every time it's played, with no once-per-
  * game memory of it; see denialTargetMoodIds()'s own docblock for the
- * full policy.
+ * full policy; and nostalgiaDiscardCardId() (confirmed by the
+ * maintainer), which always takes the highest-baseValue() card
+ * currently in the discard pile when playing Nostalgia, UNLESS the bot
+ * already has a Sadness- or Wonder-family mood
+ * (DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS) in play -- one of those
+ * depends on the discard pile staying full for its own whileInPlay
+ * value, so the pickup is skipped entirely rather than undoing part of
+ * that mood's own contribution -- see that method's own docblock for
+ * the full policy; and envyDiscouragesPlayingThisCard()/sortPriorityValue()
+ * once more (confirmed by the maintainer), which deprioritizes (the same
+ * PHP_INT_MIN treatment) any card worth 0-1 points whenever a
+ * non-teammate opponent currently has Envy in play -- EnvyEffect scales
+ * its own value up with however many moods the "moodiest" opponent
+ * (relative to ITS OWN owner) has in play, so growing the acting bot's
+ * own mood count for next to nothing risks indirectly pumping that
+ * opponent's own Envy -- UNLESS the low-value card itself grants an
+ * extra play (EXTRA_PLAY_GRANTING_EFFECT_KEYS) and some other
+ * currently-playable card is worth 4 or more, in which case playing it
+ * "enables" that bigger play the very same turn, worth the same Envy
+ * risk either way; see that method's own docblock for the full policy.
  * GameService is the only caller
  * (see its own "Practice bots" section in php-app/README.md for how this
  * fits into the request lifecycle) -- legality itself
@@ -186,6 +205,28 @@ final class BotPlayerService
      * @var string[]
      */
     private const RECURSION_EFFECT_KEYS = ['harmony', 'grief', 'angst', 'grace', 'melancholy', 'nostalgia'];
+
+    /**
+     * Every effect key whose own whileInPlay value scales with the
+     * discard pile's own SIZE -- Sadness (SadnessEffect: +2 per card in
+     * the discard pile, unconditional, any color) and Wonder
+     * (WonderEffect: +2 per in-play mood AND per discard-pile card
+     * matching whichever color was chosen after playing it). Used only
+     * by nostalgiaDiscardCardId() below (confirmed by the maintainer) --
+     * a bot with one of these already in play depends on the discard
+     * pile staying full, so Nostalgia's own discard pickup would shrink
+     * it right back down and undo part of its own investment; every
+     * other discard-pile-referencing card in the catalog either checks
+     * a THRESHOLD instead of scaling with size (Misery), checks whether
+     * a card was discarded THIS ROUND rather than the pile's own size
+     * (Vulnerability), or PUTS cards into the discard pile as part of
+     * its own effect rather than reading from it (Altruism, Courage,
+     * Cynicism, Rejection, Anger, Fury, Hostility, Infatuation, Rage,
+     * Rebellion, Shock, Spite), so none of those belong here.
+     *
+     * @var string[]
+     */
+    private const DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS = ['sadness', 'wonder'];
 
     public function __construct(
         private readonly BotChoiceResolver $resolver,
@@ -657,6 +698,9 @@ final class BotPlayerService
         if ($effectKey === 'nostalgia' && $state->discardPile() === []) {
             return PHP_INT_MIN;
         }
+        if ($this->envyDiscouragesPlayingThisCard($state, $cardId, $effectKey, $botGamePlayerId, $playableCardIds)) {
+            return PHP_INT_MIN;
+        }
 
         $priority = $this->baseValue($state, $cardId);
         if (in_array($effectKey, self::EARLY_PRIORITY_EFFECT_KEYS, true)) {
@@ -714,6 +758,95 @@ final class BotPlayerService
      * of either one's own printed value.
      */
     private const EARLY_PRIORITY_BONUS = 10;
+
+    /**
+     * Just the "grants the acting player an extra play" third of
+     * EARLY_PRIORITY_EFFECT_KEYS above -- its own hand-steal
+     * (Compulsion, Intimidation) and forced-discard (Suspicion) entries
+     * excluded, since neither of those actually lets a second card be
+     * played this same turn the way an extra-play grant does. Used only
+     * by envyDiscouragesPlayingThisCard() below (confirmed by the
+     * maintainer) -- "enables another 4+-point play" only makes sense
+     * for a card that grants the extra play needed to fit that second
+     * play in.
+     *
+     * @var string[]
+     */
+    private const EXTRA_PLAY_GRANTING_EFFECT_KEYS = [
+        'charity', 'duplicity', 'idealism', 'validation', 'ambition', 'bravado', 'fear', 'nostalgia',
+        'gluttony', 'insecurity', 'angst', 'harmony', 'grief', 'thrill', 'benevolence', 'eagerness',
+        'friendliness', 'kindness', 'pride', 'hope', 'grace', 'stubbornness', 'joy',
+    ];
+
+    /**
+     * The highest printed value still low enough for
+     * envyDiscouragesPlayingThisCard() below to discourage (confirmed by
+     * the maintainer) -- EnvyEffect::computeValue() scales its owner's
+     * own value +2 for each mood the "moodiest" opponent (relative to
+     * ITS OWN owner) has in play, so growing the acting bot's own
+     * in-play mood count for next to nothing risks making the bot itself
+     * that moodiest opponent, indirectly pumping an Envy-holding
+     * opponent's own value. A genuinely valuable play (2+) is still
+     * worth that risk; a near-worthless one (0-1) generally isn't.
+     */
+    private const ENVY_AVOIDANCE_MAX_VALUE = 1;
+
+    /**
+     * Envy's own "don't feed it for free" policy (confirmed by the
+     * maintainer): sortPriorityValue() deprioritizes (the same
+     * PHP_INT_MIN treatment as Rationalization/Cynicism/Intimidation/
+     * Paranoia/Pacifism above) any card worth ENVY_AVOIDANCE_MAX_VALUE
+     * (1) or less whenever a non-teammate opponent currently has Envy in
+     * play -- see this constant's own docblock for why. Checked only
+     * against non-teammate opponents, mirroring EnvyEffect::computeValue()
+     * itself, which only ever counts a non-teammate's own mood total
+     * toward "moodiest opponent" (see BoardState::isTeammate()) -- a
+     * teammate's own Envy can never be pumped by the acting bot's own
+     * plays in the first place, so there's nothing to avoid there.
+     *
+     * The one exception: a card whose own effect grants an extra play
+     * (EXTRA_PLAY_GRANTING_EFFECT_KEYS) is exempt whenever at least one
+     * OTHER currently-playable card is worth 4 or more -- playing the
+     * cheap card "enables" that bigger play THIS SAME TURN (the extra
+     * play it grants is what makes room for it) in exchange for the very
+     * same one point of Envy risk either way, a trade worth making. This
+     * mirrors "deprioritized WHEN, never skipped outright" -- like every
+     * other sortPriorityValue() veto in this class, a low-value card
+     * still gets played if it's genuinely the only legal option once
+     * chooseAction()'s own loop runs out of anything better.
+     */
+    private function envyDiscouragesPlayingThisCard(BoardState $state, int $cardId, string $effectKey, int $botGamePlayerId, array $playableCardIds): bool
+    {
+        if ($this->baseValue($state, $cardId) > self::ENVY_AVOIDANCE_MAX_VALUE) {
+            return false;
+        }
+
+        $anyOpponentHasEnvyInPlay = false;
+        foreach ($state->activePlayerOrder() as $playerId) {
+            if ($playerId === $botGamePlayerId || $state->isTeammate($botGamePlayerId, $playerId)) {
+                continue;
+            }
+            foreach ($state->moodsOwnedBy($playerId) as $mood) {
+                if ($state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'] === 'envy') {
+                    $anyOpponentHasEnvyInPlay = true;
+                    break 2;
+                }
+            }
+        }
+        if (!$anyOpponentHasEnvyInPlay) {
+            return false;
+        }
+
+        if (in_array($effectKey, self::EXTRA_PLAY_GRANTING_EFFECT_KEYS, true)) {
+            foreach ($playableCardIds as $otherCardId) {
+                if ($otherCardId !== $cardId && $this->baseValue($state, $otherCardId) >= 4) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
 
     /**
      * Issue #359's own draft practice bots' pick-priority bonus for a
@@ -990,6 +1123,12 @@ final class BotPlayerService
             $targetMoodIds = $this->denialTargetMoodIds($state, $cardId, $botGamePlayerId);
 
             return $targetMoodIds !== [] ? ['target_mood_ids' => $targetMoodIds] : [];
+        }
+
+        if ($effectKey === 'nostalgia') {
+            $discardCardId = $this->nostalgiaDiscardCardId($state, $botGamePlayerId);
+
+            return $discardCardId !== null ? ['discard_card_id' => $discardCardId] : [];
         }
 
         if ($effectKey === 'sneakiness') {
@@ -1621,6 +1760,51 @@ final class BotPlayerService
         }
 
         return $bestOpponentScore - $botScore > self::SNEAKINESS_WIN_MARGIN ? $bestOpponentId : null;
+    }
+
+    /**
+     * Nostalgia's own "what to pick up" policy (confirmed by the
+     * maintainer): always take the highest-baseValue() card currently in
+     * the discard pile, UNLESS the bot itself already has a
+     * DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS mood (Sadness, Wonder) in
+     * play right now, in which case null is returned instead -- shrinking
+     * the discard pile it depends on would undo part of the value that
+     * mood is already contributing, so the pickup is skipped entirely
+     * and the discard pile is left alone (Nostalgia's own separate
+     * extra-play grant is unaffected either way -- see
+     * NostalgiaEffect::afterPlaying()). This is purely a TARGETING
+     * policy, distinct from sortPriorityValue()'s own "deprioritize
+     * Nostalgia when the discard pile is completely empty" check above
+     * -- that decides WHETHER/WHEN to lead with playing Nostalgia at
+     * all; this decides what to do with the optional discard_card_id
+     * field once it's actually being played. A Sadness/Wonder-holding
+     * bot can still legally play Nostalgia (e.g. purely for the extra
+     * play), it just never volunteers to empty the discard pile while
+     * doing so.
+     *
+     * Returns null both when there's a Sadness/Wonder-family mood in
+     * play (don't pick up at all) and when the discard pile is simply
+     * empty (nothing legal to pick up) -- buildChoicesForCard() treats
+     * either the same way, an empty choices array rather than a filled
+     * discard_card_id.
+     */
+    private function nostalgiaDiscardCardId(BoardState $state, int $botGamePlayerId): ?int
+    {
+        foreach ($state->moodsOwnedBy($botGamePlayerId) as $mood) {
+            $effectKey = $state->catalogRow($state->effectiveCardId($mood->cardId))['effectKey'];
+            if (in_array($effectKey, self::DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS, true)) {
+                return null;
+            }
+        }
+
+        $bestCardId = null;
+        foreach ($state->discardPile() as $discardCardId) {
+            if ($bestCardId === null || $this->baseValue($state, $discardCardId) > $this->baseValue($state, $bestCardId)) {
+                $bestCardId = $discardCardId;
+            }
+        }
+
+        return $bestCardId;
     }
 
     /**
