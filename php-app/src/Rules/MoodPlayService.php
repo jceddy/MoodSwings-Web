@@ -44,8 +44,10 @@ final class MoodPlayService
      */
     private const DUPLICITY_REPEAT_KEY = 'duplicity_repeat';
 
-    public function __construct(private readonly EffectRegistry $registry)
-    {
+    public function __construct(
+        private readonly EffectRegistry $registry,
+        private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
+    ) {
     }
 
     /**
@@ -555,7 +557,36 @@ final class MoodPlayService
             }
         }
 
+        $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $topLevelChoices);
+
         return PlayResult::complete();
+    }
+
+    /**
+     * Chaos Draft (issue #405): if the just-played card carries an
+     * attached 'after_playing'-shaped chaos effect, resolves it now that
+     * the card's own base afterPlaying() (and the reactor loop above)
+     * have fully finished -- see ChaosMoodEffect's own docblock for why
+     * this is a deliberately simple, synchronous step, not woven into
+     * this class's own Duplicity-repeat/opponent-decision-pause
+     * machinery above. Reads its own choices from $topLevelChoices'
+     * 'chaos' sub-bag, namespaced so its own field keys can never
+     * collide with $cardId's own base effect fields in the same request.
+     * A card whose printed effect itself required pausing for an
+     * opponent's decision (RequiresOpponentDecision) still reaches this
+     * point correctly -- $topLevelChoices is always the ORIGINAL
+     * request's own bag regardless of how many pauses the base effect
+     * needed (see resolveAfterPlayingChain()'s own docblock), so the
+     * 'chaos' sub-bag survived that round trip along with it.
+     */
+    private function resolveAttachedChaosAfterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $topLevelChoices): void
+    {
+        $chaosRow = $state->chaosEffectRow($cardId);
+        if ($chaosRow === null || $chaosRow['shape'] !== 'after_playing') {
+            return;
+        }
+
+        $this->chaosRegistry->for($chaosRow['effectKey'])->afterPlaying($state, $cardId, $playerId, $topLevelChoices->sub('chaos'));
     }
 
     /**

@@ -6,6 +6,7 @@ namespace MoodSwings\Game;
 
 use MoodSwings\Database\Connection;
 use MoodSwings\Rules\BoardState;
+use MoodSwings\Rules\ChaosEffectRegistry;
 use MoodSwings\Rules\EffectRegistry;
 use PDO;
 
@@ -26,8 +27,10 @@ use PDO;
  */
 final class BoardStateRepository
 {
-    public function __construct(private readonly EffectRegistry $registry)
-    {
+    public function __construct(
+        private readonly EffectRegistry $registry,
+        private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
+    ) {
     }
 
     public function load(int $gameId): BoardState
@@ -83,6 +86,15 @@ final class BoardStateRepository
             $catalog[(int) $row['id']] = $this->mapCatalogRow($row);
         }
 
+        // Chaos Draft (issue #405): loaded unconditionally, the same way
+        // $catalog itself is -- a tiny, cheap, game-independent read, so
+        // there's no need to special-case it per deck_type the way
+        // $hasSeparateDecks above has to.
+        $chaosCatalog = [];
+        foreach ($pdo->query('SELECT * FROM chaos_effects') as $row) {
+            $chaosCatalog[(int) $row['id']] = $this->mapChaosCatalogRow($row);
+        }
+
         $cardsStmt = $pdo->prepare('SELECT * FROM game_cards WHERE game_id = :game_id');
         $cardsStmt->execute(['game_id' => $gameId]);
         $gameCards = $cardsStmt->fetchAll();
@@ -94,8 +106,17 @@ final class BoardStateRepository
         // BoardState::catalogRow() translate an instance id back to the
         // catalog row (name/color/value/rules text) it should use.
         $catalogCardIdFor = [];
+        // Chaos Draft: an attached effect (game_cards.chaos_effect_id)
+        // travels with a card through every zone it's ever in -- hand,
+        // deck, discard, or in play -- for the rest of the game, not just
+        // while it happens to be in play, so this is read for every row
+        // here the same way $catalogCardIdFor is, not just $inPlayRows.
+        $chaosEffectIdFor = [];
         foreach ($gameCards as $row) {
             $catalogCardIdFor[(int) $row['id']] = (int) $row['card_id'];
+            if ($row['chaos_effect_id'] !== null) {
+                $chaosEffectIdFor[(int) $row['id']] = (int) $row['chaos_effect_id'];
+            }
         }
 
         $hands = [];
@@ -132,7 +153,7 @@ final class BoardStateRepository
         }
         $deck = $hasSeparateDecks ? $deckByOwnerPosition : ($deckByOwnerPosition[BoardState::SHARED_DECK_KEY] ?? []);
 
-        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds, $bankedExtraPlays);
+        $state = new BoardState($catalog, $this->registry, $playerIds, $hands, $deck, $discard, $hasSeparateDecks, $discardOwners, $catalogCardIdFor, $teamIdByPlayer, $resignedPlayerIds, $bankedExtraPlays, $chaosCatalog, $this->chaosRegistry, $chaosEffectIdFor);
 
         foreach ($inPlayRows as $row) {
             $state->restoreMoodInPlay(
@@ -201,6 +222,14 @@ final class BoardStateRepository
         // -- and since a suppression source id is now already a real
         // instance id rather than needing translation from a catalog id,
         // it can be written in this same pass instead of a second one.
+        //
+        // Chaos Draft (issue #405) is the one exception to "nothing ever
+        // creates a new one mid-game": BoardState::spawnMoodInPlay()
+        // (a token conjured into play by a chaos effect) hands out a
+        // negative placeholder id specifically so this method can tell a
+        // brand-new card apart from an ordinary one and $insertSpawned
+        // below INSERTs a real row for it instead -- see that method's
+        // own docblock for why nothing needs the real id back afterward.
         $update = $pdo->prepare(
             'UPDATE game_cards SET
                 zone = :zone,
@@ -208,8 +237,13 @@ final class BoardStateRepository
                 deck_position = :deck_position,
                 copied_card_id = :copied_card_id,
                 suppressions = :suppressions,
-                effect_state = :effect_state
+                effect_state = :effect_state,
+                chaos_effect_id = :chaos_effect_id
              WHERE id = :id AND game_id = :game_id'
+        );
+        $insertSpawned = $pdo->prepare(
+            'INSERT INTO game_cards (game_id, card_id, zone, owner_game_player_id, chaos_effect_id)
+             VALUES (:game_id, :card_id, :zone, :owner, :chaos_effect_id)'
         );
 
         $write = function (
@@ -220,7 +254,21 @@ final class BoardStateRepository
             ?int $copiedCardId,
             array $suppressions,
             array $effectState,
-        ) use ($update, $gameId): void {
+        ) use ($update, $insertSpawned, $gameId, $state): void {
+            $chaosEffectId = $state->chaosEffectId($cardId);
+
+            if ($cardId < 0) {
+                $insertSpawned->execute([
+                    'game_id' => $gameId,
+                    'card_id' => $state->catalogCardId($cardId),
+                    'zone' => $zone,
+                    'owner' => $owner,
+                    'chaos_effect_id' => $chaosEffectId,
+                ]);
+
+                return;
+            }
+
             $update->execute([
                 'id' => $cardId,
                 'game_id' => $gameId,
@@ -230,6 +278,7 @@ final class BoardStateRepository
                 'copied_card_id' => $copiedCardId,
                 'suppressions' => $this->encodeSuppressions($suppressions),
                 'effect_state' => $effectState === [] ? null : json_encode($effectState),
+                'chaos_effect_id' => $chaosEffectId,
             ]);
         };
 
@@ -322,6 +371,17 @@ final class BoardStateRepository
             'hasToPlay' => (bool) $row['has_to_play_ability'],
             'hasWhileInPlay' => (bool) $row['has_while_in_play_ability'],
             'hasAfterPlaying' => (bool) $row['has_after_playing_ability'],
+            'rulesText' => $row['rules_text'],
+        ];
+    }
+
+    /** @return array{effectKey:string,rarity:string,shape:string,rulesText:string} */
+    private function mapChaosCatalogRow(array $row): array
+    {
+        return [
+            'effectKey' => $row['effect_key'],
+            'rarity' => $row['rarity'],
+            'shape' => $row['shape'],
             'rulesText' => $row['rules_text'],
         ];
     }

@@ -69,6 +69,15 @@ final class BoardState
     /** @var array<int, array<int, array{sourceCardId: int}>> playerId => every play Joy/Generosity has banked for them, not yet fired -- see bankExtraPlay()/consumeBankedExtraPlaysFor(). */
     private array $bankedExtraPlays;
 
+    /** @var array<int, int> cardId (instance id) => chaos_effects.id (Chaos Draft, issue #405) -- see the constructor's own $chaosEffectIdFor docblock and chaosEffectRow()/attachChaosEffect(). Mutable (unlike $catalogCardIdFor) since a chaos effect can be newly attached, or overwritten by a later one, mid-game. */
+    private array $chaosEffectIdFor;
+
+    /** @var array<int, int> a spawned token's own placeholder instance id => its catalog id (Chaos Draft, issue #405) -- see spawnMoodInPlay()'s own docblock. Separate from (and checked before) $catalogCardIdFor since that one's readonly and populated once at load time, before any token this game could have spawned yet existed. */
+    private array $spawnedCatalogCardIdFor = [];
+
+    /** The next placeholder instance id spawnMoodInPlay() hands out -- always negative, so it can never collide with a real game_cards.id (an AUTO_INCREMENT PK, always positive) either already loaded or inserted later by BoardStateRepository::save(). Counts down so each spawn within one request gets its own distinct placeholder. */
+    private int $nextSpawnedCardId = -1;
+
     /** @var array<int, MoodInPlay> cardId (instance id) => the mood currently in play. Keyed by instance id rather than catalog id so two players' identical printed cards can both be in play simultaneously without one clobbering the other. */
     private array $moodsInPlay = [];
 
@@ -333,6 +342,20 @@ final class BoardState
      *     Generosity has banked for them that hasn't fired yet -- empty
      *     for every game with none outstanding (and every pre-existing
      *     test). See bankExtraPlay()'s own docblock.
+     * @param array<int, array{rarity:string,shape:string,rulesText:string}> $chaosCatalog
+     *     chaos_effects.id => row (Chaos Draft, issue #405) -- the same
+     *     role $catalog plays for cards.id, just for the separate
+     *     chaos_effects catalog. Empty for every non-Chaos-Draft game (and
+     *     every pre-existing test), in which case chaosEffectRow() always
+     *     returns null since $chaosEffectIdFor is empty too.
+     * @param array<int, int> $chaosEffectIdFor cardId (instance id) =>
+     *     chaos_effects.id, for whichever card (if any) currently carries
+     *     an attached Chaos Draft effect -- see chaosEffectRow()'s own
+     *     docblock and attachChaosEffect(). Keyed by the RAW instance id,
+     *     never resolved through effectiveCardId() the way catalogRow()
+     *     is: an attached effect is a property of one specific physical
+     *     card, independent of whatever it's currently copying (Creativity)
+     *     or being copied by.
      */
     public function __construct(
         private readonly array $catalog,
@@ -347,12 +370,16 @@ final class BoardState
         private readonly array $teamIdByPlayer = [],
         private readonly array $resignedPlayerIds = [],
         array $bankedExtraPlays = [],
+        private readonly array $chaosCatalog = [],
+        private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
+        array $chaosEffectIdFor = [],
     ) {
         $this->hands = $hands;
         $this->decks = $hasSeparateDecks ? $deck : [self::SHARED_DECK_KEY => $deck];
         $this->discard = $discard;
         $this->discardOwners = $discardOwners;
         $this->bankedExtraPlays = $bankedExtraPlays;
+        $this->chaosEffectIdFor = $chaosEffectIdFor;
     }
 
     /**
@@ -381,7 +408,7 @@ final class BoardState
     /** @return array{color:string,rarity:string,baseValue:int,altValue:?int,effectKey:string,hasToPlay:bool,hasWhileInPlay:bool,hasAfterPlaying:bool,rulesText:string} */
     public function catalogRow(int $cardId): array
     {
-        $catalogId = $this->catalogCardIdFor[$cardId] ?? $cardId;
+        $catalogId = $this->catalogCardId($cardId);
         return $this->catalog[$catalogId] ?? throw new InvalidArgumentException("Unknown card id {$catalogId}");
     }
 
@@ -391,10 +418,56 @@ final class BoardState
      * so callers that need the catalog id itself (e.g. to look up a card's
      * art asset, which is keyed by cards.id -- see web-static/README.md's
      * "Assets" section) don't have to re-derive it from catalogRow().
+     * Checks $spawnedCatalogCardIdFor first -- see spawnMoodInPlay()'s own
+     * docblock -- since a token's own placeholder instance id (negative,
+     * never a real game_cards.id) was never in $catalogCardIdFor at load
+     * time in the first place.
      */
     public function catalogCardId(int $cardId): int
     {
-        return $this->catalogCardIdFor[$cardId] ?? $cardId;
+        return $this->spawnedCatalogCardIdFor[$cardId] ?? $this->catalogCardIdFor[$cardId] ?? $cardId;
+    }
+
+    /**
+     * The chaos_effects row currently attached to $cardId (Chaos Draft,
+     * issue #405), or null if it carries none -- see the constructor's own
+     * $chaosEffectIdFor docblock and attachChaosEffect(). Keyed by the RAW
+     * instance id, same as $chaosEffectIdFor itself.
+     *
+     * @return ?array{effectKey:string,rarity:string,shape:string,rulesText:string}
+     */
+    public function chaosEffectRow(int $cardId): ?array
+    {
+        $chaosId = $this->chaosEffectIdFor[$cardId] ?? null;
+        if ($chaosId === null) {
+            return null;
+        }
+
+        return $this->chaosCatalog[$chaosId] ?? throw new InvalidArgumentException("Unknown chaos effect id {$chaosId}");
+    }
+
+    /** @see chaosEffectRow(). Convenience for the common case of just needing the key to dispatch a ChaosEffectRegistry lookup. */
+    public function chaosEffectKeyFor(int $cardId): ?string
+    {
+        return $this->chaosEffectRow($cardId)['effectKey'] ?? null;
+    }
+
+    /** The raw chaos_effects.id attached to $cardId, or null -- unlike chaosEffectRow(), doesn't require $chaosCatalog to actually contain it, since BoardStateRepository::save() just needs the id to persist, not the full row. */
+    public function chaosEffectId(int $cardId): ?int
+    {
+        return $this->chaosEffectIdFor[$cardId] ?? null;
+    }
+
+    /**
+     * Attaches (or overwrites -- "a card can carry at most one Chaos
+     * Draft effect at a time... attaching a new one... overwrites" per
+     * the issue) a chaos effect to $cardId. Confirmed by the maintainer:
+     * plain assignment already gives "overwrites, doesn't stack" for
+     * free -- there's nothing here to explicitly clear first.
+     */
+    public function attachChaosEffect(int $cardId, int $chaosEffectId): void
+    {
+        $this->chaosEffectIdFor[$cardId] = $chaosEffectId;
     }
 
     /** @return int[] */
@@ -595,6 +668,37 @@ final class BoardState
         // The card just became $playerId's own in-play mood, no longer a
         // discard-pile card with a "last owner" of its own -- see
         // removeFromDiscard(), which already cleared any stale entry.
+    }
+
+    /**
+     * Conjures a brand-new physical card directly into play -- e.g. a
+     * chaos effect's own "put a white mood with value 1 named Smugness
+     * into play" (Chaos Draft, issue #405). New territory: every OTHER
+     * card in the game is instantiated once at deal time (see migration
+     * 0013's own docblock), never mid-game, so this is the one place a
+     * card's own instance id doesn't already come from BoardStateRepository::
+     * load(). $catalogCardId is a token card's own cards.id (see migration
+     * 0183's own is_token column) -- nothing stops calling this with an
+     * ordinary non-token catalog id too, but nothing in the curated
+     * effect pool ever needs to.
+     *
+     * Returns a NEGATIVE placeholder instance id (see $nextSpawnedCardId)
+     * rather than a real game_cards.id, since this card has no database
+     * row yet -- BoardStateRepository::save() is what actually INSERTs
+     * one and gets a real id back; nothing within the same request needs
+     * the real id, since GameService never serializes a play's own
+     * mutated BoardState directly back to a caller (see that class's own
+     * "Chaos Draft" docblock) -- every response the frontend actually
+     * reads comes from a fresh, separate buildGameState() read after
+     * save() has already committed.
+     */
+    public function spawnMoodInPlay(int $catalogCardId, int $ownerId): int
+    {
+        $cardId = $this->nextSpawnedCardId--;
+        $this->spawnedCatalogCardIdFor[$cardId] = $catalogCardId;
+        $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $ownerId);
+
+        return $cardId;
     }
 
     /** @param array<string, mixed> $effectState */
@@ -1347,6 +1451,23 @@ final class BoardState
         if ($mood->suppressions !== []) {
             return 0;
         }
+
+        return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood));
+    }
+
+    /**
+     * This mood's value from its OWN printed identity alone -- an
+     * override, the dice rule, its own while-in-play computation, or its
+     * flat base value -- exactly what valueOf() always returned before
+     * Chaos Draft (issue #405) existed. Split out so applyChaosValuePipeline()
+     * has a single well-defined "the card's own printed ability already
+     * ran" starting point to hand an attached chaos effect, per
+     * ChaosMoodEffect::computeValue()'s own docblock, rather than
+     * threading the chaos step into every one of these branches
+     * individually.
+     */
+    private function printedValueOf(int $cardId, MoodInPlay $mood): int
+    {
         if (array_key_exists('valueOverride', $mood->effectState)) {
             return $mood->effectState['valueOverride'];
         }
@@ -1367,6 +1488,30 @@ final class BoardState
         }
 
         return $row['baseValue'];
+    }
+
+    /**
+     * Chaos Draft (issue #405): if $cardId carries an attached
+     * 'while_in_play'-shaped chaos effect, hands it $printedValue (the
+     * card's OWN printed ability's already-fully-resolved result, or its
+     * flat base value if it has no while-in-play ability of its own) to
+     * further adjust -- confirmed by the maintainer as a pipeline, not an
+     * independent computation the two are combined after the fact: see
+     * ChaosMoodEffect::computeValue()'s own docblock for why. An
+     * 'after_playing'-shaped attached effect has no ongoing value
+     * contribution at all, so this only ever touches the 'while_in_play'
+     * shape; a card with no attached chaos effect (chaosEffectRow()
+     * returns null -- every non-Chaos-Draft game, always) passes
+     * $printedValue through unchanged.
+     */
+    private function applyChaosValuePipeline(int $cardId, int $printedValue): int
+    {
+        $chaosRow = $this->chaosEffectRow($cardId);
+        if ($chaosRow === null || $chaosRow['shape'] !== 'while_in_play') {
+            return $printedValue;
+        }
+
+        return $this->chaosRegistry->for($this->chaosEffectKeyFor($cardId))->computeValue($this, $cardId, $printedValue);
     }
 
     /**
