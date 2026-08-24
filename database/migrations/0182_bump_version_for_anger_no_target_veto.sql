@@ -1,0 +1,16 @@
+-- Practice bots (issue #140), confirmed by the maintainer: "Bots should
+-- avoid playing Anger if they don't have any targets. As a zero-point
+-- card, it is not a good opening play." Adds a sortPriorityValue() veto
+-- (the same PHP_INT_MIN "deprioritized WHEN, never skipped outright"
+-- treatment Pacifism already gets) for Anger whenever
+-- angerTargetMoodIds() itself comes back completely empty -- no opponent
+-- mood worth discarding and no self-targeting recursion play either --
+-- reusing that existing targeting method directly rather than adding a
+-- new one, the same way sortPriorityValue()'s own Pacifism check already
+-- reuses pacifismTargetMoodIds(). See "Practice bots" in
+-- php-app/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0181 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.38' WHERE id = 1;
