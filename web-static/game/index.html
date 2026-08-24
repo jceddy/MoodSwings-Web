@@ -115,18 +115,38 @@
             <p id="board-error" class="error" hidden></p>
             <p id="pending-decision-banner" hidden></p>
 
-            <div id="scoring-preview" hidden>
-                <h4>Scores so far this round</h4>
-                <ul id="scoring-preview-scores"></ul>
-                <p id="scoring-preview-swaps"></p>
-            </div>
+            <!-- Board layout preference (issue #417, migration 0174) --
+                 #board-round-status above and this whole group are the two
+                 pieces applyBoardLayoutPreference() in game.js relocates
+                 as a unit when the preference is 'below_hand' (right
+                 after #choices-panel, i.e. after "Your hand" and the
+                 "selected card to play" panel) -- see that function's own
+                 docblock for exactly how, and why the default
+                 'above_play_area' needs no relocation at all (this group
+                 is already sitting in that exact spot). Wrapped in one
+                 element (rather than moving 4 separate nodes) purely so
+                 the relocation is a single insertAdjacentElement call
+                 instead of four -- #board-round-status itself can't join
+                 this wrapper, since the banners between it and this group
+                 (draft-match-scoreline, rematch-button, replay-controls,
+                 board-message/error, pending-decision-banner) must stay
+                 at the top in EITHER layout, so this group's own original
+                 position has to stay anchored to pending-decision-banner
+                 specifically, not to board-round-status. -->
+            <div id="board-status-group">
+                <div id="scoring-preview" hidden>
+                    <h4>Scores so far this round</h4>
+                    <ul id="scoring-preview-scores"></ul>
+                    <p id="scoring-preview-swaps"></p>
+                </div>
 
-            <h3>Players</h3>
-            <ul id="players-list"></ul>
+                <h3>Players</h3>
+                <ul id="players-list"></ul>
 
-            <div id="team-scores" hidden>
-                <h3>Team scores</h3>
-                <ul id="team-scores-list"></ul>
+                <div id="team-scores" hidden>
+                    <h3>Team scores</h3>
+                    <ul id="team-scores-list"></ul>
+                </div>
             </div>
 
             <div id="duel-deck-submission" hidden>
@@ -958,6 +978,20 @@
             <h3>Display</h3>
             <label for="settings-card-size-slider">Card size (<span id="settings-card-size-value">100%</span>)</label>
             <input type="range" id="settings-card-size-slider" min="50" max="200" step="10" value="100">
+
+            <!-- Board layout (issue #417, migration 0174) -- a real
+                 server-synced preference (unlike the card size slider
+                 above), since "where does this render" is meaningful
+                 enough to follow the player across devices. See
+                 applyBoardLayoutPreference() in game.js for exactly what
+                 moves. -->
+            <p>
+                <label for="settings-board-layout-select">Round/Score/Players position</label>
+                <select id="settings-board-layout-select">
+                    <option value="above_play_area">Above the play area (default)</option>
+                    <option value="below_hand">Below your hand</option>
+                </select>
+            </p>
         </section>
 
         <hr>

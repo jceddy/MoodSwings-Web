@@ -224,7 +224,7 @@ final class AuthService
     }
 
     /**
-     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool}, expiresAt: DateTimeImmutable}|null
+     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool, board_layout_preference: string}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
     {
@@ -273,6 +273,15 @@ final class AuthService
                 // sneakinessPlayedThisRound()). See UserRepository::
                 // setAutoApplyScoringBonuses().
                 'auto_apply_scoring_bonuses' => (bool) $session['auto_apply_scoring_bonuses'],
+                // "Board layout" (issue #417) as a personal preference
+                // (Settings dialog's "Display" section) -- 'above_play_area'
+                // (default) leaves the Round/Score/Players section exactly
+                // where it's always rendered; 'below_hand' has game.js
+                // relocate it to sit after "Your hand" and the "selected
+                // card to play" panel instead. See UserRepository::
+                // setBoardLayoutPreference() and applyBoardLayoutPreference()
+                // in game.js.
+                'board_layout_preference' => $session['board_layout_preference'],
             ],
             'expiresAt' => $expiresAt,
         ];

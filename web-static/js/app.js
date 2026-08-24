@@ -292,6 +292,21 @@ function saveAutoApplyScoringBonusesPreference(autoApplyScoringBonuses) {
     });
 }
 
+// Board layout (issue #417) as a personal preference (Settings dialog's
+// "Display" section) -- write-only, same reasoning as
+// saveAutoApplyScoringBonusesPreference() above: the current value
+// already rides on getCurrentUser()'s own user.board_layout_preference
+// field. Unlike the auto-pass/auto-apply preferences above, this DOES
+// have a client-side effect beyond persisting it -- see
+// applyBoardLayoutPreference() in game.js, called right alongside this
+// on change.
+function saveBoardLayoutPreference(boardLayoutPreference) {
+    return apiRequest('/user/board-layout-preference', {
+        method: 'POST',
+        body: JSON.stringify({ board_layout_preference: boardLayoutPreference }),
+    });
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.

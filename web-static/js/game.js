@@ -163,6 +163,51 @@
     // value once initSettings() itself runs, right below.
     applyCardScale(getCardScale());
 
+    // "Board layout" (issue #417) -- unlike card size above, this IS a
+    // real server-synced preference (users.board_layout_preference,
+    // migration 0174), since where this section renders is meaningful
+    // enough to want it to follow the player across devices. Relocates
+    // the Round/Score/Players section (#board-round-status +
+    // #board-status-group, see that element's own docblock in
+    // index.html for why it's two pieces rather than one) to sit right
+    // after #choices-panel -- "Your hand" and the "selected card to
+    // play" panel, per the maintainer's own explicit clarification --
+    // instead of its default position between the top banners and the
+    // draft/in-play area. Pure DOM relocation (insertAdjacentElement),
+    // not a CSS reorder -- #board-view interleaves this section with a
+    // lot of unrelated content (draft panels, in-play board, etc.) that
+    // must NOT move, so giving the whole section a CSS `order` would
+    // require assigning one to every sibling instead of just these two
+    // pieces. Idempotent in both directions: calling either branch again
+    // when already in that state is a harmless no-op (insertAdjacentElement
+    // just re-confirms the current position), so this is safe to call on
+    // every preference change with no "was it already applied" tracking
+    // needed.
+    function applyBoardLayoutPreference(preference) {
+        const boardRoundStatus = document.getElementById('board-round-status');
+        const boardStatusGroup = document.getElementById('board-status-group');
+
+        if (preference === 'below_hand') {
+            const choicesPanel = document.getElementById('choices-panel');
+            choicesPanel.insertAdjacentElement('afterend', boardRoundStatus);
+            boardRoundStatus.insertAdjacentElement('afterend', boardStatusGroup);
+        } else {
+            // 'above_play_area' (the default) and any unrecognized value
+            // (e.g. a future rollback) both fall back to the original,
+            // always-safe layout rather than leaving the section wherever
+            // a previous 'below_hand' call last put it.
+            const boardTitle = document.getElementById('board-title');
+            const pendingDecisionBanner = document.getElementById('pending-decision-banner');
+            boardTitle.insertAdjacentElement('afterend', boardRoundStatus);
+            pendingDecisionBanner.insertAdjacentElement('afterend', boardStatusGroup);
+        }
+    }
+
+    // Applied immediately, same reasoning as applyCardScale() above --
+    // the board can render (and this section along with it) before the
+    // Settings dialog is ever opened.
+    applyBoardLayoutPreference(user.board_layout_preference);
+
     // Settings dialog (formerly a standalone Notifications dialog, issue
     // #108) -- now also hosts the "Default selections mode" personal
     // preference (see settings-default-selections-checkbox's own wiring
@@ -319,6 +364,23 @@
                 // ignore -- the selection just won't persist across reloads
             }
             renderDiscardPile(lastDiscardPile, lastDiscardCanAct);
+        });
+
+        // Board layout (issue #417) -- a real server-synced preference
+        // (see saveBoardLayoutPreference()/user.board_layout_preference),
+        // same "sync on open, save on change" shape as
+        // default_selections_mode_preference/auto_pass_on_empty_hand/
+        // auto_apply_scoring_bonuses above, just also re-applying the
+        // layout itself immediately (applyBoardLayoutPreference() already
+        // ran once at page load with whatever value getCurrentUser()
+        // returned; this keeps it in sync with any change made here
+        // without needing a reload).
+        const boardLayoutSelect = document.getElementById('settings-board-layout-select');
+        boardLayoutSelect.value = user.board_layout_preference;
+        boardLayoutSelect.addEventListener('change', () => {
+            user.board_layout_preference = boardLayoutSelect.value;
+            applyBoardLayoutPreference(boardLayoutSelect.value);
+            saveBoardLayoutPreference(boardLayoutSelect.value);
         });
 
         // The dialog itself (and its "not supported" message) must still be

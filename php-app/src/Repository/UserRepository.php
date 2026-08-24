@@ -119,6 +119,23 @@ final class UserRepository
         $stmt->execute(['auto_apply_scoring_bonuses' => $autoApplyScoringBonuses ? 1 : 0, 'id' => $id]);
     }
 
+    /**
+     * "Board layout" (issue #417) as a personal preference (Settings
+     * dialog's "Display" section) -- 'above_play_area' (default) or
+     * 'below_hand', see applyBoardLayoutPreference() in game.js for what
+     * each actually does. $boardLayoutPreference is validated against
+     * those two values by the route handler (index.php) before this is
+     * ever called -- the users.board_layout_preference column's own
+     * ENUM(...) (migration 0174) would reject anything else anyway, but
+     * failing at the route with a clean 400 is friendlier than a raw SQL
+     * error. Defaults to 'above_play_area'; see migration 0174.
+     */
+    public function setBoardLayoutPreference(int $id, string $boardLayoutPreference): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET board_layout_preference = :board_layout_preference WHERE id = :id');
+        $stmt->execute(['board_layout_preference' => $boardLayoutPreference, 'id' => $id]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM users WHERE id = :id');

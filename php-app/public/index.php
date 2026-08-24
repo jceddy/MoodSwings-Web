@@ -875,6 +875,34 @@ if ($path === '/user/auto-apply-scoring-bonuses-preference' && $method === 'POST
     respond(200, ['status' => 'ok']);
 }
 
+// "Board layout" (issue #417) as a personal preference (Settings dialog's
+// "Display" section) -- 'above_play_area' (default) leaves the
+// Round/Score/Players section exactly where it's always rendered;
+// 'below_hand' has game.js relocate it after "Your hand" and the
+// "selected card to play" panel instead. Current value is already
+// carried on GET /me's own user object, so this route is write-only,
+// same pattern as /user/auto-apply-scoring-bonuses-preference above.
+// Validated against the column's own two ENUM values here (rather than
+// just letting a bad value hit the database) so a typo'd/tampered
+// request gets a clean 400 instead of a raw SQL error.
+if ($path === '/user/board-layout-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('board_layout_preference', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'board_layout_preference is required.']);
+    }
+    if (!in_array($input['board_layout_preference'], ['above_play_area', 'below_hand'], true)) {
+        respond(400, ['status' => 'error', 'message' => 'board_layout_preference must be one of: above_play_area, below_hand.']);
+    }
+
+    (new UserRepository())->setBoardLayoutPreference(
+        (int) $currentUser['id'],
+        $input['board_layout_preference']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't

@@ -496,6 +496,71 @@ force it. `discardStackCardWidthPx()` itself now also multiplies by
 on screen at any slider position, not just the unscaled breakpoint
 default.
 
+### Board layout preference (issue #417)
+
+"Move the whole Round / Score / Players section under my hand" -- rather
+than moving it unconditionally, this is a new personal preference
+(`users.board_layout_preference`, migration `0174`), confirmed by the
+maintainer: `'above_play_area'` (the section's current position, between
+the top banners and the draft/in-play area -- **default**, so every
+existing/new player's board renders exactly as it always has unless they
+explicitly opt in) or `'below_hand'` (the section instead renders after
+"Your hand" **and** after the "selected card to play" panel
+(`#choices-panel`), per the maintainer's own follow-up clarification --
+"below hand" alone would have left it sitting awkwardly above the very
+panel a player uses to actually play the card they just picked).
+
+Unlike the card size slider above, this IS a real server-synced
+preference (`users.board_layout_preference`, `POST
+/user/board-layout-preference`, mirroring `default_selections_mode_preference`/
+`auto_pass_on_empty_hand`/`auto_apply_scoring_bonuses`'s own "sync on
+open, save on change" shape exactly) rather than `localStorage` --
+confirmed by the maintainer: where this section renders is meaningful
+enough to want it to follow the player across devices, unlike a purely
+cosmetic card size. The control (`#settings-board-layout-select`, a
+plain two-option `<select>`) lives right below the card size slider in
+the same Settings dialog "Display" section.
+
+**The move itself** (`applyBoardLayoutPreference()` in `game.js`) is a
+real DOM relocation (`insertAdjacentElement`), not a CSS reorder --
+`#board-view` interleaves this section with a lot of unrelated content
+(draft panels, the in-play board, etc.) that must never move, so giving
+the whole section a CSS `order` would mean assigning one to every single
+sibling instead of just the two pieces that actually move. Those two
+pieces:
+
+- `#board-round-status` (the "Round 1 — your turn" text) on its own --
+  it can't join the group below, since the banners between it and that
+  group (`#draft-match-scoreline`, `#rematch-button`,
+  `#replay-controls`, `#board-message`/`#board-error`,
+  `#pending-decision-banner`) have to stay at the top in EITHER layout,
+  so this element's own original position has to stay anchored to
+  `#board-title` specifically, independent of the group below.
+- `#board-status-group` -- a new wrapper `<div>` (purely structural, no
+  styling of its own) around `#scoring-preview` ("Scores so far this
+  round"), the "Players" `<h3>`/`#players-list`, and `#team-scores` --
+  these four were already contiguous in the markup, so wrapping them
+  changes nothing about the default layout; it just turns what would
+  otherwise be a 4-element relocation into a single one.
+
+`'below_hand'` moves both pieces, in order, to sit right after
+`#choices-panel` (`choicesPanel.insertAdjacentElement('afterend',
+boardRoundStatus)`, then `boardRoundStatus.insertAdjacentElement('afterend',
+boardStatusGroup)`); `'above_play_area'` (and any unrecognized value,
+e.g. a future rollback) restores them to their original position using
+the same mechanism, anchored to their own true original previous
+siblings (`#board-title` and `#pending-decision-banner` respectively) --
+which never move themselves, so this is exactly reversible regardless of
+how many times the preference flips back and forth. Idempotent in both
+directions: calling either branch again while already in that state is a
+harmless no-op (`insertAdjacentElement` just re-confirms the current
+position), so there's no "was this already applied" tracking needed
+anywhere. Applied once, unconditionally, as soon as `game.js` runs --
+same "don't wait for Settings to be opened" reasoning as
+`applyCardScale()` above -- and re-applied immediately on change from
+the Settings dialog, so switching the preference takes effect live
+without a reload.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active

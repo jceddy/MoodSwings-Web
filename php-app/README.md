@@ -53,7 +53,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
-| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. |
+| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. Also includes `board_layout_preference` (one of `'above_play_area'`/`'below_hand'`, defaults `'above_play_area'`) -- see "Board layout preference" below. |
 | GET    | `/friends`      | —                                                                 | Requires auth. Lists accepted friends (`friend_id`, `friend_username`, `created_at`, `presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below). |
 | GET    | `/friends/invites` | —                                                              | Requires auth. Returns `{"incoming": [...], "outgoing": [...]}`, each entry has `other_user_id`/`other_username`/`created_at`. |
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
@@ -101,6 +101,7 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
 | POST   | `/user/auto-apply-scoring-bonuses-preference` | `{"auto_apply_scoring_bonuses": bool}`               | Requires auth. Opts you in/out of automatically applying Enthusiasm's/Passion's own obviously-correct per-round scoring bonus (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_apply_scoring_bonuses` is missing. See "Auto-apply scoring bonuses" below. |
+| POST   | `/user/board-layout-preference` | `{"board_layout_preference": "above_play_area"\|"below_hand"}` | Requires auth. Chooses where the board's Round/Score/Players section renders (Settings dialog's own "Display" section, defaults `"above_play_area"`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `board_layout_preference` is missing or isn't one of those two exact strings. See "Board layout preference" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
@@ -6353,6 +6354,34 @@ other per-card exception in this codebase (Fury's veto, Harmony's
 empty-discard-pile deprioritization, Anger's own targeting policy) is
 hardcoded to that specific card rather than built out for a need that
 doesn't exist yet.
+
+### Board layout preference (issue #417)
+
+"Move the whole Round / Score / Players section under my hand" -- rather
+than moving it unconditionally, this is a personal preference
+(`users.board_layout_preference`, migration `0174`, `ENUM('above_play_area',
+'below_hand')`, defaults `'above_play_area'`), confirmed by the
+maintainer: the default leaves that section exactly where it's always
+rendered, so no existing/new player's board changes unless they
+explicitly opt in; `'below_hand'` instead has the frontend (`game.js`'s
+own `applyBoardLayoutPreference()`) relocate it after "Your hand" AND
+after the "selected card to play" panel, per the maintainer's own
+follow-up clarification -- see "Board layout preference" in
+`web-static/README.md` for exactly which DOM elements move and how. This
+is purely a client-side rendering concern; the server's only role is
+storing and returning the two-value preference itself, the same
+write-only, no-separate-GET pattern `default_selections_mode_preference`/
+`auto_pass_on_empty_hand`/`auto_apply_scoring_bonuses` above already
+established (`POST /user/board-layout-preference`, see the API table
+above -- `400` if the value is missing or isn't one of the two allowed
+strings, checked at the route before it ever reaches `UserRepository::
+setBoardLayoutPreference()`, since the column's own `ENUM` would
+otherwise surface as a raw SQL error instead of a clean `400`). Unlike
+the other three "Game defaults" preferences, this one is deliberately
+its own Settings dialog section ("Display", alongside issue #417's own
+card size slider) rather than joining "Game defaults" -- it's not a
+default for anything chosen at game creation, just where a fixed board
+region renders.
 
 ### Rematch (issue #398)
 
