@@ -969,6 +969,10 @@ if ($path === '/games' && $method === 'POST') {
     // the creator's partner instead of requiring partner_user_id. See
     // createGame()'s own docblock.
     $randomTeams = (bool) ($body['random_teams'] ?? false);
+    // Issue #417's own "let the bot go first" item -- only meaningful for
+    // a non-team format with at least one practice bot seated. See
+    // createGame()'s own docblock.
+    $botGoesFirst = (bool) ($body['bot_goes_first'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1024,6 +1028,7 @@ if ($path === '/games' && $method === 'POST') {
             $rotisserieDraftCutoffCount,
             $tieredRotisserieDraftMode,
             $tieredRotisserieDraftTiers,
+            $botGoesFirst,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {

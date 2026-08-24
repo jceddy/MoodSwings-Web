@@ -1302,6 +1302,21 @@ dialog#card-detail-dialog {
     margin-bottom: 0.5rem;
 }
 
+/* .new-game-field's own `display: block` above otherwise beats the
+   browser's default `[hidden] { display: none }` UA-stylesheet rule (an
+   author rule always wins over the UA stylesheet regardless of selector
+   specificity -- see #replay-controls[hidden] below for the same fix) --
+   without this, #new-game-bot-goes-first-label's own JS-toggled `hidden`
+   (updateBotGoesFirstFieldVisibility(), issue #417) rendered it visible
+   anyway. Every other conditionally-hidden field in this dialog either
+   toggles `hidden` on a plain unclassed <label>/<div> wrapper instead (the
+   dynamically-built friend/bot checkboxes, #new-game-team-fields) or is
+   itself a <select>'s own <option> (never affected by this rule at all),
+   so this is the first .new-game-field to need its own explicit fix. */
+.new-game-field[hidden] {
+    display: none;
+}
+
 /* Quick/Winston/Grid Draft's own "My saved deck" pool-source fields --
    each is the LAST field shown before #new-game-submit-button whenever
    that pool source is chosen, and (like every other plain <div>-wrapped

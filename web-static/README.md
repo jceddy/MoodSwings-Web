@@ -895,7 +895,37 @@ there's nothing to scale.
     `bot_saved_decklist_id` is populated (mirroring how the dialog's
     other saved-deck-vs-paste fields already resolve to one shared
     param) alongside the rest of the request -- both omitted whenever no
-    bot is checked or `deckType` isn't `custom_duel`. A
+    bot is checked or `deckType` isn't `custom_duel`.
+
+    Checking a bot in a non-team format reveals a third field,
+    `#new-game-bot-goes-first-label` (issue #417, migration `0171`) -- a
+    plain checkbox, "Let the bot go first", that sends `bot_goes_first`
+    on submit. `updateBotGoesFirstFieldVisibility()` computes its
+    visibility the same two-input way `updateBotDecklistFieldsVisibility()`
+    does above: `anyBotChecked()` AND `format` is NOT `'team'`/
+    `'closed_team'` (Open/Closed Team Play's own "who actually takes the
+    opening turn" is a separate, later decision this checkbox can't
+    influence -- see "Bot goes first" in `php-app/README.md` for the full
+    server-side policy, including why game 2/3 of a best-of-three draft
+    match is untouched regardless of this flag) -- called from the same
+    three places: `updateDeckTypeDescription()`, `updateBotCheckboxAvailability()`
+    (which also handles the format-change case), and every bot checkbox's
+    own `change` listener. Like the bot-decklist fields above, it's
+    force-unchecked (not just hidden) whenever it goes out of view, so a
+    stale `true` from an earlier format/bot selection is never submitted
+    for a combination where it wouldn't do anything; `openNewGameDialog()`'s
+    own `newGameForm.reset()` already resets it to unchecked on every
+    dialog open, same as any other plain checkbox with no `checked`
+    attribute in the markup. `.new-game-field`'s own base rule
+    (`display: block`) otherwise beats the browser's default
+    `[hidden] { display: none }` UA-stylesheet rule for any element
+    carrying that class -- the same class of bug `#replay-controls[hidden]`
+    already has a fix for elsewhere in `style.css` -- so
+    `#new-game-bot-goes-first-label` (the first `.new-game-field`-classed
+    element to ever be hidden directly via its own `hidden` attribute,
+    rather than via an unclassed wrapping `<div>`/`<label>`) needed its
+    own `.new-game-field[hidden] { display: none; }` override to actually
+    disappear. A
     `#new-game-default-selections` checkbox (issue #274) sends
     `default_selections_mode` alongside the rest -- see "Default
     selections mode" in `php-app/README.md` for what it actually does

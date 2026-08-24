@@ -2342,6 +2342,25 @@
             !show || document.getElementById('new-game-bot-saved-decklist').value !== '';
     }
 
+    // Issue #417's own "let the bot go first" item -- only meaningful
+    // when at least one bot is checked AND the format isn't 'team'/
+    // 'closed_team' (Open/Closed Team Play's own "who actually takes the
+    // opening turn" is a separate, later turn_order decision this can't
+    // influence -- see GameService::resolveFirstPlayerId()'s own
+    // docblock). Unchecked (not just hidden) whenever it goes out of
+    // view, same as a bot checkbox itself above, so a stale "true" from
+    // an earlier format/bot selection never gets submitted for a
+    // combination where it wouldn't do anything.
+    function updateBotGoesFirstFieldVisibility() {
+        const format = document.getElementById('new-game-format').value;
+        const isTeamFormat = format === 'team' || format === 'closed_team';
+        const show = anyBotChecked() && !isTeamFormat;
+        document.getElementById('new-game-bot-goes-first-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-bot-goes-first').checked = false;
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -2365,6 +2384,7 @@
 
         updateOpponentSelectionLimit();
         updateBotDecklistFieldsVisibility();
+        updateBotGoesFirstFieldVisibility();
     }
 
     function updateOpponentSelectionLimit() {
@@ -2628,6 +2648,7 @@
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
+                checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
                 label.appendChild(checkbox);
                 label.append(' ' + bot.username + ' (practice bot)');
                 opponentCheckboxes.appendChild(label);
@@ -2826,6 +2847,12 @@
         const botDecklistText = botCheckedForCustomDuel && botSavedDecklistId === undefined
             ? document.getElementById('new-game-bot-decklist-text').value
             : undefined;
+        // Only meaningful for a non-team format with a bot checked -- see
+        // updateBotGoesFirstFieldVisibility() for when this field is
+        // actually shown to the creator; #new-game-bot-goes-first is
+        // itself unchecked whenever hidden, so reading .checked
+        // unconditionally here already reflects that.
+        const botGoesFirst = document.getElementById('new-game-bot-goes-first').checked;
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -2850,6 +2877,7 @@
             rotisserieDraftCutoffCount,
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
+            botGoesFirst,
         );
 
         if (!ok) {

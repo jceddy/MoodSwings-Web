@@ -758,6 +758,16 @@ final class GameService
      *        chosen partner is indistinguishable from a manually chosen
      *        one, both being nothing more than the resulting team_id on
      *        each game_players row.
+     * @param bool $botGoesFirst issue #417's own "let the bot go first"
+     *        item (migration 0171) -- a per-game toggle, same shape as
+     *        $defaultSelectionsMode above, threaded straight into the
+     *        games row with no validation of its own. Only ever consulted
+     *        by resolveFirstPlayerId()'s own initial 50/50 pick, and only
+     *        when $format is NOT 'team'/'closed_team' and at least one
+     *        practice bot is seated -- see that method's own docblock for
+     *        the full policy (a best-of-three draft match's own game 2/3
+     *        "loser decides" mechanic, and Open/Closed Team Play's own
+     *        later turn_order decision, are both deliberately untouched).
      */
     public function createGame(
         int $createdByUserId,
@@ -784,6 +794,7 @@ final class GameService
         int $rotisserieDraftCutoffCount = self::ROTISSERIE_DRAFT_DEFAULT_CUTOFF,
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
+        bool $botGoesFirst = false,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -973,12 +984,12 @@ final class GameService
                     format, deck_type, custom_deck_name, custom_deck_card_ids,
                     custom_duel_rules_preset, custom_duel_min_cards, custom_duel_rarity_limits, custom_duel_duplicate_limits,
                     custom_duel_even_color_distribution_rarities, draft_match_id, match_game_number,
-                    status, created_by_user_id, wins_needed, default_selections_mode
+                    status, created_by_user_id, wins_needed, default_selections_mode, bot_goes_first
                  ) VALUES (
                     :format, :deck_type, :custom_deck_name, :custom_deck_card_ids,
                     :duel_rules_preset, :duel_min_cards, :duel_rarity_limits, :duel_duplicate_limits,
                     :duel_even_color_distribution_rarities, :draft_match_id, :match_game_number,
-                    'waiting', :created_by, :wins_needed, :default_selections_mode
+                    'waiting', :created_by, :wins_needed, :default_selections_mode, :bot_goes_first
                  )"
             );
             $insertGame->execute([
@@ -996,6 +1007,7 @@ final class GameService
                 'created_by' => $createdByUserId,
                 'wins_needed' => $winsNeeded,
                 'default_selections_mode' => $defaultSelectionsMode ? 1 : 0,
+                'bot_goes_first' => $botGoesFirst ? 1 : 0,
             ]);
             $gameId = (int) $pdo->lastInsertId();
 
@@ -1853,6 +1865,18 @@ final class GameService
      * hand, so nothing is fixed yet at the moment this runs. See
      * setPlayFirstNextMatchGame() for how (and when) that's resolved.
      *
+     * games.bot_goes_first (issue #417, migration 0171) -- see
+     * createGame()'s own docblock -- only ever touches the coin-flip
+     * branch below: when it's set AND $game['format'] isn't 'team'/
+     * 'closed_team' (Open/Closed Team Play's own "who actually takes the
+     * opening turn" is a separate, later turn_order decision this method
+     * has no say in), a practice bot is picked instead of a uniform
+     * random seat -- among just the bot seats, uniformly, if more than
+     * one is seated (a 3-4 player standard game). Falls through to the
+     * ordinary coin flip if no bot is actually seated (nothing to honor)
+     * -- botGamePlayerIds() is a lookup rather than something $playerIds
+     * itself carries.
+     *
      * @param array<string, mixed> $game
      * @param int[] $playerIds this game's own seats (game_players.id), seat_order ASC
      */
@@ -1860,6 +1884,13 @@ final class GameService
     {
         $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
         if ($game['draft_match_id'] === null || $matchGameNumber === null || $matchGameNumber <= 1) {
+            if ((bool) $game['bot_goes_first'] && !self::isTeamFormat($game['format'])) {
+                $botPlayerIds = $this->botGamePlayerIds((int) $game['id']);
+                if ($botPlayerIds !== []) {
+                    return $botPlayerIds[array_rand($botPlayerIds)];
+                }
+            }
+
             return $playerIds[array_rand($playerIds)];
         }
 
