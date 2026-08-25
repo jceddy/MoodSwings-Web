@@ -218,4 +218,57 @@ final class ChaosDraftCompositionTest extends TestCase
 
         self::assertSame('hello', $seenChaosChoice);
     }
+
+    /**
+     * Duplicity follow-up (issue #405 follow-up -- a bug caught live):
+     * "each time you play another mood, you may have that mood's
+     * after-playing effect happen an additional time" only ever repeated
+     * the card's own PRINTED after-playing effect, never an attached
+     * chaos effect layered on top of it -- even though from the player's
+     * perspective playing the card triggers both (see
+     * testAttachedAfterPlayingChaosEffectFiresAlongsideTheCardsOwnBaseEffect()
+     * above for the non-repeated "stacks with" baseline this builds on).
+     * Charity (id 3) grants an extra play via its own printed
+     * afterPlaying(); with 'draw_a_card' attached, playing it once should
+     * draw a card from BOTH the base effect's own extra-play grant AND
+     * the attached chaos effect -- and accepting Duplicity's own repeat
+     * offer should draw a SECOND card from the attached chaos effect too,
+     * not just replay the base grant.
+     */
+    public function testDuplicityRepeatsAnAttachedAfterPlayingChaosEffectAlongsideTheCardsOwnBaseEffect(): void
+    {
+        $chaosRegistry = new ChaosEffectRegistry();
+        $chaosRegistry->register('draw_a_card', new class extends AbstractChaosMoodEffect {
+            public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
+            {
+                $state->drawCard($playerId);
+            }
+        });
+
+        $state = $this->boardState(
+            hands: [1 => [37, 3]], // Duplicity, Charity (own afterPlaying: grants an extra play)
+            deck: [55, 5], // two draws expected: the original play's own attached-chaos draw, then the repeat's
+            chaosRegistry: $chaosRegistry,
+        );
+        $state->attachChaosEffect(3, 3); // 'draw_a_card' attached to Charity
+        $state->startTurn(1);
+
+        $service = new MoodPlayService(DefaultEffectRegistry::build(), $chaosRegistry);
+        $service->playMood($state, 1, 37, new PlayerChoices([])); // Duplicity
+
+        $result = $service->playMood($state, 1, 3, new PlayerChoices([])); // Charity, chaos attached
+        self::assertTrue($result->isPending, "Duplicity should offer to repeat Charity's own after-playing effect");
+        self::assertContains(55, $state->hand(1), "the attached chaos effect's own draw should already have applied once");
+        self::assertNotContains(5, $state->hand(1), 'the repeat has not been accepted yet');
+
+        $finalResult = $service->resolvePendingDecisions(
+            $state, 3, 1, new PlayerChoices([]), new PlayerChoices([]), 0,
+            ['duplicity_repeat' => new PlayerChoices(['duplicity_repeat' => ['repeat' => true, 'choices' => []]])],
+            0,
+        );
+
+        self::assertFalse($finalResult->isPending);
+        self::assertContains(55, $state->hand(1));
+        self::assertContains(5, $state->hand(1), "the repeat should have fired the attached chaos effect a second time");
+    }
 }

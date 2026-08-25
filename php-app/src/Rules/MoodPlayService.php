@@ -260,6 +260,12 @@ final class MoodPlayService
 
         $effectiveRow = $state->catalogRow($state->effectiveCardId($cardId));
         if (!$effectiveRow['hasAfterPlaying']) {
+            // No base afterPlaying() means Duplicity never gets a chance to
+            // offer a repeat here (there's nothing for continueAfterPlayingChain()
+            // to reach) -- but an attached chaos effect can still fire on
+            // its own, exactly once, the same as it always did.
+            $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $invocationChoices);
+
             return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $reactorCandidateCardIds);
         }
 
@@ -285,7 +291,7 @@ final class MoodPlayService
             $effect->afterPlaying($state, $cardId, $playerId, $invocationChoices);
         }
 
-        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
     }
 
     /**
@@ -345,7 +351,7 @@ final class MoodPlayService
             return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $duplicityEligibleSources, $reactorCandidateCardIds);
         }
 
-        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $duplicityEligibleSources, $reactorCandidateCardIds);
+        return $this->continueAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $invocationChoices, $invocationSeq, $duplicityEligibleSources, $reactorCandidateCardIds);
     }
 
     /**
@@ -406,6 +412,23 @@ final class MoodPlayService
      * did (e.g. a card an earlier repeat discarded is no longer a valid
      * hand-card choice for a later one) -- something only the server, not
      * a pre-rendered form, can know for certain at each step.
+     *
+     * Also where THIS invocation's own attached chaos effect (if any)
+     * resolves -- issue #405 follow-up, a bug caught live: "each time you
+     * play another mood, you may have that mood's after-playing effect
+     * happen an additional time" was only ever repeating the card's own
+     * PRINTED after-playing effect, never an attached chaos effect
+     * layered on top of it, even though from the player's perspective
+     * playing the card triggers both. Every invocation whose EFFECTIVE
+     * card has a base afterPlaying() of its own (this method is only
+     * ever reached when it does -- see resolveAfterPlayingChain()'s own
+     * early return otherwise, which resolves the attached chaos effect
+     * itself right there instead, since a card with no base
+     * afterPlaying() never gets a Duplicity repeat opportunity to begin
+     * with) reaches this method exactly once, however its own base
+     * effect got here (synchronously, or resumed after an opponent's own
+     * decision) -- see resolveAttachedChaosAfterPlaying()'s own docblock
+     * for the full "why here."
      */
     /**
      * @param int[] $reactorCandidateCardIds
@@ -415,11 +438,14 @@ final class MoodPlayService
         int $cardId,
         int $playerId,
         PlayerChoices $topLevelChoices,
+        PlayerChoices $invocationChoices,
         int $invocationSeq,
         int $eligibleSources,
         array $reactorCandidateCardIds = [],
     ): PlayResult {
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+
+        $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $invocationChoices);
 
         if ($invocationSeq < $eligibleSources) {
             // The repeat-offer's own answer is resolved directly by
@@ -437,7 +463,7 @@ final class MoodPlayService
             // and only needs $reactorCandidateCardIds back at all for its
             // own DECLINE branch, where it's this same, still-current
             // snapshot that applies.
-            return PlayResult::pending([$this->duplicityRepeatOfferRequest($playerId, $effectiveEffectKey)], $cardId, $invocationSeq, $topLevelChoices, $eligibleSources, $reactorCandidateCardIds);
+            return PlayResult::pending([$this->duplicityRepeatOfferRequest($state, $cardId, $playerId, $effectiveEffectKey)], $cardId, $invocationSeq, $topLevelChoices, $eligibleSources, $reactorCandidateCardIds);
         }
 
         return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $reactorCandidateCardIds);
@@ -453,10 +479,41 @@ final class MoodPlayService
      * afterPlayingFields() -- the same shape the repeated card's own
      * after-playing choices always take, cost fields excluded since a
      * repeat never re-pays a "to play" cost.
+     *
+     * If $cardId also carries an attached 'after_playing'-shaped chaos
+     * effect (issue #405 follow-up -- a bug caught live: repeating "that
+     * mood's after-playing effect" was only ever repeating the printed
+     * half, never an attached chaos effect layered on top of it), its own
+     * ChaosCardChoiceSchema fields are appended inside "choices" as one
+     * more nested 'chaos' field -- exactly the shape GameService::
+     * serializeCard() already builds for the ORIGINAL play, so
+     * game.js's existing buildFieldRow()/buildChoicesFromFields() render
+     * and collect it with no frontend-specific code, landing the answer
+     * at choices['chaos'] (repeatBag->sub('choices')->sub('chaos')) --
+     * precisely where continueAfterPlayingChain()'s own
+     * resolveAttachedChaosAfterPlaying() call reads a repeat's choices
+     * from. Appended, not prepended, matching GameService's own
+     * base-then-chaos field ordering.
      */
-    private function duplicityRepeatOfferRequest(int $playerId, string $effectiveEffectKey): PendingDecisionRequest
+    private function duplicityRepeatOfferRequest(BoardState $state, int $cardId, int $playerId, string $effectiveEffectKey): PendingDecisionRequest
     {
         $template = CardChoiceSchema::reactionTemplate('duplicity');
+
+        $repeatChoiceFields = CardChoiceSchema::afterPlayingFields($effectiveEffectKey);
+
+        $chaosRow = $state->chaosEffectRow($cardId);
+        if ($chaosRow !== null && $chaosRow['shape'] === 'after_playing') {
+            $chaosChoiceFields = ChaosCardChoiceSchema::forEffectKey($chaosRow['effectKey']);
+            if ($chaosChoiceFields !== []) {
+                $repeatChoiceFields[] = [
+                    'key' => 'chaos',
+                    'type' => 'nested',
+                    'required' => false,
+                    'label' => 'Chaos effect choice',
+                    'fields' => $chaosChoiceFields,
+                ];
+            }
+        }
 
         return new PendingDecisionRequest(
             key: self::DUPLICITY_REPEAT_KEY,
@@ -474,7 +531,7 @@ final class MoodPlayService
                         'type' => 'nested',
                         'required' => false,
                         'label' => 'Choices for the repeat (only used if repeating above)',
-                        'fields' => CardChoiceSchema::afterPlayingFields($effectiveEffectKey),
+                        'fields' => $repeatChoiceFields,
                     ],
                 ],
             ],
@@ -557,7 +614,6 @@ final class MoodPlayService
             }
         }
 
-        $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $topLevelChoices);
         $this->dispatchChaosReactiveHooks($state, $cardId, $playerId);
 
         return PlayResult::complete();
@@ -568,8 +624,10 @@ final class MoodPlayService
      * reactive hooks (onMoodPlayed/onMoodDiscarded/onMoodSuppressed, plus
      * an immediate same-turn perpetualTurnStartGrants() application) that
      * this one play could have triggered, once $cardId's own full
-     * afterPlaying chain (base effect, reactors, attached chaos
-     * afterPlaying) has finished. Mirrors reactToAnotherPlay()'s own
+     * afterPlaying chain (base effect, every Duplicity repeat's own base
+     * effect and attached chaos afterPlaying -- see
+     * continueAfterPlayingChain()'s own docblock -- and the reactor loop
+     * immediately above) has finished. Mirrors reactToAnotherPlay()'s own
      * "every candidate already in play" sweep immediately above, except
      * scoped to chaos-carrying moods and dispatched through
      * ChaosEffectRegistry instead of EffectRegistry -- see BoardState's
@@ -623,30 +681,41 @@ final class MoodPlayService
     }
 
     /**
-     * Chaos Draft (issue #405): if the just-played card carries an
-     * attached 'after_playing'-shaped chaos effect, resolves it now that
-     * the card's own base afterPlaying() (and the reactor loop above)
-     * have fully finished -- see ChaosMoodEffect's own docblock for why
-     * this is a deliberately simple, synchronous step, not woven into
-     * this class's own Duplicity-repeat/opponent-decision-pause
-     * machinery above. Reads its own choices from $topLevelChoices'
-     * 'chaos' sub-bag, namespaced so its own field keys can never
-     * collide with $cardId's own base effect fields in the same request.
-     * A card whose printed effect itself required pausing for an
-     * opponent's decision (RequiresOpponentDecision) still reaches this
-     * point correctly -- $topLevelChoices is always the ORIGINAL
-     * request's own bag regardless of how many pauses the base effect
-     * needed (see resolveAfterPlayingChain()'s own docblock), so the
-     * 'chaos' sub-bag survived that round trip along with it.
+     * Chaos Draft (issue #405): if $cardId carries an attached
+     * 'after_playing'-shaped chaos effect, resolves it now that THIS
+     * invocation's own base afterPlaying() has fully finished (called
+     * from continueAfterPlayingChain() -- see that method's own docblock
+     * for why it belongs there rather than woven directly into
+     * resolveAfterPlayingChain()'s own RequiresOpponentDecision pause
+     * handling: every invocation, however its base effect got here,
+     * reaches continueAfterPlayingChain() exactly once).
+     *
+     * Duplicity follow-up (issue #405 follow-up -- a bug caught live):
+     * originally called exactly once per PLAY, from the very end of
+     * finishAfterPlayingChain(), using $topLevelChoices' own 'chaos'
+     * sub-bag regardless of how many times Duplicity had repeated the
+     * card's own PRINTED after-playing effect in between -- so an
+     * attached chaos effect never got repeated the way the base effect
+     * already did. Now called once per INVOCATION (the original play,
+     * and each accepted repeat) with THAT invocation's own
+     * $invocationChoices -- identical to $topLevelChoices for the
+     * original invocation (so behavior there is unchanged), and a
+     * repeat's own 'chaos' sub-bag (nested inside its own 'choices'
+     * answer -- see duplicityRepeatOfferRequest()'s own docblock) for
+     * each repeat. A card whose printed effect itself required pausing
+     * for an opponent's decision (RequiresOpponentDecision) still
+     * reaches this point correctly either way -- continueAfterPlayingChain()
+     * is called with that same invocation's own $invocationChoices
+     * regardless of how many pauses the base effect needed.
      */
-    private function resolveAttachedChaosAfterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $topLevelChoices): void
+    private function resolveAttachedChaosAfterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $invocationChoices): void
     {
         $chaosRow = $state->chaosEffectRow($cardId);
         if ($chaosRow === null || $chaosRow['shape'] !== 'after_playing') {
             return;
         }
 
-        $this->chaosRegistry->for($chaosRow['effectKey'])->afterPlaying($state, $cardId, $playerId, $topLevelChoices->sub('chaos'));
+        $this->chaosRegistry->for($chaosRow['effectKey'])->afterPlaying($state, $cardId, $playerId, $invocationChoices->sub('chaos'));
     }
 
     /**
