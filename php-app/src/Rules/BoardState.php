@@ -78,6 +78,31 @@ final class BoardState
     /** The next placeholder instance id spawnMoodInPlay() hands out -- always negative, so it can never collide with a real game_cards.id (an AUTO_INCREMENT PK, always positive) either already loaded or inserted later by BoardStateRepository::save(). Counts down so each spawn within one request gets its own distinct placeholder. */
     private int $nextSpawnedCardId = -1;
 
+    /**
+     * Every discard (any zone -> discard, i.e. moveInPlayToDiscard()) since
+     * the last consume, for ChaosMoodEffect::onMoodDiscarded()'s own
+     * dispatch (Chaos Draft, issue #405) -- deliberately a SEPARATE queue
+     * from $pendingCardMoves (used for event-log history instead), since
+     * that one is already drained once per response by GameService's own
+     * withCardHistory() and a second drain here would silently blank the
+     * event log's own 'card_moves' entry. $value is the discarded mood's
+     * own value captured the instant before it left play, since valueOf()
+     * can no longer be called on it once it's not in $moodsInPlay.
+     *
+     * @var array<int, array{cardId: int, ownerId: int, value: int}>
+     */
+    private array $pendingChaosDiscardEvents = [];
+
+    /**
+     * Every mood that newly transitioned from unsuppressed to suppressed
+     * since the last consume, for ChaosMoodEffect::onMoodSuppressed()'s own
+     * dispatch -- same "separate queue from the logging one" reasoning as
+     * $pendingChaosDiscardEvents above (see $pendingSuppressionChanges).
+     *
+     * @var int[]
+     */
+    private array $pendingChaosSuppressionEvents = [];
+
     /** @var array<int, MoodInPlay> cardId (instance id) => the mood currently in play. Keyed by instance id rather than catalog id so two players' identical printed cards can both be in play simultaneously without one clobbering the other. */
     private array $moodsInPlay = [];
 
@@ -772,11 +797,14 @@ final class BoardState
 
     public function moveInPlayToDiscard(int $cardId): void
     {
-        $this->discardOwners[$cardId] = $this->moodInPlay($cardId)->ownerId;
+        $ownerId = $this->moodInPlay($cardId)->ownerId;
+        $value = $this->valueOf($cardId);
+        $this->discardOwners[$cardId] = $ownerId;
         unset($this->moodsInPlay[$cardId]);
         $this->discard[] = $cardId;
         $this->discardedThisRound = true;
         $this->recordMove($cardId, 'play', 'discard');
+        $this->pendingChaosDiscardEvents[] = ['cardId' => $cardId, 'ownerId' => $ownerId, 'value' => $value];
         $this->cascadeMoodLeavingPlay($cardId);
     }
 
@@ -1125,11 +1153,15 @@ final class BoardState
     public function suppress(int $cardId, string $expiry, ?int $sourceCardId = null): void
     {
         $mood = $this->moodInPlay($cardId);
+        $wasUnsuppressed = $mood->suppressions === [];
         $mood->suppressions = [
             ...array_filter($mood->suppressions, static fn (array $s) => $s['sourceCardId'] !== $sourceCardId),
             ['expiry' => $expiry, 'sourceCardId' => $sourceCardId],
         ];
         $this->recordSuppressionChange($cardId, $mood->suppressions);
+        if ($wasUnsuppressed) {
+            $this->pendingChaosSuppressionEvents[] = $cardId;
+        }
     }
 
     /** @param array<int, array{expiry: string, sourceCardId: ?int}> $suppressions */
@@ -1164,6 +1196,30 @@ final class BoardState
     public function isSuppressed(int $cardId): bool
     {
         return $this->moodInPlay($cardId)->suppressions !== [];
+    }
+
+    /**
+     * @return array<int, array{cardId: int, ownerId: int, value: int}>
+     * @see $pendingChaosDiscardEvents
+     */
+    public function consumeChaosDiscardEvents(): array
+    {
+        $events = $this->pendingChaosDiscardEvents;
+        $this->pendingChaosDiscardEvents = [];
+
+        return $events;
+    }
+
+    /**
+     * @return int[]
+     * @see $pendingChaosSuppressionEvents
+     */
+    public function consumeChaosSuppressionEvents(): array
+    {
+        $events = $this->pendingChaosSuppressionEvents;
+        $this->pendingChaosSuppressionEvents = [];
+
+        return $events;
     }
 
     /**

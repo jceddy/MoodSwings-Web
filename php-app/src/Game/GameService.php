@@ -16,6 +16,7 @@ use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
+use MoodSwings\Rules\ChaosEffectRegistry;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodInPlay;
 use MoodSwings\Rules\MoodPlayService;
@@ -637,6 +638,7 @@ final class GameService
         private readonly CardStatsService $cardStats = new CardStatsService(),
         private readonly GameChatRepository $chat = new GameChatRepository(),
         private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
+        private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
     ) {
     }
 
@@ -6757,8 +6759,9 @@ final class GameService
 
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
+        $isFirstOfferForRound = $round['chaos_rarity_1'] === null;
 
-        if ($round['chaos_rarity_1'] === null) {
+        if ($isFirstOfferForRound) {
             $rarity1 = $this->rollWeightedChaosRarity();
             $rarity2 = $this->rollWeightedChaosRarity();
             $pdo->prepare('UPDATE game_rounds SET chaos_rarity_1 = :r1, chaos_rarity_2 = :r2 WHERE id = :id')
@@ -6769,6 +6772,29 @@ final class GameService
         }
 
         $state = $this->boardStates->load($gameId);
+
+        // The FIRST time this round's own offers are ensured doubles as
+        // "the beginning of the round" for every still-in-play chaos
+        // effect's own roundStartHook() (e.g. chaos_015's "at the
+        // beginning of each round, if you go first, put a token into
+        // play") -- gated on the same $isFirstOfferForRound flag that
+        // already marks this round as not-yet-initialized, so it can
+        // never fire twice for the same round even across repeated
+        // chaosDraftOfferFor() calls. Saved immediately since, unlike the
+        // rest of this method, this can mutate board state (spawn a
+        // token) -- safe to do here specifically because this whole
+        // method only ever runs inside chaosDraftOfferFor()'s own
+        // withGameLock() wrapper, never from buildGameState()'s unlocked
+        // read path.
+        if ($isFirstOfferForRound) {
+            foreach ($state->moodsInPlay() as $mood) {
+                $chaosRow = $state->chaosEffectRow($mood->cardId);
+                if ($chaosRow !== null) {
+                    $this->chaosRegistry->for($chaosRow['effectKey'])->roundStartHook($state, $mood->cardId, $mood->ownerId);
+                }
+            }
+            $this->boardStates->save($gameId, $state);
+        }
 
         if ($game['format'] === 'team') {
             foreach ([0, 1] as $teamId) {
@@ -7777,7 +7803,7 @@ final class GameService
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
 
-        $scores = $this->applyScoreSwaps($state, $this->scorer->score($state, $scoringDecisions));
+        $scores = $this->applyScoreSwaps($state, $this->applyChaosScoringBonuses($state, $this->scorer->score($state, $scoringDecisions)));
 
         // Repentance/Scorn's own 'end_of_round' suppression (as opposed to
         // Faith/Guilt/Meekness/Pacifism/Shame's 'while_source_in_play' kind)
@@ -7858,6 +7884,7 @@ final class GameService
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
         $this->applyAfterScoringHooks($state, [$winnerId], $turnOrder, $resolvedOrders);
+        $this->applyChaosAfterScoringHooks($state, $scores, [$winnerId], $this->scorer->hurtFeelings($activeScores, $turnOrder));
 
         // Hurt Feelings only exists in games of 3 or more (active) players.
         $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
@@ -8095,6 +8122,8 @@ final class GameService
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
         $this->applyAfterScoringHooks($state, $winningTeamMembers, $turnOrder, $resolvedOrders);
+        $activeScores = array_intersect_key($scores, array_flip($turnOrder));
+        $this->applyChaosAfterScoringHooks($state, $scores, $winningTeamMembers, $this->scorer->hurtFeelings($activeScores, $turnOrder));
         $this->boardStates->save($gameId, $state);
 
         $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
@@ -8324,6 +8353,58 @@ final class GameService
         }
 
         return $scores;
+    }
+
+    /**
+     * Chaos Draft (issue #405): folds every in-play chaos-carrying mood's
+     * own ChaosMoodEffect::scoringBonus() into $scores -- mirrors
+     * RoundScorer::score()'s own Enthusiasm/Passion handling (see that
+     * class's own docblock), except every chaos bonus always applies (no
+     * accept/decline decision -- see ChaosMoodEffect's own class
+     * docblock) rather than being read from $scoringDecisions. Applied
+     * BEFORE applyScoreSwaps() so a swapped score already reflects
+     * whatever bonus its original owner earned.
+     *
+     * @param array<int, int> $scores playerId => score
+     * @return array<int, int>
+     */
+    private function applyChaosScoringBonuses(BoardState $state, array $scores): array
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            $chaosRow = $state->chaosEffectRow($mood->cardId);
+            if ($chaosRow === null) {
+                continue;
+            }
+            $scores[$mood->ownerId] += $this->chaosRegistry->for($chaosRow['effectKey'])->scoringBonus($state, $mood->cardId, $mood->ownerId);
+        }
+
+        return $scores;
+    }
+
+    /**
+     * Chaos Draft (issue #405): fires ChaosMoodEffect::afterScoring() for
+     * every mood still in play carrying a chaos effect, once this round's
+     * final scores/winner/lowest-scorer are already settled -- called
+     * from both finishScoringAndAdvance() and finishTeamScoringAndAdvance(),
+     * right alongside their own existing applyAfterScoringHooks() call.
+     * $lowestScorePlayerId is always computed fresh via
+     * RoundScorer::hurtFeelings() regardless of player count or whether
+     * this particular round's own Hurt Feelings holder ends up null (a
+     * 2-player game has no Hurt Feelings status, but chaos_100's own
+     * "lowest score out of all players" condition still needs an answer).
+     *
+     * @param array<int, int> $scores playerId => final score
+     * @param int[] $winningGamePlayerIds
+     */
+    private function applyChaosAfterScoringHooks(BoardState $state, array $scores, array $winningGamePlayerIds, int $lowestScorePlayerId): void
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            $chaosRow = $state->chaosEffectRow($mood->cardId);
+            if ($chaosRow === null) {
+                continue;
+            }
+            $this->chaosRegistry->for($chaosRow['effectKey'])->afterScoring($state, $mood->cardId, $mood->ownerId, $scores, $winningGamePlayerIds, $lowestScorePlayerId);
+        }
     }
 
     /**
@@ -8964,6 +9045,25 @@ final class GameService
 
         foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
             $grants[] = ['sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
+        }
+
+        // Chaos Draft (issue #405): every one of $playerId's own in-play
+        // moods carrying an attached chaos effect contributes whatever
+        // ChaosMoodEffect::perpetualTurnStartGrants() it returns -- the
+        // same "one grant per qualifying mood" shape Hope/Grace/
+        // Stubbornness above already follow. See MoodPlayService's own
+        // dispatchChaosReactiveHooks() for this same hook's OTHER call
+        // site (applied immediately, the very turn a while_in_play chaos
+        // effect's own card is played, for "including the turn you play
+        // this mood" printed text).
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            $chaosRow = $state->chaosEffectRow($mood->cardId);
+            if ($chaosRow === null) {
+                continue;
+            }
+            foreach ($this->chaosRegistry->for($chaosRow['effectKey'])->perpetualTurnStartGrants($state, $mood->cardId, $playerId) as $restriction) {
+                $grants[] = [...$restriction, 'sourceCardId' => $mood->cardId];
+            }
         }
 
         return $grants;

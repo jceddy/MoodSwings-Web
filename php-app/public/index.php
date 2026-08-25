@@ -49,6 +49,7 @@ use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
+use MoodSwings\Rules\ChaosDefaultEffectRegistry;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\EffectNotImplementedException;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
@@ -776,8 +777,9 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
+$chaosRegistry = ChaosDefaultEffectRegistry::build();
 $cardStats = new CardStatsService();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats);
+$games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, chaosRegistry: $chaosRegistry);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
