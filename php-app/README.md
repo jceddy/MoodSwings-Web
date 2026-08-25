@@ -2643,6 +2643,33 @@ deliberately keeps the old RAW-id-only behavior: what's actually
 attached to a card's own database row can't depend on what it happens
 to be copying at read time.
 
+**Spawned token duplication (issue #405 follow-up -- a bug caught
+live, reported by the maintainer)**: a player who played Hate with a
+token-spawning chaos effect attached, then played Creativity copying
+it, ended up with 4 Passivity tokens in play instead of 2. Root cause,
+unrelated to the Creativity ruling above -- `BoardState::
+spawnMoodInPlay()`'s own docblock claimed "nothing within the same
+request needs the real id back" once `BoardStateRepository::save()`
+INSERTs a real row for a spawned token's negative placeholder id, an
+assumption that turned out to be wrong: `GameService::finishPlay()`
+saves once, then (whenever the play also ends the acting player's own
+turn -- the common case, not a rare one) `advanceTurn()` saves AGAIN
+against the very same `BoardState`, to persist
+`computeFreshGrants()`'s own side effect for the next player. A
+spawned token's own placeholder id never changes in memory, so
+`save()`'s own "negative id means insert a new row" check couldn't
+tell "a token I already inserted earlier THIS SAME request" apart from
+"a token I haven't inserted yet" -- the second `save()` call blindly
+INSERTed a second row for the same token. Two new `BoardState` methods
+close the gap: `recordSpawnedCardPersisted()` (called by `save()`
+immediately after a successful INSERT, once it learns the real
+`game_cards.id` via `lastInsertId()`) and `persistedCardIdFor()`
+(checked by `save()` on every subsequent call for that same card,
+before deciding INSERT vs. UPDATE). A player who plays Hate (with a
+token-spawning chaos effect) and then Creativity copying it now
+correctly ends up with 2 tokens, matching the two actual "after playing
+this mood" triggers.
+
 Nine `ChaosCardChoiceSchema` fields (chaos_012/014/041/049/058/059/062/096/118's
 own "if you do"/"if choosing X above"/"if mode is Y" companion fields) were
 originally marked `required: true` unconditionally, when the underlying

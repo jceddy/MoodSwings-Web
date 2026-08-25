@@ -228,8 +228,17 @@ final class BoardStateRepository
         // (a token conjured into play by a chaos effect) hands out a
         // negative placeholder id specifically so this method can tell a
         // brand-new card apart from an ordinary one and $insertSpawned
-        // below INSERTs a real row for it instead -- see that method's
-        // own docblock for why nothing needs the real id back afterward.
+        // below INSERTs a real row for it instead. A bug caught live: this
+        // method can run more than once against the very same BoardState
+        // within a single request (e.g. GameService::finishPlay() saves
+        // once, then advanceTurn() saves again for the SAME $state to
+        // persist computeFreshGrants()'s own side effect) -- a token's own
+        // negative placeholder id never changes in memory (see
+        // spawnMoodInPlay()'s own docblock), so without checking
+        // $state->persistedCardIdFor() first, a second save() blindly
+        // re-INSERTed a second row for a token the first save() had
+        // already persisted, duplicating it. See
+        // BoardState::recordSpawnedCardPersisted()'s own docblock.
         $update = $pdo->prepare(
             'UPDATE game_cards SET
                 zone = :zone,
@@ -254,10 +263,11 @@ final class BoardStateRepository
             ?int $copiedCardId,
             array $suppressions,
             array $effectState,
-        ) use ($update, $insertSpawned, $gameId, $state): void {
+        ) use ($update, $insertSpawned, $gameId, $state, $pdo): void {
             $chaosEffectId = $state->chaosEffectId($cardId);
+            $persistedId = $state->persistedCardIdFor($cardId);
 
-            if ($cardId < 0) {
+            if ($persistedId < 0) {
                 $insertSpawned->execute([
                     'game_id' => $gameId,
                     'card_id' => $state->catalogCardId($cardId),
@@ -265,12 +275,13 @@ final class BoardStateRepository
                     'owner' => $owner,
                     'chaos_effect_id' => $chaosEffectId,
                 ]);
+                $state->recordSpawnedCardPersisted($cardId, (int) $pdo->lastInsertId());
 
                 return;
             }
 
             $update->execute([
-                'id' => $cardId,
+                'id' => $persistedId,
                 'game_id' => $gameId,
                 'zone' => $zone,
                 'owner' => $owner,

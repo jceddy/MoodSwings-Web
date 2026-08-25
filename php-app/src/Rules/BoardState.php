@@ -78,6 +78,9 @@ final class BoardState
     /** The next placeholder instance id spawnMoodInPlay() hands out -- always negative, so it can never collide with a real game_cards.id (an AUTO_INCREMENT PK, always positive) either already loaded or inserted later by BoardStateRepository::save(). Counts down so each spawn within one request gets its own distinct placeholder. */
     private int $nextSpawnedCardId = -1;
 
+    /** @var array<int, int> a spawned token's own placeholder instance id => the real game_cards.id BoardStateRepository::save() assigned it, once known -- see recordSpawnedCardPersisted()'s own docblock for why this has to exist at all (a bug caught live: save() can run more than once against the same BoardState within a single request). */
+    private array $persistedSpawnedCardIdFor = [];
+
     /**
      * Every discard (any zone -> discard, i.e. moveInPlayToDiscard()) since
      * the last consume, for ChaosMoodEffect::onMoodDiscarded()'s own
@@ -733,12 +736,13 @@ final class BoardState
      * Returns a NEGATIVE placeholder instance id (see $nextSpawnedCardId)
      * rather than a real game_cards.id, since this card has no database
      * row yet -- BoardStateRepository::save() is what actually INSERTs
-     * one and gets a real id back; nothing within the same request needs
-     * the real id, since GameService never serializes a play's own
-     * mutated BoardState directly back to a caller (see that class's own
-     * "Chaos Draft" docblock) -- every response the frontend actually
-     * reads comes from a fresh, separate buildGameState() read after
-     * save() has already committed.
+     * one and gets a real id back. The token itself stays addressed by
+     * this same negative id for the rest of THIS BoardState's own
+     * lifetime (every other in-memory reference -- moodsInPlay's own key,
+     * a suppression's sourceCardId, etc. -- is written against it, and
+     * nothing re-keys any of that mid-request) -- see
+     * recordSpawnedCardPersisted()'s own docblock for the one thing that
+     * DOES need the real id back once save() learns it.
      */
     public function spawnMoodInPlay(int $catalogCardId, int $ownerId): int
     {
@@ -747,6 +751,35 @@ final class BoardState
         $this->moodsInPlay[$cardId] = new MoodInPlay($cardId, $ownerId);
 
         return $cardId;
+    }
+
+    /**
+     * Called by BoardStateRepository::save() immediately after it INSERTs
+     * a real game_cards row for $placeholderCardId (a spawnMoodInPlay()
+     * placeholder) and learns $realCardId (the AUTO_INCREMENT id MySQL
+     * assigned it) -- a bug caught live: save() can run more than once
+     * against the very same BoardState within a single request (e.g.
+     * GameService::finishPlay() saves once, then advanceTurn() saves
+     * again to persist computeFreshGrants()'s own side effect, both
+     * against the same $state), and without this, save()'s own "$cardId
+     * < 0 means insert a new row" check had no way to tell "a token I
+     * already inserted earlier THIS request" apart from "a token I
+     * haven't inserted yet" -- both still report the same negative
+     * placeholder id, since nothing else ever re-keys it (see
+     * spawnMoodInPlay()'s own docblock) -- so a second save() blindly
+     * INSERTed a SECOND row for the same token instead of UPDATEing the
+     * first one. persistedCardIdFor() is what save() checks first, on
+     * every subsequent call, to route to an UPDATE instead.
+     */
+    public function recordSpawnedCardPersisted(int $placeholderCardId, int $realCardId): void
+    {
+        $this->persistedSpawnedCardIdFor[$placeholderCardId] = $realCardId;
+    }
+
+    /** @see recordSpawnedCardPersisted(). $cardId unchanged if it was never a spawned placeholder, or hasn't been persisted by this BoardState yet. */
+    public function persistedCardIdFor(int $cardId): int
+    {
+        return $this->persistedSpawnedCardIdFor[$cardId] ?? $cardId;
     }
 
     /** @param array<string, mixed> $effectState */
