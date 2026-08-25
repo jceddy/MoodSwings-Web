@@ -31,7 +31,23 @@ namespace MoodSwings\Rules;
  * (computeValue()-only formulas; unconditional grants/discards; effects
  * resolved without any choice, e.g. "put ALL other moods into the discard
  * pile" with no selection involved) -- forEffectKey() returns [] for those,
- * same as an unregistered key.
+ * same as an unregistered key. chaos_008/012/025/036/053/058/087/106/110/
+ * 111/118 are a second reason for a missing (or partial) entry: each reads
+ * a hand card from the ACTING PLAYER'S OWN hand, which used to be
+ * collected here, up front, alongside the host card's own choices -- but
+ * that value can go stale if the host card's own printed effect changes
+ * the acting player's hand first (issue #405 follow-up, reported live for
+ * chaos_058: attaching it to Rationalization and choosing Rationalization's
+ * own "rotate hands" mode threw "Card is not in your hand," since the
+ * whole hand had already been swapped away by the time the chosen card was
+ * validated). Each now defers its own hand-card choice to a self-targeted
+ * `ChaosRequiresOpponentDecision` pending decision instead, asked only
+ * after the host card's own afterPlaying() has fully resolved -- see
+ * ChaosEffects/ChaosDiscardValueToBoostSelfEffect's own docblock for the
+ * full reasoning. chaos_058/118 keep a SYNCHRONOUS `recipient_player_id`
+ * entry here (who to give a card to doesn't depend on hand contents, so
+ * there's no reason to defer it) which doubles as the up-front "would you
+ * like to?" gate for the deferred hand-card choice that follows.
  */
 final class ChaosCardChoiceSchema
 {
@@ -42,13 +58,6 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_007' => [
             ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Moods to put into the discard pile (value 5+, up to 2, one per player)', 'scope' => 'any', 'filter' => ['min_value' => 5], 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
-        ],
-        'chaos_008' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card (base value 0-3) to discard -- boosts this mood to 5', 'filter' => ['values' => [0, 1, 2, 3]]],
-        ],
-        'chaos_012' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (green or blue)', 'filter' => ['colors' => ['green', 'blue']]],
-            ['key' => 'suppress_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to suppress (required if discarding a card above)', 'scope' => 'any', 'includes_self' => true],
         ],
         'chaos_014' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Suppress one black/red mood, or all of them', 'options' => ['single', 'all']],
@@ -62,9 +71,6 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_023' => [
             ['key' => 'value', 'type' => 'value', 'required' => false, 'min' => 0, 'max' => 12, 'label' => 'Value to suppress (every other mood showing it)'],
-        ],
-        'chaos_025' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => "Card to discard (its color determines what gets suppressed)"],
         ],
         'chaos_028' => [
             ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Odd-valued moods to return to hand (up to 2, one per player)', 'scope' => 'any', 'filter' => ['parity' => 'odd'], 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
@@ -83,9 +89,6 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_035' => [
             ['key' => 'value', 'type' => 'value', 'required' => false, 'min' => 0, 'max' => 12, 'label' => 'Value to return to hand (every other mood showing it)'],
-        ],
-        'chaos_036' => [
-            ['key' => 'hand_card_ids', 'type' => 'hand_card', 'required' => false, 'multi' => true, 'label' => 'Hand cards to reveal, bottom-deck and redraw (bans their colors next round)', 'count' => ['zero_ok' => true]],
         ],
         'chaos_038' => [
             ['key' => 'return_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'One of your other moods to return to hand', 'scope' => 'own'],
@@ -118,9 +121,6 @@ final class ChaosCardChoiceSchema
             ['key' => 'return_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'One of your white/black moods to return to hand', 'scope' => 'own', 'includes_self' => true, 'filter' => ['colors' => ['white', 'black']]],
             ['key' => 'other_mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Up to two other moods (value 3 or less) to return to hand', 'scope' => 'any', 'filter' => ['max_value' => 3], 'count' => ['max' => 2, 'zero_ok' => true]],
         ],
-        'chaos_053' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard for an additional play'],
-        ],
         'chaos_054' => [
             ['key' => 'discard_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'One of your blue/red moods to discard (grants a play from the discard pile)', 'scope' => 'own', 'includes_self' => true, 'filter' => ['colors' => ['blue', 'red']]],
         ],
@@ -128,8 +128,14 @@ final class ChaosCardChoiceSchema
             ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => "Opponent's mood to reduce (discarded instead if it would go below 0)", 'scope' => 'other', 'excludes_teammate' => true],
         ],
         'chaos_058' => [
-            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to give away'],
-            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player to receive the card (required if giving a card)', 'scope' => 'other'],
+            // 'hand_card_id' deliberately has no entry here anymore --
+            // issue #405 follow-up (reported live): choosing which card to
+            // give away has to happen AFTER this mood's own afterPlaying()
+            // resolves (see Chaos058Effect's own docblock), not up front
+            // alongside this field, so it's asked as a follow-up pending
+            // decision instead. This field alone is still the up-front
+            // "would you like to give a card away, and to whom" gate.
+            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player to receive a card from your hand (you choose which after confirming)', 'scope' => 'other'],
         ],
         'chaos_059' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Discard one green/white mood, or all of them', 'options' => ['single', 'all']],
@@ -182,9 +188,6 @@ final class ChaosCardChoiceSchema
         'chaos_086' => [
             ['key' => 'target_player_id', 'type' => 'player', 'required' => true, 'label' => 'Other player who chooses a card from their hand to give you', 'scope' => 'other'],
         ],
-        'chaos_087' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card (base value 4-6) to discard -- boosts this mood to 5', 'filter' => ['values' => [4, 5, 6]]],
-        ],
         'chaos_094' => [
             ['key' => 'discard_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'One of your black/green moods to discard', 'scope' => 'own', 'includes_self' => true, 'filter' => ['colors' => ['black', 'green']]],
             ['key' => 'other_mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Up to two moods (value 3 or less) to discard', 'scope' => 'any', 'includes_self' => true, 'filter' => ['max_value' => 3], 'count' => ['max' => 2, 'zero_ok' => true]],
@@ -211,21 +214,13 @@ final class ChaosCardChoiceSchema
         'chaos_105' => [
             ['key' => 'confirm', 'type' => 'bool', 'required' => false, 'label' => 'Put all other moods into the discard pile'],
         ],
-        'chaos_106' => [
-            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Hand card to bottom-deck (then draw)'],
-        ],
         'chaos_107' => [
             ['key' => 'target_player_id', 'type' => 'player', 'required' => true, 'label' => 'Player to go first next round', 'scope' => 'any'],
         ],
-        'chaos_110' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card (base value 0, 2, 4, or 6) to discard -- boosts this mood to 5', 'filter' => ['values' => [0, 2, 4, 6]]],
-        ],
-        'chaos_111' => [
-            ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card (base value 1, 3, or 5) to discard -- boosts this mood to 5', 'filter' => ['values' => [1, 3, 5]]],
-        ],
         'chaos_118' => [
-            ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Blue/black card to reveal and give away', 'filter' => ['colors' => ['blue', 'black']]],
-            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player to receive the card (required if giving a card)', 'scope' => 'other'],
+            // 'hand_card_id' deliberately has no entry here anymore -- see
+            // chaos_058's own comment above (same reason, same fix).
+            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player to receive a card from your hand (you choose which after confirming)', 'scope' => 'other'],
         ],
         'chaos_128' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard pile card to take into your hand (an extra play is granted regardless)'],

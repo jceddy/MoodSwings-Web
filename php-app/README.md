@@ -2894,6 +2894,54 @@ follows -- these fields themselves were never the bug (the acting
 player's own "who" was always a real choice); only what happened
 afterward, inside the target's own hand/board, was ever simplified away.
 
+**Chaos effects deferred a HAND CARD choice from the acting player's own
+hand too (issue #405 follow-up -- a bug caught live).** Reported live:
+attaching chaos_058 ("you may give a card from your hand to another
+player; if you do, this mood's value becomes 6") to Rationalization and
+choosing Rationalization's own "rotate hands" mode threw "Card is not in
+your hand" instead of letting the player choose which of their NEW
+(post-rotate) cards to give away. Root cause: chaos_058's own
+`hand_card_id` was collected in the SAME up-front `choice_fields` request
+that plays the host card -- submitted, and thus validated, against
+whatever the acting player's hand looked like BEFORE the host card's own
+afterPlaying() ran. Rationalization's own "rotate" (and "refresh") modes
+each fully replace the acting player's ENTIRE hand as part of resolving,
+so any hand card chosen up front for an attached chaos effect was
+virtually guaranteed to no longer be in hand by the time it was actually
+checked. Eleven chaos effects share this exact same shape -- reading a
+hand card from the ACTING PLAYER'S OWN hand: chaos_008/087/110/111 (the
+shared `ChaosDiscardValueToBoostSelfEffect` class), chaos_012, chaos_025,
+chaos_036, chaos_053, chaos_058, chaos_106, chaos_118.
+
+Each now defers its own hand-card choice to a SELF-targeted
+`ChaosRequiresOpponentDecision` (the same interface issue #405's
+opponent-decision follow-up above introduced, just with `targetPlayerId:
+$playerId` instead of another player) -- asked only once the host card's
+own afterPlaying() has fully resolved, mirroring exactly why Betrayal's
+own printed `RequiresOpponentDecision` implementation is self-targeted:
+"deferred because the played card's own board effect... isn't available
+until after the card has actually entered play." `pendingDecisionsFor()`
+always asks (no up-front gate) for the 9 effects whose hand-card field IS
+their own entire "you may"; chaos_058/118 keep their own
+`recipient_player_id` field as a SYNCHRONOUS, up-front choice (who to
+give a card to doesn't depend on hand contents, so there's no reason to
+defer it), which doubles as the "would you like to?" gate before the
+deferred hand-card pause is even offered. chaos_012's two fields
+(`discard_card_id` + `suppress_mood_card_id`) are bundled into ONE nested
+pending decision (mirroring `MoodPlayService::duplicityRepeatOfferRequest()`'s
+own nested shape) since which mood to suppress never depended on which
+card was discarded -- no reason to force two separate round trips.
+
+`ChaosCardChoiceSchema`'s own entries for these 11 keys were updated to
+match: the 9 fully-deferred ones have no entry at all anymore (their own
+choice happens entirely via the pending-decision pause now); chaos_058/118
+keep only their own `recipient_player_id` entry. No bot policy changes
+were needed -- every field shape these pauses use (`hand_card`, a
+`nested` field wrapping two more) is one `BotChoiceResolver`'s existing
+generic policy already resolves correctly, the same policy that already
+answers Compulsion's/Intimidation's own identically-shaped pending
+decisions.
+
 ### Winston Draft
 
 `deck_type: 'winston_draft'` (issue #89) is the second `format: 'draft'`

@@ -46,19 +46,20 @@ final class ChaosCardChoiceSchemaTest extends TestCase
 
     public function testAMultiFieldChaosEffectExposesBothFieldsInOrder(): void
     {
-        $fields = ChaosCardChoiceSchema::forEffectKey('chaos_012');
+        // chaos_012 used to be this test's own example, but it now defers
+        // its own choice entirely (issue #405 follow-up -- see this
+        // class's own docblock) -- chaos_062 (a DISCARD PILE card, not a
+        // hand card, so unaffected by that fix) still has the same
+        // "optional field + its own required-if-used companion" shape.
+        $fields = ChaosCardChoiceSchema::forEffectKey('chaos_062');
 
         self::assertCount(2, $fields);
         self::assertSame('discard_card_id', $fields[0]['key']);
-        self::assertSame('suppress_mood_card_id', $fields[1]['key']);
-        // Not statically 'required' -- Chaos012Effect only reads it once
-        // discard_card_id is also given (Chaos012Effect::afterPlaying()
-        // returns early otherwise), the same "required if the companion
-        // optional field above is used" pattern CardChoiceSchema's own
-        // faith/guile entries already use (a bug caught live: this field
-        // was originally marked required:true unconditionally, which
-        // would have made a bot try to fill it even when declining the
-        // whole "you may discard..." effect).
+        self::assertSame('opponent_player_id', $fields[1]['key']);
+        // Not statically 'required' -- Chaos062Effect only reads it once
+        // discard_card_id is also given, the same "required if the
+        // companion optional field above is used" pattern CardChoiceSchema's
+        // own faith/guile entries already use.
         self::assertFalse($fields[1]['required']);
     }
 
