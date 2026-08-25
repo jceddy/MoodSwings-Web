@@ -297,4 +297,48 @@ final class ChaosDraftOfferIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->games->proposeChaosDraftEffect(1, $players[1], $offer['effect_1']['id'], (int) $handCardRow['id']);
     }
+
+    /**
+     * Bug caught live (a user report, not a review finding): an attached
+     * chaos effect that reads a PlayerChoices value (chosen number/mood/
+     * player/etc.) never had anything to expose that field to the
+     * frontend with -- unlike a base card's own choice_fields (driven by
+     * CardChoiceSchema), nothing computed the equivalent for an attached
+     * chaos effect, so GameService::serializeCard() never surfaced it and
+     * the play-card panel never rendered a prompt for it at all. The
+     * effect wasn't broken -- $choices->int('value') was always null
+     * because nothing could ever populate it. See ChaosCardChoiceSchema's
+     * own docblock for the fix (a synthetic 'chaos'-keyed nested field,
+     * reusing the same nested-field machinery Duplicity's repeat offer
+     * already exercises).
+     */
+    public function testAttachedChaosEffectRequiringAChoiceExposesANestedChaosField(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]); // Apathy, Dignity
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $chaos035Id = (int) $this->pdo->query("SELECT id FROM chaos_effects WHERE effect_key = 'chaos_035'")->fetchColumn();
+        $this->pdo->prepare('UPDATE game_cards SET chaos_effect_id = :chaos_effect_id WHERE id = :id')
+            ->execute(['chaos_effect_id' => $chaos035Id, 'id' => $handCardRow['id']]);
+
+        $state = $this->games->getState(1, 1); // alice, user_id 1
+        $apathy = null;
+        foreach ($state['you']['hand'] as $card) {
+            if ($card['card_id'] === (int) $handCardRow['id']) {
+                $apathy = $card;
+            }
+        }
+        self::assertNotNull($apathy, 'Apathy should still be in hand with the chaos effect attached');
+
+        $chaosField = null;
+        foreach ($apathy['choice_fields'] as $field) {
+            if ($field['key'] === 'chaos') {
+                $chaosField = $field;
+            }
+        }
+        self::assertNotNull($chaosField, 'choice_fields should carry a nested chaos field for the attached chaos_035 effect');
+        self::assertSame('nested', $chaosField['type']);
+        self::assertCount(1, $chaosField['fields']);
+        self::assertSame('value', $chaosField['fields'][0]['key']);
+        self::assertSame('value', $chaosField['fields'][0]['type']);
+    }
 }

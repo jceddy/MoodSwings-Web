@@ -16,6 +16,7 @@ use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
+use MoodSwings\Rules\ChaosCardChoiceSchema;
 use MoodSwings\Rules\ChaosEffectRegistry;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodInPlay;
@@ -13191,6 +13192,14 @@ final class GameService
         // identity always governs regardless of what it later copies.
         $isCreativityCopy = $inPlay && $effectiveCardId !== $cardId;
 
+        // Chaos Draft (issue #405 follow-up): the effect currently attached
+        // to this specific card instance, if any -- computed once here so
+        // both the choice-fields wiring just below and the 'chaos_effect'
+        // key at the bottom of this method's return can reuse it, rather
+        // than calling BoardState::chaosEffectRow() (a $chaosCatalog map
+        // lookup) twice.
+        $chaosRow = $state->chaosEffectRow($cardId);
+
         $choiceFields = CardChoiceSchema::forEffectKey($catalog['effectKey']);
         if ($reactingViewerId !== null) {
             $choiceFields = [
@@ -13244,6 +13253,34 @@ final class GameService
                     $choiceFields
                 );
             }
+
+            // Chaos Draft (issue #405 follow-up): an attached chaos effect
+            // stacks with (never replaces) this card's own printed ability
+            // -- see ChaosMoodEffect's own docblock and
+            // ChaosCardChoiceSchema's docblock for the full "why." Its own
+            // fields are wrapped in a single synthetic `nested` field keyed
+            // 'chaos' rather than merged flat into $choiceFields: that's
+            // exactly the shape buildFieldRow()/buildChoicesFromFields() in
+            // game.js already know how to render and collect (reused
+            // as-is, no frontend changes needed), and it's what lands the
+            // submitted values at choices['chaos'] -- precisely where
+            // MoodPlayService::resolveAttachedChaosAfterPlaying() reads
+            // them from via PlayerChoices::sub('chaos'). Appended, not
+            // prepended: the base card's own choices (including any
+            // 'cost' stage ones) are always resolved first, matching
+            // afterPlaying()'s own base-then-chaos resolution order.
+            if ($chaosRow !== null) {
+                $chaosChoiceFields = ChaosCardChoiceSchema::forEffectKey($chaosRow['effectKey']);
+                if ($chaosChoiceFields !== []) {
+                    $choiceFields[] = [
+                        'key' => 'chaos',
+                        'type' => 'nested',
+                        'required' => false,
+                        'label' => 'Chaos effect choice',
+                        'fields' => $chaosChoiceFields,
+                    ];
+                }
+            }
         }
 
         return [
@@ -13282,7 +13319,7 @@ final class GameService
             // to yet. Keyed by the raw instance id (not effective/copy-
             // aware) since an attached chaos effect belongs to the
             // physical card, never to whatever it copies.
-            'chaos_effect' => $this->serializeChaosEffectRow($state->chaosEffectRow($cardId)),
+            'chaos_effect' => $this->serializeChaosEffectRow($chaosRow),
         ];
     }
 

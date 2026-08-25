@@ -2553,6 +2553,29 @@ rules_text}`) -- keyed by the card's own raw instance id, since an
 attached chaos effect belongs to the physical card, not whichever
 effective/copied identity it might currently be showing as.
 
+**Attached-effect choices (issue #405 follow-up -- a bug caught live).**
+~60 of the 133 effects read a player choice out of the `PlayerChoices::
+sub('chaos')` bag documented on `ChaosMoodEffect`'s own interface docblock
+(chaos_035's own "you may choose a number" is the one a user actually hit:
+attached and played, but never prompted for the number). That sub-bag
+mechanism was built and worked correctly server-side from day one, but
+nothing declared WHICH fields a given attached effect needs -- unlike a
+base card's own `CardChoiceSchema::forEffectKey()`, there was no
+`chaos_effect_key => fields` schema at all, so `serializeCard()` had
+nothing to expose and the frontend never rendered a prompt. Every such
+effect silently no-opped. `ChaosCardChoiceSchema::forEffectKey()`
+(`src/Rules/ChaosCardChoiceSchema.php`) is the fix, covering every chaos
+effect key that reads a choice, using the exact same field-descriptor DSL
+`CardChoiceSchema` already defines (see that class's own docblock).
+`serializeCard()` appends a single synthetic field to `choice_fields` when
+an attached effect has one -- `{key: 'chaos', type: 'nested', fields: [...]}`
+-- rather than merging its fields flat: that's exactly the shape
+`buildFieldRow()`/`buildChoicesFromFields()` in `game.js` already know how
+to render and collect (the same nested-field machinery Duplicity's
+repeat-with-fresh-choices sub-form uses), so it lands the submitted
+choices at `choices['chaos']` with zero frontend-specific code needed --
+precisely where `PlayerChoices::sub('chaos')` expects to read them from.
+
 ### Winston Draft
 
 `deck_type: 'winston_draft'` (issue #89) is the second `format: 'draft'`
