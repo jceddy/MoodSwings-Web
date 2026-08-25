@@ -41,7 +41,7 @@ final class ChaosCardChoiceSchema
             ['key' => 'mood_card_id', 'type' => 'mood', 'required' => true, 'label' => 'Mood to move to the bottom of the deck (owner draws a card)', 'scope' => 'any', 'includes_self' => true],
         ],
         'chaos_007' => [
-            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Up to two players (each discards one qualifying mood: value 5+)', 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Moods to put into the discard pile (value 5+, up to 2, one per player)', 'scope' => 'any', 'filter' => ['min_value' => 5], 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'chaos_008' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card (base value 0-3) to discard -- boosts this mood to 5', 'filter' => ['values' => [0, 1, 2, 3]]],
@@ -55,7 +55,7 @@ final class ChaosCardChoiceSchema
             ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to suppress (black or red; required if mode is single)', 'scope' => 'any', 'includes_self' => true, 'filter' => ['colors' => ['black', 'red']]],
         ],
         'chaos_020' => [
-            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Up to two players (each has one mood suppressed)', 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Moods to suppress (up to 2, one per player)', 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'chaos_022' => [
             ['key' => 'target_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player with more moods than you', 'scope' => 'any', 'filter' => ['more_moods_than_viewer' => true]],
@@ -67,7 +67,7 @@ final class ChaosCardChoiceSchema
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => "Card to discard (its color determines what gets suppressed)"],
         ],
         'chaos_028' => [
-            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Up to two players (each returns one qualifying mood to hand: odd value)', 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Odd-valued moods to return to hand (up to 2, one per player)', 'scope' => 'any', 'filter' => ['parity' => 'odd'], 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'chaos_029' => [
             ['key' => 'direction', 'type' => 'mode', 'required' => true, 'label' => 'Direction to pass moods', 'options' => ['left', 'right']],
@@ -102,7 +102,7 @@ final class ChaosCardChoiceSchema
             ['key' => 'bottom_top_card', 'type' => 'bool', 'required' => false, 'label' => 'Bottom your revealed top deck card (only if you returned a mood)'],
         ],
         'chaos_048' => [
-            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => "Up to two players (each returns one mood to hand; can't target this mood on yourself)", 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => "Moods to return to hand (up to 2, one per player; can't target this mood on yourself)", 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'chaos_049' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Redraw your hand, or pass all hands directionally', 'options' => ['redraw', 'pass']],
@@ -165,7 +165,7 @@ final class ChaosCardChoiceSchema
             ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => "Opponent's mood (value less than this mood's) to discard", 'scope' => 'other', 'excludes_teammate' => true],
         ],
         'chaos_076' => [
-            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Up to two players (each discards one qualifying mood: even value)', 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Even-valued moods to put into the discard pile (up to 2, one per player)', 'scope' => 'any', 'filter' => ['parity' => 'even'], 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'chaos_078' => [
             ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Players who each discard a random hand card', 'scope' => 'any', 'count' => ['zero_ok' => true]],
@@ -203,7 +203,7 @@ final class ChaosCardChoiceSchema
             ['key' => 'value', 'type' => 'value', 'required' => true, 'min' => 0, 'max' => 3, 'label' => 'Value (0-3) -- discards every other mood showing it'],
         ],
         'chaos_101' => [
-            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Up to two players (each discards one qualifying mood: value 3 or less)', 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true]],
+            ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Moods to put into the discard pile (value 3 or less, up to 2, one per player)', 'scope' => 'any', 'filter' => ['max_value' => 3], 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'chaos_103' => [
             ['key' => 'return_mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Any number of your other moods to return to hand (grants that many extra plays)', 'scope' => 'own', 'count' => ['zero_ok' => true]],
