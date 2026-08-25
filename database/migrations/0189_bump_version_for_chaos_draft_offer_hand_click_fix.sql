@@ -1,0 +1,17 @@
+-- No schema change: fixes a hand-card click opening the read-only
+-- detail view instead of the Play panel right after resolving a Chaos
+-- Draft round-start offer (reported live). chaosDraftOfferOpenForViewer
+-- was only ever refreshed by checkChaosDraftOffer()'s own unawaited
+-- fetch, fired near the end of refreshBoard()'s own render pass -- so
+-- the hand, rendered earlier in that same pass, still saw the
+-- just-resolved offer as open until the next full poll landed. Each
+-- offer-resolving action now awaits a fresh check before refreshing the
+-- board. See web-static/README.md's "Chaos Draft" section.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0188
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.45' WHERE id = 1;

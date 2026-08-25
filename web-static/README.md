@@ -1568,6 +1568,26 @@ failure.
     unplayable-right-now card -- only the panel's own Play button is
     gated.
 
+    `chaosDraftOfferOpenForViewer` ALSO feeds `canAct` itself
+    (`passButtonCanAct()`), which the hand-rendering code in
+    `renderBoard()` uses to decide whether a hand-card click opens the
+    Play panel (`handleHandCardClick()`) or the read-only detail view
+    (`openCardDetail()`) at all -- not just whether the Play button
+    inside the panel is enabled. A bug caught live (issue #405
+    follow-up): resolving the round's own offer (the pick-and-attach
+    step, or the team confirm/reject step) called `refreshBoard()`
+    straight away, but `chaosDraftOfferOpenForViewer` is only ever
+    updated by `checkChaosDraftOffer()`'s own unawaited fetch, fired
+    near the END of that same render pass -- so the hand, rendered
+    EARLIER in that pass, still saw the JUST-RESOLVED offer as open and
+    routed every hand-card click to the detail view instead of the Play
+    panel, until the next full poll happened to land. Each of the three
+    offer-resolving call sites (`submitChaosDraftChoice()`, the
+    confirm-button handler, the reject-button handler) now `await
+    checkChaosDraftOffer(currentState)` before calling `refreshBoard()`,
+    so `chaosDraftOfferOpenForViewer` is already correct by the time the
+    hand renders.
+
     A card carrying an attached chaos effect gets a "Chaos" badge
     (`buildCardThumb()`, `.card-thumb__badge--chaos`, tinted by
     `--chaos-common`/`--chaos-uncommon`/`--chaos-rare`/`--chaos-mythic`)
