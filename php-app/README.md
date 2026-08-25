@@ -2782,6 +2782,118 @@ previously exercised by any chaos effect). The constructor signature
 (`$action`, `$maxPlayers`, `$qualifies`, `$excludeThisCard`) is unchanged,
 so all six `ChaosDefaultEffectRegistry` registrations needed no changes.
 
+**Chaos effects can now pause for an opponent's own real decision too
+(issue #405 follow-up -- a maintainer ruling reversing 10 classes' own
+original design).** Reported live for chaos_086 ("Choose another player.
+That player chooses a card from their hand and gives it to you."):
+"the other player should choose the card from their hand to give to me --
+it should not be random." `ChaosMoodEffect`'s own class docblock had
+documented the uniformly-random simplification as deliberate from the
+start ("chaos effects never pause for another player's own decision"),
+mirroring `RequiresOpponentDecision`'s own reasoning for a genuinely
+different reason -- but for the handful of chaos effects whose printed
+text has an EXACT identically-shaped printed-card precedent already using
+`RequiresOpponentDecision`, that reasoning doesn't hold: the other
+player's own hidden-information choice is real, not an ambiguity worth
+randomizing away. Ten effects share this shape (each cited its own
+printed-card analog in its own docblock even before this fix, since they
+were literally implemented by copying that analog's afterPlaying()):
+chaos_010/Disillusionment, chaos_029/Avoidance, chaos_031/Confusion,
+chaos_067/Intimidation, chaos_068 (new -- "that player chooses two of
+their moods," a single multi-select field rather than two sequential
+one-mood requests, mirroring how an ordinary "choose exactly 2" field
+already works elsewhere, e.g. Regret's `hand_mood_ids`), chaos_078 (new --
+"each chosen player discards a card," Confusion's own "every targeted
+player answers their own field" shape scoped to a chosen subset rather
+than every active player), chaos_082/Arrogance, chaos_086/Compulsion, and
+chaos_096 (new -- the acting player names two candidate moods
+up front and the opponent picks which of THOSE TWO to give up, via
+`PendingDecisionRequest.field.candidate_card_ids`, the same narrowing
+`Chaos091Effect`/printed Fury already use for "tied for highest"). Two
+more (chaos_043/061) explicitly say "a RANDOM one of their moods" in
+their own printed rules text -- genuinely random by design, left
+unchanged.
+
+**New interface, `ChaosRequiresOpponentDecision`** (mirrors
+`RequiresOpponentDecision` method-for-method: `pendingDecisionsFor()`/
+`resolveDecisions()`, same `PendingDecisionRequest[]` shape, deliberately
+standalone rather than extending `ChaosMoodEffect` for the identical
+reason `RequiresOpponentDecision` stays standalone from `MoodEffect`).
+`$choices` here is always the attached effect's own already-unwrapped
+`PlayerChoices::sub('chaos')` bag -- exactly what `afterPlaying()` itself
+would have received.
+
+**`MoodPlayService::resolveAttachedChaosAfterPlaying()`** now returns
+`PendingDecisionRequest[]` instead of resolving synchronously and
+returning void: `[]` still means fully resolved (no attached effect, a
+`'while_in_play'` shape, a plain `ChaosMoodEffect` resolved via its
+ordinary `afterPlaying()`, or a `ChaosRequiresOpponentDecision` that
+didn't actually need anyone's input for this play). Both of its call
+sites -- `resolveAfterPlayingChain()`'s own early-return branch (a base
+card with no `afterPlaying()` of its own) and `continueAfterPlayingChain()`
+(a base card that does) -- pause with a fresh
+`PlayResult::pending(..., pendingSource: 'chaos_effect')` on a non-empty
+return instead of continuing the chain. A new `continueAfterChaosResolved()`
+helper holds exactly the "what continueAfterPlayingChain() does after its
+own chaos-resolution call" tail (the Duplicity-repeat-offer eligibility
+check, then `finishAfterPlayingChain()`) -- factored out so
+`resolvePendingDecisions()`'s own resumption path can reach it directly
+without looping back through `continueAfterPlayingChain()` and
+re-invoking `resolveAttachedChaosAfterPlaying()` a second time for the
+same invocation. The early-return branch passes `duplicityEligibleSources:
+0` into its own pause (unchanged from before this feature -- a card with
+no base `afterPlaying()` never offered a Duplicity repeat, chaos pause or
+not), which `continueAfterChaosResolved()`'s own eligibility check then
+naturally honors on resume without needing to know which of the two
+origins it came from.
+
+**`PlayResult::pending()` gained `$pendingSource`** (`'effect'` | `'chaos_effect'`,
+default `'effect'` so every existing call site is unchanged) --
+`MoodPlayService::resolvePendingDecisions()` needs to know, when resuming
+a pause, whether to resolve it through the base card's own
+`EffectRegistry` (unchanged path) or the attached chaos effect's own
+`ChaosEffectRegistry` (new). `played_card_id` alone can't disambiguate: a
+single card can carry BOTH a base `RequiresOpponentDecision` effect and an
+attached chaos effect at once (they "stack," per the composition layer's
+own rule), so a pause opened by one can't be told apart from a pause that
+would be opened by the other just by which card it's for. Persisted as
+`game_pending_decision_batches.pending_source` (migration 0191), following
+the exact precedent migrations 0107/0127 already set for
+`duplicity_eligible_sources`/`reactor_candidate_card_ids` -- a
+`PlayResult` field that has to survive a real request round-trip, read
+back the same way in `GameService::respondToDecision()` before calling
+`resolvePendingDecisions()` again. `GameService::serializePendingDecision()`'s
+own `withChoiceDefault()` call was also fixed to derive its `$effectKey`
+from `chaosEffectRow()` rather than `catalogRow()` when `pending_source`
+is `'chaos_effect'` -- inert today (its only effect-key-specific branch,
+Imagination's own color default, can never collide with a chaos
+`effect_key`), but correct rather than accidentally-harmless.
+
+**Bots** need no new policy for 9 of the 10 -- every required field these
+effects' own `PendingDecisionRequest`s use (`hand_card`, `mood` with
+`scope: 'own'`, `mood` with `candidate_card_ids`, a `multi` `mood` field
+with `count.min`/`count.max`) is a shape `BotChoiceResolver`'s existing
+generic policy already resolves correctly with zero special-casing
+(exactly the same policy that already answers Compulsion's/Intimidation's/
+Arrogance's/Fury's/Avoidance's/Confusion's own identically-shaped
+decisions today). Only chaos_010 needed anything: its own field is
+OPTIONAL (`required: false`, mirroring Disillusionment's own "may choose a
+color"), and `BotChoiceResolver` never fills an optional field at all (see
+its own docblock) -- so `BotPlayerService::chooseDecisionAnswer()`'s
+existing `disillusionment_choose_color` special case (a "safe color"
+policy: never pick a color matching the responding bot's own board, since
+every mood of a chosen color gets discarded regardless of owner) now also
+covers `chaos_010_choose_color`, since chaos_010 is Disillusionment's own
+chaos analog with an identical field shape.
+
+Six `ChaosCardChoiceSchema` labels (chaos_067/068/078/082/086/096's own
+SYNCHRONOUS "who to target" fields, unchanged in shape, still read
+up-front exactly as before) had their wording updated from "random"/
+describing the old simplification to describing the real choice that now
+follows -- these fields themselves were never the bug (the acting
+player's own "who" was always a real choice); only what happened
+afterward, inside the target's own hand/board, was ever simplified away.
+
 ### Winston Draft
 
 `deck_type: 'winston_draft'` (issue #89) is the second `format: 'draft'`

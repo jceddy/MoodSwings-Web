@@ -263,8 +263,19 @@ final class MoodPlayService
             // No base afterPlaying() means Duplicity never gets a chance to
             // offer a repeat here (there's nothing for continueAfterPlayingChain()
             // to reach) -- but an attached chaos effect can still fire on
-            // its own, exactly once, the same as it always did.
-            $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $invocationChoices);
+            // its own, exactly once, the same as it always did. It can now
+            // also pause for its own opponent decision (issue #405
+            // follow-up -- see ChaosRequiresOpponentDecision); $eligibleSources
+            // is passed as 0 here (not computed in this branch at all,
+            // same as before this feature existed), which is exactly
+            // right for continueAfterChaosResolved()'s own resume path
+            // too -- a card with no base afterPlaying() never offers a
+            // Duplicity repeat regardless of how its attached chaos
+            // effect resolved.
+            $chaosPendingDecisions = $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $invocationChoices);
+            if ($chaosPendingDecisions !== []) {
+                return PlayResult::pending($chaosPendingDecisions, $cardId, $invocationSeq, $invocationChoices, 0, $reactorCandidateCardIds, pendingSource: 'chaos_effect');
+            }
 
             return $this->finishAfterPlayingChain($state, $cardId, $playerId, $topLevelChoices, $reactorCandidateCardIds);
         }
@@ -322,8 +333,20 @@ final class MoodPlayService
      * its own color cascade) and these values have to survive that
      * regardless.
      *
+     * $pendingSource (issue #405 follow-up) is the batch's own persisted
+     * discriminator -- see PlayResult's own docblock -- saying whether this
+     * pause belongs to the base printed card's own RequiresOpponentDecision
+     * ('effect', the original/default case, resumed exactly as before) or
+     * to an attached chaos effect's own ChaosRequiresOpponentDecision
+     * ('chaos_effect', resolved via $chaosRegistry instead). The
+     * 'chaos_effect' branch resumes through continueAfterChaosResolved()
+     * rather than continueAfterPlayingChain() specifically to avoid
+     * re-invoking resolveAttachedChaosAfterPlaying() a second time --
+     * that's exactly what THIS resolution IS.
+     *
      * @param array<string, PlayerChoices> $answers
      * @param int[] $reactorCandidateCardIds
+     * @param 'effect'|'chaos_effect' $pendingSource
      */
     public function resolvePendingDecisions(
         BoardState $state,
@@ -335,9 +358,28 @@ final class MoodPlayService
         array $answers,
         int $duplicityEligibleSources,
         array $reactorCandidateCardIds = [],
+        string $pendingSource = 'effect',
     ): PlayResult {
         if (isset($answers[self::DUPLICITY_REPEAT_KEY])) {
             return $this->resolveDuplicityRepeatOffer($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $answers[self::DUPLICITY_REPEAT_KEY], $reactorCandidateCardIds);
+        }
+
+        if ($pendingSource === 'chaos_effect') {
+            $chaosRow = $state->chaosEffectRow($cardId);
+            if ($chaosRow === null) {
+                throw new IllegalPlayException("Card {$cardId} no longer carries an attached chaos effect to resolve a pending decision against");
+            }
+            $chaosEffect = $this->chaosRegistry->for($chaosRow['effectKey']);
+            if (!$chaosEffect instanceof ChaosRequiresOpponentDecision) {
+                throw new IllegalPlayException("Chaos effect '{$chaosRow['effectKey']}' has no pending decisions to resolve");
+            }
+
+            $followUpDecisions = $chaosEffect->resolveDecisions($state, $cardId, $playerId, $invocationChoices->sub('chaos'), $answers);
+            if ($followUpDecisions !== []) {
+                return PlayResult::pending($followUpDecisions, $cardId, $invocationSeq, $invocationChoices, $duplicityEligibleSources, $reactorCandidateCardIds, pendingSource: 'chaos_effect');
+            }
+
+            return $this->continueAfterChaosResolved($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $duplicityEligibleSources, $reactorCandidateCardIds);
         }
 
         $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
@@ -429,6 +471,16 @@ final class MoodPlayService
      * effect got here (synchronously, or resumed after an opponent's own
      * decision) -- see resolveAttachedChaosAfterPlaying()'s own docblock
      * for the full "why here."
+     *
+     * The attached chaos effect can now itself pause for an opponent's
+     * own decision too (issue #405 follow-up -- see
+     * ChaosRequiresOpponentDecision) -- when it does, this method returns
+     * that pause immediately, BEFORE even checking the Duplicity-repeat-
+     * offer eligibility below, and continueAfterChaosResolved() picks up
+     * exactly where this left off once resolvePendingDecisions() resolves
+     * it (see that method's own docblock for why it's a separate helper
+     * rather than just calling back into this method, which would
+     * re-invoke resolveAttachedChaosAfterPlaying() a second time).
      */
     /**
      * @param int[] $reactorCandidateCardIds
@@ -443,9 +495,35 @@ final class MoodPlayService
         int $eligibleSources,
         array $reactorCandidateCardIds = [],
     ): PlayResult {
-        $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
+        $chaosPendingDecisions = $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $invocationChoices);
+        if ($chaosPendingDecisions !== []) {
+            return PlayResult::pending($chaosPendingDecisions, $cardId, $invocationSeq, $invocationChoices, $eligibleSources, $reactorCandidateCardIds, pendingSource: 'chaos_effect');
+        }
 
-        $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $invocationChoices);
+        return $this->continueAfterChaosResolved($state, $cardId, $playerId, $topLevelChoices, $invocationSeq, $eligibleSources, $reactorCandidateCardIds);
+    }
+
+    /**
+     * The remainder of continueAfterPlayingChain(), once THIS invocation's
+     * own attached chaos effect (if any) has fully resolved -- factored
+     * out so resolvePendingDecisions()'s own 'chaos_effect' branch can
+     * reach it directly after resolving a chaos-originated pause, without
+     * looping back through continueAfterPlayingChain() and re-invoking
+     * resolveAttachedChaosAfterPlaying() a second time for the same
+     * invocation (issue #405 follow-up -- see ChaosRequiresOpponentDecision).
+     *
+     * @param int[] $reactorCandidateCardIds
+     */
+    private function continueAfterChaosResolved(
+        BoardState $state,
+        int $cardId,
+        int $playerId,
+        PlayerChoices $topLevelChoices,
+        int $invocationSeq,
+        int $eligibleSources,
+        array $reactorCandidateCardIds = [],
+    ): PlayResult {
+        $effectiveEffectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
 
         if ($invocationSeq < $eligibleSources) {
             // The repeat-offer's own answer is resolved directly by
@@ -707,15 +785,52 @@ final class MoodPlayService
      * reaches this point correctly either way -- continueAfterPlayingChain()
      * is called with that same invocation's own $invocationChoices
      * regardless of how many pauses the base effect needed.
+     *
+     * Returns any PendingDecisionRequests the attached effect itself needs
+     * answered before it's fully resolved (issue #405 follow-up -- see
+     * ChaosRequiresOpponentDecision): [] means fully resolved already
+     * (there was no attached effect, its shape wasn't 'after_playing', it
+     * doesn't implement that interface and resolved synchronously via the
+     * ordinary afterPlaying() call, or it does implement it but this
+     * specific play didn't actually need anyone's input). The caller is
+     * responsible for pausing (PlayResult::pending(..., pendingSource:
+     * 'chaos_effect')) on a non-empty return instead of continuing the
+     * chain -- this method itself never constructs a PlayResult, mirroring
+     * resolveAfterPlayingChain()'s own base-effect handling, which keeps
+     * that same responsibility at each of ITS two call sites rather than
+     * inside pendingDecisionsFor() itself.
+     *
+     * @return PendingDecisionRequest[]
      */
-    private function resolveAttachedChaosAfterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $invocationChoices): void
+    private function resolveAttachedChaosAfterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $invocationChoices): array
     {
         $chaosRow = $state->chaosEffectRow($cardId);
         if ($chaosRow === null || $chaosRow['shape'] !== 'after_playing') {
-            return;
+            return [];
         }
 
-        $this->chaosRegistry->for($chaosRow['effectKey'])->afterPlaying($state, $cardId, $playerId, $invocationChoices->sub('chaos'));
+        $chaosChoices = $invocationChoices->sub('chaos');
+        $effect = $this->chaosRegistry->for($chaosRow['effectKey']);
+
+        if ($effect instanceof ChaosRequiresOpponentDecision) {
+            $pendingDecisions = $effect->pendingDecisionsFor($state, $cardId, $playerId, $chaosChoices);
+            if ($pendingDecisions !== []) {
+                return $pendingDecisions;
+            }
+            // Nothing to ask for this specific play (e.g. declined, or no
+            // qualifying target/candidate) -- resolve immediately with no
+            // answers, same as an ordinary no-op afterPlaying(). Any
+            // follow-up this returns would be a genuinely new kind of
+            // case none of today's implementers produce (see
+            // ChaosRequiresOpponentDecision's own docblock on why the
+            // shape is still supported) -- returned here exactly like a
+            // first-round pause, so the caller pauses on it the same way.
+            return $effect->resolveDecisions($state, $cardId, $playerId, $chaosChoices, []);
+        }
+
+        $effect->afterPlaying($state, $cardId, $playerId, $chaosChoices);
+
+        return [];
     }
 
     /**

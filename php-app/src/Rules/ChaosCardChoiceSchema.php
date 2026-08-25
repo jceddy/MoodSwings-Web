@@ -150,10 +150,10 @@ final class ChaosCardChoiceSchema
             ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to move to the bottom of the deck (then you draw)', 'scope' => 'any', 'includes_self' => true],
         ],
         'chaos_067' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'required' => false, 'label' => 'Other player to force reveal + give a random hand card', 'scope' => 'other'],
+            ['key' => 'target_player_id', 'type' => 'player', 'required' => false, 'label' => 'Other player who reveals a card of their choice from their hand', 'scope' => 'other'],
         ],
         'chaos_068' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'required' => true, 'label' => 'Player (2+ moods) whose two random moods trigger a color-match discard', 'scope' => 'any', 'filter' => ['min_mood_count' => 2]],
+            ['key' => 'target_player_id', 'type' => 'player', 'required' => true, 'label' => 'Player (2+ moods) who chooses two of their moods to trigger a color-match discard', 'scope' => 'any', 'filter' => ['min_mood_count' => 2]],
         ],
         'chaos_071' => [
             ['key' => 'target_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player (1+ hand cards) to bottom-deck a random hand card (then you draw)', 'scope' => 'any', 'filter' => ['min_hand_count' => 1]],
@@ -168,19 +168,19 @@ final class ChaosCardChoiceSchema
             ['key' => 'target_mood_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Even-valued moods to put into the discard pile (up to 2, one per player)', 'scope' => 'any', 'filter' => ['parity' => 'even'], 'count' => ['max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'distinct_owners']],
         ],
         'chaos_078' => [
-            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Players who each discard a random hand card', 'scope' => 'any', 'count' => ['zero_ok' => true]],
+            ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Players who each choose a card from their hand to discard', 'scope' => 'any', 'count' => ['zero_ok' => true]],
         ],
         'chaos_080' => [
             ['key' => 'mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Any number of moods (total value 5 or less) to discard', 'scope' => 'any', 'includes_self' => true, 'count' => ['zero_ok' => true], 'constraint' => ['type' => 'max_total_value', 'max' => 5]],
         ],
         'chaos_082' => [
-            ['key' => 'opponent_player_id', 'type' => 'player', 'required' => false, 'label' => "Opponent whose white/blue mood you'll take (random; returns when this mood leaves play)", 'scope' => 'other', 'excludes_teammate' => true],
+            ['key' => 'opponent_player_id', 'type' => 'player', 'required' => false, 'label' => "Opponent who chooses one of their white/blue moods to give up (returns when this mood leaves play)", 'scope' => 'other', 'excludes_teammate' => true],
         ],
         'chaos_084' => [
             ['key' => 'discard_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'One of your other moods to discard for an extra play', 'scope' => 'own'],
         ],
         'chaos_086' => [
-            ['key' => 'target_player_id', 'type' => 'player', 'required' => true, 'label' => 'Other player who gives you a random hand card', 'scope' => 'other'],
+            ['key' => 'target_player_id', 'type' => 'player', 'required' => true, 'label' => 'Other player who chooses a card from their hand to give you', 'scope' => 'other'],
         ],
         'chaos_087' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card (base value 4-6) to discard -- boosts this mood to 5', 'filter' => ['values' => [4, 5, 6]]],
@@ -193,7 +193,7 @@ final class ChaosCardChoiceSchema
             ['key' => 'discard_mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => 'Two of your other moods to discard (boosts this mood to 9)', 'scope' => 'own', 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true]],
         ],
         'chaos_096' => [
-            ['key' => 'opponent_mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => "Two of the same opponent's moods (one taken at random)", 'scope' => 'other', 'excludes_teammate' => true, 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_owner']],
+            ['key' => 'opponent_mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => "Two of the same opponent's moods (they choose which one to give up)", 'scope' => 'other', 'excludes_teammate' => true, 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_owner']],
             ['key' => 'own_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'One of your moods to give back (required if choosing opponent moods above)', 'scope' => 'own'],
         ],
         'chaos_098' => [

@@ -475,7 +475,14 @@ final class BotPlayerService
     /** @return array<string, mixed> */
     public function chooseDecisionAnswer(BoardState $state, array $field, int $botGamePlayerId, string $decisionType = ''): array
     {
-        if ($decisionType === 'disillusionment_choose_color') {
+        // chaos_010 (issue #405 follow-up) is Disillusionment's own chaos
+        // analog -- identical printed text, identical field shape (an
+        // optional 'mode' color pick) -- so it reuses the exact same
+        // safe-color policy rather than falling through to the generic
+        // resolver, which would never fill an optional field at all (see
+        // BotChoiceResolver's own docblock) and so never participate,
+        // safe but strictly worse than picking a color that can't backfire.
+        if ($decisionType === 'disillusionment_choose_color' || $decisionType === 'chaos_010_choose_color') {
             $color = $this->disillusionmentSafeColor($state, $field, $botGamePlayerId);
 
             return $color === null ? [] : [$field['key'] => $color];
