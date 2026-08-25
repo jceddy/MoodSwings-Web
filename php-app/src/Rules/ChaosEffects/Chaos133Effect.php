@@ -16,8 +16,12 @@ use MoodSwings\Rules\PlayerChoices;
  * Effects/WonderEffect.php's identically-worded 'while_in_play' ability
  * (a continuously recomputed bonus), this effect's shape is
  * 'after_playing' -- a one-time snapshot taken right now, fixed via
- * setValueOverride() rather than recomputed on every future valueOf()
- * call.
+ * adjustChaosValueDelta() rather than recomputed on every future
+ * valueOf() call. A DELTA ("increase ... BY 2 for each..."), not an
+ * absolute override -- adjustChaosValueDelta() stacks this with
+ * whatever this card's value already is (its own dice/alt value
+ * included) instead of replacing it; see that method's own docblock on
+ * BoardState.
  */
 final class Chaos133Effect extends AbstractChaosMoodEffect
 {
@@ -43,6 +47,6 @@ final class Chaos133Effect extends AbstractChaosMoodEffect
             }
         }
 
-        $state->setValueOverride($cardId, $state->valueOf($cardId) + self::VALUE_PER_MATCH * $count);
+        $state->adjustChaosValueDelta($cardId, self::VALUE_PER_MATCH * $count);
     }
 }

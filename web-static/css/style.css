@@ -939,6 +939,10 @@ body.game-page {
         top: calc((0.25rem + 15px) * var(--card-scale, 1));
     }
 
+    .in-play-zone .card-thumb--suppressed .card-thumb__badge--chaos-delta {
+        top: calc((0.25rem + 15px) * var(--card-scale, 1));
+    }
+
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--suppressed {
         bottom: calc((0.25rem + 15px) * var(--card-scale, 1));
     }
@@ -1059,6 +1063,10 @@ body.game-page {
     top: calc((0.25rem + 20px) * var(--card-scale, 1));
 }
 
+.card-thumb--suppressed .card-thumb__badge--chaos-delta {
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
+}
+
 .card-thumb--suppressed .card-thumb__badge--suppressed {
     bottom: calc((0.25rem + 20px) * var(--card-scale, 1));
 }
@@ -1085,6 +1093,26 @@ body.game-page {
 .card-thumb__badge--value {
     top: calc(0.25rem * var(--card-scale, 1));
     right: calc(0.25rem * var(--card-scale, 1));
+}
+
+/* Chaos Draft (issue #405 follow-up): the net permanent delta an
+   attached chaos effect's own "permanently increase/decrease this
+   mood's value BY N" wording has applied (chaos_056/064/120/133) --
+   see BoardState::adjustChaosValueDelta()'s own docblock for why this
+   is now a separate, additively-stacking badge rather than folded into
+   'value_locked' (which incorrectly rotated the card 180 degrees, as if
+   the card's OWN printed ability had fixed its value, when a delta
+   effect never does that). Positioned immediately left of the value
+   badge -- the reserved 1.75rem gap is sized to comfortably clear a
+   2-3 character value badge (this game's values never realistically
+   exceed 2 digits) without measuring its actual rendered width, the
+   same "close enough" fixed-offset convention every other badge
+   stacking rule on this page already uses (see e.g. the 20px/22px
+   nudges below). */
+.card-thumb__badge--chaos-delta {
+    top: calc(0.25rem * var(--card-scale, 1));
+    right: calc((0.25rem + 1.75rem) * var(--card-scale, 1));
+    background: #b00020;
 }
 
 /* Nudged down ~20px from the other corner badges (see .card-thumb__badge
@@ -2156,6 +2184,10 @@ dialog#deck-builder-dialog[open] {
         top: calc((0.5rem + 40px) * var(--card-scale, 1));
     }
 
+    .card-thumb--suppressed .card-thumb__badge--chaos-delta {
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
+    }
+
     .card-thumb--suppressed .card-thumb__badge--suppressed {
         bottom: calc((0.5rem + 40px) * var(--card-scale, 1));
     }
@@ -2173,6 +2205,13 @@ dialog#deck-builder-dialog[open] {
     .card-thumb__badge--value {
         top: calc(0.5rem * var(--card-scale, 1));
         right: calc(0.5rem * var(--card-scale, 1));
+    }
+
+    /* Doubled counterpart of .card-thumb__badge--chaos-delta further up
+       (0.25rem -> 0.5rem, 1.75rem -> 3.5rem). */
+    .card-thumb__badge--chaos-delta {
+        top: calc(0.5rem * var(--card-scale, 1));
+        right: calc((0.5rem + 3.5rem) * var(--card-scale, 1));
     }
 
     .card-thumb__badge--copy {

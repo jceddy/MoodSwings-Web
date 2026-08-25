@@ -6,6 +6,7 @@ namespace MoodSwings\Bot;
 
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
+use MoodSwings\Rules\ChaosCardChoiceSchema;
 use MoodSwings\Rules\RoundScorer;
 
 /**
@@ -1120,8 +1121,56 @@ final class BotPlayerService
         return array_slice($sorted, 0, $minDeckSize);
     }
 
-    /** @return ?array<string, mixed> */
+    /**
+     * buildBaseChoicesForCard()'s own result, plus (issue #405 follow-up
+     * -- a bug caught live) whatever an attached chaos effect's own
+     * required choices resolve to (ChaosCardChoiceSchema, using the same
+     * field-shape-driven resolveSchemaFields() below as the card's own
+     * fields -- its field DSL is identical to CardChoiceSchema's, see
+     * that class's own docblock). Before this, a bot playing a card
+     * carrying an attached effect with a genuinely required field
+     * (chaos_006/029/031/051/068/086/099/107/133) submitted no 'chaos'
+     * choices at all, and PlayerChoices::requireInt()/requireString()
+     * threw uncaught inside advanceAutomatedTurns(), crashing the whole
+     * request. Applied uniformly regardless of which of
+     * buildBaseChoicesForCard()'s many per-effect-key branches produced
+     * the base choices, since a card's own printed ability and its
+     * attached chaos effect are completely independent (any base card
+     * can carry any chaos effect -- see ChaosMoodEffect's own docblock)
+     * -- this can't just be tacked onto the END of
+     * buildBaseChoicesForCard() instead, since most of its branches
+     * return early, before ever reaching that point. A required chaos
+     * field with no legal answer makes the whole card unplayable this
+     * way, same as a required base field would.
+     *
+     * @return ?array<string, mixed>
+     */
     private function buildChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
+    {
+        $choices = $this->buildBaseChoicesForCard($state, $cardId, $botGamePlayerId);
+        if ($choices === null) {
+            return null;
+        }
+
+        $chaosEffectKey = $state->chaosEffectKeyFor($cardId);
+        if ($chaosEffectKey !== null) {
+            $chaosChoices = $this->resolveSchemaFields(ChaosCardChoiceSchema::forEffectKey($chaosEffectKey), $state, $cardId, $botGamePlayerId, $chaosEffectKey);
+            if ($chaosChoices === null) {
+                // A required chaos field with no legal answer makes the
+                // whole card unplayable this way, same as a required base
+                // field would -- see resolveSchemaFields()'s own docblock.
+                return null;
+            }
+            if ($chaosChoices !== []) {
+                $choices['chaos'] = $chaosChoices;
+            }
+        }
+
+        return $choices;
+    }
+
+    /** @return ?array<string, mixed> */
+    private function buildBaseChoicesForCard(BoardState $state, int $cardId, int $botGamePlayerId): ?array
     {
         $effectKey = $state->catalogRow($state->effectiveCardId($cardId))['effectKey'];
 
@@ -1189,9 +1238,27 @@ final class BotPlayerService
             return $targetPlayerId !== null ? ['opponent_player_id' => $targetPlayerId] : null;
         }
 
+        return $this->resolveSchemaFields(CardChoiceSchema::forEffectKey($effectKey), $state, $cardId, $botGamePlayerId, $effectKey);
+    }
+
+    /**
+     * The shared per-field resolution loop buildChoicesForCard() runs
+     * once (via buildBaseChoicesForCard()) for a card's own
+     * CardChoiceSchema fields and again (if an attached chaos effect has
+     * any) for its ChaosCardChoiceSchema fields -- see buildChoicesForCard()'s
+     * own docblock for why the same policy applies to both without any
+     * chaos-specific logic here.
+     *
+     * @param array<int, array<string, mixed>> $fields
+     * @return array<string, mixed>|null null means a required field had
+     *     no legal value -- the caller should treat whatever this belongs
+     *     to (the whole card, today) as unusable.
+     */
+    private function resolveSchemaFields(array $fields, BoardState $state, int $cardId, int $botGamePlayerId, string $effectKey): ?array
+    {
         $choices = [];
 
-        foreach (CardChoiceSchema::forEffectKey($effectKey) as $field) {
+        foreach ($fields as $field) {
             $required = ($field['required'] ?? false) === true;
             $forced = !$required && (
                 $this->resolver->isAlwaysFilledOptionalField($effectKey, $field['key'])

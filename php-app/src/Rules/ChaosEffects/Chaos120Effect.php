@@ -15,7 +15,10 @@ use MoodSwings\Rules\PlayerChoices;
  * the first qualifying onMoodPlayed() disarms it and applies the bonus --
  * to a uniformly-random one of the owner's own moods, since this fires
  * reactively with no request-scoped PlayerChoices to read from (see
- * ChaosMoodEffect's own class docblock).
+ * ChaosMoodEffect's own class docblock). A DELTA ("increase ... BY 1"),
+ * not an absolute override -- adjustChaosValueDelta() stacks this with
+ * whatever the target's value already is instead of replacing it; see
+ * that method's own docblock on BoardState.
  */
 final class Chaos120Effect extends AbstractChaosMoodEffect
 {
@@ -40,6 +43,6 @@ final class Chaos120Effect extends AbstractChaosMoodEffect
             return;
         }
         $targetCardId = array_rand($ownMoods);
-        $state->setValueOverride($targetCardId, $state->valueOf($targetCardId) + 1);
+        $state->adjustChaosValueDelta($targetCardId, 1);
     }
 }

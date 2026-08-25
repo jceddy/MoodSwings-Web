@@ -15,7 +15,11 @@ use MoodSwings\Rules\BoardState;
  * discard, with no request-scoped PlayerChoices to read from -- the
  * target is simplified to a uniformly-random opponent's mood, matching
  * every other "you may choose ..." reactive chaos effect (see
- * ChaosMoodEffect's own class docblock).
+ * ChaosMoodEffect's own class docblock). A DELTA ("reduce ... BY 1"), not
+ * an absolute override -- adjustChaosValueDelta() stacks this with
+ * whatever the target's value already is instead of replacing it; see
+ * that method's own docblock on BoardState. Cumulative across repeated
+ * firings against the same target, same as the printed text implies.
  */
 final class Chaos064Effect extends AbstractChaosMoodEffect
 {
@@ -39,6 +43,6 @@ final class Chaos064Effect extends AbstractChaosMoodEffect
             return;
         }
 
-        $state->setValueOverride($targetCardId, $newValue);
+        $state->adjustChaosValueDelta($targetCardId, -1);
     }
 }

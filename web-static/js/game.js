@@ -3119,6 +3119,26 @@
             button.appendChild(valueBadge);
         }
 
+        // Chaos Draft (issue #405 follow-up): the net permanent delta an
+        // attached chaos effect's own "permanently increase/decrease this
+        // mood's value BY N" wording has applied (chaos_056/064/120/133) --
+        // shown as its own signed badge immediately left of the value
+        // badge above, since it STACKS with whatever the card's own
+        // printed/dice/alt-value computation already produced rather than
+        // replacing it (see BoardState::adjustChaosValueDelta()'s own
+        // docblock). Deliberately independent of card.value_locked, which
+        // only ever means the card's OWN printed ability fixed its value
+        // (Dignity/Delight-style) -- a chaos delta never sets that flag,
+        // so it never rotates the card the way value_locked does.
+        if (card.chaos_value_delta) {
+            const deltaBadge = document.createElement('span');
+            deltaBadge.className = 'card-thumb__badge card-thumb__badge--chaos-delta';
+            deltaBadge.textContent = (card.chaos_value_delta > 0 ? '+' : '') + card.chaos_value_delta;
+            deltaBadge.title = 'Permanently ' + (card.chaos_value_delta > 0 ? 'increased' : 'decreased')
+                + ' by an attached chaos effect (net ' + (card.chaos_value_delta > 0 ? '+' : '') + card.chaos_value_delta + ')';
+            button.appendChild(deltaBadge);
+        }
+
         if (card.is_creativity_copy) {
             const copyBadge = document.createElement('span');
             copyBadge.className = 'card-thumb__badge card-thumb__badge--copy';
@@ -3225,6 +3245,13 @@
         }
         if (card.value !== card.base_value) {
             meta += ', current value ' + card.value;
+        }
+        // Chaos Draft (issue #405 follow-up): the net permanent delta an
+        // attached chaos effect has applied -- already folded into
+        // 'current value' above, called out separately here the same way
+        // the thumb's own badge does (see buildCardThumb()).
+        if (card.chaos_value_delta) {
+            meta += ' (chaos: ' + (card.chaos_value_delta > 0 ? '+' : '') + card.chaos_value_delta + ')';
         }
         if (ownerLabel) {
             meta += ' — ' + ownerLabel;
