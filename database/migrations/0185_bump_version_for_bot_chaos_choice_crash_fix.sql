@@ -1,0 +1,16 @@
+-- No schema change: fixes BotPlayerService::buildChoicesForCard() never
+-- learning to fill an attached chaos effect's own required
+-- ChaosCardChoiceSchema fields (chaos_006/029/031/051/068/086/099/107/133),
+-- which crashed advanceAutomatedTurns() with an uncaught
+-- PlayerChoices::requireInt()/requireString() the instant a bot played a
+-- card carrying one of them. Also corrects nine ChaosCardChoiceSchema
+-- fields that were marked required:true unconditionally when they're only
+-- conditionally required. See php-app/README.md's "Chaos Draft" section.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0184
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.41' WHERE id = 1;
