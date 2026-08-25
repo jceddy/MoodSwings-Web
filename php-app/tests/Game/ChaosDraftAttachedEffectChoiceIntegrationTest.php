@@ -145,6 +145,19 @@ final class ChaosDraftAttachedEffectChoiceIntegrationTest extends TestCase
         }
         self::assertNotNull($chaosField, 'serializeCard() should expose a chaos choice field for the attached chaos_035 effect');
 
+        // Issue #405 follow-up: playMood() now also requires this round's
+        // OWN chaos_draft_offers row resolved (see
+        // GameService::assertChaosDraftOfferResolved()) -- a completely
+        // separate mechanic from chaos_035 itself being attached above.
+        // Rolled and marked resolved directly (not via chooseChaosDraftEffect(),
+        // which would attach a second, unrelated effect on top of the
+        // one already manually attached for this test) so it doesn't
+        // interfere with the scenario under test.
+        $this->games->chaosDraftOfferFor(1, $player1);
+        $this->pdo->prepare(
+            'UPDATE chaos_draft_offers SET resolved_at = NOW() WHERE game_round_id = (SELECT id FROM game_rounds WHERE game_id = 1) AND game_player_id = :player'
+        )->execute(['player' => $player1]);
+
         $this->games->playMood(1, $player1, $apathyCardId, ['chaos' => ['value' => 4]]);
 
         $complacencyRow = $this->pdo->query('SELECT zone, owner_game_player_id FROM game_cards WHERE card_id = 5')->fetch();

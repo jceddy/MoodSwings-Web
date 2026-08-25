@@ -1536,6 +1536,21 @@ failure.
     `action: 'confirm'`) for the other teammate, mirroring
     `#team-decision-panel`'s own propose/confirm shape immediately above.
 
+    Resolving the round's own offer is mandatory (issue #405 follow-up):
+    `GameService::assertChaosDraftOfferResolved()` now rejects
+    `playMood()`/`pass()` for whoever still has one open. `chaosDraftOfferOpenForViewer`
+    (set from `renderChaosDraftOffer()`'s own poll -- non-null `offer`
+    always means unresolved) feeds both `canAct` (via the shared
+    `passButtonCanAct()`/`refreshPassButtonDisabled()` pair, so `#pass-button`
+    reflects it immediately rather than waiting for the next full board
+    poll) and an early check in `updatePlayButtonEnabled()` (disabling
+    `#play-card-button` with "Choose and attach this round's Chaos Draft
+    effect first" -- checked ahead of `is_playable`, since that's a purely
+    per-card server flag that knows nothing about this DB-level
+    restriction). Hand cards stay clickable regardless, same as any other
+    unplayable-right-now card -- only the panel's own Play button is
+    gated.
+
     A card carrying an attached chaos effect gets a "Chaos" badge
     (`buildCardThumb()`, `.card-thumb__badge--chaos`, tinted by
     `--chaos-common`/`--chaos-uncommon`/`--chaos-rare`/`--chaos-mythic`)

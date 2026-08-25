@@ -552,6 +552,31 @@ final class BotPlayerService
     }
 
     /**
+     * Chaos Draft's own round-start choose-an-effect offer (issue #405
+     * follow-up: resolving it is now mandatory before a bot can play or
+     * pass -- see GameService::assertChaosDraftOfferResolved()). A bot
+     * has no real preference between the two randomly-offered effects, so
+     * it always takes the first ($offer's own effect_1) -- the same "no
+     * real decision, just pick a fixed candidate" convention
+     * chooseTeamDecisionProposal() above already uses -- and attaches it
+     * to the lowest-value card among $candidateHandCardIds, the same
+     * "buff your weakest card" bias chooseInitialCardPass() applies to a
+     * mandatory discard. $candidateHandCardIds is the bot's own hand for
+     * an individual offer, or both teammates' combined hands for Open
+     * Team Play's own offer (either teammate's card is a legal target
+     * there -- see GameService::proposeChaosDraftEffect()).
+     *
+     * @param int[] $candidateHandCardIds
+     * @return array{effect_id: int, attach_game_card_id: int}
+     */
+    public function chooseChaosDraftEffectAttachment(BoardState $state, array $candidateHandCardIds, int $effect1Id): array
+    {
+        usort($candidateHandCardIds, fn (int $a, int $b) => $this->baseValue($state, $a) <=> $this->baseValue($state, $b));
+
+        return ['effect_id' => $effect1Id, 'attach_game_card_id' => $candidateHandCardIds[0]];
+    }
+
+    /**
      * Closed Team Play's own blind pregame card pass (issue #360; see
      * "Closed Team Play" in php-app/README.md) -- the 2 LOWEST-value
      * cards in the bot's own opening hand, the same "give up the least"

@@ -84,8 +84,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
-| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
-| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
+| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for you (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
+| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, or this round's own Chaos Draft offer is still unresolved for you (see "Chaos Draft" below). Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` (unless it's a `quick_draft`/`winston_draft`/`grid_draft` match still `'waiting'` through drafting/deck-building -- see "Resigning from a draft match" below), you've already resigned, or a decision is pending. Gives up instead of playing the game/draft out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
 | GET    | `/games/notes`  | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. Returns `{"note_text"}` -- your own private note for that seat (issue #258), `""` if you've never saved one. Always readable, regardless of the game's status. See "In-game notepad" below. |
@@ -2575,6 +2575,56 @@ to render and collect (the same nested-field machinery Duplicity's
 repeat-with-fresh-choices sub-form uses), so it lands the submitted
 choices at `choices['chaos']` with zero frontend-specific code needed --
 precisely where `PlayerChoices::sub('chaos')` expects to read them from.
+
+**Resolving the round's own offer is mandatory (issue #405 follow-up --
+maintainer request).** `GameService::assertChaosDraftOfferResolved()` is
+called from both `playMood()` and `pass()`, right after
+`assertNoPendingDecision()`: if the acting player (or, in Open Team Play,
+their TEAM) still has this round's own offer sitting unresolved, both
+throw a `409` rather than let the play/pass go through -- "the player
+needs to choose and apply a chaos effect before they can take their
+turn." It rolls the round's offer itself
+(`ensureChaosDraftOffersForRound()`) rather than trusting the frontend's
+own `GET /games/chaos-draft-offer` poll to have already done so, so a
+request racing ahead of that poll can't slip through with no offer row to
+check yet. Only the ACTING player/team is blocked -- someone else's own
+still-open offer this round never stops you, matching
+`chaosDraftOfferFor()`'s own "resolved independently, not turn-gated"
+design. A player with an empty hand at the start of the round gets no
+offer at all (unchanged), so nothing to block them on.
+
+Practice bots (issue #140) never had any policy for choosing a chaos
+effect -- previously harmless (the offer was always optional), but a bot
+seated in a chaos_draft game would now get stuck forever the instant this
+gate applied to it. `GameService::advanceBotChaosDraftOffer()` (dispatched
+from `advanceAutomatedTurns()`, positioned the same way
+`advanceBotTeamDecision()` already is -- resolved before that iteration's
+own turn/decision dispatch, so the gate above is always already
+satisfied by the time a bot's own `playMood()`/`pass()` is tried) gives
+every bot `BotPlayerService::chooseChaosDraftEffectAttachment()`'s own
+simple, deterministic policy: always take `effect_1` (the first offered),
+attached to the lowest-value candidate hand card (the same "buff your
+weakest card" bias `chooseInitialCardPass()` already applies to a
+mandatory discard). Open Team Play's own propose/confirm two-step is
+handled the same way `advanceBotTeamDecision()` handles
+`turn_order`/`draw_recipient`: either bot teammate may propose (attaching
+to whichever of the two teammates' own hands has the lowest-value
+candidate, since the offer accepts either), and only the NON-proposing
+teammate may confirm (always approves, never rejects). A bot paired with
+a real human teammate proposes on its own initiative but correctly stops
+there -- confirmation is that human's own call, so the offer stays open
+until they act.
+
+One more wrinkle `advanceAutomatedTurns()` itself has to guard against: a
+bot whose own turn comes up while its TEAM's offer is proposed but still
+awaiting a human teammate's own confirm is legitimately still blocked by
+the gate above even though it's a bot's turn nominally -- dispatching to
+its own `playMood()`/`pass()` unconditionally would let that exception
+escape uncaught mid-loop. `GameService::chaosDraftOfferBlocksPlayer()`
+(the shared, non-throwing predicate half of
+`assertChaosDraftOfferResolved()`) is checked immediately before that
+dispatch, falling through to the loop's own "waiting on a real player"
+`break` instead.
 
 ### Winston Draft
 
