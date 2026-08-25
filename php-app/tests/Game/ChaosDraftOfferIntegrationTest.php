@@ -513,4 +513,83 @@ final class ChaosDraftOfferIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->games->pass(1, $players[1]);
     }
+
+    /**
+     * A bug caught live (a user report): "if a player has no cards in
+     * hand, the game should not present them with a chaos effect to
+     * choose from." ensureChaosDraftOffersForRound()'s own "no cards, no
+     * offer" rule only applies once, the first time this round's offers
+     * are rolled -- a player who HAD cards then but loses their last one
+     * later this same round (another player's chaos_058/118-style effect
+     * can take it) previously stayed shown/blocked by an already-created
+     * offer with nothing left to attach it to. Simulated here directly
+     * (moving the hand card to discard) rather than through a real chaos
+     * effect, since only the dynamic re-check itself is under test.
+     */
+    public function testOfferDisappearsOnceAPlayersHandEmptiesMidRound(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [3], 2 => [8]]);
+        $offer = $this->games->chaosDraftOfferFor(1, $players[1]);
+        self::assertNotNull($offer, 'sanity check: player 1 starts with a card in hand');
+
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $this->pdo->prepare('UPDATE game_cards SET zone = "discard" WHERE id = :id')->execute(['id' => $handCardRow['id']]);
+
+        self::assertNull($this->games->chaosDraftOfferFor(1, $players[1]), 'nothing left in hand to attach the offer to');
+    }
+
+    public function testPassIsNoLongerBlockedOnceAPlayersHandEmptiesMidRound(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [3], 2 => [8]]);
+        $this->games->chaosDraftOfferFor(1, $players[1]); // rolls the round's own offer row, still unresolved
+
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $this->pdo->prepare('UPDATE game_cards SET zone = "discard" WHERE id = :id')->execute(['id' => $handCardRow['id']]);
+
+        $result = $this->games->pass(1, $players[1]);
+
+        self::assertFalse($result['game_completed']);
+    }
+
+    /**
+     * Open Team Play: proposeChaosDraftEffect() lets either teammate
+     * attach to EITHER teammate's own hand card, so the team's offer only
+     * truly has nothing left to attach to once BOTH teammates are
+     * empty-handed -- one teammate's own hand emptying alone must not
+     * hide/unblock the still-meaningful team offer.
+     */
+    public function testTeamOfferStaysVisibleIfOnlyOneTeammatesHandEmpties(): void
+    {
+        $players = $this->makeChaosDraftGame('team', [1 => [3], 2 => [55], 3 => [8], 4 => [33]], teamIdBySeat: [1 => 0, 2 => 1, 3 => 0, 4 => 1]);
+        self::assertNotNull($this->games->chaosDraftOfferFor(1, $players[1]));
+
+        $ownHandCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $this->pdo->prepare('UPDATE game_cards SET zone = "discard" WHERE id = :id')->execute(['id' => $ownHandCardRow['id']]);
+
+        // Player 1's own hand is now empty, but teammate (seat 3, same team) still has Dignity in hand.
+        self::assertNotNull($this->games->chaosDraftOfferFor(1, $players[1]), 'still attachable to the teammates own hand card');
+
+        $this->expectException(GameStateException::class);
+        $this->games->pass(1, $players[1]);
+    }
+
+    public function testTeamOfferDisappearsOnceBothTeammatesHandsEmpty(): void
+    {
+        $players = $this->makeChaosDraftGame('team', [1 => [3], 2 => [55], 3 => [8], 4 => [33]], teamIdBySeat: [1 => 0, 2 => 1, 3 => 0, 4 => 1]);
+        self::assertNotNull($this->games->chaosDraftOfferFor(1, $players[1]));
+
+        $this->pdo->exec('UPDATE game_cards SET zone = "discard" WHERE owner_game_player_id IN (' . $players[1] . ', ' . $players[3] . ') AND zone = "hand"');
+
+        self::assertNull($this->games->chaosDraftOfferFor(1, $players[1]));
+
+        // advanceTeamTurn() (unrelated to this gate) expects round 1's own
+        // team_turn_1_game_player_id already set -- see
+        // testOpenTeamPlaySucceedsOnceTheTeamOfferIsFullyResolved()'s own
+        // identical setup for why.
+        $this->pdo->prepare('UPDATE game_rounds SET team_turn_1_game_player_id = :player WHERE game_id = 1')
+            ->execute(['player' => $players[1]]);
+
+        $result = $this->games->pass(1, $players[1]);
+        self::assertFalse($result['game_completed']);
+    }
 }

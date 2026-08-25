@@ -249,4 +249,44 @@ final class ChaosDraftBotAutoResolveIntegrationTest extends TestCase
         self::assertNull($offer['resolved_at'], "still awaiting the human teammate's own confirmation");
         self::assertSame($players[1], (int) $offer['proposer_game_player_id']);
     }
+
+    /**
+     * A bug caught live (a user report): "if a player has no cards in
+     * hand, the game should not present them with a chaos effect to
+     * choose from" -- applies to a bot's own turn just as much as a
+     * human's. Before chaosDraftOfferHasNothingToAttachTo()'s own guard in
+     * advanceBotChaosDraftOffer(), an empty-handed bot with an unresolved
+     * offer would crash inside BotPlayerService::
+     * chooseChaosDraftEffectAttachment()'s own unconditional
+     * candidateHandCardIds[0] indexing (an empty hand means an empty
+     * candidate list). Simulated here by discarding the bot's own hand
+     * card right after seeding it, so the bot ends the round with an
+     * unresolved offer and literally nothing to attach it to.
+     */
+    public function testABotWithAnEmptyHandDoesNotCrashOnItsUnresolvedOffer(): void
+    {
+        $players = $this->makeChaosDraftGame(
+            'draft',
+            [1 => ['username' => 'alice'], 2 => ['username' => 'bob', 'is_bot' => true]],
+            [1 => [3], 2 => [55]], // human: Charity -- bot: Apathy
+            firstSeat: 1,
+        );
+        // Rolls (and creates) the bot's own offer row WHILE it still has a
+        // hand card -- ensureChaosDraftOffersForRound()'s own "no cards,
+        // no offer" rule would otherwise skip creating a row at all, which
+        // wouldn't exercise the bug: an ALREADY-CREATED offer that only
+        // loses its last attachable card afterward.
+        self::assertNotNull($this->games->chaosDraftOfferFor(1, $players[2]));
+
+        $this->pdo->prepare('UPDATE game_cards SET zone = "discard" WHERE owner_game_player_id = :player AND zone = "hand"')
+            ->execute(['player' => $players[2]]);
+
+        $this->games->advanceAutomatedTurns(1); // must not throw
+
+        $offerRow = $this->pdo->query(
+            "SELECT resolved_at FROM chaos_draft_offers WHERE game_round_id = (SELECT id FROM game_rounds WHERE game_id = 1) AND game_player_id = {$players[2]}"
+        )->fetch();
+        self::assertNotFalse($offerRow, 'sanity check: the offer row should still exist');
+        self::assertNull($offerRow['resolved_at'], 'nothing to attach it to -- left unresolved rather than crashing');
+    }
 }

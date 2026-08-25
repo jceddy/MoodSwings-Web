@@ -1,0 +1,22 @@
+-- No schema change: this is pure application logic in GameService, not a
+-- new column. Issue #405 follow-up (reported live): "if a player has no
+-- cards in hand, the game should not present them with a chaos effect to
+-- choose from." ensureChaosDraftOffersForRound()'s own "no cards, no
+-- offer" rule only applied once, the first time a round's offers were
+-- rolled -- a player who HAD cards then but loses their last one later
+-- the same round (e.g. chaos_058/118 taking it) stayed shown/blocked by
+-- an already-created offer with nothing left to attach it to.
+-- GameService::chaosDraftOfferHasNothingToAttachTo() now re-checks current
+-- hand state dynamically at both chaosDraftOfferFor() (display) and
+-- chaosDraftOfferBlocksPlayer() (mandatory-resolution) call sites, and
+-- advanceBotChaosDraftOffer() applies the same check before asking a bot
+-- to choose an attachment (which would otherwise crash on an empty hand).
+-- See php-app/README.md's Chaos Draft section for the full writeup.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0194
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.51' WHERE id = 1;

@@ -939,7 +939,8 @@ body.game-page {
         top: calc((0.25rem + 15px) * var(--card-scale, 1));
     }
 
-    .in-play-zone .card-thumb--suppressed .card-thumb__badge--chaos-delta {
+    .in-play-zone .card-thumb--suppressed .card-thumb__badge--chaos-delta,
+    .in-play-zone .card-thumb--suppressed .card-thumb__badge--chaos-override {
         top: calc((0.25rem + 15px) * var(--card-scale, 1));
     }
 
@@ -1063,7 +1064,8 @@ body.game-page {
     top: calc((0.25rem + 20px) * var(--card-scale, 1));
 }
 
-.card-thumb--suppressed .card-thumb__badge--chaos-delta {
+.card-thumb--suppressed .card-thumb__badge--chaos-delta,
+.card-thumb--suppressed .card-thumb__badge--chaos-override {
     top: calc((0.25rem + 20px) * var(--card-scale, 1));
 }
 
@@ -1108,8 +1110,12 @@ body.game-page {
    exceed 2 digits) without measuring its actual rendered width, the
    same "close enough" fixed-offset convention every other badge
    stacking rule on this page already uses (see e.g. the 20px/22px
-   nudges below). */
-.card-thumb__badge--chaos-delta {
+   nudges below). Shares its exact position with
+   .card-thumb__badge--chaos-override just below -- the two are mutually
+   exclusive on any single card (a chaos effect is either delta-shaped or
+   absolute-override-shaped, never both), so there's nothing to stack. */
+.card-thumb__badge--chaos-delta,
+.card-thumb__badge--chaos-override {
     top: calc(0.25rem * var(--card-scale, 1));
     right: calc((0.25rem + 1.75rem) * var(--card-scale, 1));
     background: #b00020;
@@ -2184,7 +2190,8 @@ dialog#deck-builder-dialog[open] {
         top: calc((0.5rem + 40px) * var(--card-scale, 1));
     }
 
-    .card-thumb--suppressed .card-thumb__badge--chaos-delta {
+    .card-thumb--suppressed .card-thumb__badge--chaos-delta,
+    .card-thumb--suppressed .card-thumb__badge--chaos-override {
         top: calc((0.5rem + 40px) * var(--card-scale, 1));
     }
 
@@ -2208,8 +2215,11 @@ dialog#deck-builder-dialog[open] {
     }
 
     /* Doubled counterpart of .card-thumb__badge--chaos-delta further up
-       (0.25rem -> 0.5rem, 1.75rem -> 3.5rem). */
-    .card-thumb__badge--chaos-delta {
+       (0.25rem -> 0.5rem, 1.75rem -> 3.5rem). Covers
+       .card-thumb__badge--chaos-override too -- see that selector's own
+       comment for why the two share a position. */
+    .card-thumb__badge--chaos-delta,
+    .card-thumb__badge--chaos-override {
         top: calc(0.5rem * var(--card-scale, 1));
         right: calc((0.5rem + 3.5rem) * var(--card-scale, 1));
     }

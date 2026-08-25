@@ -1130,17 +1130,17 @@ owns Scorn.
 
 Every in-play mood also carries `value_locked` -- true once a permanent
 one-time "after playing this mood, ... this mood's value becomes N"
-trigger (Dignity, Delight, Cynicism, and 7 other cards -- every one that
-calls `BoardState::setValueOverride()`) has actually fired, as opposed to
-a continuously recomputed "while in play" value (Determination): both
+trigger (Dignity, Delight, Cynicism, and others -- every one that calls
+`BoardState::setValueOverride()`) has actually fired, as opposed to a
+continuously recomputed "while in play" value (Determination): both
 kinds of card can end up with `value === alt_value`, but only the former
 locks it in via `effectState['valueOverride']`, which `valueOf()` checks
 first and unconditionally returns once set. The frontend uses this to
 rotate the card art 180 degrees, matching a suppressed mood's own 90
 degree rotation -- see "Card art rendering" in `web-static/README.md`.
-chaos_008/087/110/111 (`ChaosDiscardValueToBoostSelfEffect`) share this
-exact same "value BECOMES N" printed wording and correctly set
-`value_locked` too.
+`value_locked` only ever means the card's OWN printed ability fixed its
+own value -- see `chaos_value_override` below for the (superficially
+identical-looking) case where an attached chaos effect did it instead.
 
 **`chaos_value_delta` (issue #405 follow-up -- a bug caught live).** A
 DIFFERENT wording -- an attached chaos effect's own "permanently
@@ -1155,6 +1155,28 @@ adjustChaosValueDelta()` is the fix: a separate, cumulative signed
 result (already `valueOf()`'s job -- see its own docblock) so the two
 stack. Exposed as `chaos_value_delta` (0 for every card nothing has ever
 adjusted) purely for the frontend's own small "+N"/"-N" badge -- see
+"Card art rendering" in `web-static/README.md`.
+
+**`chaos_value_override` (issue #405 follow-up -- a second bug caught
+live, reported for chaos_033: "the UI should not rotate the card 180
+degrees").** An attached chaos effect's own ABSOLUTE "this mood's value
+becomes N" wording (chaos_001/008/033/058/062/087/095/108/110/111/118)
+shares Dignity's/Delight's exact printed wording, and the original fix
+for `chaos_value_delta` above deliberately left these calling the
+base-card `setValueOverride()` directly, reasoning they were conceptually
+identical to a card locking in its own value -- that reasoning was wrong.
+The card a chaos effect attaches to is essentially arbitrary (whatever
+hand card the round's offer got attached to), so its OWN printed ability
+almost never actually fixed a value at all; rotating the whole card 180
+degrees via `value_locked` misleadingly suggested it did.
+`BoardState::setChaosValueOverride()`/`chaosValueOverrideOf()` mirror
+`chaosValueDelta`'s own separate-effectState-key treatment: a distinct
+`effectState['chaosValueOverride']`, which `printedValueOf()` now checks
+*before* the base card's own `valueOverride` (giving an attached chaos
+effect final say if both are somehow set -- the same precedent
+`applyChaosValuePipeline()` already establishes for the while-in-play
+shape). Exposed as `chaos_value_override` (`null` for every card nothing
+has overridden) purely for the frontend's own non-rotating badge -- see
 "Card art rendering" in `web-static/README.md`.
 
 Suppression isn't the only "one in-play mood affects another" relationship
@@ -2482,8 +2504,27 @@ one row per player (or, for Open Team Play, one row per TEAM -- `team_id`
 set instead of `game_player_id`) at that point, drawing two DISTINCT
 `chaos_effects.id`s (rarity-weighted per the distribution above) and
 storing them as `effect_1_id`/`effect_2_id`/`effect_1_rarity`/
-`effect_2_rarity`. A player with an empty hand gets no offer at all
-(`chaosDraftOfferFor()` returns `null`) -- nothing to attach it to.
+`effect_2_rarity`. A player with an empty hand gets no offer row created
+at all (or, for Open Team Play, no row for a team with no cards in EITHER
+teammate's hand). That's only a snapshot taken once, though -- a player
+who HAD cards then but loses their last one later the same round (e.g.
+chaos_058/118 taking it) would otherwise stay shown/blocked by an
+already-created offer with nothing left to attach it to (issue #405
+follow-up -- a bug caught live: "if a player has no cards in hand, the
+game should not present them with a chaos effect to choose from"), so
+`chaosDraftOfferFor()` (returns `null`) and `chaosDraftOfferBlocksPlayer()`
+(returns `false`) both re-check current hand state dynamically too, via
+`chaosDraftOfferHasNothingToAttachTo()` -- per-team for Open Team Play
+(mirroring `proposeChaosDraftEffect()`'s own "either teammate's hand"
+rule: the team offer only has nothing to attach to once BOTH teammates
+are empty-handed), per-player everywhere else. Safe to leave such an
+offer permanently unresolved -- nothing in round-completion/scoring
+depends on every `chaos_draft_offers` row ending up resolved.
+`advanceBotChaosDraftOffer()` applies the same check before asking
+`BotPlayerService::chooseChaosDraftEffectAttachment()` to pick a card,
+since that method's own unconditional first-candidate indexing would
+otherwise crash a bot's turn on an empty hand the exact same way a human
+would otherwise be wrongly blocked/prompted.
 Deliberately kept OUT of `getState()`'s regular unlocked read path (it's a
 lazy write, needing `withGameLock()`) -- the frontend polls it via its own
 `GET /games/chaos-draft-offer` route instead (see below).

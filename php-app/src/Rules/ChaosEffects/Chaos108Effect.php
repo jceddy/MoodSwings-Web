@@ -17,7 +17,7 @@ final class Chaos108Effect extends AbstractChaosMoodEffect
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
             if ($mood->cardId !== $cardId && $state->colorOf($mood->cardId) === $color) {
                 $current = $state->valueOf($mood->cardId);
-                $state->setValueOverride($mood->cardId, $current + $current);
+                $state->setChaosValueOverride($mood->cardId, $current + $current);
             }
         }
     }

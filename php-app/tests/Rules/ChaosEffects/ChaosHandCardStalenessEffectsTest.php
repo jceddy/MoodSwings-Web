@@ -108,6 +108,8 @@ final class ChaosHandCardStalenessEffectsTest extends TestCase
         self::assertSame([], $state->hand(1));
         self::assertContains(5, $state->hand(2), 'the post-rotate card was successfully given away');
         self::assertSame(6, $state->valueOf(49));
+        self::assertSame(6, $state->chaosValueOverrideOf(49));
+        self::assertNull($state->effectState(49, 'valueOverride'), 'must never set valueOverride -- that would incorrectly trigger the 180-degree value_locked rotation');
     }
 
     public function testChaos058PausesOnlyAfterConfirmingARecipient(): void
@@ -251,6 +253,8 @@ final class ChaosHandCardStalenessEffectsTest extends TestCase
         self::assertFalse($finalResult->isPending);
         self::assertContains(33, $state->hand(2));
         self::assertSame(7, $state->valueOf(55));
+        self::assertSame(7, $state->chaosValueOverrideOf(55));
+        self::assertNull($state->effectState(55, 'valueOverride'), 'must never set valueOverride -- that would incorrectly trigger the 180-degree value_locked rotation');
     }
 
     public function testChaos118RejectsANonQualifyingColor(): void
@@ -288,6 +292,8 @@ final class ChaosHandCardStalenessEffectsTest extends TestCase
         self::assertFalse($finalResult->isPending);
         self::assertContains(3, $state->discardPile());
         self::assertSame(5, $state->valueOf(55));
+        self::assertSame(5, $state->chaosValueOverrideOf(55));
+        self::assertNull($state->effectState(55, 'valueOverride'), 'must never set valueOverride -- that would incorrectly trigger the 180-degree value_locked rotation');
     }
 
     public function testChaosDiscardValueToBoostSelfEffectDoesNothingWhenDeclined(): void

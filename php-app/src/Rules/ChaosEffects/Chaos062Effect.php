@@ -27,6 +27,6 @@ final class Chaos062Effect extends AbstractChaosMoodEffect
         }
 
         $state->moveDiscardToHand($opponentId, $discardCardId);
-        $state->setValueOverride($cardId, 6);
+        $state->setChaosValueOverride($cardId, 6);
     }
 }

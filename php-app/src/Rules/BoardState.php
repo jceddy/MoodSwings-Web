@@ -1498,18 +1498,21 @@ final class BoardState
      * BY N" wording (chaos_056/064/120/133) is a DELTA that stacks on top
      * of whatever this card's value already is -- deliberately kept
      * separate from setValueOverride()'s own absolute "value BECOMES N"
-     * (Dignity/Delight-style; also chaos_008/087/110/111, which use that
-     * exact same printed wording). Reusing setValueOverride() for both
-     * was the bug: valueOverride also drives the frontend's 180-degree
-     * "value_locked" rotation (see that field's own docblock in
-     * GameService::serializeCard()), so an attached chaos_133 firing on a
-     * card with no "value becomes N" ability of its own would still
-     * rotate it -- wrong, since nothing about the card's OWN printed
-     * ability actually locked in. valueOf() adds this delta on top of
-     * printedValueOf()'s result (which already resolves any dice/alt
-     * value the card has), so the two stack rather than one silently
-     * replacing the other. Cumulative across repeated calls -- chaos_064
-     * can fire more than once against the same card over a game.
+     * (Dignity/Delight-style; also chaos_001/008/033/058/062/087/095/108/
+     * 110/111/118, which use that exact same printed wording -- see
+     * setChaosValueOverride()'s own docblock for why THOSE are also kept
+     * separate from setValueOverride() despite sharing its exact wording).
+     * Reusing setValueOverride() for the delta case was the original bug:
+     * valueOverride also drives the frontend's 180-degree "value_locked"
+     * rotation (see that field's own docblock in GameService::serializeCard()),
+     * so an attached chaos_133 firing on a card with no "value becomes N"
+     * ability of its own would still rotate it -- wrong, since nothing
+     * about the card's OWN printed ability actually locked it in. valueOf()
+     * adds this delta on top of printedValueOf()'s result (which already
+     * resolves any dice/alt value or chaos value override the card has),
+     * so the two stack rather than one silently replacing the other.
+     * Cumulative across repeated calls -- chaos_064 can fire more than
+     * once against the same card over a game.
      */
     public function adjustChaosValueDelta(int $cardId, int $delta): void
     {
@@ -1521,6 +1524,39 @@ final class BoardState
     public function chaosValueDeltaOf(int $cardId): int
     {
         return $this->effectState($cardId, 'chaosValueDelta') ?? 0;
+    }
+
+    /**
+     * Chaos Draft (issue #405 follow-up -- a bug caught live, reported for
+     * chaos_033: "the UI should not rotate the card 180 degrees"): an
+     * attached chaos effect's own absolute "this mood's value becomes N"
+     * wording (chaos_001/008/033/058/062/087/095/108/110/111/118) is kept
+     * separate from setValueOverride()'s own base-card version for the
+     * exact same reason adjustChaosValueDelta() is -- see that method's
+     * own docblock -- even though these effects share Dignity's/Delight's
+     * own exact "value becomes N" wording, the card carrying the effect
+     * is essentially arbitrary (whatever hand card the round's offer got
+     * attached to), so its OWN printed ability almost never actually
+     * fixed a value at all; rotating the whole card 180 degrees would
+     * misleadingly suggest it did. printedValueOf() checks this BEFORE
+     * the card's own valueOverride, so an attached chaos effect's own
+     * "becomes N" always has final say if both are somehow set -- the
+     * same "chaos effect gets the last word" precedent
+     * applyChaosValuePipeline() already establishes for the while-in-play
+     * shape. GameService::serializeCard() exposes this via its own
+     * 'chaos_value_override' field, which the frontend renders as a
+     * non-rotating badge (see "Card art rendering" in
+     * web-static/README.md) instead of the value_locked rotation.
+     */
+    public function setChaosValueOverride(int $cardId, int $value): void
+    {
+        $this->setEffectState($cardId, 'chaosValueOverride', $value);
+    }
+
+    /** The chaos-effect-driven absolute value override currently applied to $cardId, or null if none -- see setChaosValueOverride()'s own docblock. */
+    public function chaosValueOverrideOf(int $cardId): ?int
+    {
+        return $this->effectState($cardId, 'chaosValueOverride');
     }
 
     // --- effective identity, color, and value ---
@@ -1616,6 +1652,12 @@ final class BoardState
      */
     private function printedValueOf(int $cardId, MoodInPlay $mood): int
     {
+        // Checked before the card's own valueOverride -- see
+        // setChaosValueOverride()'s own docblock for why an attached
+        // chaos effect's own absolute override gets the final say.
+        if (array_key_exists('chaosValueOverride', $mood->effectState)) {
+            return $mood->effectState['chaosValueOverride'];
+        }
         if (array_key_exists('valueOverride', $mood->effectState)) {
             return $mood->effectState['valueOverride'];
         }

@@ -31,6 +31,6 @@ final class Chaos095Effect extends AbstractChaosMoodEffect
         foreach ($targetCardIds as $targetCardId) {
             $state->moveInPlayToDiscard($targetCardId);
         }
-        $state->setValueOverride($cardId, 9);
+        $state->setChaosValueOverride($cardId, 9);
     }
 }
