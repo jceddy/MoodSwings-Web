@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests;
 
+use MoodSwings\Game\CardCatalog;
 use MoodSwings\Repository\CardRepository;
 use PDO;
 use PDOException;
@@ -170,6 +171,27 @@ final class CardCatalogIntegrationTest extends TestCase
             self::assertSame(0, (int) $card['has_to_play_ability']);
             self::assertSame(0, (int) $card['has_while_in_play_ability']);
             self::assertSame(0, (int) $card['has_after_playing_ability']);
+        }
+    }
+
+    /**
+     * A bug caught live: CardCatalog::load() -- the idsByName/rowsById map
+     * DecklistParser (custom decklists/draft pools), UserDecklistService's
+     * own card-id validation, CardStatsService's stats page, and Tiered
+     * Rotisserie Draft's own 'rarity' tiering mode all read from -- had no
+     * is_token filter, so a token was resolvable by name in a custom
+     * decklist/pool, savable into a persistent decklist by id, and would
+     * have shown up as its own row on the public stats page.
+     */
+    public function testCardCatalogLoadExcludesTokenCards(): void
+    {
+        $catalog = CardCatalog::load();
+
+        foreach (['smugness', 'unconcern', 'passivity', 'tedium', 'idleness'] as $tokenName) {
+            self::assertArrayNotHasKey($tokenName, $catalog['idsByName']);
+        }
+        foreach ([134, 135, 136, 137, 138] as $tokenCardId) {
+            self::assertArrayNotHasKey($tokenCardId, $catalog['rowsById']);
         }
     }
 }

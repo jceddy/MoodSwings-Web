@@ -2148,7 +2148,7 @@ final class GameService
 
         $cardIds = [];
         foreach (self::STRUCTURE_DECK_RARITY_COUNTS as $rarity => $count) {
-            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity');
+            $stmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
             $stmt->execute(['rarity' => $rarity]);
             $rarityCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
 
@@ -2176,12 +2176,12 @@ final class GameService
     {
         $pdo = Connection::get();
 
-        $mythicStmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity');
+        $mythicStmt = $pdo->prepare('SELECT id FROM cards WHERE rarity = :rarity AND is_token = 0');
         $mythicStmt->execute(['rarity' => 'mythic']);
         $mythicCardIds = array_map(intval(...), $mythicStmt->fetchAll(PDO::FETCH_COLUMN));
         $cardIds = [$mythicCardIds[array_rand($mythicCardIds)]];
 
-        $nonMythicStmt = $pdo->prepare("SELECT id FROM cards WHERE rarity != 'mythic'");
+        $nonMythicStmt = $pdo->prepare("SELECT id FROM cards WHERE rarity != 'mythic' AND is_token = 0");
         $nonMythicStmt->execute();
         $nonMythicCardIds = array_map(intval(...), $nonMythicStmt->fetchAll(PDO::FETCH_COLUMN));
 
@@ -2266,7 +2266,7 @@ final class GameService
      */
     private function randomCardIdsWithCopyLimit(PDO $pdo, string $color, string $rarity, int $count, int $maxCopies): array
     {
-        $stmt = $pdo->prepare('SELECT id FROM cards WHERE color = :color AND rarity = :rarity');
+        $stmt = $pdo->prepare('SELECT id FROM cards WHERE color = :color AND rarity = :rarity AND is_token = 0');
         $stmt->execute(['color' => $color, 'rarity' => $rarity]);
         $poolCardIds = array_map(intval(...), $stmt->fetchAll(PDO::FETCH_COLUMN));
 

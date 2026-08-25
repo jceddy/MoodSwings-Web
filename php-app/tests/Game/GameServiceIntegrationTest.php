@@ -424,6 +424,42 @@ final class GameServiceIntegrationTest extends TestCase
         }
     }
 
+    /**
+     * A bug caught live: Chaos Draft's own 5 conjured token cards (ids
+     * 134-138, migration 0183, issue #405) are all rarity 'common', so
+     * buildStructureDeckCardIds()/buildPowerDeckCardIds()/
+     * randomCardIdsWithCopyLimit() -- each a raw `SELECT id FROM cards
+     * WHERE rarity = ...`/`WHERE color = ... AND rarity = ...` query,
+     * bypassing CardCatalog::load() entirely -- had no `is_token = 0`
+     * filter, so a token could be randomly drawn into a 'structure'/
+     * 'power'/'jceddys_75' deck (and, since buildDraftPool() reuses these
+     * same three builders as pool sources, into a Quick/Winston/Grid/
+     * Rotisserie/Chaos Draft pool too) even though it was never meant to
+     * be a draftable/playable-from-hand card at all -- only ever conjured
+     * into play by the specific chaos effects registered for it.
+     */
+    public function testTokenCardsAreNeverDealtIntoAStructurePowerOrJceddys75Deck(): void
+    {
+        $creator = $this->insertUser('notoken-alice');
+        $bob = $this->insertUser('notoken-bob');
+        $tokenCardIds = [134, 135, 136, 137, 138];
+
+        foreach (['structure', 'power', 'jceddys_75'] as $deckType) {
+            $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: $deckType);
+            $this->games->startGame($gameId);
+
+            $cardIdsStmt = $this->pdo->prepare('SELECT card_id FROM game_cards WHERE game_id = :game_id');
+            $cardIdsStmt->execute(['game_id' => $gameId]);
+            $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+            self::assertSame(
+                [],
+                array_values(array_intersect($cardIds, $tokenCardIds)),
+                "a '{$deckType}' deck should never contain a Chaos Draft token card",
+            );
+        }
+    }
+
     public function testCreateGameCanRequestTheOneOfEachDeckInstead(): void
     {
         $creator = $this->insertUser('ooe-alice');
