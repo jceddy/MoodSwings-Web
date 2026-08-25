@@ -2594,6 +2594,29 @@ repeat-with-fresh-choices sub-form uses), so it lands the submitted
 choices at `choices['chaos']` with zero frontend-specific code needed --
 precisely where `PlayerChoices::sub('chaos')` expects to read them from.
 
+**Duplicity repeats an attached chaos effect too (issue #405 follow-up --
+a bug caught live, reported by the maintainer).** Duplicity's own "each
+time you play another mood, you may have that mood's after-playing
+effect happen an additional time" was only ever repeating the card's own
+PRINTED after-playing effect -- `MoodPlayService::
+resolveAttachedChaosAfterPlaying()` used to be called exactly once per
+PLAY, from the very end of the whole resolution chain
+(`finishAfterPlayingChain()`), regardless of how many times Duplicity had
+repeated the base effect in between. Now it's called once per
+INVOCATION instead -- from `continueAfterPlayingChain()`, the one choke
+point every invocation (the original play, and each accepted repeat)
+reaches exactly once, however its own base effect got there (a card with
+no base `afterPlaying()` at all reaches an equivalent call directly from
+`resolveAfterPlayingChain()`'s own early return instead, since such a
+card never gets a repeat opportunity to begin with). Each repeat's own
+choices come from `duplicityRepeatOfferRequest()`'s existing nested
+`'choices'` field, which now also appends a `'chaos'` nested field (built
+the same way `GameService::serializeCard()` already builds one for the
+original play) whenever the repeated card carries an attached
+`'after_playing'`-shaped chaos effect -- so a human repeating, say, a
+`chaos_099`-carrying card gets asked to choose a fresh value for the
+repeat too, not just for the printed effect.
+
 Nine `ChaosCardChoiceSchema` fields (chaos_012/014/041/049/058/059/062/096/118's
 own "if you do"/"if choosing X above"/"if mode is Y" companion fields) were
 originally marked `required: true` unconditionally, when the underlying
