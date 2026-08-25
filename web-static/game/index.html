@@ -976,6 +976,17 @@
                  round Sneakiness swaps your score away, which this still
                  correctly falls back to asking about manually. -->
             <label><input type="checkbox" id="settings-auto-apply-scoring-bonuses-checkbox" checked> Auto-apply Enthusiasm/Passion's scoring bonus</label>
+            <!-- "Custom card/effect formats" (issue #405 follow-up, migration
+                 0184) -- unlike every checkbox above, this one starts
+                 UNCHECKED, matching users.allow_custom_content's own DEFAULT
+                 0: an explicit opt-IN, not a convenience. Gates whether
+                 Chaos Draft's own fan-made effect pool is even offered as a
+                 New Game dialog option (isDeckTypeAvailableForFormat() in
+                 game.js) or seatable at all -- GameService::createGame()
+                 independently re-checks that every seated player (not just
+                 whoever's creating the game) has this on, so this checkbox
+                 is a convenience, not the actual enforcement. -->
+            <label><input type="checkbox" id="settings-allow-custom-content-checkbox"> Show custom card/effect formats (e.g. Chaos Draft) in the New Game dialog</label>
         </section>
 
         <hr>

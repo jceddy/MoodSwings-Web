@@ -905,6 +905,30 @@ if ($path === '/user/board-layout-preference' && $method === 'POST') {
     respond(200, ['status' => 'ok']);
 }
 
+// "Custom card/effect formats" (issue #405 follow-up) as a personal
+// preference (Settings dialog's "Game defaults" section) -- off by
+// default; gates whether Chaos Draft's own fan-made effect pool is
+// offered/joinable at all for this user, see
+// GameService::createGame()'s own chaos_draft validation for the
+// server-side half of this gate (every seated player must have this on,
+// not just whoever's creating the game). Current value is already
+// carried on GET /me's own user object, so this route is write-only,
+// same pattern as /user/board-layout-preference above.
+if ($path === '/user/allow-custom-content-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('allow_custom_content', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'allow_custom_content is required.']);
+    }
+
+    (new UserRepository())->setAllowCustomContent(
+        (int) $currentUser['id'],
+        (bool) $input['allow_custom_content']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
 /**
  * Resolves the authenticated user's game_players.id for $gameId, responding
  * 403 (without confirming or denying the game's existence) if they aren't

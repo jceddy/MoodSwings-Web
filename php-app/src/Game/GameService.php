@@ -910,6 +910,29 @@ final class GameService
             throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, Team Play, or Closed Team Play");
         }
 
+        // "Custom card/effect formats" (issue #405 follow-up, users.
+        // allow_custom_content, migration 0184) -- off by default, so
+        // Chaos Draft's own fan-made effect pool is never surfaced to
+        // anyone who hasn't explicitly opted in. Checked against every
+        // SEATED player in $userIds (which already includes
+        // $createdByUserId -- see index.php's own $userIds construction),
+        // not just the creator: an opted-in creator could otherwise still
+        // invite/seat a non-opted-in player (a company employee, say) into
+        // a live game with no say in the matter, defeating the whole point
+        // of the preference. The frontend's own gate
+        // (isDeckTypeAvailableForFormat() hiding the option unless
+        // user.allow_custom_content) is only a convenience on top of this
+        // -- this is the actual enforcement, since a client-side hide
+        // alone can't stop a direct API request.
+        if ($deckType === 'chaos_draft') {
+            $missingOptIn = $this->usersWithoutCustomContentOptIn($userIds);
+            if ($missingOptIn !== []) {
+                throw new GameStateException(
+                    'Chaos Draft uses custom, fan-made card effects -- every seated player must opt in first via Settings > "Allow custom card/effect formats" (missing: ' . implode(', ', $missingOptIn) . ')'
+                );
+            }
+        }
+
         if ($deckType === 'custom') {
             if ($format === 'duel') {
                 throw new GameStateException('Custom decklists are not supported for duel games -- use deck_type "custom_duel" instead');
@@ -1238,6 +1261,33 @@ final class GameService
         $id = $stmt->fetchColumn();
 
         return $id !== false ? (int) $id : null;
+    }
+
+    /**
+     * @param int[] $userIds
+     * @return string[] usernames among $userIds who have NOT opted into
+     *         "custom card/effect formats" (users.allow_custom_content) --
+     *         empty when every one of them has. See createGame()'s own
+     *         chaos_draft validation, the only caller. Excludes practice
+     *         bots (is_bot = 1) -- a bot seat is simulated gameplay logic,
+     *         not a real person the preference exists to protect, and bot
+     *         accounts have no Settings UI to ever opt in through, so
+     *         requiring it of them would just silently break Chaos
+     *         Draft's own existing bot support (DRAFT_DECK_TYPES already
+     *         includes it, see botsSupportedFor()) for every human who
+     *         HAS opted in.
+     */
+    private function usersWithoutCustomContentOptIn(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Connection::get()->prepare("SELECT username FROM users WHERE id IN ({$placeholders}) AND allow_custom_content = 0 AND is_bot = 0");
+        $stmt->execute(array_values($userIds));
+
+        return $stmt->fetchAll(PDO::FETCH_COLUMN);
     }
 
     /**

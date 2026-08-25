@@ -340,6 +340,22 @@ function saveBoardLayoutPreference(boardLayoutPreference) {
     });
 }
 
+// "Custom card/effect formats" (issue #405 follow-up) as a personal
+// preference (Settings dialog's "Game defaults" section) -- write-only,
+// same reasoning as saveAutoApplyScoringBonusesPreference() above: the
+// current value already rides on getCurrentUser()'s own
+// user.allow_custom_content field. Gates whether Chaos Draft's own
+// fan-made effect pool is even offered as a New Game dialog option
+// (isDeckTypeAvailableForFormat() in game.js) -- GameService::
+// createGame() independently re-checks every seated player server-side,
+// so this is a convenience, not the actual enforcement.
+function saveAllowCustomContentPreference(allowCustomContent) {
+    return apiRequest('/user/allow-custom-content-preference', {
+        method: 'POST',
+        body: JSON.stringify({ allow_custom_content: allowCustomContent }),
+    });
+}
+
 // Saved user decklists (issue #92) -- see "Saved decklists" in
 // web-static/README.md. listDecklists() returns { own, friends } where
 // friends is grouped per accepted friend who has 1+ friends-visible decks.

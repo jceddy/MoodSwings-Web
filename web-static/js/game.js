@@ -335,6 +335,21 @@
             saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
         });
 
+        // "Custom card/effect formats" (issue #405 follow-up) -- same
+        // wiring pattern as the checkboxes above, except this one starts
+        // UNCHECKED (off) by default, matching users.allow_custom_content's
+        // own DEFAULT 0 -- an explicit opt-in, not a convenience. Mutating
+        // user.allow_custom_content in place here is what actually makes
+        // isDeckTypeAvailableForFormat() (read the next time the New Game
+        // dialog's own updateDeckTypeAvailability() runs) show/hide the
+        // Chaos Draft option without needing a page reload.
+        const allowCustomContentCheckbox = document.getElementById('settings-allow-custom-content-checkbox');
+        allowCustomContentCheckbox.checked = user.allow_custom_content;
+        allowCustomContentCheckbox.addEventListener('change', () => {
+            user.allow_custom_content = allowCustomContentCheckbox.checked;
+            saveAllowCustomContentPreference(allowCustomContentCheckbox.checked);
+        });
+
         // Card/icon size slider (issue #417) -- a client-only preference
         // (see CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale()
         // above, already applied once at page load independent of this
@@ -1911,6 +1926,17 @@
     // the first place, so the three draft deck types are deliberately
     // exempt from this same rule below.
     function isDeckTypeAvailableForFormat(deckType, format) {
+        // "Custom card/effect formats" (issue #405 follow-up) -- off by
+        // default; Chaos Draft is never offered as an option at all
+        // unless the viewer has explicitly opted in via Settings,
+        // regardless of format. Purely a client-side convenience so a
+        // non-opted-in player never even sees the option to try --
+        // GameService::createGame() independently re-checks EVERY seated
+        // player server-side (not just whoever's creating the game), so
+        // this alone can't be relied on for enforcement.
+        if (deckType === 'chaos_draft' && !user.allow_custom_content) {
+            return false;
+        }
         if (format === 'draft') {
             return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft' || deckType === 'chaos_draft';
         }

@@ -599,6 +599,36 @@ same "don't wait for Settings to be opened" reasoning as
 the Settings dialog, so switching the preference takes effect live
 without a reload.
 
+### Custom card/effect formats preference (issue #405 follow-up)
+
+`#settings-allow-custom-content-checkbox`, in the Settings dialog's
+"Game defaults" section, right below the auto-apply-scoring-bonuses
+checkbox -- unlike every checkbox above it, this one starts **unchecked**
+(`users.allow_custom_content`, migration `0184`, defaults `false`): an
+explicit opt-IN, not a convenience someone might want to turn off. Gates
+whether "Chaos Draft" (issue #405's own fan-made 133-effect pool, layered
+on top of a real published TCG's card catalog) is even offered as a New
+Game dialog option at all -- confirmed by the maintainer: there's a real
+concern an employee of the game's publisher could stumble onto it (most
+plausibly as an invited opponent) and get the wrong impression about
+what this project is, so nobody sees it unless they explicitly ask to.
+
+Same "sync on open, save on change" wiring as every other Settings
+checkbox (`POST /user/allow-custom-content-preference`, mutating
+`user.allow_custom_content` in place on change) -- what makes this one
+actually take effect is `isDeckTypeAvailableForFormat()` (`game.js`)
+reading that same `user.allow_custom_content` field: the "Chaos Draft"
+`<option>` is hidden from `#new-game-deck-type` entirely, for every
+format, unless it's `true`. This is purely a client-side convenience,
+not the real enforcement -- `GameService::createGame()` independently
+re-checks EVERY seated player server-side (not just whoever's creating
+the game), since a non-opted-in friend could otherwise still be invited
+into a live game with no say in the matter; see "Custom card/effect
+formats preference" in `php-app/README.md`. A `createGame()` rejection
+from a non-opted-in invitee surfaces through the New Game dialog's own
+ordinary `#new-game-error` element, the same as any other creation
+failure.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
