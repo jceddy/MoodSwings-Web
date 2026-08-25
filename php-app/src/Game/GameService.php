@@ -6188,6 +6188,7 @@ final class GameService
                 $invocationSeq = (int) $batchRow['invocation_seq'];
                 $duplicityEligibleSources = (int) $batchRow['duplicity_eligible_sources'];
                 $reactorCandidateCardIds = array_map(intval(...), (array) json_decode((string) $batchRow['reactor_candidate_card_ids'], true));
+                $pendingSource = (string) $batchRow['pending_source'];
 
                 $result = $this->plays->resolvePendingDecisions(
                     $state,
@@ -6199,6 +6200,7 @@ final class GameService
                     $answers,
                     $duplicityEligibleSources,
                     $reactorCandidateCardIds,
+                    $pendingSource,
                 );
 
                 // Logged only now, after resolvePendingDecisions() has
@@ -14324,7 +14326,18 @@ final class GameService
         if ($isYou) {
             $field = json_decode((string) $decisionRow['field'], true);
             if ($defaultSelectionsMode && $state !== null) {
-                $effectKey = $state->catalogRow($playedCardId)['effectKey'] ?? '';
+                // Issue #405 follow-up: a pending decision opened by an
+                // ATTACHED chaos effect (pending_source = 'chaos_effect',
+                // see PlayResult's own docblock) belongs to the chaos
+                // effect's own key, not the played card's printed one --
+                // withChoiceDefault()'s only effect-key-specific branch
+                // today (Imagination's color default) never actually
+                // collides with any chaos effect_key, but deriving the
+                // right key here keeps this correct rather than
+                // accidentally-harmless.
+                $effectKey = $batchRow['pending_source'] === 'chaos_effect'
+                    ? ($state->chaosEffectRow($playedCardId)['effectKey'] ?? '')
+                    : ($state->catalogRow($playedCardId)['effectKey'] ?? '');
                 $field = $this->withChoiceDefault($state, $field, $effectKey, $targetGamePlayerId);
             }
             $result['field'] = $field;
@@ -14623,8 +14636,8 @@ final class GameService
 
         $insertBatch = $pdo->prepare(
             'INSERT INTO game_pending_decision_batches
-                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices, duplicity_eligible_sources, reactor_candidate_card_ids)
-             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices, :duplicity_eligible_sources, :reactor_candidate_card_ids)'
+                (game_id, game_round_id, played_card_id, invocation_seq, initiating_game_player_id, top_level_choices, invocation_choices, duplicity_eligible_sources, reactor_candidate_card_ids, pending_source)
+             VALUES (:game_id, :round_id, :played_card_id, :invocation_seq, :initiator, :top_level_choices, :invocation_choices, :duplicity_eligible_sources, :reactor_candidate_card_ids, :pending_source)'
         );
 
         try {
@@ -14638,6 +14651,7 @@ final class GameService
                 'invocation_choices' => json_encode($invocationChoices->toArray()),
                 'duplicity_eligible_sources' => $result->duplicityEligibleSources,
                 'reactor_candidate_card_ids' => json_encode($result->reactorCandidateCardIds),
+                'pending_source' => $result->pendingSource,
             ]);
         } catch (PDOException $e) {
             if ($e->getCode() === '23000') {

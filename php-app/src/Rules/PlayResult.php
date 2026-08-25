@@ -58,6 +58,24 @@ namespace MoodSwings\Rules;
  * $duplicityEligibleSources above already established for Duplicity's
  * own repeat opportunity.
  *
+ * $pendingSource (issue #405 follow-up: chaos effects can now pause for
+ * an opponent's own real decision too, see ChaosRequiresOpponentDecision)
+ * says WHICH registry's effect actually opened this pause -- 'effect' for
+ * the base printed card's own RequiresOpponentDecision (including
+ * Duplicity's own repeat offer, though that one is actually intercepted
+ * by its own DUPLICITY_REPEAT_KEY sentinel before this ever gets read, so
+ * its own value here is moot), 'chaos_effect' for an attached chaos
+ * effect's own ChaosRequiresOpponentDecision. GameService persists this
+ * as that batch's own pending_source column (migration
+ * 0191_add_pending_source_to_pending_decision_batches.sql), the same
+ * batch-level "snapshot that has to survive to a LATER request"
+ * precedent $duplicityEligibleSources/$reactorCandidateCardIds already
+ * set, since MoodPlayService::resolvePendingDecisions() needs to know
+ * which registry to resume through and has no other reliable way to
+ * re-derive it: a single card can carry both a base RequiresOpponentDecision
+ * effect AND an attached chaos effect at once, so $playedCardId alone
+ * can't disambiguate which one actually opened THIS particular pause.
+ *
  * @param int[] $reactorCandidateCardIds
  */
 final class PlayResult
@@ -71,6 +89,7 @@ final class PlayResult
         public readonly ?PlayerChoices $invocationChoices = null,
         public readonly int $duplicityEligibleSources = 0,
         public readonly array $reactorCandidateCardIds = [],
+        public readonly string $pendingSource = 'effect',
     ) {
     }
 
@@ -82,9 +101,10 @@ final class PlayResult
     /**
      * @param PendingDecisionRequest[] $pendingDecisions
      * @param int[] $reactorCandidateCardIds
+     * @param 'effect'|'chaos_effect' $pendingSource
      */
-    public static function pending(array $pendingDecisions, int $playedCardId, int $invocationSeq, PlayerChoices $invocationChoices, int $duplicityEligibleSources, array $reactorCandidateCardIds = []): self
+    public static function pending(array $pendingDecisions, int $playedCardId, int $invocationSeq, PlayerChoices $invocationChoices, int $duplicityEligibleSources, array $reactorCandidateCardIds = [], string $pendingSource = 'effect'): self
     {
-        return new self(isPending: true, pendingDecisions: $pendingDecisions, playedCardId: $playedCardId, invocationSeq: $invocationSeq, invocationChoices: $invocationChoices, duplicityEligibleSources: $duplicityEligibleSources, reactorCandidateCardIds: $reactorCandidateCardIds);
+        return new self(isPending: true, pendingDecisions: $pendingDecisions, playedCardId: $playedCardId, invocationSeq: $invocationSeq, invocationChoices: $invocationChoices, duplicityEligibleSources: $duplicityEligibleSources, reactorCandidateCardIds: $reactorCandidateCardIds, pendingSource: $pendingSource);
     }
 }
