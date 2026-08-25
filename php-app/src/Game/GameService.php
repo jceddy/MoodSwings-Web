@@ -12151,8 +12151,24 @@ final class GameService
                 // whose value keeps being recomputed live by valueOf() and
                 // never touches 'valueOverride' at all. The frontend uses
                 // this to distinguish the two visually (see "Card art
-                // rendering" in web-static/README.md).
+                // rendering" in web-static/README.md). Deliberately NOT
+                // set by an attached chaos effect's own "permanently
+                // increase/decrease ... BY N" wording (chaos_056/064/120/
+                // 133) -- that's a DELTA, exposed separately below via
+                // 'chaos_value_delta', not an absolute override; see
+                // BoardState::adjustChaosValueDelta()'s own docblock for
+                // why the two are kept apart (issue #405 follow-up, a bug
+                // caught live: reusing setValueOverride() for the delta
+                // case incorrectly rotated cards it had no business
+                // rotating).
                 'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                // The net permanent chaos-effect delta currently applied
+                // to this card's value (0 for every card nothing has ever
+                // adjusted) -- already folded into 'value' above, this is
+                // purely presentational: it drives the frontend's own
+                // small "+N"/"-N" badge next to the value badge (see
+                // "Card art rendering" in web-static/README.md).
+                'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
                 ...$this->suppressionFields($state, $cardId, $names),
                 'boosted_by_card_id' => $boosterCardId,
                 'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
@@ -12652,6 +12668,7 @@ final class GameService
                         'owner_game_player_id' => $mood->ownerId,
                         'has_unused_play_grant' => false,
                         'value_locked' => array_key_exists('valueOverride', $mood->effectState),
+                        'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
                         ...$this->suppressionFields($state, $cardId, $names),
                         'boosted_by_card_id' => $boosterCardId,
                         'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,

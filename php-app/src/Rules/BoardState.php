@@ -1436,6 +1436,37 @@ final class BoardState
         $this->setEffectState($cardId, 'valueOverride', $value);
     }
 
+    /**
+     * Chaos Draft (issue #405 follow-up -- a bug caught live): an attached
+     * chaos effect's own "permanently increase/decrease this mood's value
+     * BY N" wording (chaos_056/064/120/133) is a DELTA that stacks on top
+     * of whatever this card's value already is -- deliberately kept
+     * separate from setValueOverride()'s own absolute "value BECOMES N"
+     * (Dignity/Delight-style; also chaos_008/087/110/111, which use that
+     * exact same printed wording). Reusing setValueOverride() for both
+     * was the bug: valueOverride also drives the frontend's 180-degree
+     * "value_locked" rotation (see that field's own docblock in
+     * GameService::serializeCard()), so an attached chaos_133 firing on a
+     * card with no "value becomes N" ability of its own would still
+     * rotate it -- wrong, since nothing about the card's OWN printed
+     * ability actually locked in. valueOf() adds this delta on top of
+     * printedValueOf()'s result (which already resolves any dice/alt
+     * value the card has), so the two stack rather than one silently
+     * replacing the other. Cumulative across repeated calls -- chaos_064
+     * can fire more than once against the same card over a game.
+     */
+    public function adjustChaosValueDelta(int $cardId, int $delta): void
+    {
+        $current = $this->effectState($cardId, 'chaosValueDelta') ?? 0;
+        $this->setEffectState($cardId, 'chaosValueDelta', $current + $delta);
+    }
+
+    /** The net permanent chaos-effect delta currently applied to $cardId's value -- see adjustChaosValueDelta()'s own docblock. 0 for every card nothing has ever adjusted. */
+    public function chaosValueDeltaOf(int $cardId): int
+    {
+        return $this->effectState($cardId, 'chaosValueDelta') ?? 0;
+    }
+
     // --- effective identity, color, and value ---
 
     /**
@@ -1499,7 +1530,12 @@ final class BoardState
     /**
      * This mood's current score value: 0 if suppressed, its stored
      * one-time override if it has one, its live "while in play"
-     * computation if it has that ability, otherwise its flat base value.
+     * computation if it has that ability, otherwise its flat base value --
+     * plus any accumulated chaosValueDelta on top (see
+     * adjustChaosValueDelta()'s own docblock for why that's added here,
+     * after everything else, rather than folded into printedValueOf() or
+     * applyChaosValuePipeline(): it has to stack with whichever of those
+     * two produced the value it's adjusting, not replace either one).
      */
     public function valueOf(int $cardId): int
     {
@@ -1508,7 +1544,7 @@ final class BoardState
             return 0;
         }
 
-        return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood));
+        return $this->applyChaosValuePipeline($cardId, $this->printedValueOf($cardId, $mood)) + $this->chaosValueDeltaOf($cardId);
     }
 
     /**

@@ -224,7 +224,24 @@ rotating it 180 degrees. Both classes
 can apply at once (a suppressed, value-locked mood), for which a third
 CSS rule (`.card-thumb--suppressed.card-thumb--value-locked`) rotates
 270 degrees rather than letting the two `transform`s silently clobber
-each other. The card-detail dialog's enlarged
+each other.
+
+An attached chaos effect's own "permanently increase/decrease ... BY N"
+(issue #405 follow-up -- a bug caught live: this used to incorrectly
+trigger `value_locked`'s own 180-degree rotation too, as if the card's
+OWN printed ability had fixed its value, and silently replaced rather
+than stacked with whatever alt/dice value the card's own printed ability
+already produced -- see `chaos_value_delta` in `php-app/README.md`) gets
+its own small red `.card-thumb__badge--chaos-delta` badge instead,
+reading `+N`/`-N`, positioned immediately left of the value badge --
+never a rotation, since nothing about the card's own printed ability
+locked anything. Shown whenever `card.chaos_value_delta` is nonzero
+(0 -- the common case, nothing to show -- reads as falsy in JS, so the
+badge is simply omitted). The card-detail dialog's own meta line
+(`openCardDetail()`) surfaces the same net delta as a parenthetical
+(`(chaos: +N)`) alongside its existing base/alt/current value line.
+
+The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
 a `<p>` rules-text paragraph -- both now conveyed only via that image's
 `alt` text -- while every other line in the dialog (color, value, alt

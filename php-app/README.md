@@ -1138,6 +1138,24 @@ locks it in via `effectState['valueOverride']`, which `valueOf()` checks
 first and unconditionally returns once set. The frontend uses this to
 rotate the card art 180 degrees, matching a suppressed mood's own 90
 degree rotation -- see "Card art rendering" in `web-static/README.md`.
+chaos_008/087/110/111 (`ChaosDiscardValueToBoostSelfEffect`) share this
+exact same "value BECOMES N" printed wording and correctly set
+`value_locked` too.
+
+**`chaos_value_delta` (issue #405 follow-up -- a bug caught live).** A
+DIFFERENT wording -- an attached chaos effect's own "permanently
+increase/decrease this mood's value BY N" (chaos_056/064/120/133) -- used
+to also call `setValueOverride()`, which was wrong on two counts: it
+incorrectly set `value_locked` (rotating a card whose own printed ability
+never fixed anything), and being an absolute replacement rather than a
+delta, it silently clobbered whatever the card's own dice/alt-value
+computation had already produced instead of adjusting it. `BoardState::
+adjustChaosValueDelta()` is the fix: a separate, cumulative signed
+`effectState['chaosValueDelta']`, added on top of `printedValueOf()`'s
+result (already `valueOf()`'s job -- see its own docblock) so the two
+stack. Exposed as `chaos_value_delta` (0 for every card nothing has ever
+adjusted) purely for the frontend's own small "+N"/"-N" badge -- see
+"Card art rendering" in `web-static/README.md`.
 
 Suppression isn't the only "one in-play mood affects another" relationship
 worth surfacing: a mood with a printed dice value (`has_dice_value`) can
