@@ -4918,6 +4918,16 @@ final class GameService
                 if ($offer === null || $offer['resolved_at'] !== null) {
                     continue;
                 }
+                // issue #405 follow-up -- a bug caught live: nothing left
+                // in hand to attach this offer to (see
+                // chaosDraftOfferHasNothingToAttachTo()'s own docblock) --
+                // chooseChaosDraftEffectAttachment() below unconditionally
+                // indexes candidateHandCardIds[0], which would crash a
+                // bot's own turn on an empty hand exactly the same way a
+                // human would otherwise be wrongly blocked/prompted.
+                if ($this->chaosDraftOfferHasNothingToAttachTo($gameId, $game, $botId)) {
+                    continue;
+                }
 
                 $state = $this->boardStates->load($gameId);
                 $choice = $this->bots->chooseChaosDraftEffectAttachment($state, $state->hand($botId), (int) $offer['effect_id_1']);
@@ -4947,6 +4957,13 @@ final class GameService
             if ($offer['phase'] === 'propose') {
                 if ($teamBotIds === []) {
                     continue; // waiting on a real player to propose
+                }
+                // issue #405 follow-up -- see the non-team branch's own
+                // comment above: an empty-handed team would otherwise
+                // crash chooseChaosDraftEffectAttachment()'s own
+                // candidateHandCardIds[0] indexing below.
+                if ($this->chaosDraftOfferHasNothingToAttachTo($gameId, $game, $teamBotIds[0])) {
+                    continue;
                 }
 
                 $state = $this->boardStates->load($gameId);
@@ -7070,14 +7087,18 @@ final class GameService
      * The chaos effect choice $gamePlayerId is currently facing this
      * round (issue #405), or null if there's nothing to show them right
      * now -- this isn't a chaos_draft game, they (or, in Open Team Play,
-     * their whole team) have no cards in hand this round, or they've
-     * already resolved their own offer. Also ensures the round's own
-     * rarities and every eligible offer exist first -- see this
-     * section's own docblock for why that happens here, lazily, rather
-     * than at round-creation time, and why this is wrapped in
-     * withGameLock() (a write, unlike almost everything else
-     * buildGameState() itself reads) rather than folded into that
-     * method's own unlocked read path.
+     * their whole team) currently have no cards in hand to attach it to
+     * (issue #405 follow-up -- a bug caught live: "if a player has no
+     * cards in hand, the game should not present them with a chaos
+     * effect to choose from"; re-checked dynamically every call via
+     * chaosDraftOfferHasNothingToAttachTo(), not just once when the offer
+     * was first created), or they've already resolved their own offer.
+     * Also ensures the round's own rarities and every eligible offer
+     * exist first -- see this section's own docblock for why that
+     * happens here, lazily, rather than at round-creation time, and why
+     * this is wrapped in withGameLock() (a write, unlike almost
+     * everything else buildGameState() itself reads) rather than folded
+     * into that method's own unlocked read path.
      */
     public function chaosDraftOfferFor(int $gameId, int $gamePlayerId): ?array
     {
@@ -7096,6 +7117,10 @@ final class GameService
                 : $this->fetchChaosDraftOffer($roundId, $gamePlayerId, null);
 
             if ($offer === null || $offer['resolved_at'] !== null) {
+                return null;
+            }
+
+            if ($this->chaosDraftOfferHasNothingToAttachTo($gameId, $game, $gamePlayerId)) {
                 return null;
             }
 
@@ -7159,7 +7184,50 @@ final class GameService
             ? $this->fetchChaosDraftOffer((int) $round['id'], null, $this->teamIdByGamePlayer($gameId)[$gamePlayerId] ?? null)
             : $this->fetchChaosDraftOffer((int) $round['id'], $gamePlayerId, null);
 
-        return $offer !== null && $offer['resolved_at'] === null;
+        if ($offer === null || $offer['resolved_at'] !== null) {
+            return false;
+        }
+
+        return !$this->chaosDraftOfferHasNothingToAttachTo($gameId, $game, $gamePlayerId);
+    }
+
+    /**
+     * True once nothing is left in hand to attach this round's Chaos Draft
+     * offer to (issue #405 follow-up -- a bug caught live: "if a player
+     * has no cards in hand, the game should not present them with a chaos
+     * effect to choose from"). ensureChaosDraftOffersForRound() already
+     * skips CREATING an offer at all for an empty-handed player/team, but
+     * that's only a snapshot taken once, the first time this round's
+     * offers are rolled -- a player who HAD cards then but loses their
+     * last one later this same round (another player's chaos_058/118-style
+     * effect can take it) would otherwise stay shown/blocked by an
+     * already-created offer with nothing left to attach it to. Re-checked
+     * dynamically here instead, at both chaosDraftOfferFor()'s (display)
+     * and chaosDraftOfferBlocksPlayer()'s (mandatory-resolution) own call
+     * sites -- safe because nothing in round-completion/scoring depends on
+     * every chaos_draft_offers row ending up resolved. Mirrors
+     * ensureChaosDraftOffersForRound()'s own per-team-vs-per-player split:
+     * Open Team Play's proposeChaosDraftEffect() lets either teammate
+     * attach to EITHER teammate's own hand card, so a team offer only
+     * truly has nothing to attach to once BOTH teammates are empty-handed,
+     * even if $gamePlayerId's own hand alone is empty.
+     */
+    private function chaosDraftOfferHasNothingToAttachTo(int $gameId, array $game, int $gamePlayerId): bool
+    {
+        $state = $this->boardStates->load($gameId);
+
+        if ($game['format'] === 'team') {
+            $teamId = $this->teamIdByGamePlayer($gameId)[$gamePlayerId];
+            foreach ($this->teamMembers($gameId, $teamId) as $memberId) {
+                if ($state->hand($memberId) !== []) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return $state->hand($gamePlayerId) === [];
     }
 
     /**

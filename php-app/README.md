@@ -2504,8 +2504,27 @@ one row per player (or, for Open Team Play, one row per TEAM -- `team_id`
 set instead of `game_player_id`) at that point, drawing two DISTINCT
 `chaos_effects.id`s (rarity-weighted per the distribution above) and
 storing them as `effect_1_id`/`effect_2_id`/`effect_1_rarity`/
-`effect_2_rarity`. A player with an empty hand gets no offer at all
-(`chaosDraftOfferFor()` returns `null`) -- nothing to attach it to.
+`effect_2_rarity`. A player with an empty hand gets no offer row created
+at all (or, for Open Team Play, no row for a team with no cards in EITHER
+teammate's hand). That's only a snapshot taken once, though -- a player
+who HAD cards then but loses their last one later the same round (e.g.
+chaos_058/118 taking it) would otherwise stay shown/blocked by an
+already-created offer with nothing left to attach it to (issue #405
+follow-up -- a bug caught live: "if a player has no cards in hand, the
+game should not present them with a chaos effect to choose from"), so
+`chaosDraftOfferFor()` (returns `null`) and `chaosDraftOfferBlocksPlayer()`
+(returns `false`) both re-check current hand state dynamically too, via
+`chaosDraftOfferHasNothingToAttachTo()` -- per-team for Open Team Play
+(mirroring `proposeChaosDraftEffect()`'s own "either teammate's hand"
+rule: the team offer only has nothing to attach to once BOTH teammates
+are empty-handed), per-player everywhere else. Safe to leave such an
+offer permanently unresolved -- nothing in round-completion/scoring
+depends on every `chaos_draft_offers` row ending up resolved.
+`advanceBotChaosDraftOffer()` applies the same check before asking
+`BotPlayerService::chooseChaosDraftEffectAttachment()` to pick a card,
+since that method's own unconditional first-candidate indexing would
+otherwise crash a bot's turn on an empty hand the exact same way a human
+would otherwise be wrongly blocked/prompted.
 Deliberately kept OUT of `getState()`'s regular unlocked read path (it's a
 lazy write, needing `withGameLock()`) -- the frontend polls it via its own
 `GET /games/chaos-draft-offer` route instead (see below).
