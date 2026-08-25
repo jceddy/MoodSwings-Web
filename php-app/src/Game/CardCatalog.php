@@ -24,7 +24,18 @@ final class CardCatalog
      */
     public static function load(): array
     {
-        $stmt = Connection::get()->query('SELECT id, name, rarity, color, draft_priority_score FROM cards');
+        // is_token = 0 (migration 0183, Chaos Draft's own 5 conjured-token
+        // cards, issue #405) -- a token only ever exists once a chaos
+        // effect actually puts it into play (BoardStateRepository's own
+        // full `SELECT * FROM cards` -- no filter there -- still hydrates
+        // it fine at that point). It's not a real catalog card a player
+        // ever drafts, saves into a decklist, or sees on the stats page,
+        // so every consumer of idsByName/rowsById here (DecklistParser's
+        // name resolution, UserDecklistService's card-id validation,
+        // CardStatsService's per-card rows, Tiered Rotisserie Draft's own
+        // 'rarity' tiering) needs it excluded at the source rather than
+        // each call site remembering to filter it out individually.
+        $stmt = Connection::get()->query('SELECT id, name, rarity, color, draft_priority_score FROM cards WHERE is_token = 0');
         $idsByName = [];
         $rowsById = [];
         foreach ($stmt->fetchAll() as $row) {

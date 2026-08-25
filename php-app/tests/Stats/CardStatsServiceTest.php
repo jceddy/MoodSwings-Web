@@ -310,7 +310,13 @@ final class CardStatsServiceTest extends TestCase
 
     public function testAllCardStatsIncludesEveryCatalogCardWithZeroDefaultsForUnrecordedOnes(): void
     {
-        $totalCards = (int) $this->pdo->query('SELECT COUNT(*) FROM cards')->fetchColumn();
+        // is_token = 0 excludes Chaos Draft's own 5 conjured-token cards
+        // (migration 0183, issue #405) -- allCardStats() reads from
+        // CardCatalog::load(), which now excludes them too (a bug caught
+        // live: a token isn't a real draftable/collectible catalog card,
+        // so it has no business getting its own row on the public stats
+        // page).
+        $totalCards = (int) $this->pdo->query('SELECT COUNT(*) FROM cards WHERE is_token = 0')->fetchColumn();
 
         $winner = $this->insertUser('cardstats-allstats-winner');
         $loser = $this->insertUser('cardstats-allstats-loser');
