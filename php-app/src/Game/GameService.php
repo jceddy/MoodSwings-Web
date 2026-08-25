@@ -13515,13 +13515,16 @@ final class GameService
             'copy_simulation' => ($reactingViewerId !== null && $catalog['effectKey'] === 'creativity')
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
-            // Chaos Draft (issue #405): the effect currently attached to
-            // this specific card instance, if any -- see
-            // BoardState::chaosEffectRow(). Null for every non-chaos_draft
-            // game and every chaos_draft card nothing has been attached
-            // to yet. Keyed by the raw instance id (not effective/copy-
-            // aware) since an attached chaos effect belongs to the
-            // physical card, never to whatever it copies.
+            // Chaos Draft (issue #405): the effect currently applying to
+            // this card, if any -- see BoardState::chaosEffectRow(). Null
+            // for every non-chaos_draft game and every chaos_draft card
+            // nothing has been attached to yet. Resolved through
+            // effectiveCardId() (issue #405 follow-up -- a maintainer
+            // ruling reversing this field's original "always the raw
+            // instance's own attachment" behavior): a Creativity copy
+            // shows the COPIED card's own attached effect instead of
+            // Creativity's own, matching value/color/dice already doing
+            // the same.
             'chaos_effect' => $this->serializeChaosEffectRow($chaosRow),
         ];
     }

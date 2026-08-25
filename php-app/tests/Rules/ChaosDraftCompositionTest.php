@@ -271,4 +271,127 @@ final class ChaosDraftCompositionTest extends TestCase
         self::assertContains(55, $state->hand(1));
         self::assertContains(5, $state->hand(1), "the repeat should have fired the attached chaos effect a second time");
     }
+
+    /**
+     * Creativity follow-up (issue #405 follow-up -- a maintainer ruling
+     * reversing chaosEffectRow()'s own original design): "an exact copy
+     * of that printed card... including dice, color, and abilities" now
+     * also covers whatever chaos effect is attached to the copied card --
+     * confirmed via valueOf(), which pipelines a 'while_in_play' attached
+     * effect's own computeValue() the same way testValueOfPipelines*()
+     * above already proves for a plain (non-copying) card.
+     */
+    public function testCreativityCopyingAMoodInheritsItsAttachedWhileInPlayChaosEffect(): void
+    {
+        $chaosRegistry = new ChaosEffectRegistry();
+        $chaosRegistry->register('plus_three', new class extends AbstractChaosMoodEffect {
+            public function computeValue(BoardState $state, int $cardId, int $incomingValue): int
+            {
+                return $incomingValue + 3;
+            }
+        });
+
+        $state = $this->boardState(hands: [1 => [32], 2 => [55]], chaosRegistry: $chaosRegistry); // Creativity; Apathy
+        $state->moveHandToInPlay(2, 55); // Apathy (value 4, no ability) -- the copy target
+        $state->attachChaosEffect(55, 1); // 'plus_three' attached to Apathy, not Creativity
+
+        $state->moveHandToInPlay(1, 32, 55); // Creativity, copying Apathy
+
+        self::assertSame('plus_three', $state->chaosEffectKeyFor(32), "Creativity's own effective chaos effect should be Apathy's");
+        self::assertSame(7, $state->valueOf(32), '4 (copied base value) + 3 (inherited chaos effect)');
+    }
+
+    /**
+     * The other half of the same ruling: a Creativity NOT currently
+     * copying anything (effectiveCardId() is a no-op for it) still keeps
+     * its OWN attached chaos effect exactly as before -- nothing to
+     * replace it with when there's no copy target.
+     */
+    public function testCreativityWithNoCopyTargetKeepsItsOwnAttachedChaosEffect(): void
+    {
+        $chaosRegistry = new ChaosEffectRegistry();
+        $chaosRegistry->register('plus_three', new class extends AbstractChaosMoodEffect {
+            public function computeValue(BoardState $state, int $cardId, int $incomingValue): int
+            {
+                return $incomingValue + 3;
+            }
+        });
+
+        $state = $this->boardState(hands: [1 => [32]], chaosRegistry: $chaosRegistry);
+        $state->moveHandToInPlay(1, 32); // Creativity, played with no copy target -- "just a blue card worth 0"
+        $state->attachChaosEffect(32, 1); // 'plus_three' attached directly to Creativity itself
+
+        self::assertSame('plus_three', $state->chaosEffectKeyFor(32));
+        self::assertSame(3, $state->valueOf(32), '0 (own base value) + 3 (own attached chaos effect)');
+    }
+
+    /**
+     * The maintainer's own confirmed answer to the "which one wins"
+     * question this ruling raises: copying is a FULL replacement, not a
+     * stack -- Creativity's own separately-attached chaos effect is
+     * ignored (not combined) while it's actively copying a card that
+     * carries a different one, the same way copying already fully
+     * replaces Creativity's own (nonexistent) base value/ability rather
+     * than adding to it.
+     */
+    public function testCreativityCopyingAMoodWithAnAttachedChaosEffectReplacesItsOwnRatherThanStacking(): void
+    {
+        $chaosRegistry = new ChaosEffectRegistry();
+        $chaosRegistry->register('plus_three', new class extends AbstractChaosMoodEffect {
+            public function computeValue(BoardState $state, int $cardId, int $incomingValue): int
+            {
+                return $incomingValue + 3;
+            }
+        });
+        $chaosRegistry->register('double_it', new class extends AbstractChaosMoodEffect {
+            public function computeValue(BoardState $state, int $cardId, int $incomingValue): int
+            {
+                return $incomingValue * 2;
+            }
+        });
+
+        $state = $this->boardState(hands: [1 => [32], 2 => [55]], chaosRegistry: $chaosRegistry);
+        $state->moveHandToInPlay(2, 55); // Apathy (value 4) -- the copy target
+        $state->attachChaosEffect(55, 2); // 'double_it' attached to Apathy
+
+        $state->moveHandToInPlay(1, 32, 55); // Creativity, copying Apathy
+        $state->attachChaosEffect(32, 1); // 'plus_three' attached to Creativity itself -- should be ignored while copying
+
+        self::assertSame('double_it', $state->chaosEffectKeyFor(32), "Apathy's chaos effect should fully replace Creativity's own, not add to it");
+        self::assertSame(8, $state->valueOf(32), '4 (copied base value) * 2 (Apathy\'s effect) -- NOT +3 and NOT both applied');
+    }
+
+    /**
+     * End to end through MoodPlayService: an 'after_playing'-shaped
+     * attached chaos effect fires as part of playing Creativity's own
+     * copy, the same way testAttachedAfterPlayingChaosEffectFiresAlongsideTheCardsOwnBaseEffect()
+     * above already proves for a plain (non-copying) card -- confirming
+     * resolveAttachedChaosAfterPlaying()'s own chaosEffectRow($cardId)
+     * lookup correctly resolves through Creativity's own copiedCardId.
+     */
+    public function testCreativityCopyingAMoodAlsoFiresItsAttachedAfterPlayingChaosEffect(): void
+    {
+        $chaosRegistry = new ChaosEffectRegistry();
+        $chaosRegistry->register('draw_a_card', new class extends AbstractChaosMoodEffect {
+            public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
+            {
+                $state->drawCard($playerId);
+            }
+        });
+
+        $state = $this->boardState(
+            hands: [1 => [32], 2 => [55]], // Creativity; Apathy
+            deck: [5], // Complacency, drawn by the inherited chaos effect
+            chaosRegistry: $chaosRegistry,
+        );
+        $state->moveHandToInPlay(2, 55); // Apathy -- already in play, the copy target
+        $state->attachChaosEffect(55, 3); // 'draw_a_card' attached to Apathy
+        $state->startTurn(1);
+
+        $service = new MoodPlayService(DefaultEffectRegistry::build(), $chaosRegistry);
+        $result = $service->playMood($state, 1, 32, new PlayerChoices(['copy_card_id' => 55]));
+
+        self::assertFalse($result->isPending);
+        self::assertContains(5, $state->hand(1), "Apathy's own attached chaos effect should have fired as part of playing the Creativity copy");
+    }
 }
