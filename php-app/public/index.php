@@ -1574,6 +1574,36 @@ if ($path === '/games/initial-pass' && $method === 'POST') {
     }
 }
 
+if ($path === '/games/chaos-draft-offer' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    respond(200, ['status' => 'ok', 'offer' => $games->chaosDraftOfferFor($gameId, $gamePlayerId)]);
+}
+
+if ($path === '/games/chaos-draft-effect' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $action = (string) ($body['action'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = match ($action) {
+            'choose' => $games->chooseChaosDraftEffect($gameId, $gamePlayerId, (int) ($body['chosen_effect_id'] ?? 0), (int) ($body['attach_game_card_id'] ?? 0)),
+            'propose' => $games->proposeChaosDraftEffect($gameId, $gamePlayerId, (int) ($body['chosen_effect_id'] ?? 0), (int) ($body['attach_game_card_id'] ?? 0)),
+            'confirm' => $games->confirmChaosDraftEffect($gameId, $gamePlayerId, (bool) ($body['approve'] ?? false)),
+            default => throw new GameStateException('action must be "choose", "propose", or "confirm"'),
+        };
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
 if ($path === '/games/draft/pick' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
