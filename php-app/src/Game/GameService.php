@@ -625,6 +625,9 @@ final class GameService
     /** @var array<int, array<int, string>> gameId => (game_player_id => username), memoized per instance by playerUsernamesFor() */
     private array $playerUsernamesByGame = [];
 
+    /** @var array<int, string> chaos_effects.id => rarity, memoized per instance by chaosEffectRarity() -- global catalog data, not scoped per game */
+    private array $chaosEffectRarityCache = [];
+
     public function __construct(
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
@@ -12667,6 +12670,18 @@ final class GameService
             // null (there's no card involved), so this needs its own
             // phrasing for the same reason 'game_expired' above does.
             $row['event_type'] === 'draft_resigned' => "{$actor} resigned from the draft",
+            // A bug caught live, same shape as closed_team_leader_decided's
+            // own comment above: this case was missing, so it fell through
+            // to the generic "{actor} played {card}" default below -- which
+            // misleadingly read as the player having PLAYED the card,
+            // rather than merely attaching a chaos effect to it (still
+            // sitting in their hand, not entered play at all).
+            $row['event_type'] === 'chaos_draft_effect_attached' => (function () use ($actor, $cardName, $details) {
+                $rarity = $this->chaosEffectRarity((int) ($details['chaos_effect_id'] ?? 0));
+                $article = $rarity === 'uncommon' ? 'an' : 'a';
+
+                return "{$actor} attached {$article} {$rarity} chaos effect to {$cardName}";
+            })(),
             default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 
@@ -13210,6 +13225,29 @@ final class GameService
             'copy_simulation' => ($reactingViewerId !== null && $catalog['effectKey'] === 'creativity')
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
+            // Chaos Draft (issue #405): the effect currently attached to
+            // this specific card instance, if any -- see
+            // BoardState::chaosEffectRow(). Null for every non-chaos_draft
+            // game and every chaos_draft card nothing has been attached
+            // to yet. Keyed by the raw instance id (not effective/copy-
+            // aware) since an attached chaos effect belongs to the
+            // physical card, never to whatever it copies.
+            'chaos_effect' => $this->serializeChaosEffectRow($state->chaosEffectRow($cardId)),
+        ];
+    }
+
+    /** @param ?array{effectKey:string,rarity:string,shape:string,rulesText:string} $chaosRow */
+    private function serializeChaosEffectRow(?array $chaosRow): ?array
+    {
+        if ($chaosRow === null) {
+            return null;
+        }
+
+        return [
+            'effect_key' => $chaosRow['effectKey'],
+            'rarity' => $chaosRow['rarity'],
+            'shape' => $chaosRow['shape'],
+            'rules_text' => $chaosRow['rulesText'],
         ];
     }
 
@@ -13633,6 +13671,25 @@ final class GameService
         }
 
         return $this->cardNamesByGame[$gameId];
+    }
+
+    /**
+     * Rarity for describeEvent()'s own 'chaos_draft_effect_attached' case --
+     * unlike cardNamesFor()/playerUsernamesFor() above, this isn't scoped
+     * per game_id, since chaos_effects.id is already a global catalog id
+     * (there's only ever one row per id across every game, unlike
+     * game_cards.id).
+     */
+    private function chaosEffectRarity(int $effectId): string
+    {
+        if (!isset($this->chaosEffectRarityCache[$effectId])) {
+            $stmt = Connection::get()->prepare('SELECT rarity FROM chaos_effects WHERE id = :id');
+            $stmt->execute(['id' => $effectId]);
+            $rarity = $stmt->fetchColumn();
+            $this->chaosEffectRarityCache[$effectId] = $rarity !== false ? (string) $rarity : 'common';
+        }
+
+        return $this->chaosEffectRarityCache[$effectId];
     }
 
     /**

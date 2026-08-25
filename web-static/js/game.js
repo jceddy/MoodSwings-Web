@@ -1482,7 +1482,7 @@
     // six are the only deck_types with no single "the deck" for
     // openSharedDeckView() (issue #197) to show.
     function isSharedDeckType(deckType) {
-        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(deckType);
+        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(deckType);
     }
 
     // Plain-language explanation shown under the New Game dialog's own
@@ -1501,6 +1501,7 @@
         grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/96 cards for 2/3/4 players) over 6 rounds (4 for exactly 4 players, so each player picks first exactly once): each round, cards are dealt into a 3x3 grid (4x4 for exactly 4 players), and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         rotisserie_draft: '2-4 players draft one card at a time from a shared, fully face-up pool -- no packs, piles, or grid, just the whole pool laid out at once. A snake-style turn order (choosable cutoff of 13-20 cards per player, default 14) continues until every player has picked that many; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
+        chaos_draft: 'Quick Draft\'s own drafting, deck-building, and match structure, unchanged -- but at the start of every round, each player (or team, in Open Team Play) is offered a choice between two randomly-generated effects and attaches the chosen one permanently to a card in their hand, stacking with that card\'s own printed ability.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1775,7 +1776,7 @@
         document.getElementById('new-game-decklist-paste-fields').hidden =
             deckType !== 'custom' || document.getElementById('new-game-saved-decklist').value !== '';
         document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
-        document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
+        document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft' && deckType !== 'chaos_draft';
         document.getElementById('new-game-winston-draft-fields').hidden = deckType !== 'winston_draft';
         document.getElementById('new-game-grid-draft-fields').hidden = deckType !== 'grid_draft';
         document.getElementById('new-game-rotisserie-draft-fields').hidden = deckType !== 'rotisserie_draft';
@@ -1783,7 +1784,7 @@
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
-        if (deckType === 'quick_draft') {
+        if (deckType === 'quick_draft' || deckType === 'chaos_draft') {
             updateQuickDraftPoolSourceVisibility();
         }
         if (deckType === 'winston_draft') {
@@ -1911,7 +1912,7 @@
     // exempt from this same rule below.
     function isDeckTypeAvailableForFormat(deckType, format) {
         if (format === 'draft') {
-            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft';
+            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft' || deckType === 'chaos_draft';
         }
         switch (deckType) {
             case 'custom': return format !== 'duel';
@@ -1921,6 +1922,7 @@
             case 'grid_draft': return format === 'closed_team' || format === 'team';
             case 'rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'tiered_rotisserie_draft': return format === 'closed_team' || format === 'team';
+            case 'chaos_draft': return format === 'closed_team' || format === 'team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2455,7 +2457,7 @@
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(deckType)) {
+        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(deckType)) {
             return true;
         }
         return ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
@@ -2918,8 +2920,8 @@
             ? document.getElementById('new-game-decklist-text').value
             : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
-        const quickDraftPoolSource = deckType === 'quick_draft' ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
-        const quickDraftCustomPoolText = deckType === 'quick_draft' && quickDraftPoolSource === 'custom'
+        const quickDraftPoolSource = (deckType === 'quick_draft' || deckType === 'chaos_draft') ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
+        const quickDraftCustomPoolText = (deckType === 'quick_draft' || deckType === 'chaos_draft') && quickDraftPoolSource === 'custom'
             ? document.getElementById('new-game-quick-draft-custom-pool-text').value
             : undefined;
         const winstonDraftPoolSource = deckType === 'winston_draft' ? document.getElementById('new-game-winston-draft-pool-source').value : undefined;
@@ -2971,7 +2973,7 @@
         // GameService::createGame() itself reuses one $savedDecklistId
         // param across all five -- see its own docblock.
         const savedDecklistId = deckType === 'custom' ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
-            : deckType === 'quick_draft' && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
+            : (deckType === 'quick_draft' || deckType === 'chaos_draft') && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
             : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
             : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
             : deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-rotisserie-draft-saved-decklist').value) || undefined
@@ -3131,6 +3133,19 @@
             button.classList.add('card-thumb--suppressed');
         }
 
+        if (card.chaos_effect) {
+            // Chaos Draft (issue #405): a card carrying an attached chaos
+            // effect keeps its own printed ability -- this badge is purely
+            // informational (open the card's own detail dialog for the
+            // attached effect's full rules text), not a state toggle like
+            // Suppressed/value-locked above.
+            const chaosBadge = document.createElement('span');
+            chaosBadge.className = 'card-thumb__badge card-thumb__badge--chaos card-thumb__badge--chaos-' + card.chaos_effect.rarity;
+            chaosBadge.textContent = 'Chaos';
+            chaosBadge.title = card.chaos_effect.rules_text;
+            button.appendChild(chaosBadge);
+        }
+
         if (card.value_locked) {
             // A permanent "after playing this mood, ... this mood's value
             // becomes N" trigger (Dignity, Delight, ...) has locked in its
@@ -3201,6 +3216,17 @@
             creativityCopyEl.hidden = false;
         } else {
             creativityCopyEl.hidden = true;
+        }
+
+        // Chaos Draft (issue #405): the attached effect stacks with (never
+        // replaces) this card's own printed ability, which the art/meta
+        // above already show -- this is purely additive information.
+        const chaosEffectEl = document.getElementById('card-detail-chaos-effect');
+        if (card.chaos_effect) {
+            chaosEffectEl.textContent = capitalize(card.chaos_effect.rarity) + ' Chaos effect: ' + card.chaos_effect.rules_text;
+            chaosEffectEl.hidden = false;
+        } else {
+            chaosEffectEl.hidden = true;
         }
 
         const suppressionEl = document.getElementById('card-detail-suppression');
@@ -3938,7 +3964,7 @@
         if (!state || state.game.status !== 'waiting' || state.game.format !== 'team') {
             return false;
         }
-        const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
+        const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
             : state.game.deck_type === 'winston_draft' ? state.winston_draft
                 : state.game.deck_type === 'grid_draft' ? state.grid_draft
                     : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
@@ -4356,7 +4382,7 @@
         // a pending decision is known (nothing can freeze a still-waiting
         // draft the same way, so there's nothing to gate here yet).
         const canResignWhileWaiting = state.game.status === 'waiting'
-            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(state.game.deck_type);
+            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(state.game.deck_type);
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = isReadOnlyView()
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
@@ -4611,9 +4637,9 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft') {
+            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft' || state.game.deck_type === 'chaos_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
-                const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
+                const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
                         : state.game.deck_type === 'grid_draft' ? state.grid_draft
                             : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
@@ -4764,6 +4790,7 @@
 
         renderTeammateHand(state);
         renderTeamDecision(state.team_decision);
+        checkChaosDraftOffer(state);
         renderInitialCardPass(state);
 
         document.getElementById('pass-button').disabled = !canAct;
@@ -5035,6 +5062,177 @@
         const { ok, body } = await confirmTeamDecision(currentGameId, false);
         if (!ok) {
             boardError.textContent = body.message || 'Could not reject that decision.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    });
+
+    // Chaos Draft (issue #405): the round-start choice/attach mechanic.
+    // Unlike state.team_decision above, this isn't part of the regular
+    // polled game state at all -- GameService::chaosDraftOfferFor() is a
+    // separate, lock-protected endpoint (it lazily creates the round's
+    // own offer on first call), so this panel is driven by its own
+    // fetch, kicked off once per renderBoard() poll below.
+    let chaosDraftOfferRequestInFlight = false;
+    // The effect the viewer has tentatively picked (client-side only,
+    // never sent until they also choose a card) -- cleared whenever the
+    // offer itself changes shape (a fresh poll with no offer, or the
+    // offer having since resolved) so a stale selection can never linger
+    // into a later round's own different offer.
+    let chaosDraftSelectedEffectId = null;
+
+    async function checkChaosDraftOffer(state) {
+        const eligible = !isSpectating
+            && state.game.deck_type === 'chaos_draft'
+            && state.game.status === 'in_progress'
+            && state.you && state.you.game_player_id != null;
+        if (!eligible) {
+            chaosDraftSelectedEffectId = null;
+            renderChaosDraftOffer(null);
+            return;
+        }
+        if (chaosDraftOfferRequestInFlight) {
+            return;
+        }
+        chaosDraftOfferRequestInFlight = true;
+        const { ok, body } = await getChaosDraftOffer(currentGameId);
+        chaosDraftOfferRequestInFlight = false;
+        if (!ok) {
+            return; // transient failure -- the next poll retries
+        }
+        renderChaosDraftOffer(body.offer);
+    }
+
+    function chaosDraftEffectSummary(effect) {
+        return capitalize(effect.rarity) + ' — ' + effect.rules_text;
+    }
+
+    function renderChaosDraftOffer(offer) {
+        const panel = document.getElementById('chaos-draft-offer-panel');
+        const choicesEl = document.getElementById('chaos-draft-offer-choices');
+        const attachEl = document.getElementById('chaos-draft-offer-attach');
+        const attachCardsEl = document.getElementById('chaos-draft-offer-attach-cards');
+        const statusEl = document.getElementById('chaos-draft-offer-status');
+        const confirmButton = document.getElementById('chaos-draft-offer-confirm-button');
+        const rejectButton = document.getElementById('chaos-draft-offer-reject-button');
+
+        if (!offer) {
+            panel.hidden = true;
+            choicesEl.innerHTML = '';
+            attachCardsEl.innerHTML = '';
+            attachEl.hidden = true;
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+            chaosDraftSelectedEffectId = null;
+            return;
+        }
+
+        panel.hidden = false;
+
+        // Open Team Play's own confirm phase: the proposer just waits;
+        // the OTHER teammate approves/rejects -- mirrors
+        // renderTeamDecision()'s identical propose/confirm shape.
+        if (offer.is_team_offer && offer.phase === 'confirm') {
+            choicesEl.innerHTML = '';
+            attachEl.hidden = true;
+            chaosDraftSelectedEffectId = null;
+
+            const isProposer = offer.proposer_game_player_id === currentState.you.game_player_id;
+            if (isProposer) {
+                statusEl.textContent = 'Waiting for your teammate to confirm your choice.';
+                confirmButton.hidden = true;
+                rejectButton.hidden = true;
+            } else {
+                statusEl.textContent = playerLabelFor(offer.proposer_game_player_id) + ' proposed a Chaos effect. Do you agree?';
+                confirmButton.hidden = false;
+                rejectButton.hidden = false;
+            }
+            return;
+        }
+
+        confirmButton.hidden = true;
+        rejectButton.hidden = true;
+
+        if (chaosDraftSelectedEffectId === null) {
+            attachEl.hidden = true;
+            statusEl.textContent = offer.is_team_offer
+                ? "Choose one of these two effects for your team's card:"
+                : 'Choose one of these two effects for one of your cards:';
+            choicesEl.innerHTML = '';
+            [offer.effect_1, offer.effect_2].forEach((effect) => {
+                choicesEl.appendChild(actionButton(
+                    chaosDraftEffectSummary(effect),
+                    () => {
+                        chaosDraftSelectedEffectId = effect.id;
+                        renderChaosDraftOffer(offer);
+                    }
+                ));
+            });
+            return;
+        }
+
+        // An effect is picked -- show the card picker (own hand, plus the
+        // teammate's own hand too for Open Team Play, per the issue's
+        // "attaches to a card in EITHER teammate's hand").
+        choicesEl.innerHTML = '';
+        statusEl.textContent = 'Attach it to which card?';
+        attachEl.hidden = false;
+        attachCardsEl.innerHTML = '';
+        const ownHand = (currentState.you.hand || []).map((card) => ({ card, ownerLabel: null }));
+        const teammateHand = offer.is_team_offer && currentState.you.teammate_hand
+            ? currentState.you.teammate_hand.map((card) => ({ card, ownerLabel: playerLabelFor(currentState.you.teammate_game_player_id) }))
+            : [];
+        [...ownHand, ...teammateHand].forEach(({ card, ownerLabel }) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, {
+                onClick: () => submitChaosDraftChoice(offer, chaosDraftSelectedEffectId, card.card_id, ownerLabel),
+            }));
+            attachCardsEl.appendChild(li);
+        });
+    }
+
+    document.getElementById('chaos-draft-offer-back-button').addEventListener('click', () => {
+        chaosDraftSelectedEffectId = null;
+        checkChaosDraftOffer(currentState);
+    });
+
+    async function submitChaosDraftChoice(offer, chosenEffectId, attachGameCardId, teammateOwnerLabel) {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        if (teammateOwnerLabel && !confirm('Attach this effect to ' + teammateOwnerLabel + "'s card? They'll need to confirm before it's final.")) {
+            return;
+        }
+        const { ok, body } = offer.is_team_offer
+            ? await proposeChaosDraftEffect(currentGameId, chosenEffectId, attachGameCardId)
+            : await chooseChaosDraftEffect(currentGameId, chosenEffectId, attachGameCardId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not attach that effect.';
+            boardError.hidden = false;
+            return;
+        }
+        chaosDraftSelectedEffectId = null;
+        await refreshBoard();
+    }
+
+    document.getElementById('chaos-draft-offer-confirm-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmChaosDraftEffect(currentGameId, true);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not confirm that effect.';
+            boardError.hidden = false;
+            return;
+        }
+        await refreshBoard();
+    });
+
+    document.getElementById('chaos-draft-offer-reject-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmChaosDraftEffect(currentGameId, false);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not reject that effect.';
             boardError.hidden = false;
             return;
         }
@@ -6257,7 +6455,7 @@
         const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
         currentOpponentUsername = opponent ? opponent.username : 'your opponent';
 
-        if (state.game.deck_type === 'quick_draft') {
+        if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft') {
             const qd = state.quick_draft;
             document.getElementById('quick-draft-panel').hidden = false;
             document.getElementById('winston-draft-panel').hidden = true;
@@ -7119,6 +7317,20 @@
         const artEl = document.getElementById('choices-card-art');
         artEl.src = cardArtUrl(card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
+
+        // Chaos Draft (issue #405): same additive info as openCardDetail()'s
+        // own #card-detail-chaos-effect -- a card carrying an attached
+        // chaos effect is usually reached through THIS panel (its own
+        // is_playable already routes a hand-card click here rather than to
+        // the read-only detail view), so the effect needs to be visible
+        // here too, not just in the read-only view.
+        const chaosEffectEl = document.getElementById('choices-card-chaos-effect');
+        if (card.chaos_effect) {
+            chaosEffectEl.textContent = capitalize(card.chaos_effect.rarity) + ' Chaos effect: ' + card.chaos_effect.rules_text;
+            chaosEffectEl.hidden = false;
+        } else {
+            chaosEffectEl.hidden = true;
+        }
 
         const fieldsContainer = document.getElementById('choices-fields');
         fieldsContainer.innerHTML = '';

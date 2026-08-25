@@ -354,6 +354,19 @@
                     <button id="team-decision-reject-button" type="button" hidden>Reject</button>
                 </div>
 
+                <div id="chaos-draft-offer-panel" hidden>
+                    <h4>Chaos Draft: choose an effect</h4>
+                    <p id="chaos-draft-offer-status"></p>
+                    <div id="chaos-draft-offer-choices"></div>
+                    <div id="chaos-draft-offer-attach" hidden>
+                        <p id="chaos-draft-offer-attach-prompt">Choose a card to attach it to:</p>
+                        <ul id="chaos-draft-offer-attach-cards"></ul>
+                        <button id="chaos-draft-offer-back-button" type="button">Back</button>
+                    </div>
+                    <button id="chaos-draft-offer-confirm-button" type="button" hidden>Approve</button>
+                    <button id="chaos-draft-offer-reject-button" type="button" hidden>Reject</button>
+                </div>
+
                 <div id="initial-card-pass-panel" hidden>
                     <h4>Pass 2 cards to your teammate</h4>
                     <p id="initial-card-pass-status"></p>
@@ -363,6 +376,7 @@
 
                 <div id="choices-panel" hidden>
                     <img id="choices-card-art" class="card-detail-art">
+                    <p id="choices-card-chaos-effect" hidden></p>
 
                     <div id="choices-fields"></div>
                     <p id="choices-validation" class="error" hidden></p>
@@ -451,6 +465,7 @@
                     <option value="grid_draft">Grid Draft</option>
                     <option value="rotisserie_draft">Rotisserie Draft</option>
                     <option value="tiered_rotisserie_draft">Tiered Rotisserie Draft</option>
+                    <option value="chaos_draft">Chaos Draft</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -800,6 +815,7 @@
         <img id="card-detail-art" class="card-detail-art">
         <p id="card-detail-meta"></p>
         <p id="card-detail-creativity-copy" hidden></p>
+        <p id="card-detail-chaos-effect" hidden></p>
         <p id="card-detail-suppression" hidden></p>
         <p id="card-detail-ownership" hidden></p>
         <p id="card-detail-affected-by" hidden></p>

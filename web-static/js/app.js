@@ -213,6 +213,39 @@ function confirmTeamDecision(gameId, approve) {
     });
 }
 
+// Chaos Draft (issue #405): the round-start choice/attach mechanic. The
+// offer itself is fetched (and, on its very first call this round,
+// lazily created server-side) via its own dedicated endpoint rather than
+// through getGameState() -- see GameService::chaosDraftOfferFor()'s own
+// docblock for why. chooseChaosDraftEffect() is the 'draft'/'closed_team'
+// formats' own direct resolve; proposeChaosDraftEffect()/
+// confirmChaosDraftEffect() are Open Team Play's two-step counterpart,
+// mirroring proposeTeamDecision()/confirmTeamDecision() above exactly.
+function getChaosDraftOffer(gameId) {
+    return apiRequest('/games/chaos-draft-offer?game_id=' + gameId);
+}
+
+function chooseChaosDraftEffect(gameId, chosenEffectId, attachGameCardId) {
+    return apiRequest('/games/chaos-draft-effect', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'choose', chosen_effect_id: chosenEffectId, attach_game_card_id: attachGameCardId }),
+    });
+}
+
+function proposeChaosDraftEffect(gameId, chosenEffectId, attachGameCardId) {
+    return apiRequest('/games/chaos-draft-effect', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'propose', chosen_effect_id: chosenEffectId, attach_game_card_id: attachGameCardId }),
+    });
+}
+
+function confirmChaosDraftEffect(gameId, approve) {
+    return apiRequest('/games/chaos-draft-effect', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'confirm', approve }),
+    });
+}
+
 // 'closed_team's own pregame mechanic -- see "Closed Team Play" in
 // web-static/README.md: pass exactly 2 hand cards to your teammate,
 // face down, before round 1 can begin.
@@ -732,6 +765,7 @@ const DECK_TYPE_LABELS = {
     grid_draft: 'Grid Draft',
     rotisserie_draft: 'Rotisserie Draft',
     tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
+    chaos_draft: 'Chaos Draft',
     one_of_each: 'One of Each Card',
 };
 

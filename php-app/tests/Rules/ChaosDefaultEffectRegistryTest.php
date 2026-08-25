@@ -76,4 +76,41 @@ final class ChaosDefaultEffectRegistryTest extends TestCase
         $missing = array_filter($effectKeys, static fn (string $key) => !$registry->has($key));
         self::assertSame([], array_values($missing), 'Missing ChaosMoodEffect registrations for DB-seeded keys: ' . implode(', ', $missing));
     }
+
+    /**
+     * A bug caught live: migration 0183's own chaos_010 row carried a
+     * stray trailing apostrophe in its rules_text (an extra `'''` at the
+     * end of the SQL string literal, rather than the intended closing
+     * `'`) -- rendered to a player as "...into the discard pile.'", a
+     * visible typo nothing else in this test file would have caught since
+     * the other two tests above only check effect_key coverage, never
+     * rules_text content.
+     */
+    public function testNoRulesTextEndsWithAStrayApostrophe(): void
+    {
+        $host = getenv('TEST_DB_HOST') ?: '127.0.0.1';
+        $port = getenv('TEST_DB_PORT') ?: '3306';
+        $name = getenv('TEST_DB_NAME') ?: 'moodswings_test';
+        $user = getenv('TEST_DB_USER') ?: 'root';
+        $password = getenv('TEST_DB_PASSWORD') ?: '';
+
+        try {
+            $pdo = new PDO(
+                "mysql:host={$host};port={$port};dbname={$name};charset=utf8mb4",
+                $user,
+                $password,
+                [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
+            );
+        } catch (PDOException $e) {
+            self::markTestSkipped('No test MySQL database available: ' . $e->getMessage());
+        }
+
+        $rows = $pdo->query('SELECT effect_key, rules_text FROM chaos_effects')->fetchAll();
+        $offenders = array_values(array_filter(
+            $rows,
+            static fn (array $row): bool => str_ends_with((string) $row['rules_text'], "'"),
+        ));
+
+        self::assertSame([], $offenders, 'chaos_effects.rules_text should never end with a stray apostrophe');
+    }
 }

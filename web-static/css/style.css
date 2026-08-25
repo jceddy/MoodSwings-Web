@@ -1149,6 +1149,30 @@ body.game-page {
     background: #b00020;
 }
 
+/* Chaos Draft (issue #405): the attached effect's own rarity, same corner
+   as Copy/Recolored (nudged below them when both are present, same
+   sibling-combinator stacking those two already use) -- purely
+   informational (see buildCardThumb()'s own comment), so it never
+   overlaps Suppressed's own full-width bottom badge in the common case. */
+.card-thumb__badge--chaos {
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
+    left: calc(0.25rem * var(--card-scale, 1));
+}
+
+.card-thumb__badge--copy + .card-thumb__badge--chaos,
+.card-thumb__badge--recolored + .card-thumb__badge--chaos {
+    top: calc((0.25rem + 20px + 22px) * var(--card-scale, 1));
+}
+
+.card-thumb__badge--copy + .card-thumb__badge--recolored + .card-thumb__badge--chaos {
+    top: calc((0.25rem + 20px + 44px) * var(--card-scale, 1));
+}
+
+.card-thumb__badge--chaos-common { background: #5a5a5a; }
+.card-thumb__badge--chaos-uncommon { background: #2c6e49; }
+.card-thumb__badge--chaos-rare { background: #1f6fb2; }
+.card-thumb__badge--chaos-mythic { background: #8a3ffc; }
+
 /* -- Discard pile stacking (issue #142) ------------------------------
    Cards fan into however many columns discardStackColumnCount() (see
    web-static/js/game.js) works out fit #discard-list's own current width,
@@ -2156,6 +2180,22 @@ dialog#deck-builder-dialog[open] {
         left: calc(0.5rem * var(--card-scale, 1));
         right: calc(0.5rem * var(--card-scale, 1));
         bottom: calc(0.5rem * var(--card-scale, 1));
+    }
+
+    /* Doubled counterparts of .card-thumb__badge--chaos and its own
+       sibling-combinator stacking further up. */
+    .card-thumb__badge--chaos {
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
+        left: calc(0.5rem * var(--card-scale, 1));
+    }
+
+    .card-thumb__badge--copy + .card-thumb__badge--chaos,
+    .card-thumb__badge--recolored + .card-thumb__badge--chaos {
+        top: calc((0.5rem + 40px + 44px) * var(--card-scale, 1));
+    }
+
+    .card-thumb__badge--copy + .card-thumb__badge--recolored + .card-thumb__badge--chaos {
+        top: calc((0.5rem + 40px + 88px) * var(--card-scale, 1));
     }
 
     /* Doubled counterpart of .grid-draft-cell/.grid-draft-cell--empty's

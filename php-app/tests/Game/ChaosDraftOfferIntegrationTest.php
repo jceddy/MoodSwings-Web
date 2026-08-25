@@ -177,6 +177,33 @@ final class ChaosDraftOfferIntegrationTest extends TestCase
         self::assertNull($this->games->chaosDraftOfferFor(1, $players[1]));
     }
 
+    /**
+     * A bug caught live (same shape as GameServiceIntegrationTest's own
+     * testClosedTeamLeaderDecisionIsLoggedAsBeingChosenNotAsAPlay()):
+     * describeEvent() never got a case added for
+     * 'chaos_draft_effect_attached', so it fell through to the generic
+     * "{actor} played {card}" default -- misleadingly rendering as though
+     * the card had just been PLAYED, when attaching a chaos effect never
+     * moves it out of hand at all.
+     */
+    public function testChoosingAnEffectIsLoggedAsAttachingNotAsAPlay(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [3], 2 => [55]]);
+        $offer = $this->games->chaosDraftOfferFor(1, $players[1]);
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $handCardId = (int) $handCardRow['id'];
+
+        $this->games->chooseChaosDraftEffect(1, $players[1], $offer['effect_1']['id'], $handCardId);
+
+        $rarity = $this->pdo->query("SELECT rarity FROM chaos_effects WHERE id = {$offer['effect_1']['id']}")->fetchColumn();
+
+        $entry = $this->games->fullEventLog(1)[0];
+        self::assertSame('chaos_draft_effect_attached', $entry['event_type']);
+        self::assertSame($handCardId, $entry['card_id']);
+        $article = $rarity === 'uncommon' ? 'an' : 'a';
+        self::assertSame("alice attached {$article} {$rarity} chaos effect to Charity", $entry['description']);
+    }
+
     public function testChoosingAnEffectNotOfferedIsRejected(): void
     {
         $players = $this->makeChaosDraftGame('draft', [1 => [3], 2 => [55]]);

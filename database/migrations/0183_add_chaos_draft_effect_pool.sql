@@ -53,7 +53,7 @@ INSERT INTO chaos_effects (id, effect_key, rarity, shape, rules_text) VALUES
 (7, 'chaos_007', 'common', 'after_playing', 'After playing this mood — Choose up to two players. For each chosen player, put one of their moods with a value of 5 or more into the discard pile.'),
 (8, 'chaos_008', 'common', 'after_playing', 'After playing this mood — You may discard a card from your hand with a  0, 1, 2, or 3 in its top right corner. If you do, this mood''s value becomes 5.'),
 (9, 'chaos_009', 'common', 'while_in_play', 'While in play — This mood''s value is 3 if there are two or more black and/or red moods.'),
-(10, 'chaos_010', 'rare', 'after_playing', 'After playing this mood — Starting with the next player in turn order, each player may choose a color. Put each other mood that shares one of those colors into the discard pile.'''),
+(10, 'chaos_010', 'rare', 'after_playing', 'After playing this mood — Starting with the next player in turn order, each player may choose a color. Put each other mood that shares one of those colors into the discard pile.'),
 (11, 'chaos_011', 'uncommon', 'while_in_play', 'While in play - If this mood moves from play to the discard pile, put two white moods with value 1 named Smugness into play.'),
 (12, 'chaos_012', 'uncommon', 'after_playing', 'After playing this mood — You may discard a green or blue card from your hand. If you do, suppress any mood. It remains suppressed for as long as you have this mood.'),
 (13, 'chaos_013', 'uncommon', 'after_playing', 'After playing this mood — You may play an additional mood this turn if it has a 0, 2, 4, or 6 in its top right corner.'),
