@@ -375,12 +375,11 @@ final class BoardState
      *     returns null since $chaosEffectIdFor is empty too.
      * @param array<int, int> $chaosEffectIdFor cardId (instance id) =>
      *     chaos_effects.id, for whichever card (if any) currently carries
-     *     an attached Chaos Draft effect -- see chaosEffectRow()'s own
-     *     docblock and attachChaosEffect(). Keyed by the RAW instance id,
-     *     never resolved through effectiveCardId() the way catalogRow()
-     *     is: an attached effect is a property of one specific physical
-     *     card, independent of whatever it's currently copying (Creativity)
-     *     or being copied by.
+     *     an attached Chaos Draft effect -- keyed by the RAW instance id
+     *     (what's actually attached to that physical card), but read back
+     *     out through chaosEffectRow()'s own effectiveCardId() resolution
+     *     -- see that method's own docblock for why a Creativity copy
+     *     inherits the copied card's attached effect instead.
      */
     public function __construct(
         private readonly array $catalog,
@@ -454,16 +453,40 @@ final class BoardState
     }
 
     /**
-     * The chaos_effects row currently attached to $cardId (Chaos Draft,
-     * issue #405), or null if it carries none -- see the constructor's own
-     * $chaosEffectIdFor docblock and attachChaosEffect(). Keyed by the RAW
-     * instance id, same as $chaosEffectIdFor itself.
+     * The chaos_effects row currently applying to $cardId (Chaos Draft,
+     * issue #405), or null if none applies -- see the constructor's own
+     * $chaosEffectIdFor docblock and attachChaosEffect().
+     *
+     * Resolved through effectiveCardId(), NOT the raw instance id (a
+     * reversal, confirmed by the maintainer, of this method's own
+     * original design -- issue #405 follow-up): Creativity's printed text
+     * is "an exact copy of that printed card... including dice, color,
+     * and abilities," and a chaos effect attached to whatever it's
+     * copying is part of what that mood currently does, the same way its
+     * value/color already fully replace Creativity's own (nonexistent)
+     * printed ones -- see catalogRow()'s own effectiveCardId() use for
+     * the parallel. This is a full replacement, not a stack: if Creativity
+     * ITSELF separately carries its own attached chaos effect (from its
+     * own round offer) while copying a card that also carries one, only
+     * the copied card's effect applies while the copy is active --
+     * $chaosEffectIdFor[$cardId] is never consulted once effectiveCardId()
+     * resolves to a different card. A card that isn't (or isn't currently)
+     * copying anything has effectiveCardId($cardId) === $cardId, so this
+     * is a no-op change for every other card -- including Creativity
+     * itself played with no copy target ("just a blue card worth 0"),
+     * which still keeps its own attached effect since there's nothing to
+     * replace it with.
+     *
+     * chaosEffectId() (persistence only -- see its own docblock)
+     * deliberately does NOT get this same treatment: what's actually
+     * attached to $cardId's own row in the database is unaffected by
+     * whatever it happens to be copying at read time.
      *
      * @return ?array{effectKey:string,rarity:string,shape:string,rulesText:string}
      */
     public function chaosEffectRow(int $cardId): ?array
     {
-        $chaosId = $this->chaosEffectIdFor[$cardId] ?? null;
+        $chaosId = $this->chaosEffectIdFor[$this->effectiveCardId($cardId)] ?? null;
         if ($chaosId === null) {
             return null;
         }
@@ -477,7 +500,7 @@ final class BoardState
         return $this->chaosEffectRow($cardId)['effectKey'] ?? null;
     }
 
-    /** The raw chaos_effects.id attached to $cardId, or null -- unlike chaosEffectRow(), doesn't require $chaosCatalog to actually contain it, since BoardStateRepository::save() just needs the id to persist, not the full row. */
+    /** The raw chaos_effects.id attached to $cardId's own row, or null -- unlike chaosEffectRow(), NOT resolved through effectiveCardId() (persistence needs to know what's physically attached to THIS instance, regardless of what it's currently copying), and doesn't require $chaosCatalog to actually contain it, since BoardStateRepository::save() just needs the id to persist, not the full row. */
     public function chaosEffectId(int $cardId): ?int
     {
         return $this->chaosEffectIdFor[$cardId] ?? null;

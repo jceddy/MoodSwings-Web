@@ -2617,6 +2617,32 @@ original play) whenever the repeated card carries an attached
 `chaos_099`-carrying card gets asked to choose a fresh value for the
 repeat too, not just for the printed effect.
 
+**Creativity now copies an attached chaos effect too (issue #405
+follow-up -- a maintainer ruling, reversing this method's own original
+design).** Creativity's own printed text is "an exact copy of that
+printed card... including dice, color, and abilities" -- `BoardState::
+chaosEffectRow()` originally read `$chaosEffectIdFor` by the RAW
+instance id only, deliberately independent of whatever a card was
+currently copying or being copied by (an attached chaos effect isn't
+part of the "printed card" a Creativity copy is defined against). The
+maintainer confirmed this should change: a chaos effect attached to
+whatever Creativity is copying is now treated as part of what that mood
+currently does, the same way its value/color/dice already fully replace
+Creativity's own (nonexistent) printed ones. `chaosEffectRow()` now
+resolves `$chaosEffectIdFor` through `effectiveCardId()` instead of the
+raw id -- a no-op for every card that isn't (or isn't currently)
+copying anything, so nothing changes for the other 132 cards. This is a
+full REPLACEMENT, not a stack (confirmed by the maintainer): if
+Creativity itself separately carries its own attached chaos effect
+while copying a card that carries a different one, only the copied
+card's effect applies -- `$chaosEffectIdFor[$cardId]` (Creativity's own
+raw attachment) is never consulted once `effectiveCardId()` resolves to
+a different card. `chaosEffectId()` (persistence -- what
+`BoardStateRepository::save()` writes to `game_cards.chaos_effect_id`)
+deliberately keeps the old RAW-id-only behavior: what's actually
+attached to a card's own database row can't depend on what it happens
+to be copying at read time.
+
 Nine `ChaosCardChoiceSchema` fields (chaos_012/014/041/049/058/059/062/096/118's
 own "if you do"/"if choosing X above"/"if mode is Y" companion fields) were
 originally marked `required: true` unconditionally, when the underlying
