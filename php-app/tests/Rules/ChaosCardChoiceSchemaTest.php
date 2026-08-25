@@ -70,7 +70,7 @@ final class ChaosCardChoiceSchemaTest extends TestCase
         foreach (['chaos_007', 'chaos_020', 'chaos_028', 'chaos_048', 'chaos_076', 'chaos_101'] as $effectKey) {
             $fields = ChaosCardChoiceSchema::forEffectKey($effectKey);
             self::assertCount(1, $fields, "{$effectKey} should have exactly one field");
-            self::assertSame('target_player_ids', $fields[0]['key']);
+            self::assertSame('target_mood_ids', $fields[0]['key']);
             self::assertTrue($fields[0]['multi']);
         }
     }

@@ -2754,6 +2754,34 @@ escape uncaught mid-loop. `GameService::chaosDraftOfferBlocksPlayer()`
 dispatch, falling through to the loop's own "waiting on a real player"
 `break` instead.
 
+**`ChaosActOnChosenPlayersMoodEffect` lets the acting player choose the
+target moods directly (issue #405 follow-up -- a maintainer ruling
+reversing this class's own original design).** chaos_007/020/028/048/076/
+101 ("choose up to two players; for each, [discard/suppress/return to
+hand] one of their moods [matching some filter]") originally read a
+`target_player_ids` field and picked a uniformly-random qualifying mood
+per chosen player -- the same "an opponent's own decision becomes
+randomized" reading `Effects/CrueltyEffect.php`'s own docblock uses for a
+genuinely different shape. The maintainer flagged this as wrong for this
+class specifically: unlike Cruelty, it's the ACTING player naming a
+target, not an opponent making their own choice, so randomizing it away
+just took a real decision away from the player (reported live: choosing
+which of a player's moods with value 3 or less goes to the discard pile
+"seems to currently be choosing randomly"). The class now reads
+`target_mood_ids` directly instead -- the concrete target moods (up to
+`$maxPlayers`, one per owner) rather than "players" plus a separate
+"which of their moods" step -- mirroring the exact shape and validation
+its printed-card analogs already use: Courage/chaos_007, Pacifism/
+chaos_020, Anxiety/chaos_028, Panic/chaos_048, Spite/chaos_076, Shock/
+chaos_101. `ChaosCardChoiceSchema`'s six entries for these keys were
+updated to match (`target_mood_ids`, `multi: true`, the same `filter` each
+already had, and a `distinct_owners` constraint -- an existing constraint
+type already used by the six printed-card entries above and already
+implemented client-side in `game.js`'s `constraintMessage()`, just never
+previously exercised by any chaos effect). The constructor signature
+(`$action`, `$maxPlayers`, `$qualifies`, `$excludeThisCard`) is unchanged,
+so all six `ChaosDefaultEffectRegistry` registrations needed no changes.
+
 ### Winston Draft
 
 `deck_type: 'winston_draft'` (issue #89) is the second `format: 'draft'`
