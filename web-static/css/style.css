@@ -1826,6 +1826,18 @@ dialog#deck-builder-dialog[open] {
     margin-right: 0.5rem;
 }
 
+/* Chaos Draft's own round-start offer (issue #405) -- the two effect
+   choice buttons carry a full paragraph of rules text each, so unlike
+   #team-decision-candidates' own short side-by-side buttons above, these
+   stack vertically (one per line, full width) rather than wrap awkwardly
+   mid-sentence in a row. Without this they sat flush against each other
+   with no visual separation at all (a bug caught live). */
+#chaos-draft-offer-choices {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
 #choices-panel input[type="checkbox"],
 #pending-decision-panel input[type="checkbox"] {
     margin-left: 0.5rem;

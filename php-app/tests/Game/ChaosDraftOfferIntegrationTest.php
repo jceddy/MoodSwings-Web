@@ -297,4 +297,220 @@ final class ChaosDraftOfferIntegrationTest extends TestCase
         $this->expectException(GameStateException::class);
         $this->games->proposeChaosDraftEffect(1, $players[1], $offer['effect_1']['id'], (int) $handCardRow['id']);
     }
+
+    /**
+     * Bug caught live (a user report, not a review finding): an attached
+     * chaos effect that reads a PlayerChoices value (chosen number/mood/
+     * player/etc.) never had anything to expose that field to the
+     * frontend with -- unlike a base card's own choice_fields (driven by
+     * CardChoiceSchema), nothing computed the equivalent for an attached
+     * chaos effect, so GameService::serializeCard() never surfaced it and
+     * the play-card panel never rendered a prompt for it at all. The
+     * effect wasn't broken -- $choices->int('value') was always null
+     * because nothing could ever populate it. See ChaosCardChoiceSchema's
+     * own docblock for the fix (a synthetic 'chaos'-keyed nested field,
+     * reusing the same nested-field machinery Duplicity's repeat offer
+     * already exercises).
+     */
+    public function testAttachedChaosEffectRequiringAChoiceExposesANestedChaosField(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]); // Apathy, Dignity
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $chaos035Id = (int) $this->pdo->query("SELECT id FROM chaos_effects WHERE effect_key = 'chaos_035'")->fetchColumn();
+        $this->pdo->prepare('UPDATE game_cards SET chaos_effect_id = :chaos_effect_id WHERE id = :id')
+            ->execute(['chaos_effect_id' => $chaos035Id, 'id' => $handCardRow['id']]);
+
+        $state = $this->games->getState(1, 1); // alice, user_id 1
+        $apathy = null;
+        foreach ($state['you']['hand'] as $card) {
+            if ($card['card_id'] === (int) $handCardRow['id']) {
+                $apathy = $card;
+            }
+        }
+        self::assertNotNull($apathy, 'Apathy should still be in hand with the chaos effect attached');
+
+        $chaosField = null;
+        foreach ($apathy['choice_fields'] as $field) {
+            if ($field['key'] === 'chaos') {
+                $chaosField = $field;
+            }
+        }
+        self::assertNotNull($chaosField, 'choice_fields should carry a nested chaos field for the attached chaos_035 effect');
+        self::assertSame('nested', $chaosField['type']);
+        self::assertCount(1, $chaosField['fields']);
+        self::assertSame('value', $chaosField['fields'][0]['key']);
+        self::assertSame('value', $chaosField['fields'][0]['type']);
+    }
+
+    /**
+     * Issue #405 follow-up (a rule the maintainer asked for explicitly):
+     * "the player needs to choose and apply a chaos effect before they
+     * can take their turn." GameService::assertChaosDraftOfferResolved()
+     * is the gate; playMood()/pass() both call it right after
+     * assertNoPendingDecision().
+     */
+    public function testPlayMoodIsRejectedWhileTheActingPlayersOwnOfferIsUnresolved(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]); // Apathy, Dignity
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("Choose and attach this round's Chaos Draft effect before you can play or pass");
+        $this->games->playMood(1, $players[1], (int) $handCardRow['id'], []);
+    }
+
+    public function testPassIsRejectedWhileTheActingPlayersOwnOfferIsUnresolved(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("Choose and attach this round's Chaos Draft effect before you can play or pass");
+        $this->games->pass(1, $players[1]);
+    }
+
+    /**
+     * The gate rolls the round's own offer itself (ensureChaosDraftOffersForRound())
+     * rather than assuming the frontend's own GET /games/chaos-draft-offer
+     * poll already ran -- proven here by never calling chaosDraftOfferFor()
+     * at all before playMood(), unlike every other test in this file.
+     */
+    public function testPlayMoodRollsThisRoundsOfferItselfEvenIfNeverPolledFirst(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]);
+
+        $this->expectException(GameStateException::class);
+        $this->games->playMood(1, $players[1], 999999, []);
+    }
+
+    /**
+     * playMood() itself (not just pass()) is exercised here -- but the
+     * card played is deliberately left WITHOUT the offer's own effect
+     * attached to it (effect_1 goes onto the same card just to resolve
+     * the offer; nothing about this test depends on the attached effect
+     * itself firing, only that the gate no longer blocks the play once
+     * resolved), so this stays independent of any specific chaos effect
+     * class actually being registered -- see
+     * ChaosDraftAttachedEffectChoiceIntegrationTest.php for a full
+     * real-registry play-through of an attached effect actually firing.
+     */
+    public function testPlayMoodSucceedsOnceTheOfferIsResolved(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]);
+        $this->games->chaosDraftOfferFor(1, $players[1]); // rolls this round's own offer row
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $handCardId = (int) $handCardRow['id'];
+        // Resolved directly (not via chooseChaosDraftEffect(), whose
+        // randomly-offered effect_1/effect_2 aren't registered in this
+        // file's own empty ChaosEffectRegistry -- see this file's own
+        // class docblock) -- only the gate itself is under test here.
+        $this->pdo->prepare(
+            'UPDATE chaos_draft_offers SET resolved_at = NOW() WHERE game_round_id = (SELECT id FROM game_rounds WHERE game_id = 1) AND game_player_id = :player'
+        )->execute(['player' => $players[1]]);
+
+        $result = $this->games->playMood(1, $players[1], $handCardId, []);
+
+        self::assertFalse($result['pending_decision'] ?? false);
+    }
+
+    public function testPassSucceedsOnceTheOfferIsResolved(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]);
+        $offer = $this->games->chaosDraftOfferFor(1, $players[1]);
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $this->games->chooseChaosDraftEffect(1, $players[1], $offer['effect_1']['id'], (int) $handCardRow['id']);
+
+        $result = $this->games->pass(1, $players[1]);
+
+        self::assertFalse($result['game_completed']);
+    }
+
+    /**
+     * The gate only blocks the ACTING player (or their team) -- someone
+     * ELSE's own still-open offer this round never stops you, matching
+     * chaosDraftOfferFor()'s own "resolved independently, not turn-gated"
+     * design.
+     */
+    public function testAnotherPlayersUnresolvedOfferDoesNotBlockYourOwnTurn(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [55], 2 => [8]]);
+        $this->games->chaosDraftOfferFor(1, $players[1]); // rolls both players' own offer rows
+        $this->pdo->prepare(
+            'UPDATE chaos_draft_offers SET resolved_at = NOW() WHERE game_round_id = (SELECT id FROM game_rounds WHERE game_id = 1) AND game_player_id = :player'
+        )->execute(['player' => $players[1]]);
+        // Player 2's own offer is deliberately left unresolved.
+
+        $handCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $result = $this->games->playMood(1, $players[1], (int) $handCardRow['id'], []);
+
+        self::assertFalse($result['pending_decision'] ?? false);
+    }
+
+    /**
+     * A player with an empty hand at the start of the round gets no
+     * offer at all (ensureChaosDraftOffersForRound()'s own "no cards, no
+     * choice" rule) -- nothing to block them on, so pass() must still
+     * work normally. Empty hand also means nothing to play, so pass() is
+     * the only turn action worth exercising here.
+     */
+    public function testAPlayerWithNoOfferAtAllIsNeverBlocked(): void
+    {
+        $players = $this->makeChaosDraftGame('draft', [1 => [], 2 => [8]]);
+
+        $result = $this->games->pass(1, $players[1]);
+
+        self::assertFalse($result['game_completed']);
+    }
+
+    /**
+     * Open Team Play: the gate checks the TEAM's own shared offer, not an
+     * individual one -- unresolved until BOTH the propose and confirm
+     * steps complete, blocking the currently-acting teammate the whole
+     * time even though it's specifically their own turn.
+     */
+    public function testOpenTeamPlayBlocksTheActingTeammateUntilTheTeamOfferIsResolved(): void
+    {
+        $players = $this->makeChaosDraftGame('team', [1 => [3], 2 => [55], 3 => [8], 4 => [33]], teamIdBySeat: [1 => 0, 2 => 1, 3 => 0, 4 => 1]);
+
+        $this->expectException(GameStateException::class);
+        $this->expectExceptionMessage("Choose and attach this round's Chaos Draft effect before you can play or pass");
+        $this->games->pass(1, $players[1]);
+    }
+
+    public function testOpenTeamPlaySucceedsOnceTheTeamOfferIsFullyResolved(): void
+    {
+        $players = $this->makeChaosDraftGame('team', [1 => [3], 2 => [55], 3 => [8], 4 => [33]], teamIdBySeat: [1 => 0, 2 => 1, 3 => 0, 4 => 1]);
+        $offer = $this->games->chaosDraftOfferFor(1, $players[1]);
+        $ownHandCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $this->games->proposeChaosDraftEffect(1, $players[1], $offer['effect_1']['id'], (int) $ownHandCardRow['id']);
+        $this->games->confirmChaosDraftEffect(1, $players[3], true);
+
+        // advanceTeamTurn() (unrelated to this gate) expects round 1's own
+        // team_turn_1_game_player_id already set by the normal team
+        // turn-order decision flow -- makeChaosDraftGame()'s own raw
+        // INSERT doesn't run that flow, so it's set directly here purely
+        // so pass() has a real turn to advance; nothing about the gate
+        // itself depends on this.
+        $this->pdo->prepare('UPDATE game_rounds SET team_turn_1_game_player_id = :player WHERE game_id = 1')
+            ->execute(['player' => $players[1]]);
+
+        $result = $this->games->pass(1, $players[1]);
+
+        self::assertFalse($result['game_completed']);
+    }
+
+    /**
+     * Still awaiting the OTHER teammate's own confirmation -- proposing
+     * alone doesn't resolve the team's offer, so the acting player stays
+     * blocked exactly like before anyone proposed anything.
+     */
+    public function testOpenTeamPlayStillBlocksWhileAwaitingConfirmation(): void
+    {
+        $players = $this->makeChaosDraftGame('team', [1 => [3], 2 => [55], 3 => [8], 4 => [33]], teamIdBySeat: [1 => 0, 2 => 1, 3 => 0, 4 => 1]);
+        $offer = $this->games->chaosDraftOfferFor(1, $players[1]);
+        $ownHandCardRow = $this->pdo->query('SELECT id FROM game_cards WHERE owner_game_player_id = ' . $players[1] . ' AND zone = "hand"')->fetch();
+        $this->games->proposeChaosDraftEffect(1, $players[1], $offer['effect_1']['id'], (int) $ownHandCardRow['id']);
+
+        $this->expectException(GameStateException::class);
+        $this->games->pass(1, $players[1]);
+    }
 }

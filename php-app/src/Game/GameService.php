@@ -16,6 +16,7 @@ use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
+use MoodSwings\Rules\ChaosCardChoiceSchema;
 use MoodSwings\Rules\ChaosEffectRegistry;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodInPlay;
@@ -4366,6 +4367,7 @@ final class GameService
             $round = $this->currentRound($gameId);
             $roundId = (int) $round['id'];
             $this->assertNoPendingDecision($roundId);
+            $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round, $gamePlayerId);
 
             $state = $this->boardStates->load($gameId);
             $playerChoices = new PlayerChoices($choices);
@@ -4421,6 +4423,7 @@ final class GameService
         $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $automated): array {
             $round = $this->currentRound($gameId);
             $this->assertNoPendingDecision((int) $round['id']);
+            $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round, $gamePlayerId);
 
             if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
                 throw new GameStateException("It is not player {$gamePlayerId}'s turn");
@@ -4570,6 +4573,21 @@ final class GameService
             }
             $roundId = (int) $round['id'];
 
+            // Chaos Draft's own round-start offer (issue #405 follow-up):
+            // checked before the pending-batch/current-turn dispatch below,
+            // since assertChaosDraftOfferResolved() would otherwise reject
+            // a bot's own playMood()/pass() call the instant it's tried --
+            // resolving here first keeps that gate a no-op for bots
+            // (matching advanceBotTeamDecision()'s own "handle the bot's
+            // forced decision before its ordinary turn action" placement).
+            // Needs $round already loaded (unlike advanceBotTeamDecision()
+            // above), since an offer is scoped to game_round_id.
+            $chaosDraftOfferResult = $this->advanceBotChaosDraftOffer($gameId, $this->fetchGame($gameId), $round, $botGamePlayerIds);
+            if ($chaosDraftOfferResult !== null) {
+                $lastResult = $chaosDraftOfferResult;
+                continue;
+            }
+
             $batch = $this->activePendingBatch($roundId);
             if ($batch !== null) {
                 $decision = $this->activePendingDecision((int) $batch['id']);
@@ -4633,6 +4651,20 @@ final class GameService
                 }
 
                 break; // waiting on a real player either way
+            }
+
+            // Chaos Draft (issue #405 follow-up): advanceBotChaosDraftOffer()
+            // above already resolves every bot's own OFFER it possibly
+            // can, but a mixed-team offer proposed by a bot and still
+            // awaiting its HUMAN teammate's own confirm can leave
+            // $currentTurnGamePlayerId's own turn still genuinely blocked
+            // (assertChaosDraftOfferResolved() would throw) even though
+            // it belongs to a bot -- dispatching to either branch below
+            // unconditionally would let that exception escape uncaught.
+            // Treated the same as any other "waiting on a real player"
+            // case already in this loop.
+            if ($this->chaosDraftOfferBlocksPlayer($gameId, $this->fetchGame($gameId), $round, $currentTurnGamePlayerId)) {
+                break;
             }
 
             if (in_array($currentTurnGamePlayerId, $botGamePlayerIds, true)) {
@@ -4850,6 +4882,102 @@ final class GameService
         }
 
         return $this->confirmTeamDecision($gameId, $confirmerId, true);
+    }
+
+    /**
+     * advanceAutomatedTurns()'s own Chaos Draft branch (issue #405
+     * follow-up) -- resolves a bot's own outstanding round-start offer
+     * (BotPlayerService::chooseChaosDraftEffectAttachment()) before
+     * assertChaosDraftOfferResolved() ever gets a chance to reject its
+     * playMood()/pass() call. A no-op (null) for every non-chaos_draft
+     * game, a game with no bots seated, or a round whose offers are all
+     * already resolved (or don't apply to any bot).
+     *
+     * Open Team Play's own propose/confirm two-step mirrors
+     * advanceBotTeamDecision() above exactly -- either bot teammate may
+     * propose (attaching to whichever of the two teammates' hands has the
+     * lowest-value candidate, since the offer accepts either), and only
+     * the non-proposing teammate may confirm (a bot always approves,
+     * never rejects, same as advanceBotTeamDecision()'s own confirm step).
+     *
+     * @param int[] $botGamePlayerIds
+     * @return array<string, mixed>|null
+     */
+    private function advanceBotChaosDraftOffer(int $gameId, array $game, array $round, array $botGamePlayerIds): ?array
+    {
+        if ($game['deck_type'] !== 'chaos_draft' || $botGamePlayerIds === []) {
+            return null;
+        }
+
+        $this->ensureChaosDraftOffersForRound($gameId, $game, $round);
+        $roundId = (int) $round['id'];
+
+        if ($game['format'] !== 'team') {
+            foreach ($botGamePlayerIds as $botId) {
+                $offer = $this->fetchChaosDraftOffer($roundId, $botId, null);
+                if ($offer === null || $offer['resolved_at'] !== null) {
+                    continue;
+                }
+
+                $state = $this->boardStates->load($gameId);
+                $choice = $this->bots->chooseChaosDraftEffectAttachment($state, $state->hand($botId), (int) $offer['effect_id_1']);
+
+                return $this->chooseChaosDraftEffect($gameId, $botId, $choice['effect_id'], $choice['attach_game_card_id']);
+            }
+
+            return null;
+        }
+
+        $teamIdByGamePlayer = $this->teamIdByGamePlayer($gameId);
+        $checkedTeamIds = [];
+        foreach ($botGamePlayerIds as $botId) {
+            $teamId = $teamIdByGamePlayer[$botId] ?? null;
+            if ($teamId === null || in_array($teamId, $checkedTeamIds, true)) {
+                continue;
+            }
+            $checkedTeamIds[] = $teamId;
+
+            $offer = $this->fetchChaosDraftOffer($roundId, null, $teamId);
+            if ($offer === null || $offer['resolved_at'] !== null) {
+                continue;
+            }
+
+            $teamBotIds = array_values(array_intersect($this->teamMembers($gameId, $teamId), $botGamePlayerIds));
+
+            if ($offer['phase'] === 'propose') {
+                if ($teamBotIds === []) {
+                    continue; // waiting on a real player to propose
+                }
+
+                $state = $this->boardStates->load($gameId);
+                $candidateHandCardIds = [];
+                foreach ($this->teamMembers($gameId, $teamId) as $memberId) {
+                    $candidateHandCardIds = [...$candidateHandCardIds, ...$state->hand($memberId)];
+                }
+                $choice = $this->bots->chooseChaosDraftEffectAttachment($state, $candidateHandCardIds, (int) $offer['effect_id_1']);
+
+                return $this->proposeChaosDraftEffect($gameId, $teamBotIds[0], $choice['effect_id'], $choice['attach_game_card_id']);
+            }
+
+            // 'confirm' -- only the non-proposing teammate may confirm
+            // (confirmChaosDraftEffect() itself rejects the proposer
+            // trying to).
+            $proposerId = (int) $offer['proposer_game_player_id'];
+            $confirmerId = null;
+            foreach ($teamBotIds as $memberBotId) {
+                if ($memberBotId !== $proposerId) {
+                    $confirmerId = $memberBotId;
+                    break;
+                }
+            }
+            if ($confirmerId === null) {
+                continue; // waiting on a real player to confirm
+            }
+
+            return $this->confirmChaosDraftEffect($gameId, $confirmerId, true);
+        }
+
+        return null;
     }
 
     /**
@@ -6971,6 +7099,65 @@ final class GameService
 
             return $this->serializeChaosDraftOffer($offer);
         });
+    }
+
+    /**
+     * playMood()/pass() both call this right after assertNoPendingDecision()
+     * (issue #405 follow-up -- a rule the maintainer asked for explicitly:
+     * "the player needs to choose and apply a chaos effect before they can
+     * take their turn"). A no-op for every non-chaos_draft game. Unlike
+     * assertNoPendingDecision(), this only blocks the ACTING player (or
+     * their team, in Open Team Play) -- a still-open offer for someone
+     * ELSE this round never stops anyone but themselves, matching
+     * chaosDraftOfferFor()'s own "resolved independently, not turn-gated"
+     * design (see that method's own docblock).
+     *
+     * Calls ensureChaosDraftOffersForRound() itself rather than assuming
+     * the frontend's own GET /games/chaos-draft-offer poll already rolled
+     * this round's offer -- without that, a fast enough playMood()/pass()
+     * call could race ahead of the first offer poll and slip through with
+     * no chaos_draft_offers row to check against at all.
+     *
+     * Both callers already run inside their own withGameLock() -- this
+     * stays unlocked itself, the same way ensureChaosDraftOffersForRound()
+     * and fetchChaosDraftOffer() (both called from here) already do.
+     */
+    private function assertChaosDraftOfferResolved(int $gameId, array $game, array $round, int $gamePlayerId): void
+    {
+        if ($game['deck_type'] !== 'chaos_draft') {
+            return;
+        }
+
+        $this->ensureChaosDraftOffersForRound($gameId, $game, $round);
+
+        if ($this->chaosDraftOfferBlocksPlayer($gameId, $game, $round, $gamePlayerId)) {
+            throw new GameStateException("Choose and attach this round's Chaos Draft effect before you can play or pass");
+        }
+    }
+
+    /**
+     * The predicate half of assertChaosDraftOfferResolved() above, split
+     * out so advanceAutomatedTurns() can check it too WITHOUT throwing --
+     * a bot whose own turn comes up while its team's offer is proposed
+     * but still awaiting a human teammate's own confirm needs to fall
+     * through to "waiting on a real player" (see that call site's own
+     * comment), not have this exception escape uncaught. Doesn't call
+     * ensureChaosDraftOffersForRound() itself -- every caller either
+     * already called it this same request (assertChaosDraftOfferResolved()
+     * above) or is checking a round advanceBotChaosDraftOffer() already
+     * rolled offers for earlier this same automated-turns iteration.
+     */
+    private function chaosDraftOfferBlocksPlayer(int $gameId, array $game, array $round, int $gamePlayerId): bool
+    {
+        if ($game['deck_type'] !== 'chaos_draft') {
+            return false;
+        }
+
+        $offer = $game['format'] === 'team'
+            ? $this->fetchChaosDraftOffer((int) $round['id'], null, $this->teamIdByGamePlayer($gameId)[$gamePlayerId] ?? null)
+            : $this->fetchChaosDraftOffer((int) $round['id'], $gamePlayerId, null);
+
+        return $offer !== null && $offer['resolved_at'] === null;
     }
 
     /**
@@ -13191,6 +13378,14 @@ final class GameService
         // identity always governs regardless of what it later copies.
         $isCreativityCopy = $inPlay && $effectiveCardId !== $cardId;
 
+        // Chaos Draft (issue #405 follow-up): the effect currently attached
+        // to this specific card instance, if any -- computed once here so
+        // both the choice-fields wiring just below and the 'chaos_effect'
+        // key at the bottom of this method's return can reuse it, rather
+        // than calling BoardState::chaosEffectRow() (a $chaosCatalog map
+        // lookup) twice.
+        $chaosRow = $state->chaosEffectRow($cardId);
+
         $choiceFields = CardChoiceSchema::forEffectKey($catalog['effectKey']);
         if ($reactingViewerId !== null) {
             $choiceFields = [
@@ -13244,6 +13439,34 @@ final class GameService
                     $choiceFields
                 );
             }
+
+            // Chaos Draft (issue #405 follow-up): an attached chaos effect
+            // stacks with (never replaces) this card's own printed ability
+            // -- see ChaosMoodEffect's own docblock and
+            // ChaosCardChoiceSchema's docblock for the full "why." Its own
+            // fields are wrapped in a single synthetic `nested` field keyed
+            // 'chaos' rather than merged flat into $choiceFields: that's
+            // exactly the shape buildFieldRow()/buildChoicesFromFields() in
+            // game.js already know how to render and collect (reused
+            // as-is, no frontend changes needed), and it's what lands the
+            // submitted values at choices['chaos'] -- precisely where
+            // MoodPlayService::resolveAttachedChaosAfterPlaying() reads
+            // them from via PlayerChoices::sub('chaos'). Appended, not
+            // prepended: the base card's own choices (including any
+            // 'cost' stage ones) are always resolved first, matching
+            // afterPlaying()'s own base-then-chaos resolution order.
+            if ($chaosRow !== null) {
+                $chaosChoiceFields = ChaosCardChoiceSchema::forEffectKey($chaosRow['effectKey']);
+                if ($chaosChoiceFields !== []) {
+                    $choiceFields[] = [
+                        'key' => 'chaos',
+                        'type' => 'nested',
+                        'required' => false,
+                        'label' => 'Chaos effect choice',
+                        'fields' => $chaosChoiceFields,
+                    ];
+                }
+            }
         }
 
         return [
@@ -13282,7 +13505,7 @@ final class GameService
             // to yet. Keyed by the raw instance id (not effective/copy-
             // aware) since an attached chaos effect belongs to the
             // physical card, never to whatever it copies.
-            'chaos_effect' => $this->serializeChaosEffectRow($state->chaosEffectRow($cardId)),
+            'chaos_effect' => $this->serializeChaosEffectRow($chaosRow),
         ];
     }
 

@@ -4756,7 +4756,11 @@
         // state.you.is_your_turn always being false for a spectator/replay
         // viewer) so a future change to the state.you stub can never
         // silently re-enable controls for either read-only view.
-        const canAct = !isReadOnlyView() && state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
+        // !chaosDraftOfferOpenForViewer (issue #405 follow-up): mirrors
+        // GameService::assertChaosDraftOfferResolved() -- may be a poll
+        // cycle stale (see that flag's own declaration), so the server's
+        // own rejection message still backs this up either way.
+        const canAct = passButtonCanAct();
 
         document.getElementById('discard-count').textContent = state.discard_pile.length;
         document.getElementById('deck-count').textContent = state.deck_count;
@@ -4819,7 +4823,7 @@
         checkChaosDraftOffer(state);
         renderInitialCardPass(state);
 
-        document.getElementById('pass-button').disabled = !canAct;
+        refreshPassButtonDisabled();
 
         // .hidden was already decided above (before the 'waiting' branch's
         // early return) -- only .disabled needs the in_progress round's
@@ -5107,6 +5111,41 @@
     // offer having since resolved) so a stale selection can never linger
     // into a later round's own different offer.
     let chaosDraftSelectedEffectId = null;
+    // Whether the viewer (or their team) currently has an unresolved
+    // Chaos Draft offer -- GameService::assertChaosDraftOfferResolved()
+    // now rejects playMood()/pass() until it's attached (issue #405
+    // follow-up), so canAct/updatePlayButtonEnabled() below both gate on
+    // this too, matching the server rather than just relying on its own
+    // error message after the fact. Set from renderChaosDraftOffer()'s
+    // own poll, which runs independently of the regular board poll (see
+    // that function's own docblock) -- so this can be a poll cycle stale,
+    // same tradeoff every other chaos-draft-offer UI state already makes.
+    let chaosDraftOfferOpenForViewer = false;
+
+    // Whether #pass-button should currently be clickable -- shared by
+    // renderBoard()'s own regular poll and refreshPassButtonDisabled()
+    // below, so the two can never drift out of sync with each other.
+    function passButtonCanAct() {
+        if (!currentState) {
+            return false;
+        }
+        const pendingDecision = Boolean(currentState.round && currentState.round.pending_decision);
+        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer;
+    }
+
+    // Applies passButtonCanAct() to the DOM immediately -- called both
+    // from renderBoard() and, right after chaosDraftOfferOpenForViewer
+    // changes, from renderChaosDraftOffer() itself (issue #405 follow-up).
+    // That second call matters: the offer panel is driven by its own
+    // separate, faster-than-a-full-poll fetch (see checkChaosDraftOffer()'s
+    // own docblock), so without this, Pass stayed clickable for however
+    // long remained until the NEXT full renderBoard() poll happened to
+    // run -- a live UX gap caught during testing (a click during that
+    // window still failed server-side, but nothing visibly told the
+    // player why).
+    function refreshPassButtonDisabled() {
+        document.getElementById('pass-button').disabled = !passButtonCanAct();
+    }
 
     async function checkChaosDraftOffer(state) {
         const eligible = !isSpectating
@@ -5135,6 +5174,13 @@
     }
 
     function renderChaosDraftOffer(offer) {
+        // See chaosDraftOfferOpenForViewer's own declaration -- offer is
+        // only ever non-null while genuinely unresolved (chaosDraftOfferFor()
+        // returns null once resolved_at is set), so this is exactly
+        // "must I choose/attach before I can play or pass this round."
+        chaosDraftOfferOpenForViewer = offer !== null;
+        refreshPassButtonDisabled();
+
         const panel = document.getElementById('chaos-draft-offer-panel');
         const choicesEl = document.getElementById('chaos-draft-offer-choices');
         const attachEl = document.getElementById('chaos-draft-offer-attach');
@@ -7284,6 +7330,19 @@
     function updatePlayButtonEnabled() {
         const playButton = document.getElementById('play-card-button');
         const validationMessage = document.getElementById('choices-validation');
+
+        // Chaos Draft (issue #405 follow-up): choose-and-attach this
+        // round's own offer is now mandatory before ANY card can be
+        // played -- see GameService::assertChaosDraftOfferResolved().
+        // Checked ahead of is_playable below since is_playable is a
+        // purely card-specific server flag that knows nothing about this
+        // (a DB-level, not BoardState-level, restriction).
+        if (chaosDraftOfferOpenForViewer) {
+            validationMessage.textContent = "Choose and attach this round's Chaos Draft effect first (see above).";
+            validationMessage.hidden = false;
+            playButton.disabled = true;
+            return;
+        }
 
         // is_playable covers everything that isn't a per-field choice
         // mistake -- whose turn it is, a play-grant restriction (e.g.
