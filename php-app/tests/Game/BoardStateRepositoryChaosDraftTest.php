@@ -170,4 +170,45 @@ final class BoardStateRepositoryChaosDraftTest extends TestCase
         self::assertNotFalse($row);
         self::assertSame(3, (int) $row['chaos_effect_id']);
     }
+
+    /**
+     * A real bug, reported live: GameService::finishPlay() saves once,
+     * then (whenever the play ends the acting player's own turn --
+     * the common case, not a rare one) advanceTurn() saves AGAIN against
+     * the very same BoardState, to persist computeFreshGrants()'s own
+     * side effect for the next player. A spawned token's own placeholder
+     * id never changes in memory (see BoardState::spawnMoodInPlay()'s own
+     * docblock), so before persistedCardIdFor()/recordSpawnedCardPersisted()
+     * existed, save()'s own "negative id means insert a new row" check
+     * couldn't tell "a token I already inserted earlier THIS SAME
+     * request" apart from "a token I haven't inserted yet" -- a second
+     * save() call blindly inserted a SECOND row for the same token. A
+     * player who played Hate with a token-spawning chaos effect attached,
+     * then played Creativity copying it, ended up with 4 tokens in play
+     * instead of 2 (issue #405 follow-up) -- exactly two calls to
+     * playMood(), each internally saving twice.
+     */
+    public function testSavingTheSameStateTwiceDoesNotDuplicateASpawnedToken(): void
+    {
+        ['gameId' => $gameId, 'player1' => $player1] = $this->makeGame();
+        $this->insertHandCard(100, $gameId, 3, $player1);
+
+        $state = $this->repository->load($gameId);
+        $state->spawnMoodInPlay(136, $player1); // Passivity
+
+        // Mirrors GameService::finishPlay() (saves once) immediately
+        // followed by advanceTurn() (saves again for the SAME $state) --
+        // nothing about the board changes between the two calls, the same
+        // as a token spawn with no other board mutation before the turn
+        // passes.
+        $this->repository->save($gameId, $state);
+        $this->repository->save($gameId, $state);
+
+        $rows = $this->pdo->query("SELECT * FROM game_cards WHERE game_id = {$gameId} AND card_id = 136")->fetchAll();
+        self::assertCount(1, $rows, 'the second save() should have UPDATEd the same row, not inserted a new one');
+
+        $reloaded = $this->repository->load($gameId);
+        self::assertCount(1, $reloaded->moodsInPlay());
+        self::assertTrue($reloaded->isInPlay((int) $rows[0]['id']));
+    }
 }
