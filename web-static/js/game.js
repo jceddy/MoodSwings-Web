@@ -5311,6 +5311,10 @@
             return;
         }
         chaosDraftSelectedEffectId = null;
+        // See the confirm-button handler's own comment just below for why
+        // this awaits checkChaosDraftOffer() before refreshBoard() rather
+        // than just calling refreshBoard() alone.
+        await checkChaosDraftOffer(currentState);
         await refreshBoard();
     }
 
@@ -5323,6 +5327,20 @@
             boardError.hidden = false;
             return;
         }
+        // A bug caught live: refreshBoard()'s own render pass reads
+        // chaosDraftOfferOpenForViewer to decide whether a hand-card click
+        // opens the Play panel or the read-only detail view (see
+        // renderBoard()'s own hand-rendering code) -- but that flag is only
+        // ever updated by checkChaosDraftOffer()'s own unawaited fetch,
+        // fired near the END of that same render pass (see its own call
+        // site's comment), so it's still reporting the JUST-RESOLVED
+        // offer as open by the time the hand renders. Without this,
+        // resolving the offer left every hand-card click routed to the
+        // detail view instead of the Play panel until the NEXT full poll
+        // happened to land. Awaiting a fresh check here first means
+        // chaosDraftOfferOpenForViewer is already correct before
+        // refreshBoard()'s own render pass ever reads it.
+        await checkChaosDraftOffer(currentState);
         await refreshBoard();
     });
 
@@ -5335,6 +5353,8 @@
             boardError.hidden = false;
             return;
         }
+        // See the confirm-button handler's own comment just above.
+        await checkChaosDraftOffer(currentState);
         await refreshBoard();
     });
 
