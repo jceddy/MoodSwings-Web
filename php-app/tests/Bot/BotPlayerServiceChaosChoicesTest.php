@@ -93,13 +93,16 @@ final class BotPlayerServiceChaosChoicesTest extends TestCase
 
     public function testChooseActionDeclinesAnOptionalChaosEffectByDefault(): void
     {
-        // chaos_012: "you may discard..., if you do suppress..." -- both
-        // fields optional -- a bot never volunteers for either, matching
-        // BotChoiceResolver's own "never volunteer for an optional
-        // bonus" bias.
+        // chaos_096: "you may choose two moods..., you may give one of
+        // your own back" -- both fields optional -- a bot never
+        // volunteers for either, matching BotChoiceResolver's own "never
+        // volunteer for an optional bonus" bias. (chaos_012, this test's
+        // own former example, now has no schema entry at all -- issue
+        // #405 follow-up, see ChaosCardChoiceSchema's own docblock --
+        // which would make this assertion pass for an unrelated reason.)
         $state = $this->boardState(
             hands: [1 => [55]],
-            chaosCatalog: [1 => ['effectKey' => 'chaos_012', 'rarity' => 'uncommon', 'shape' => 'after_playing', 'rulesText' => 'You may discard a card to suppress a mood.']],
+            chaosCatalog: [1 => ['effectKey' => 'chaos_096', 'rarity' => 'rare', 'shape' => 'after_playing', 'rulesText' => 'You may choose two moods from the same opponent.']],
             chaosEffectIdFor: [55 => 1],
         );
 

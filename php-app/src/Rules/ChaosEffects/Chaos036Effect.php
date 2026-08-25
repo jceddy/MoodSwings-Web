@@ -6,7 +6,9 @@ namespace MoodSwings\Rules\ChaosEffects;
 
 use MoodSwings\Rules\AbstractChaosMoodEffect;
 use MoodSwings\Rules\BoardState;
+use MoodSwings\Rules\ChaosRequiresOpponentDecision;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
+use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 
 /**
@@ -17,14 +19,40 @@ use MoodSwings\Rules\PlayerChoices;
  * 'bannedColors'/BoardState::bannedColorsThisRound() mechanism Doubt's own
  * identically-worded printed ability already relies on -- see
  * BoardState::bannedColorsThisRound()'s own docblock.
+ *
+ * Deferred as a self-targeted `ChaosRequiresOpponentDecision` -- see
+ * ChaosDiscardValueToBoostSelfEffect's own docblock for the full "why"
+ * (issue #405 follow-up: hand cards chosen up front can go stale if the
+ * host card's own printed effect changes the acting player's hand first).
  */
-final class Chaos036Effect extends AbstractChaosMoodEffect
+final class Chaos036Effect extends AbstractChaosMoodEffect implements ChaosRequiresOpponentDecision
 {
-    public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
+    private const KEY = 'hand_card_ids';
+
+    public function pendingDecisionsFor(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): array
     {
-        $revealedCardIds = array_unique($choices->ints('hand_card_ids'));
+        return [
+            new PendingDecisionRequest(
+                key: self::KEY,
+                targetPlayerId: $playerId,
+                decisionType: 'chaos_036_reveal_cards',
+                field: [
+                    'key' => self::KEY,
+                    'type' => 'hand_card',
+                    'multi' => true,
+                    'required' => false,
+                    'count' => ['zero_ok' => true],
+                    'label' => 'Hand cards to reveal, bottom-deck and redraw (bans their colors next round)',
+                ],
+            ),
+        ];
+    }
+
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    {
+        $revealedCardIds = array_unique(($answers[self::KEY] ?? null)?->ints(self::KEY) ?? []);
         if ($revealedCardIds === []) {
-            return;
+            return [];
         }
 
         $colors = [];
@@ -44,5 +72,7 @@ final class Chaos036Effect extends AbstractChaosMoodEffect
         }
 
         $state->setEffectState($cardId, 'bannedColors', array_values(array_unique($colors)));
+
+        return [];
     }
 }

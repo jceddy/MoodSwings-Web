@@ -6,7 +6,9 @@ namespace MoodSwings\Rules\ChaosEffects;
 
 use MoodSwings\Rules\AbstractChaosMoodEffect;
 use MoodSwings\Rules\BoardState;
+use MoodSwings\Rules\ChaosRequiresOpponentDecision;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
+use MoodSwings\Rules\PendingDecisionRequest;
 use MoodSwings\Rules\PlayerChoices;
 
 /**
@@ -21,9 +23,32 @@ use MoodSwings\Rules\PlayerChoices;
  * no computeValue() hook for it to participate in at all, exactly like
  * every other card that permanently fixes its own value this way (see
  * BoardState::setValueOverride()).
+ *
+ * Deferred as a self-targeted `ChaosRequiresOpponentDecision` (issue #405
+ * follow-up -- a bug caught live: attaching chaos_058, an identically-
+ * shaped "discard/give a hand card" chaos effect, to Rationalization and
+ * choosing its own "rotate hands" mode threw "Card is not in your hand"
+ * -- Rationalization's own afterPlaying() had already replaced the
+ * acting player's ENTIRE hand by the time this class's own
+ * $choices->int('discard_card_id') check ran, since that value came from
+ * the SAME up-front request as Rationalization's own choices, submitted
+ * before either effect actually resolved). Every chaos effect reading a
+ * hand card from the ACTING PLAYER'S OWN hand shares this same latent
+ * staleness risk whenever attached to a card whose own printed effect
+ * touches that hand first -- mirrors Betrayal's own reasoning for why a
+ * same-player decision still needs a real, durable pause: "one of your
+ * moods" can't be offered as an ordinary up-front field when the mood in
+ * question won't exist (or, here, the hand won't look the same) until
+ * after this invocation's own resolution has actually progressed.
+ * pendingDecisionsFor() below always asks (mirroring Betrayal's own
+ * unconditional pause) rather than gating on any up-front field, since
+ * the field itself -- not some earlier "would you like to?" choice -- is
+ * this effect's own entire "you may".
  */
-final class ChaosDiscardValueToBoostSelfEffect extends AbstractChaosMoodEffect
+final class ChaosDiscardValueToBoostSelfEffect extends AbstractChaosMoodEffect implements ChaosRequiresOpponentDecision
 {
+    private const KEY = 'discard_card_id';
+
     /** @param int[] $qualifyingValues */
     public function __construct(
         private readonly array $qualifyingValues,
@@ -31,11 +56,29 @@ final class ChaosDiscardValueToBoostSelfEffect extends AbstractChaosMoodEffect
     ) {
     }
 
-    public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
+    public function pendingDecisionsFor(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): array
     {
-        $discardCardId = $choices->int('discard_card_id');
+        return [
+            new PendingDecisionRequest(
+                key: self::KEY,
+                targetPlayerId: $playerId,
+                decisionType: 'chaos_discard_value_boost',
+                field: [
+                    'key' => self::KEY,
+                    'type' => 'hand_card',
+                    'required' => false,
+                    'filter' => ['values' => $this->qualifyingValues],
+                    'label' => "Card to discard -- boosts this mood to {$this->boostedValue}",
+                ],
+            ),
+        ];
+    }
+
+    public function resolveDecisions(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices, array $answers): array
+    {
+        $discardCardId = ($answers[self::KEY] ?? null)?->int(self::KEY);
         if ($discardCardId === null) {
-            return;
+            return [];
         }
 
         if (!$state->isInHand($playerId, $discardCardId)) {
@@ -49,5 +92,7 @@ final class ChaosDiscardValueToBoostSelfEffect extends AbstractChaosMoodEffect
 
         $state->moveHandToDiscard($playerId, $discardCardId);
         $state->setValueOverride($cardId, $this->boostedValue);
+
+        return [];
     }
 }

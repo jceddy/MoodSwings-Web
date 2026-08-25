@@ -1,0 +1,19 @@
+-- No schema change: reuses the pending_source column migration 0191
+-- already added. Issue #405 follow-up (reported live): chaos_058,
+-- attached to Rationalization, threw "Card is not in your hand" when
+-- choosing Rationalization's own "rotate hands" mode -- the whole hand
+-- had already been swapped away by the time the up-front-chosen card was
+-- validated. chaos_008/012/025/036/053/058/087/106/110/111/118 all read
+-- a hand card from the ACTING PLAYER'S OWN hand the same way and share
+-- the same latent staleness risk; each now defers that choice to a
+-- self-targeted ChaosRequiresOpponentDecision pending decision, asked
+-- only once the host card's own afterPlaying() has fully resolved. See
+-- php-app/README.md's Chaos Draft section for the full writeup.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0192
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.49' WHERE id = 1;
