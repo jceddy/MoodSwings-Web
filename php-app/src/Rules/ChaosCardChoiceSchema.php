@@ -48,11 +48,11 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_012' => [
             ['key' => 'discard_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to discard (green or blue)', 'filter' => ['colors' => ['green', 'blue']]],
-            ['key' => 'suppress_mood_card_id', 'type' => 'mood', 'required' => true, 'label' => 'Mood to suppress', 'scope' => 'any', 'includes_self' => true],
+            ['key' => 'suppress_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to suppress (required if discarding a card above)', 'scope' => 'any', 'includes_self' => true],
         ],
         'chaos_014' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Suppress one black/red mood, or all of them', 'options' => ['single', 'all']],
-            ['key' => 'mood_card_id', 'type' => 'mood', 'required' => true, 'label' => 'Mood to suppress (black or red; required if mode is single)', 'scope' => 'any', 'includes_self' => true, 'filter' => ['colors' => ['black', 'red']]],
+            ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to suppress (black or red; required if mode is single)', 'scope' => 'any', 'includes_self' => true, 'filter' => ['colors' => ['black', 'red']]],
         ],
         'chaos_020' => [
             ['key' => 'target_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Up to two players (each has one mood suppressed)', 'scope' => 'any', 'count' => ['max' => 2, 'zero_ok' => true]],
@@ -92,7 +92,7 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_041' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Return one red/green mood to hand, or all of them', 'options' => ['single', 'all']],
-            ['key' => 'mood_card_id', 'type' => 'mood', 'required' => true, 'label' => 'Mood to return to hand (red or green; required if mode is single)', 'scope' => 'any', 'includes_self' => true, 'filter' => ['colors' => ['red', 'green']]],
+            ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to return to hand (red or green; required if mode is single)', 'scope' => 'any', 'includes_self' => true, 'filter' => ['colors' => ['red', 'green']]],
         ],
         'chaos_043' => [
             ['key' => 'opponent_player_ids', 'type' => 'player', 'required' => false, 'multi' => true, 'label' => 'Opponents (2+ moods) who each return a random mood to hand', 'scope' => 'other', 'excludes_teammate' => true, 'filter' => ['min_mood_count' => 2], 'count' => ['zero_ok' => true]],
@@ -106,7 +106,7 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_049' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Redraw your hand, or pass all hands directionally', 'options' => ['redraw', 'pass']],
-            ['key' => 'direction', 'type' => 'mode', 'required' => true, 'label' => 'Direction to pass hands (required if mode is pass)', 'options' => ['left', 'right']],
+            ['key' => 'direction', 'type' => 'mode', 'required' => false, 'label' => 'Direction to pass hands (required if mode is pass)', 'options' => ['left', 'right']],
         ],
         'chaos_050' => [
             ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => "Opponent's mood to target", 'scope' => 'other', 'excludes_teammate' => true],
@@ -129,11 +129,11 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_058' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Card to give away'],
-            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => true, 'label' => 'Player to receive the card (required if giving a card)', 'scope' => 'other'],
+            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player to receive the card (required if giving a card)', 'scope' => 'other'],
         ],
         'chaos_059' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Discard one green/white mood, or all of them', 'options' => ['single', 'all']],
-            ['key' => 'mood_card_id', 'type' => 'mood', 'required' => true, 'label' => 'Mood to discard (green or white; required if mode is single)', 'scope' => 'any', 'includes_self' => true, 'filter' => ['colors' => ['green', 'white']]],
+            ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to discard (green or white; required if mode is single)', 'scope' => 'any', 'includes_self' => true, 'filter' => ['colors' => ['green', 'white']]],
         ],
         'chaos_060' => [
             ['key' => 'mode', 'type' => 'mode', 'required' => false, 'label' => 'Recycle discard pile cards, or award an extra round win', 'options' => ['recycle', 'extra_win']],
@@ -144,7 +144,7 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_062' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard pile card to give away'],
-            ['key' => 'opponent_player_id', 'type' => 'player', 'required' => true, 'label' => 'Opponent to receive the card (required if giving a card)', 'scope' => 'other', 'excludes_teammate' => true],
+            ['key' => 'opponent_player_id', 'type' => 'player', 'required' => false, 'label' => 'Opponent to receive the card (required if giving a card)', 'scope' => 'other', 'excludes_teammate' => true],
         ],
         'chaos_066' => [
             ['key' => 'mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'Mood to move to the bottom of the deck (then you draw)', 'scope' => 'any', 'includes_self' => true],
@@ -194,7 +194,7 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_096' => [
             ['key' => 'opponent_mood_card_ids', 'type' => 'mood', 'required' => false, 'multi' => true, 'label' => "Two of the same opponent's moods (one taken at random)", 'scope' => 'other', 'excludes_teammate' => true, 'count' => ['min' => 2, 'max' => 2, 'zero_ok' => true], 'constraint' => ['type' => 'same_owner']],
-            ['key' => 'own_mood_card_id', 'type' => 'mood', 'required' => true, 'label' => 'One of your moods to give back', 'scope' => 'own'],
+            ['key' => 'own_mood_card_id', 'type' => 'mood', 'required' => false, 'label' => 'One of your moods to give back (required if choosing opponent moods above)', 'scope' => 'own'],
         ],
         'chaos_098' => [
             ['key' => 'confirm', 'type' => 'bool', 'required' => false, 'label' => 'Put all other moods with value 2 or less into the discard pile'],
@@ -225,7 +225,7 @@ final class ChaosCardChoiceSchema
         ],
         'chaos_118' => [
             ['key' => 'hand_card_id', 'type' => 'hand_card', 'required' => false, 'label' => 'Blue/black card to reveal and give away', 'filter' => ['colors' => ['blue', 'black']]],
-            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => true, 'label' => 'Player to receive the card (required if giving a card)', 'scope' => 'other'],
+            ['key' => 'recipient_player_id', 'type' => 'player', 'required' => false, 'label' => 'Player to receive the card (required if giving a card)', 'scope' => 'other'],
         ],
         'chaos_128' => [
             ['key' => 'discard_card_id', 'type' => 'discard_card', 'required' => false, 'label' => 'Discard pile card to take into your hand (an extra play is granted regardless)'],

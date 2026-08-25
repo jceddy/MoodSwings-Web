@@ -2594,6 +2594,40 @@ repeat-with-fresh-choices sub-form uses), so it lands the submitted
 choices at `choices['chaos']` with zero frontend-specific code needed --
 precisely where `PlayerChoices::sub('chaos')` expects to read them from.
 
+Nine `ChaosCardChoiceSchema` fields (chaos_012/014/041/049/058/059/062/096/118's
+own "if you do"/"if choosing X above"/"if mode is Y" companion fields) were
+originally marked `required: true` unconditionally, when the underlying
+effect class only ever reads them once a companion optional field is also
+engaged -- the same conditionally-required shape `CardChoiceSchema`'s own
+faith/guile entries already use. Corrected to `required: false` (the
+effect class, not the schema, still enforces the real requirement via
+`requireInt()`/`requireString()` once the optional trigger field is set).
+
+**Practice bots and attached chaos-effect choices (issue #405 follow-up --
+a bug caught live).** `ChaosCardChoiceSchema` above only solved the
+frontend half -- `BotPlayerService::buildChoicesForCard()` never learned
+to fill an attached effect's own required fields (chaos_006/029/031/051/
+068/086/099/107/133, the nine chaos effects with a genuinely
+unconditionally-required field), so a bot playing a card carrying one of
+them submitted no `'chaos'` choices at all, and `PlayerChoices::
+requireInt()`/`requireString()` threw uncaught inside
+`advanceAutomatedTurns()`, crashing the whole request. The original
+function was renamed to `buildBaseChoicesForCard()`, and a new thin
+`buildChoicesForCard()` wrapper calls it, then -- regardless of which of
+`buildBaseChoicesForCard()`'s many per-effect-key branches produced the
+base result -- separately resolves `state->chaosEffectKeyFor($cardId)`'s
+own `ChaosCardChoiceSchema` fields through the exact same generic,
+field-shape-driven `BotChoiceResolver` the card's own fields already use
+(`resolveSchemaFields()`, factored out of the original per-field loop so
+both a card's own fields and its attached effect's fields share one
+policy). A required chaos field with no legal answer makes the whole card
+unplayable this way, same as an unfillable base field already does. No
+new resolver logic was needed -- `BotChoiceResolver`'s only effect-key-
+specific tables (`MODE_FIELD_OVERRIDES`, `ALWAYS_FILLED_OPTIONAL_FIELDS`)
+don't contain any `chaos_NNN` key, so its generic per-field-type policy
+(see that class's own docblock) already covered every shape these nine
+fields use.
+
 **Resolving the round's own offer is mandatory (issue #405 follow-up --
 maintainer request).** `GameService::assertChaosDraftOfferResolved()` is
 called from both `playMood()` and `pass()`, right after

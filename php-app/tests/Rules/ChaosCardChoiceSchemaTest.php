@@ -51,7 +51,15 @@ final class ChaosCardChoiceSchemaTest extends TestCase
         self::assertCount(2, $fields);
         self::assertSame('discard_card_id', $fields[0]['key']);
         self::assertSame('suppress_mood_card_id', $fields[1]['key']);
-        self::assertTrue($fields[1]['required']);
+        // Not statically 'required' -- Chaos012Effect only reads it once
+        // discard_card_id is also given (Chaos012Effect::afterPlaying()
+        // returns early otherwise), the same "required if the companion
+        // optional field above is used" pattern CardChoiceSchema's own
+        // faith/guile entries already use (a bug caught live: this field
+        // was originally marked required:true unconditionally, which
+        // would have made a bot try to fill it even when declining the
+        // whole "you may discard..." effect).
+        self::assertFalse($fields[1]['required']);
     }
 
     public function testAReusableParameterizedClasssRegisteredKeysAreCovered(): void
