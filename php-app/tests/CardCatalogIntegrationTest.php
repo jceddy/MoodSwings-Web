@@ -47,18 +47,24 @@ final class CardCatalogIntegrationTest extends TestCase
         $this->cards = new CardRepository();
     }
 
+    /** Excludes migration 0183's own five Chaos Draft token cards (Smugness/Unconcern/Passivity/Tedium/Idleness, issue #405) -- conjured into play by certain chaos effects, never part of the official 133-card printed gallery these two tests verify against. */
+    private function officialGalleryOnly(array $rows): array
+    {
+        return array_values(array_filter($rows, static fn (array $row): bool => (int) $row['is_token'] === 0));
+    }
+
     public function testCatalogHasExactlyOneHundredThirtyThreeCards(): void
     {
-        self::assertCount(133, $this->cards->all());
+        self::assertCount(133, $this->officialGalleryOnly($this->cards->all()));
     }
 
     public function testColorCountsMatchTheOfficialGallery(): void
     {
-        self::assertCount(26, $this->cards->findByColor('white'));
-        self::assertCount(26, $this->cards->findByColor('blue'));
-        self::assertCount(27, $this->cards->findByColor('black'));
-        self::assertCount(27, $this->cards->findByColor('red'));
-        self::assertCount(27, $this->cards->findByColor('green'));
+        self::assertCount(26, $this->officialGalleryOnly($this->cards->findByColor('white')));
+        self::assertCount(26, $this->officialGalleryOnly($this->cards->findByColor('blue')));
+        self::assertCount(27, $this->officialGalleryOnly($this->cards->findByColor('black')));
+        self::assertCount(27, $this->officialGalleryOnly($this->cards->findByColor('red')));
+        self::assertCount(27, $this->officialGalleryOnly($this->cards->findByColor('green')));
     }
 
     public function testNoDuplicateNamesOrEffectKeys(): void
@@ -136,6 +142,30 @@ final class CardCatalogIntegrationTest extends TestCase
 
             self::assertNotNull($card, "Expected a vanilla common with effect_key {$effectKey}");
             self::assertSame(4, (int) $card['base_value']);
+            self::assertNull($card['alt_value']);
+            self::assertSame(0, (int) $card['has_to_play_ability']);
+            self::assertSame(0, (int) $card['has_while_in_play_ability']);
+            self::assertSame(0, (int) $card['has_after_playing_ability']);
+        }
+    }
+
+    public function testChaosDraftTokenCardsAreFlaggedAndVanilla(): void
+    {
+        $tokensByColor = [
+            'smugness_token' => 'white',
+            'unconcern_token' => 'blue',
+            'passivity_token' => 'black',
+            'tedium_token' => 'red',
+            'idleness_token' => 'green',
+        ];
+
+        foreach ($tokensByColor as $effectKey => $color) {
+            $card = $this->cards->findByEffectKey($effectKey);
+
+            self::assertNotNull($card, "Expected a token card with effect_key {$effectKey}");
+            self::assertSame(1, (int) $card['is_token']);
+            self::assertSame($color, $card['color']);
+            self::assertSame(1, (int) $card['base_value']);
             self::assertNull($card['alt_value']);
             self::assertSame(0, (int) $card['has_to_play_ability']);
             self::assertSame(0, (int) $card['has_while_in_play_ability']);

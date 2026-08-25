@@ -44,8 +44,10 @@ final class MoodPlayService
      */
     private const DUPLICITY_REPEAT_KEY = 'duplicity_repeat';
 
-    public function __construct(private readonly EffectRegistry $registry)
-    {
+    public function __construct(
+        private readonly EffectRegistry $registry,
+        private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
+    ) {
     }
 
     /**
@@ -555,7 +557,96 @@ final class MoodPlayService
             }
         }
 
+        $this->resolveAttachedChaosAfterPlaying($state, $cardId, $playerId, $topLevelChoices);
+        $this->dispatchChaosReactiveHooks($state, $cardId, $playerId);
+
         return PlayResult::complete();
+    }
+
+    /**
+     * Chaos Draft (issue #405): fires every one of ChaosMoodEffect's
+     * reactive hooks (onMoodPlayed/onMoodDiscarded/onMoodSuppressed, plus
+     * an immediate same-turn perpetualTurnStartGrants() application) that
+     * this one play could have triggered, once $cardId's own full
+     * afterPlaying chain (base effect, reactors, attached chaos
+     * afterPlaying) has finished. Mirrors reactToAnotherPlay()'s own
+     * "every candidate already in play" sweep immediately above, except
+     * scoped to chaos-carrying moods and dispatched through
+     * ChaosEffectRegistry instead of EffectRegistry -- see BoardState's
+     * own $pendingChaosDiscardEvents/$pendingChaosSuppressionEvents for
+     * why discard/suppression events need their own queues rather than
+     * reusing consumeCardMoves()/consumeSuppressionChanges() (those are
+     * drained once already, for event-log history, by GameService's own
+     * withCardHistory()).
+     */
+    private function dispatchChaosReactiveHooks(BoardState $state, int $cardId, int $playerId): void
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            $chaosRow = $state->chaosEffectRow($mood->cardId);
+            if ($chaosRow === null) {
+                continue;
+            }
+            $this->chaosRegistry->for($chaosRow['effectKey'])->onMoodPlayed($state, $mood->cardId, $mood->ownerId, $playerId, $cardId);
+        }
+
+        foreach ($state->consumeChaosDiscardEvents() as $event) {
+            $recipients = $state->moodsInPlay();
+            $discardedChaosRow = $state->chaosEffectRow($event['cardId']);
+            foreach ($recipients as $mood) {
+                $chaosRow = $state->chaosEffectRow($mood->cardId);
+                if ($chaosRow === null) {
+                    continue;
+                }
+                $this->chaosRegistry->for($chaosRow['effectKey'])->onMoodDiscarded($state, $mood->cardId, $mood->ownerId, $event['cardId'], $event['ownerId'], $event['value']);
+            }
+            if ($discardedChaosRow !== null) {
+                $this->chaosRegistry->for($discardedChaosRow['effectKey'])->onMoodDiscarded($state, $event['cardId'], $event['ownerId'], $event['cardId'], $event['ownerId'], $event['value']);
+            }
+        }
+
+        foreach ($state->consumeChaosSuppressionEvents() as $suppressedCardId) {
+            foreach ($state->moodsInPlay() as $mood) {
+                $chaosRow = $state->chaosEffectRow($mood->cardId);
+                if ($chaosRow === null) {
+                    continue;
+                }
+                $this->chaosRegistry->for($chaosRow['effectKey'])->onMoodSuppressed($state, $mood->cardId, $mood->ownerId, $suppressedCardId);
+            }
+        }
+
+        $playedChaosRow = $state->chaosEffectRow($cardId);
+        if ($playedChaosRow !== null && $playedChaosRow['shape'] === 'while_in_play') {
+            foreach ($this->chaosRegistry->for($playedChaosRow['effectKey'])->perpetualTurnStartGrants($state, $cardId, $playerId) as $restriction) {
+                $state->grantExtraPlay(1, $restriction, sourceCardId: $cardId);
+            }
+        }
+    }
+
+    /**
+     * Chaos Draft (issue #405): if the just-played card carries an
+     * attached 'after_playing'-shaped chaos effect, resolves it now that
+     * the card's own base afterPlaying() (and the reactor loop above)
+     * have fully finished -- see ChaosMoodEffect's own docblock for why
+     * this is a deliberately simple, synchronous step, not woven into
+     * this class's own Duplicity-repeat/opponent-decision-pause
+     * machinery above. Reads its own choices from $topLevelChoices'
+     * 'chaos' sub-bag, namespaced so its own field keys can never
+     * collide with $cardId's own base effect fields in the same request.
+     * A card whose printed effect itself required pausing for an
+     * opponent's decision (RequiresOpponentDecision) still reaches this
+     * point correctly -- $topLevelChoices is always the ORIGINAL
+     * request's own bag regardless of how many pauses the base effect
+     * needed (see resolveAfterPlayingChain()'s own docblock), so the
+     * 'chaos' sub-bag survived that round trip along with it.
+     */
+    private function resolveAttachedChaosAfterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $topLevelChoices): void
+    {
+        $chaosRow = $state->chaosEffectRow($cardId);
+        if ($chaosRow === null || $chaosRow['shape'] !== 'after_playing') {
+            return;
+        }
+
+        $this->chaosRegistry->for($chaosRow['effectKey'])->afterPlaying($state, $cardId, $playerId, $topLevelChoices->sub('chaos'));
     }
 
     /**

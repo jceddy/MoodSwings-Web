@@ -1,0 +1,42 @@
+<?php
+
+declare(strict_types=1);
+
+namespace MoodSwings\Rules\ChaosEffects;
+
+use MoodSwings\Rules\AbstractChaosMoodEffect;
+use MoodSwings\Rules\BoardState;
+use MoodSwings\Rules\Exceptions\InvalidChoiceException;
+use MoodSwings\Rules\PlayerChoices;
+
+/** chaos_033 (common, after_playing): "You may choose a player. If you do, that player reveals a random card from their hand. If the revealed card shares a color with any mood, this mood's value becomes 6." */
+final class Chaos033Effect extends AbstractChaosMoodEffect
+{
+    public function afterPlaying(BoardState $state, int $cardId, int $playerId, PlayerChoices $choices): void
+    {
+        $targetPlayerId = $choices->int('target_player_id');
+        if ($targetPlayerId === null) {
+            return;
+        }
+        if (!in_array($targetPlayerId, $state->activePlayerOrder(), true)) {
+            throw new InvalidChoiceException("Player {$targetPlayerId} is not a valid player");
+        }
+
+        $hand = $state->hand($targetPlayerId);
+        if ($hand === []) {
+            return;
+        }
+
+        $revealedCardId = $hand[array_rand($hand)];
+        $state->recordRevealedCard($revealedCardId);
+        $revealedColor = $state->colorOf($revealedCardId);
+
+        foreach ($state->moodsInPlay() as $mood) {
+            if ($state->colorOf($mood->cardId) === $revealedColor) {
+                $state->setValueOverride($cardId, 6);
+
+                return;
+            }
+        }
+    }
+}

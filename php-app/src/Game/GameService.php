@@ -16,6 +16,7 @@ use MoodSwings\Repository\GameNoteRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Rules\BoardState;
 use MoodSwings\Rules\CardChoiceSchema;
+use MoodSwings\Rules\ChaosEffectRegistry;
 use MoodSwings\Rules\Exceptions\InvalidChoiceException;
 use MoodSwings\Rules\MoodInPlay;
 use MoodSwings\Rules\MoodPlayService;
@@ -624,6 +625,9 @@ final class GameService
     /** @var array<int, array<int, string>> gameId => (game_player_id => username), memoized per instance by playerUsernamesFor() */
     private array $playerUsernamesByGame = [];
 
+    /** @var array<int, string> chaos_effects.id => rarity, memoized per instance by chaosEffectRarity() -- global catalog data, not scoped per game */
+    private array $chaosEffectRarityCache = [];
+
     public function __construct(
         private readonly BoardStateRepository $boardStates,
         private readonly MoodPlayService $plays,
@@ -637,6 +641,7 @@ final class GameService
         private readonly CardStatsService $cardStats = new CardStatsService(),
         private readonly GameChatRepository $chat = new GameChatRepository(),
         private readonly BotPlayerService $bots = new BotPlayerService(new BotChoiceResolver()),
+        private readonly ChaosEffectRegistry $chaosRegistry = new ChaosEffectRegistry(),
     ) {
     }
 
@@ -803,7 +808,7 @@ final class GameService
             // Quick Draft, Grid Draft, Winston Draft, Rotisserie Draft, and
             // Tiered Rotisserie Draft all support 3-4 players now (issue
             // #189) -- 'duel' itself stays locked to exactly 2.
-            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
+            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)) {
                 if (count($userIds) < 2 || count($userIds) > 4) {
                     throw new GameStateException("A {$deckType} game must have 2-4 players");
                 }
@@ -885,7 +890,7 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
-        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
+        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)) {
             throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft" deck types');
         }
         // Team Play/Closed Team Play (issue #362) may also draft: each of
@@ -901,7 +906,7 @@ final class GameService
         // gridDraftDraftingStateFor()'s/draftDeckBuildingStateFor()'s own
         // `team_drafted_cards` field. Closed Team Play stays fully private
         // between teammates instead, exactly like Stage 1 left it.
-        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
+        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
             throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, Team Play, or Closed Team Play");
         }
 
@@ -944,8 +949,12 @@ final class GameService
         // transaction starts, same rationale as parseCustomDecklist()/
         // resolveDuelDeckRules() above -- a bad pool should fail loudly
         // before anything is written, not mid-transaction.
+        // Chaos Draft (issue #405) reuses Quick Draft's own pool-building
+        // verbatim -- there's no separate chaos_draft_pool_source param at
+        // all, $quickDraftPoolSource/$quickDraftCustomPoolText double as
+        // both deck types' own inputs.
         $draftPoolSource = match ($deckType) {
-            'quick_draft' => $quickDraftPoolSource,
+            'quick_draft', 'chaos_draft' => $quickDraftPoolSource,
             'winston_draft' => $winstonDraftPoolSource,
             'grid_draft' => $gridDraftPoolSource,
             'rotisserie_draft' => $rotisserieDraftPoolSource,
@@ -953,7 +962,7 @@ final class GameService
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
-            'quick_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
+            'quick_draft', 'chaos_draft' => $this->buildQuickDraftPool((string) $quickDraftPoolSource, $quickDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'winston_draft' => $this->buildWinstonDraftPool((string) $winstonDraftPoolSource, $winstonDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount),
@@ -1062,6 +1071,10 @@ final class GameService
                 // initializeWinstonDraft()/submitWinstonDraftPick() and
                 // initializeGridDraft()/submitGridDraftPick()), unlike Quick
                 // Draft's own NULL-until-finalizeQuickDraft() convention.
+                // Chaos Draft (issue #405) reuses Quick Draft's own pool/
+                // pick/deck-building mechanics verbatim (see this file's own
+                // "Quick Draft" docblock), so it follows that same NULL
+                // convention too, not this branch's.
                 $insertMatchPlayer = $pdo->prepare(
                     'INSERT INTO draft_match_players (draft_match_id, user_id, drafted_card_ids) VALUES (:match_id, :user_id, :drafted_card_ids)'
                 );
@@ -1074,7 +1087,7 @@ final class GameService
                     ]);
                 }
 
-                if ($deckType === 'quick_draft') {
+                if ($deckType === 'quick_draft' || $deckType === 'chaos_draft') {
                     $this->dealQuickDraftRound($gameId, $draftMatchId, 1, $draftPoolCardIds, array_values($seatedUserIds));
                 } elseif ($deckType === 'winston_draft') {
                     $this->initializeWinstonDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds));
@@ -1125,7 +1138,7 @@ final class GameService
      * botsSupportedFor()/advanceBotDraftTurn() (issue #359) rather than
      * as a wholesale refactor of every existing inline copy.
      */
-    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'];
+    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'];
 
     /**
      * Whether a practice bot (issue #140) can be seated in a game with
@@ -1358,7 +1371,7 @@ final class GameService
      */
     private static function isSharedDeckType(string $deckType): bool
     {
-        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true);
+        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true);
     }
 
     /**
@@ -1643,7 +1656,7 @@ final class GameService
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
-        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)
+        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)
             ? $this->requireDraftDecksSubmitted($gameId, $playerIds)
             : [];
 
@@ -1671,11 +1684,11 @@ final class GameService
             // formats support that ISN'T one shared/identical pool --
             // see BoardStateRepository::load()'s identical check.
             if (self::isDuelShapedFormat($game['format'])
-                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)) {
+                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)) {
                 foreach ($playerIds as $playerId) {
                     $playerCardIds = match ($game['deck_type']) {
                         'custom_duel' => $customDuelDeckCardIds[$playerId],
-                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft' => $draftDeckCardIds[$playerId],
+                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft' => $draftDeckCardIds[$playerId],
                         default => $this->deckCardIdsFor($game),
                     };
                     shuffle($playerCardIds);
@@ -1985,7 +1998,7 @@ final class GameService
     {
         $this->withGameLock($gameId, function () use ($gameId, $userId, $playFirst): void {
             $game = $this->fetchGame($gameId);
-            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
+            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true) || $game['draft_match_id'] === null) {
                 throw new GameStateException("Game {$gameId} is not a draft match game");
             }
             $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
@@ -2075,6 +2088,11 @@ final class GameService
             // startGame() reads it directly via requireDraftDecksSubmitted()
             // and never reaches this method for that deck_type.
             'quick_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "quick_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
+            // Same reasoning as 'quick_draft' immediately above -- Chaos
+            // Draft (issue #405) reuses Quick Draft's own drafting
+            // verbatim, so its own per-player deck lives on
+            // draft_match_players.deck_card_ids too.
+            'chaos_draft' => throw new \LogicException('deckCardIdsFor() cannot build a "chaos_draft" deck -- each duel player\'s own deck must be read via requireDraftDecksSubmitted()'),
             // Same reasoning as 'quick_draft' immediately above --
             // Winston Draft's own per-player deck lives on
             // draft_match_players.deck_card_ids too.
@@ -2979,8 +2997,11 @@ final class GameService
     public function submitQuickDraftPick(int $gameId, int $userId, int $roundNumber, int $stageNumber, array $cardIds): array
     {
         $game = $this->fetchGame($gameId);
-        if ($game['deck_type'] !== 'quick_draft' || $game['draft_match_id'] === null) {
-            throw new GameStateException("Game {$gameId} is not a Quick Draft game");
+        // Chaos Draft (issue #405) reuses this exact pick-submission
+        // mechanic verbatim -- see createGame()'s own "Chaos Draft"
+        // comments.
+        if (!in_array($game['deck_type'], ['quick_draft', 'chaos_draft'], true) || $game['draft_match_id'] === null) {
+            throw new GameStateException("Game {$gameId} is not a Quick Draft (or Chaos Draft) game");
         }
         $draftMatchId = (int) $game['draft_match_id'];
 
@@ -3163,7 +3184,7 @@ final class GameService
     private static function draftMinDeckSizeFor(string $deckType): int
     {
         return match ($deckType) {
-            'quick_draft' => self::QUICK_DRAFT_MIN_DECK_SIZE,
+            'quick_draft', 'chaos_draft' => self::QUICK_DRAFT_MIN_DECK_SIZE,
             'winston_draft' => self::WINSTON_MIN_DECK_SIZE,
             'grid_draft' => self::GRID_DRAFT_MIN_DECK_SIZE,
             'rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
@@ -3179,7 +3200,7 @@ final class GameService
     public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
     {
         $game = $this->fetchGame($gameId);
-        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) || $game['draft_match_id'] === null) {
+        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true) || $game['draft_match_id'] === null) {
             throw new GameStateException("Game {$gameId} is not a draft game");
         }
         $draftMatchId = (int) $game['draft_match_id'];
@@ -4835,7 +4856,7 @@ final class GameService
         }
 
         return match ($game['deck_type']) {
-            'quick_draft' => $this->advanceBotQuickDraftPick($gameId, $draftMatchId, $match, $botUserIds),
+            'quick_draft', 'chaos_draft' => $this->advanceBotQuickDraftPick($gameId, $draftMatchId, $match, $botUserIds),
             'winston_draft' => $this->advanceBotWinstonDraftPick($gameId, $draftMatchId, $botUserIds),
             'grid_draft' => $this->advanceBotGridDraftPick($gameId, $draftMatchId, $botUserIds),
             'rotisserie_draft' => $this->advanceBotRotisserieDraftPick($gameId, $draftMatchId, $botUserIds),
@@ -5496,7 +5517,7 @@ final class GameService
 
             if (
                 $game['status'] === 'waiting'
-                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true)
+                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)
                 && $game['draft_match_id'] !== null
             ) {
                 return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id'], $game['format']);
@@ -6626,6 +6647,447 @@ final class GameService
         return $row === false ? null : $row;
     }
 
+    // --- Chaos Draft (issue #405) ---
+    //
+    // Every round, each eligible player (or team, in Open Team Play) is
+    // offered a choice between two chaos_effects rows, drawn from the
+    // round's own two independently-rolled rarities, and attaches
+    // whichever one they pick to a card in their own (or, for Open Team
+    // Play, either teammate's) hand -- see chaos_draft_offers' own
+    // docblock (migration 0183) for the full schema. Mirrors Open Team
+    // Play's own game_team_decisions propose/confirm shape (see
+    // proposeTeamDecision()/confirmTeamDecision() just above) for the
+    // team-scoped case, and a single direct resolve for the
+    // per-player case ('draft'/'closed_team' formats), confirmed by the
+    // maintainer for both.
+    //
+    // Rolled and created LAZILY -- the first time chaosDraftOfferFor()
+    // is called for a round, rather than hooked into this class's own
+    // several "create a new round" call sites (createGame()'s own round
+    // 1, applyTurnOrderDecision()/applyClosedTeamLeaderDecision()/
+    // seatFirstPlayerOverride()'s own round continuations,
+    // applyDrawRecipientDecision()'s own next-round creation, and the
+    // team-format short-player/resignation paths) -- functionally
+    // identical to rolling everything the instant the round starts
+    // (nothing could observe the gap either way, since nobody has a
+    // reason to check for an offer before this method is ever called),
+    // but far simpler and lower-risk than retrofitting every one of
+    // those divergent paths individually. chaosDraftOfferFor() is
+    // wrapped in withGameLock() specifically so this write-on-first-read
+    // is race-safe against two players asking at once -- deliberately
+    // NOT surfaced through buildGameState()'s own unlocked read path for
+    // that reason (see chaosDraftOfferFor()'s own docblock); the
+    // frontend calls it as its own dedicated action instead.
+
+    /**
+     * Chaos Draft's own weighted rarity roll (confirmed by the
+     * maintainer): common 23/45, uncommon 14/45, rare 6/45, mythic
+     * 2/45 -- the same weighting the 133 printed cards' own rarity
+     * distribution already has (see database/migrations/0003's own
+     * per-rarity counts: 49/39/30/15 -- wait, that's chaos_effects'
+     * own distribution, seeded to match the printed cards' 45-common/
+     * 27-uncommon/... no; see migration 0183's own docblock: this
+     * exact 23/14/6/2 weighting is the maintainer's own explicit
+     * scoping for issue #405, reused here verbatim rather than derived
+     * from any card-count ratio).
+     *
+     * @var array<string, int>
+     */
+    private const CHAOS_RARITY_WEIGHTS = ['common' => 23, 'uncommon' => 14, 'rare' => 6, 'mythic' => 2];
+
+    private function rollWeightedChaosRarity(): string
+    {
+        $roll = random_int(1, array_sum(self::CHAOS_RARITY_WEIGHTS));
+        $cumulative = 0;
+        foreach (self::CHAOS_RARITY_WEIGHTS as $rarity => $weight) {
+            $cumulative += $weight;
+            if ($roll <= $cumulative) {
+                return $rarity;
+            }
+        }
+
+        return 'common'; // unreachable -- $cumulative always reaches the full sum by the last iteration.
+    }
+
+    /**
+     * A random chaos_effects.id of $rarity, distinct from every id in
+     * $excludeIds -- used to keep a player's own two offered effects
+     * from ever being the identical effect twice, which could otherwise
+     * happen when the round's own two rarities happen to match (see
+     * ensureChaosDraftOffersForRound()). Every rarity has at least 15
+     * rows (mythic, the smallest tier), so excluding one id already
+     * offered can never exhaust a tier's own pool.
+     *
+     * @param int[] $excludeIds
+     */
+    private function randomChaosEffectIdForRarity(string $rarity, array $excludeIds = []): int
+    {
+        $pdo = Connection::get();
+        $sql = 'SELECT id FROM chaos_effects WHERE rarity = :rarity';
+        $params = ['rarity' => $rarity];
+        if ($excludeIds !== []) {
+            $placeholders = [];
+            foreach ($excludeIds as $i => $excludeId) {
+                $key = "exclude{$i}";
+                $placeholders[] = ":{$key}";
+                $params[$key] = $excludeId;
+            }
+            $sql .= ' AND id NOT IN (' . implode(',', $placeholders) . ')';
+        }
+        $sql .= ' ORDER BY RAND() LIMIT 1';
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Rolls this round's own two rarities (if not already rolled) and
+     * creates every currently-eligible player's/team's own offer row (if
+     * missing) -- see this section's own docblock for why this happens
+     * lazily here rather than at round-creation time. "If a player has
+     * no cards in hand at the start of a round, they aren't offered a
+     * choice at all" (confirmed by the maintainer) -- checked against
+     * the CURRENT hand, evaluated the first time this round is asked
+     * about, which for an ordinary round (nobody's played yet) is
+     * exactly "at the start of the round"; idempotent either way, since
+     * a player/team that already has a row is simply skipped.
+     */
+    private function ensureChaosDraftOffersForRound(int $gameId, array $game, array $round): void
+    {
+        if ($game['deck_type'] !== 'chaos_draft') {
+            return;
+        }
+
+        $roundId = (int) $round['id'];
+        $pdo = Connection::get();
+        $isFirstOfferForRound = $round['chaos_rarity_1'] === null;
+
+        if ($isFirstOfferForRound) {
+            $rarity1 = $this->rollWeightedChaosRarity();
+            $rarity2 = $this->rollWeightedChaosRarity();
+            $pdo->prepare('UPDATE game_rounds SET chaos_rarity_1 = :r1, chaos_rarity_2 = :r2 WHERE id = :id')
+                ->execute(['r1' => $rarity1, 'r2' => $rarity2, 'id' => $roundId]);
+        } else {
+            $rarity1 = $round['chaos_rarity_1'];
+            $rarity2 = $round['chaos_rarity_2'];
+        }
+
+        $state = $this->boardStates->load($gameId);
+
+        // The FIRST time this round's own offers are ensured doubles as
+        // "the beginning of the round" for every still-in-play chaos
+        // effect's own roundStartHook() (e.g. chaos_015's "at the
+        // beginning of each round, if you go first, put a token into
+        // play") -- gated on the same $isFirstOfferForRound flag that
+        // already marks this round as not-yet-initialized, so it can
+        // never fire twice for the same round even across repeated
+        // chaosDraftOfferFor() calls. Saved immediately since, unlike the
+        // rest of this method, this can mutate board state (spawn a
+        // token) -- safe to do here specifically because this whole
+        // method only ever runs inside chaosDraftOfferFor()'s own
+        // withGameLock() wrapper, never from buildGameState()'s unlocked
+        // read path.
+        if ($isFirstOfferForRound) {
+            foreach ($state->moodsInPlay() as $mood) {
+                $chaosRow = $state->chaosEffectRow($mood->cardId);
+                if ($chaosRow !== null) {
+                    $this->chaosRegistry->for($chaosRow['effectKey'])->roundStartHook($state, $mood->cardId, $mood->ownerId);
+                }
+            }
+            $this->boardStates->save($gameId, $state);
+        }
+
+        if ($game['format'] === 'team') {
+            foreach ([0, 1] as $teamId) {
+                $hasAnyHand = false;
+                foreach ($this->teamMembers($gameId, $teamId) as $memberId) {
+                    if ($state->hand($memberId) !== []) {
+                        $hasAnyHand = true;
+                        break;
+                    }
+                }
+                if ($hasAnyHand) {
+                    $this->createChaosDraftOfferIfMissing($gameId, $roundId, null, $teamId, $rarity1, $rarity2);
+                }
+            }
+
+            return;
+        }
+
+        foreach ($this->activeGamePlayerIds($gameId) as $playerId) {
+            if ($state->hand($playerId) !== []) {
+                $this->createChaosDraftOfferIfMissing($gameId, $roundId, $playerId, null, $rarity1, $rarity2);
+            }
+        }
+    }
+
+    private function createChaosDraftOfferIfMissing(int $gameId, int $roundId, ?int $gamePlayerId, ?int $teamId, string $rarity1, string $rarity2): void
+    {
+        $column = $gamePlayerId !== null ? 'game_player_id' : 'team_id';
+        $value = $gamePlayerId ?? $teamId;
+
+        $existsStmt = Connection::get()->prepare("SELECT id FROM chaos_draft_offers WHERE game_round_id = :round_id AND {$column} = :value");
+        $existsStmt->execute(['round_id' => $roundId, 'value' => $value]);
+        if ($existsStmt->fetch() !== false) {
+            return;
+        }
+
+        $effect1 = $this->randomChaosEffectIdForRarity($rarity1);
+        $effect2 = $this->randomChaosEffectIdForRarity($rarity2, [$effect1]);
+
+        Connection::get()->prepare(
+            'INSERT INTO chaos_draft_offers (game_id, game_round_id, game_player_id, team_id, effect_id_1, effect_id_2)
+             VALUES (:game_id, :round_id, :player, :team, :e1, :e2)'
+        )->execute([
+            'game_id' => $gameId,
+            'round_id' => $roundId,
+            'player' => $gamePlayerId,
+            'team' => $teamId,
+            'e1' => $effect1,
+            'e2' => $effect2,
+        ]);
+    }
+
+    private function fetchChaosDraftOffer(int $roundId, ?int $gamePlayerId, ?int $teamId): ?array
+    {
+        $column = $gamePlayerId !== null ? 'game_player_id' : 'team_id';
+        $value = $gamePlayerId ?? $teamId;
+
+        $stmt = Connection::get()->prepare("SELECT * FROM chaos_draft_offers WHERE game_round_id = :round_id AND {$column} = :value");
+        $stmt->execute(['round_id' => $roundId, 'value' => $value]);
+        $row = $stmt->fetch();
+
+        return $row === false ? null : $row;
+    }
+
+    /** @return array{effect_1: array{id:int,rarity:string,shape:string,rules_text:string}, effect_2: array, is_team_offer: bool, phase: string, proposer_game_player_id: ?int} */
+    private function serializeChaosDraftOffer(array $offer): array
+    {
+        $effectsById = [];
+        $stmt = Connection::get()->prepare('SELECT * FROM chaos_effects WHERE id IN (:e1, :e2)');
+        $stmt->execute(['e1' => (int) $offer['effect_id_1'], 'e2' => (int) $offer['effect_id_2']]);
+        foreach ($stmt->fetchAll() as $row) {
+            $effectsById[(int) $row['id']] = [
+                'id' => (int) $row['id'],
+                'rarity' => $row['rarity'],
+                'shape' => $row['shape'],
+                'rules_text' => $row['rules_text'],
+            ];
+        }
+
+        return [
+            'effect_1' => $effectsById[(int) $offer['effect_id_1']],
+            'effect_2' => $effectsById[(int) $offer['effect_id_2']],
+            'is_team_offer' => $offer['team_id'] !== null,
+            'phase' => $offer['phase'],
+            'proposer_game_player_id' => $offer['proposer_game_player_id'] !== null ? (int) $offer['proposer_game_player_id'] : null,
+        ];
+    }
+
+    /**
+     * The chaos effect choice $gamePlayerId is currently facing this
+     * round (issue #405), or null if there's nothing to show them right
+     * now -- this isn't a chaos_draft game, they (or, in Open Team Play,
+     * their whole team) have no cards in hand this round, or they've
+     * already resolved their own offer. Also ensures the round's own
+     * rarities and every eligible offer exist first -- see this
+     * section's own docblock for why that happens here, lazily, rather
+     * than at round-creation time, and why this is wrapped in
+     * withGameLock() (a write, unlike almost everything else
+     * buildGameState() itself reads) rather than folded into that
+     * method's own unlocked read path.
+     */
+    public function chaosDraftOfferFor(int $gameId, int $gamePlayerId): ?array
+    {
+        return $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId): ?array {
+            $game = $this->fetchGame($gameId);
+            if ($game['deck_type'] !== 'chaos_draft') {
+                return null;
+            }
+
+            $round = $this->currentRound($gameId);
+            $this->ensureChaosDraftOffersForRound($gameId, $game, $round);
+
+            $roundId = (int) $round['id'];
+            $offer = $game['format'] === 'team'
+                ? $this->fetchChaosDraftOffer($roundId, null, $this->teamIdByGamePlayer($gameId)[$gamePlayerId])
+                : $this->fetchChaosDraftOffer($roundId, $gamePlayerId, null);
+
+            if ($offer === null || $offer['resolved_at'] !== null) {
+                return null;
+            }
+
+            return $this->serializeChaosDraftOffer($offer);
+        });
+    }
+
+    /**
+     * Attaches $chosenEffectId to $attachGameCardId (a card in
+     * $gamePlayerId's own hand) -- the 'draft'/'closed_team' formats' own
+     * direct resolve, no propose/confirm needed (each player
+     * independently owns their own offer). See proposeChaosDraftEffect()/
+     * confirmChaosDraftEffect() for Open Team Play's own two-step
+     * counterpart.
+     */
+    public function chooseChaosDraftEffect(int $gameId, int $gamePlayerId, int $chosenEffectId, int $attachGameCardId): array
+    {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $chosenEffectId, $attachGameCardId): array {
+            $game = $this->fetchGame($gameId);
+            if ($game['format'] === 'team') {
+                throw new GameStateException('Open Team Play resolves its Chaos Draft offer as a team -- see proposeChaosDraftEffect()');
+            }
+
+            $round = $this->currentRound($gameId);
+            $offer = $this->fetchChaosDraftOffer((int) $round['id'], $gamePlayerId, null);
+            if ($offer === null || $offer['resolved_at'] !== null) {
+                throw new GameStateException("Player {$gamePlayerId} has no open Chaos Draft offer this round");
+            }
+            if (!in_array($chosenEffectId, [(int) $offer['effect_id_1'], (int) $offer['effect_id_2']], true)) {
+                throw new GameStateException('That effect was not one of the two offered');
+            }
+
+            $state = $this->boardStates->load($gameId);
+            if (!in_array($attachGameCardId, $state->hand($gamePlayerId), true)) {
+                throw new GameStateException("Card {$attachGameCardId} is not in player {$gamePlayerId}'s own hand");
+            }
+
+            $state->attachChaosEffect($attachGameCardId, $chosenEffectId);
+            $this->boardStates->save($gameId, $state);
+
+            Connection::get()->prepare(
+                'UPDATE chaos_draft_offers SET chosen_effect_id = :effect, attach_game_card_id = :card, resolved_at = NOW() WHERE id = :id'
+            )->execute(['effect' => $chosenEffectId, 'card' => $attachGameCardId, 'id' => $offer['id']]);
+
+            $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'chaos_draft_effect_attached', $attachGameCardId, ['chaos_effect_id' => $chosenEffectId], $state);
+
+            return ['round_scored' => false, 'game_completed' => false];
+        });
+
+        $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
+
+        return $result;
+    }
+
+    /**
+     * Open Team Play's own first step (confirmed by the maintainer,
+     * mirroring proposeTeamDecision()'s exact shape): either teammate
+     * proposes an effect and a card to attach it to, in EITHER
+     * teammate's own hand (per the issue) -- the other teammate must
+     * then confirmTeamsChaosDraftEffect() before it's final.
+     */
+    public function proposeChaosDraftEffect(int $gameId, int $gamePlayerId, int $chosenEffectId, int $attachGameCardId): array
+    {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $chosenEffectId, $attachGameCardId): array {
+            $game = $this->fetchGame($gameId);
+            if ($game['format'] !== 'team') {
+                throw new GameStateException('proposeChaosDraftEffect() is only for Open Team Play -- see chooseChaosDraftEffect()');
+            }
+
+            $teamId = $this->teamIdByGamePlayer($gameId)[$gamePlayerId];
+            $round = $this->currentRound($gameId);
+            $offer = $this->fetchChaosDraftOffer((int) $round['id'], null, $teamId);
+            if ($offer === null || $offer['resolved_at'] !== null) {
+                throw new GameStateException("Team {$teamId} has no open Chaos Draft offer this round");
+            }
+            if ($offer['phase'] !== 'propose') {
+                throw new GameStateException('This Chaos Draft offer is already awaiting confirmation');
+            }
+            if (!in_array($chosenEffectId, [(int) $offer['effect_id_1'], (int) $offer['effect_id_2']], true)) {
+                throw new GameStateException('That effect was not one of the two offered');
+            }
+
+            $state = $this->boardStates->load($gameId);
+            $teammateHands = [];
+            foreach ($this->teamMembers($gameId, $teamId) as $memberId) {
+                $teammateHands = [...$teammateHands, ...$state->hand($memberId)];
+            }
+            if (!in_array($attachGameCardId, $teammateHands, true)) {
+                throw new GameStateException("Card {$attachGameCardId} is not in either teammate's own hand");
+            }
+
+            Connection::get()->prepare(
+                'UPDATE chaos_draft_offers SET phase = :phase, proposer_game_player_id = :proposer, chosen_effect_id = :effect, attach_game_card_id = :card WHERE id = :id'
+            )->execute([
+                'phase' => 'confirm',
+                'proposer' => $gamePlayerId,
+                'effect' => $chosenEffectId,
+                'card' => $attachGameCardId,
+                'id' => $offer['id'],
+            ]);
+
+            return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+        });
+
+        $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
+
+        return $result;
+    }
+
+    /**
+     * The OTHER teammate's response to a proposed Chaos Draft effect
+     * (never the proposer themselves) -- mirrors confirmTeamDecision()'s
+     * own exact shape. Approving actually attaches the effect
+     * (BoardState::attachChaosEffect()) and resolves the offer;
+     * rejecting sends it back to 'propose' (clearing the previous
+     * proposal, same as confirmTeamDecision()'s own reject) so either
+     * teammate can try again.
+     */
+    public function confirmChaosDraftEffect(int $gameId, int $gamePlayerId, bool $approve): array
+    {
+        $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $approve): array {
+            $game = $this->fetchGame($gameId);
+            if ($game['format'] !== 'team') {
+                throw new GameStateException('confirmChaosDraftEffect() is only for Open Team Play');
+            }
+
+            $teamId = $this->teamIdByGamePlayer($gameId)[$gamePlayerId];
+            $round = $this->currentRound($gameId);
+            $offer = $this->fetchChaosDraftOffer((int) $round['id'], null, $teamId);
+            if ($offer === null || $offer['resolved_at'] !== null) {
+                throw new GameStateException("Team {$teamId} has no open Chaos Draft offer this round");
+            }
+            if ($offer['phase'] !== 'confirm') {
+                throw new GameStateException('This Chaos Draft offer has no proposal awaiting confirmation yet');
+            }
+            if ((int) $offer['proposer_game_player_id'] === $gamePlayerId) {
+                throw new GameStateException("Player {$gamePlayerId} proposed this effect and can't also confirm it");
+            }
+
+            $pdo = Connection::get();
+
+            if (!$approve) {
+                $pdo->prepare(
+                    'UPDATE chaos_draft_offers SET phase = :phase, proposer_game_player_id = NULL, chosen_effect_id = NULL, attach_game_card_id = NULL WHERE id = :id'
+                )->execute(['phase' => 'propose', 'id' => $offer['id']]);
+
+                return ['round_scored' => false, 'game_completed' => false, 'pending_decision' => true];
+            }
+
+            $state = $this->boardStates->load($gameId);
+            $chosenEffectId = (int) $offer['chosen_effect_id'];
+            $attachGameCardId = (int) $offer['attach_game_card_id'];
+
+            $state->attachChaosEffect($attachGameCardId, $chosenEffectId);
+            $this->boardStates->save($gameId, $state);
+
+            $pdo->prepare('UPDATE chaos_draft_offers SET resolved_at = NOW() WHERE id = :id')
+                ->execute(['id' => $offer['id']]);
+
+            $this->logEvent($gameId, (int) $round['id'], $gamePlayerId, 'chaos_draft_effect_attached', $attachGameCardId, ['chaos_effect_id' => $chosenEffectId], $state);
+
+            return ['round_scored' => false, 'game_completed' => false];
+        });
+
+        $this->touchLastMoveAt($gameId);
+        $this->clearQueuedNotificationForGamePlayer($gameId, $gamePlayerId);
+
+        return $result;
+    }
+
     private function totalWinsForTeam(int $gameId, int $teamId): int
     {
         $stmt = Connection::get()->prepare(
@@ -7344,7 +7806,7 @@ final class GameService
         $roundId = (int) $round['id'];
         $pdo = Connection::get();
 
-        $scores = $this->applyScoreSwaps($state, $this->scorer->score($state, $scoringDecisions));
+        $scores = $this->applyScoreSwaps($state, $this->applyChaosScoringBonuses($state, $this->scorer->score($state, $scoringDecisions)));
 
         // Repentance/Scorn's own 'end_of_round' suppression (as opposed to
         // Faith/Guilt/Meekness/Pacifism/Shame's 'while_source_in_play' kind)
@@ -7425,6 +7887,7 @@ final class GameService
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
         $this->applyAfterScoringHooks($state, [$winnerId], $turnOrder, $resolvedOrders);
+        $this->applyChaosAfterScoringHooks($state, $scores, [$winnerId], $this->scorer->hurtFeelings($activeScores, $turnOrder));
 
         // Hurt Feelings only exists in games of 3 or more (active) players.
         $hurtFeelingsHolder = count($turnOrder) >= 3 ? $this->scorer->hurtFeelings($activeScores, $turnOrder) : null;
@@ -7662,6 +8125,8 @@ final class GameService
 
         $resolvedOrders = $this->resolvedAfterScoringOrders($roundId);
         $this->applyAfterScoringHooks($state, $winningTeamMembers, $turnOrder, $resolvedOrders);
+        $activeScores = array_intersect_key($scores, array_flip($turnOrder));
+        $this->applyChaosAfterScoringHooks($state, $scores, $winningTeamMembers, $this->scorer->hurtFeelings($activeScores, $turnOrder));
         $this->boardStates->save($gameId, $state);
 
         $this->logEvent($gameId, $roundId, null, 'round_scored', null, [
@@ -7891,6 +8356,58 @@ final class GameService
         }
 
         return $scores;
+    }
+
+    /**
+     * Chaos Draft (issue #405): folds every in-play chaos-carrying mood's
+     * own ChaosMoodEffect::scoringBonus() into $scores -- mirrors
+     * RoundScorer::score()'s own Enthusiasm/Passion handling (see that
+     * class's own docblock), except every chaos bonus always applies (no
+     * accept/decline decision -- see ChaosMoodEffect's own class
+     * docblock) rather than being read from $scoringDecisions. Applied
+     * BEFORE applyScoreSwaps() so a swapped score already reflects
+     * whatever bonus its original owner earned.
+     *
+     * @param array<int, int> $scores playerId => score
+     * @return array<int, int>
+     */
+    private function applyChaosScoringBonuses(BoardState $state, array $scores): array
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            $chaosRow = $state->chaosEffectRow($mood->cardId);
+            if ($chaosRow === null) {
+                continue;
+            }
+            $scores[$mood->ownerId] += $this->chaosRegistry->for($chaosRow['effectKey'])->scoringBonus($state, $mood->cardId, $mood->ownerId);
+        }
+
+        return $scores;
+    }
+
+    /**
+     * Chaos Draft (issue #405): fires ChaosMoodEffect::afterScoring() for
+     * every mood still in play carrying a chaos effect, once this round's
+     * final scores/winner/lowest-scorer are already settled -- called
+     * from both finishScoringAndAdvance() and finishTeamScoringAndAdvance(),
+     * right alongside their own existing applyAfterScoringHooks() call.
+     * $lowestScorePlayerId is always computed fresh via
+     * RoundScorer::hurtFeelings() regardless of player count or whether
+     * this particular round's own Hurt Feelings holder ends up null (a
+     * 2-player game has no Hurt Feelings status, but chaos_100's own
+     * "lowest score out of all players" condition still needs an answer).
+     *
+     * @param array<int, int> $scores playerId => final score
+     * @param int[] $winningGamePlayerIds
+     */
+    private function applyChaosAfterScoringHooks(BoardState $state, array $scores, array $winningGamePlayerIds, int $lowestScorePlayerId): void
+    {
+        foreach ($state->moodsInPlay() as $mood) {
+            $chaosRow = $state->chaosEffectRow($mood->cardId);
+            if ($chaosRow === null) {
+                continue;
+            }
+            $this->chaosRegistry->for($chaosRow['effectKey'])->afterScoring($state, $mood->cardId, $mood->ownerId, $scores, $winningGamePlayerIds, $lowestScorePlayerId);
+        }
     }
 
     /**
@@ -8531,6 +9048,25 @@ final class GameService
 
         foreach ($state->consumeBankedExtraPlaysFor($playerId) as $banked) {
             $grants[] = ['sourceCardId' => $state->effectiveCardId($banked['sourceCardId'])];
+        }
+
+        // Chaos Draft (issue #405): every one of $playerId's own in-play
+        // moods carrying an attached chaos effect contributes whatever
+        // ChaosMoodEffect::perpetualTurnStartGrants() it returns -- the
+        // same "one grant per qualifying mood" shape Hope/Grace/
+        // Stubbornness above already follow. See MoodPlayService's own
+        // dispatchChaosReactiveHooks() for this same hook's OTHER call
+        // site (applied immediately, the very turn a while_in_play chaos
+        // effect's own card is played, for "including the turn you play
+        // this mood" printed text).
+        foreach ($state->moodsOwnedBy($playerId) as $mood) {
+            $chaosRow = $state->chaosEffectRow($mood->cardId);
+            if ($chaosRow === null) {
+                continue;
+            }
+            foreach ($this->chaosRegistry->for($chaosRow['effectKey'])->perpetualTurnStartGrants($state, $mood->cardId, $playerId) as $restriction) {
+                $grants[] = [...$restriction, 'sourceCardId' => $mood->cardId];
+            }
         }
 
         return $grants;
@@ -9489,7 +10025,7 @@ final class GameService
             return [];
         }
 
-        if ($deckType === 'quick_draft') {
+        if ($deckType === 'quick_draft' || $deckType === 'chaos_draft') {
             return $this->quickDraftAwaitingResponseUsernames($draftMatchId, (int) $match['current_round'], $usernamesByUserId);
         }
 
@@ -11134,7 +11670,7 @@ final class GameService
         }
 
         if ($viewerUserId !== null) {
-            if ($game['deck_type'] === 'quick_draft' && $game['draft_match_id'] !== null) {
+            if (($game['deck_type'] === 'quick_draft' || $game['deck_type'] === 'chaos_draft') && $game['draft_match_id'] !== null) {
                 $response['quick_draft'] = $this->quickDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'winston_draft' && $game['draft_match_id'] !== null) {
                 $response['winston_draft'] = $this->winstonDraftStateFor($game, $viewerUserId);
@@ -12134,6 +12670,18 @@ final class GameService
             // null (there's no card involved), so this needs its own
             // phrasing for the same reason 'game_expired' above does.
             $row['event_type'] === 'draft_resigned' => "{$actor} resigned from the draft",
+            // A bug caught live, same shape as closed_team_leader_decided's
+            // own comment above: this case was missing, so it fell through
+            // to the generic "{actor} played {card}" default below -- which
+            // misleadingly read as the player having PLAYED the card,
+            // rather than merely attaching a chaos effect to it (still
+            // sitting in their hand, not entered play at all).
+            $row['event_type'] === 'chaos_draft_effect_attached' => (function () use ($actor, $cardName, $details) {
+                $rarity = $this->chaosEffectRarity((int) ($details['chaos_effect_id'] ?? 0));
+                $article = $rarity === 'uncommon' ? 'an' : 'a';
+
+                return "{$actor} attached {$article} {$rarity} chaos effect to {$cardName}";
+            })(),
             default => "{$actor} played {$cardName}{$playedFromSuffix}{$grantUsedSuffix}",
         };
 
@@ -12677,6 +13225,29 @@ final class GameService
             'copy_simulation' => ($reactingViewerId !== null && $catalog['effectKey'] === 'creativity')
                 ? $this->creativityCopySimulation($state, $reactingViewerId, $cardId)
                 : null,
+            // Chaos Draft (issue #405): the effect currently attached to
+            // this specific card instance, if any -- see
+            // BoardState::chaosEffectRow(). Null for every non-chaos_draft
+            // game and every chaos_draft card nothing has been attached
+            // to yet. Keyed by the raw instance id (not effective/copy-
+            // aware) since an attached chaos effect belongs to the
+            // physical card, never to whatever it copies.
+            'chaos_effect' => $this->serializeChaosEffectRow($state->chaosEffectRow($cardId)),
+        ];
+    }
+
+    /** @param ?array{effectKey:string,rarity:string,shape:string,rulesText:string} $chaosRow */
+    private function serializeChaosEffectRow(?array $chaosRow): ?array
+    {
+        if ($chaosRow === null) {
+            return null;
+        }
+
+        return [
+            'effect_key' => $chaosRow['effectKey'],
+            'rarity' => $chaosRow['rarity'],
+            'shape' => $chaosRow['shape'],
+            'rules_text' => $chaosRow['rulesText'],
         ];
     }
 
@@ -13100,6 +13671,25 @@ final class GameService
         }
 
         return $this->cardNamesByGame[$gameId];
+    }
+
+    /**
+     * Rarity for describeEvent()'s own 'chaos_draft_effect_attached' case --
+     * unlike cardNamesFor()/playerUsernamesFor() above, this isn't scoped
+     * per game_id, since chaos_effects.id is already a global catalog id
+     * (there's only ever one row per id across every game, unlike
+     * game_cards.id).
+     */
+    private function chaosEffectRarity(int $effectId): string
+    {
+        if (!isset($this->chaosEffectRarityCache[$effectId])) {
+            $stmt = Connection::get()->prepare('SELECT rarity FROM chaos_effects WHERE id = :id');
+            $stmt->execute(['id' => $effectId]);
+            $rarity = $stmt->fetchColumn();
+            $this->chaosEffectRarityCache[$effectId] = $rarity !== false ? (string) $rarity : 'common';
+        }
+
+        return $this->chaosEffectRarityCache[$effectId];
     }
 
     /**

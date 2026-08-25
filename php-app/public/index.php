@@ -49,6 +49,7 @@ use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
+use MoodSwings\Rules\ChaosDefaultEffectRegistry;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\EffectNotImplementedException;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
@@ -776,8 +777,9 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
+$chaosRegistry = ChaosDefaultEffectRegistry::build();
 $cardStats = new CardStatsService();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats);
+$games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, chaosRegistry: $chaosRegistry);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
@@ -1566,6 +1568,36 @@ if ($path === '/games/initial-pass' && $method === 'POST') {
         if ($autoResult !== null) {
             $result = $autoResult;
         }
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/chaos-draft-offer' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    respond(200, ['status' => 'ok', 'offer' => $games->chaosDraftOfferFor($gameId, $gamePlayerId)]);
+}
+
+if ($path === '/games/chaos-draft-effect' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $action = (string) ($body['action'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = match ($action) {
+            'choose' => $games->chooseChaosDraftEffect($gameId, $gamePlayerId, (int) ($body['chosen_effect_id'] ?? 0), (int) ($body['attach_game_card_id'] ?? 0)),
+            'propose' => $games->proposeChaosDraftEffect($gameId, $gamePlayerId, (int) ($body['chosen_effect_id'] ?? 0), (int) ($body['attach_game_card_id'] ?? 0)),
+            'confirm' => $games->confirmChaosDraftEffect($gameId, $gamePlayerId, (bool) ($body['approve'] ?? false)),
+            default => throw new GameStateException('action must be "choose", "propose", or "confirm"'),
+        };
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

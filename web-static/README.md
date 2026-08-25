@@ -1203,13 +1203,14 @@ without a reload.
     selected (Power's 15 cards fall short of the 45-card minimum both team
     formats share -- see "Open Team Play"/"Closed Team Play" in
     `php-app/README.md`), and -- since the Draft format supports only Quick
-    Draft/Winston Draft/Grid Draft -- every option *except* those three
-    whenever Draft is selected. Quick Draft/Winston Draft/Grid Draft
-    themselves are available whenever Draft, Closed Team Play, *or Open Team
-    Play* is selected (issue #362 -- each of the 4 players drafts and builds
-    their own deck completely independently either team format, exactly
-    like a normal individual draft; Open Team Play's teammates additionally
-    get to SEE each other's own drafted cards throughout the draft and
+    Draft/Winston Draft/Grid Draft/Chaos Draft -- every option *except*
+    those four whenever Draft is selected. Quick Draft/Winston Draft/Grid
+    Draft/Chaos Draft themselves are available whenever Draft, Closed Team
+    Play, *or Open Team Play* is selected (issue #362, extended to Chaos
+    Draft by issue #405 -- each of the 4 players drafts and builds their
+    own deck completely independently either team format, exactly like a
+    normal individual draft; Open Team Play's teammates additionally get
+    to SEE each other's own drafted cards throughout the draft and
     deck-building, matching this format's existing "open information"
     premise -- see "Open Team Play" in `php-app/README.md`), and hidden for
     every other format. If
@@ -1255,7 +1256,13 @@ without a reload.
     "Paste/upload a decklist instead", which wouldn't make sense here since
     there's no paste/upload fallback within this dropdown itself -- picking
     Custom pool from the Pool dropdown above it is that fallback instead).
-    Selecting Winston Draft reveals `#new-game-winston-draft-fields`
+    Selecting Chaos Draft reveals the exact same `#new-game-quick-draft-fields`
+    block Quick Draft does -- not a separate set of fields (`deckType ===
+    'quick_draft' || deckType === 'chaos_draft'` is the visibility check,
+    same `quick_draft_pool_source`/`quick_draft_custom_pool_text`/
+    `saved_decklist_id` params sent to `POST /games`, since drafting itself
+    is identical between the two -- see "Chaos Draft" in
+    `php-app/README.md`). Selecting Winston Draft reveals `#new-game-winston-draft-fields`
     instead -- the exact same shape one level down
     (`#new-game-winston-draft-pool-source`, same 6 options, its own
     `WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
@@ -1464,6 +1471,53 @@ without a reload.
     border/padding and no `margin: 1rem 0` below it, so its own "Pass
     cards" button sat flush against the ordinary "Pass" turn button
     directly underneath it (a bug caught live).
+
+    A `#chaos-draft-offer-panel` (`checkChaosDraftOffer()`/
+    `renderChaosDraftOffer()`) is `chaos_draft`'s own round-start
+    mechanic (issue #405) -- entirely separate from every other
+    `chaos_draft` panel on this page, which all reuse Quick Draft's own
+    drafting/deck-building UI verbatim (`state.game.deck_type ===
+    'chaos_draft'` is simply added alongside `=== 'quick_draft'` at every
+    relevant check -- dropdown visibility, `isDeckTypeAvailableForFormat()`,
+    `botsSupportedFor()`, `isSharedDeckType()`, and so on; see "Chaos
+    Draft" in `php-app/README.md`). Driven by its OWN polled endpoint
+    (`getChaosDraftOffer()`, `GET /games/chaos-draft-offer`) rather than
+    the regular board poll, since resolving an offer is a lazy WRITE the
+    ordinary unlocked `GET /games/state` read path deliberately stays out
+    of. `null` (nothing to show this round) hides the panel entirely;
+    otherwise it shows the two offered effects
+    (`chaosDraftEffectSummary()`: rarity + rules text) as clickable
+    buttons. Picking one reveals a second step -- a card-thumbnail picker
+    (`#chaos-draft-offer-attach-cards`, reusing `buildCardThumb()`) over
+    the viewer's own hand (or, for Open Team Play, both teammates' hands
+    combined, reading `state.you.hand`/`state.you.teammate_hand`) to
+    choose which card to attach it to, with a "Back" button
+    (`#chaos-draft-offer-back-button`) to return to the effect choice.
+    Clicking a card calls `submitChaosDraftChoice()` --
+    `chooseChaosDraftEffect()`/`POST /games/chaos-draft-effect` with
+    `action: 'choose'` for `draft`/`closed_team`, confirming via
+    `window.confirm()` first when attaching to a teammate's own card
+    rather than the proposer's -- or, for Open Team Play,
+    `proposeChaosDraftEffect()` (`action: 'propose'`) instead, after which
+    the panel switches to a read-only "Waiting for your teammate to
+    confirm your choice" status for the proposer, or an "X proposed a
+    Chaos effect. Do you agree?" prompt with an Approve/Reject pair
+    (`#chaos-draft-offer-confirm-button`/`#chaos-draft-offer-reject-button`,
+    `action: 'confirm'`) for the other teammate, mirroring
+    `#team-decision-panel`'s own propose/confirm shape immediately above.
+
+    A card carrying an attached chaos effect gets a "Chaos" badge
+    (`buildCardThumb()`, `.card-thumb__badge--chaos`, tinted by
+    `--chaos-common`/`--chaos-uncommon`/`--chaos-rare`/`--chaos-mythic`)
+    reading `card.chaos_effect.rules_text` as its own `title` tooltip, and
+    `openCardDetail()`'s `#card-detail-chaos-effect` line (plus
+    `#choices-card-chaos-effect` in the Play-card confirmation panel,
+    `#choices-panel` -- a card carrying an attached effect is USUALLY
+    reached through that panel rather than the read-only detail view,
+    since `is_playable` already routes a playable hand card there, so the
+    effect needs to be visible there too, not just in the read-only view)
+    shows the same rarity + rules text alongside the card's own printed
+    ability, additive rather than replacing it.
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
     whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
