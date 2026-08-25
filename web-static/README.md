@@ -241,6 +241,21 @@ badge is simply omitted). The card-detail dialog's own meta line
 (`openCardDetail()`) surfaces the same net delta as a parenthetical
 (`(chaos: +N)`) alongside its existing base/alt/current value line.
 
+An attached chaos effect's own absolute "this mood's value becomes N"
+wording (chaos_001/008/033/058/062/087/095/108/110/111/118 -- issue #405
+follow-up, reported live for chaos_033: "the UI should not rotate the
+card 180 degrees") shares Dignity's/Delight's exact printed wording, but
+the card it's attached to is essentially arbitrary, so its OWN printed
+ability almost never actually fixed a value -- `value_locked`'s own
+180-degree rotation would misleadingly suggest it did. Kept separate the
+same way `chaos_value_delta` is, and shown the same way: its own small
+red `.card-thumb__badge--chaos-override` badge (sharing the delta
+badge's exact position -- the two are mutually exclusive per card, so
+there's nothing to stack), reading `=N`, whenever `card.chaos_value_override`
+is non-null (see `chaos_value_override` in `php-app/README.md`). The
+card-detail dialog's meta line surfaces the same fixed value as a
+parenthetical (`(chaos: fixed at N)`).
+
 The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
 a `<p>` rules-text paragraph -- both now conveyed only via that image's

@@ -71,7 +71,7 @@ final class Chaos118Effect extends AbstractChaosMoodEffect implements ChaosRequi
         $recipientId = $choices->requireInt('recipient_player_id');
         $state->recordRevealedCard($handCardId);
         $state->giveHandCardToPlayer($playerId, $recipientId, $handCardId);
-        $state->setValueOverride($cardId, 7);
+        $state->setChaosValueOverride($cardId, 7);
 
         return [];
     }

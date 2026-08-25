@@ -33,7 +33,7 @@ final class Chaos033Effect extends AbstractChaosMoodEffect
 
         foreach ($state->moodsInPlay() as $mood) {
             if ($state->colorOf($mood->cardId) === $revealedColor) {
-                $state->setValueOverride($cardId, 6);
+                $state->setChaosValueOverride($cardId, 6);
 
                 return;
             }

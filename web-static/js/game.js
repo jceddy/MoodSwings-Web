@@ -3139,6 +3139,24 @@
             button.appendChild(deltaBadge);
         }
 
+        // Chaos Draft (issue #405 follow-up, reported live for chaos_033):
+        // an attached chaos effect's own absolute "this mood's value
+        // becomes N" wording (chaos_001/008/033/058/062/087/095/108/110/
+        // 111/118) shares Dignity's/Delight's exact printed wording, but
+        // the card it's attached to is essentially arbitrary, so its OWN
+        // printed ability almost never actually fixed a value -- rotating
+        // the whole card 180deg the way card.value_locked does would
+        // misleadingly suggest it did. Shown instead as its own badge,
+        // same shape as the delta badge above (see
+        // BoardState::setChaosValueOverride()'s own docblock).
+        if (card.chaos_value_override !== null && card.chaos_value_override !== undefined) {
+            const overrideBadge = document.createElement('span');
+            overrideBadge.className = 'card-thumb__badge card-thumb__badge--chaos-override';
+            overrideBadge.textContent = '=' + card.chaos_value_override;
+            overrideBadge.title = "Value fixed at " + card.chaos_value_override + ' by an attached chaos effect';
+            button.appendChild(overrideBadge);
+        }
+
         if (card.is_creativity_copy) {
             const copyBadge = document.createElement('span');
             copyBadge.className = 'card-thumb__badge card-thumb__badge--copy';
@@ -3197,7 +3215,11 @@
             // becomes N" trigger (Dignity, Delight, ...) has locked in its
             // alt value, as opposed to a "while in play" card (Determination)
             // whose value is only ever recomputed live -- rotated 180deg to
-            // distinguish the two at a glance, per table convention.
+            // distinguish the two at a glance, per table convention. Only
+            // ever true for the card's OWN printed ability -- an attached
+            // chaos effect's own "becomes N" wording never sets this (see
+            // card.chaos_value_override above), so it never rotates the
+            // card the way this does.
             button.classList.add('card-thumb--value-locked');
         }
 
@@ -3252,6 +3274,9 @@
         // the thumb's own badge does (see buildCardThumb()).
         if (card.chaos_value_delta) {
             meta += ' (chaos: ' + (card.chaos_value_delta > 0 ? '+' : '') + card.chaos_value_delta + ')';
+        }
+        if (card.chaos_value_override !== null && card.chaos_value_override !== undefined) {
+            meta += ' (chaos: fixed at ' + card.chaos_value_override + ')';
         }
         if (ownerLabel) {
             meta += ' — ' + ownerLabel;

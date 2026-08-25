@@ -23,7 +23,7 @@ final class Chaos001Effect extends AbstractChaosMoodEffect
             return;
         }
 
-        $state->setValueOverride($cardId, 7);
+        $state->setChaosValueOverride($cardId, 7);
 
         $order = $state->activePlayerOrder();
         $index = array_search($playerId, $order, true);

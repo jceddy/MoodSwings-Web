@@ -20,9 +20,13 @@ use MoodSwings\Rules\PlayerChoices;
  * "in play" value to compute. Setting a value override on $cardId (rather
  * than returning a fixed value from computeValue()) is correct here since
  * this effect's shape is 'after_playing', not 'while_in_play' -- there's
- * no computeValue() hook for it to participate in at all, exactly like
- * every other card that permanently fixes its own value this way (see
- * BoardState::setValueOverride()).
+ * no computeValue() hook for it to participate in at all. Uses
+ * BoardState::setChaosValueOverride() rather than the base-card
+ * setValueOverride() precisely because $cardId here is an essentially
+ * arbitrary attached-to hand card, not this effect's own printed ability
+ * -- see setChaosValueOverride()'s own docblock for why that distinction
+ * matters (it keeps the frontend from rotating the card 180 degrees as if
+ * its own printed ability had locked in a value).
  *
  * Deferred as a self-targeted `ChaosRequiresOpponentDecision` (issue #405
  * follow-up -- a bug caught live: attaching chaos_058, an identically-
@@ -91,7 +95,7 @@ final class ChaosDiscardValueToBoostSelfEffect extends AbstractChaosMoodEffect i
         }
 
         $state->moveHandToDiscard($playerId, $discardCardId);
-        $state->setValueOverride($cardId, $this->boostedValue);
+        $state->setChaosValueOverride($cardId, $this->boostedValue);
 
         return [];
     }

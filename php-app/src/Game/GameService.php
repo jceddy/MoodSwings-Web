@@ -12157,12 +12157,15 @@ final class GameService
                 // set by an attached chaos effect's own "permanently
                 // increase/decrease ... BY N" wording (chaos_056/064/120/
                 // 133) -- that's a DELTA, exposed separately below via
-                // 'chaos_value_delta', not an absolute override; see
-                // BoardState::adjustChaosValueDelta()'s own docblock for
-                // why the two are kept apart (issue #405 follow-up, a bug
-                // caught live: reusing setValueOverride() for the delta
-                // case incorrectly rotated cards it had no business
-                // rotating).
+                // 'chaos_value_delta', not an absolute override -- nor by
+                // an attached chaos effect's own absolute "value becomes N"
+                // wording (chaos_001/008/033/058/062/087/095/108/110/111/
+                // 118), exposed separately below via 'chaos_value_override';
+                // see BoardState::adjustChaosValueDelta()'s and
+                // setChaosValueOverride()'s own docblocks for why all three
+                // are kept apart (issue #405 follow-up, bugs caught live:
+                // reusing setValueOverride() for either chaos-effect case
+                // incorrectly rotated cards they had no business rotating).
                 'value_locked' => array_key_exists('valueOverride', $mood->effectState),
                 // The net permanent chaos-effect delta currently applied
                 // to this card's value (0 for every card nothing has ever
@@ -12171,6 +12174,14 @@ final class GameService
                 // small "+N"/"-N" badge next to the value badge (see
                 // "Card art rendering" in web-static/README.md).
                 'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
+                // The chaos-effect-driven absolute value override currently
+                // applied to this card (null if none) -- already folded
+                // into 'value' above via printedValueOf(), this is purely
+                // presentational: it drives a non-rotating frontend badge
+                // instead of the 'value_locked' rotation (see "Card art
+                // rendering" in web-static/README.md and
+                // BoardState::setChaosValueOverride()'s own docblock).
+                'chaos_value_override' => $state->chaosValueOverrideOf($cardId),
                 ...$this->suppressionFields($state, $cardId, $names),
                 'boosted_by_card_id' => $boosterCardId,
                 'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,
@@ -12671,6 +12682,7 @@ final class GameService
                         'has_unused_play_grant' => false,
                         'value_locked' => array_key_exists('valueOverride', $mood->effectState),
                         'chaos_value_delta' => $state->chaosValueDeltaOf($cardId),
+                        'chaos_value_override' => $state->chaosValueOverrideOf($cardId),
                         ...$this->suppressionFields($state, $cardId, $names),
                         'boosted_by_card_id' => $boosterCardId,
                         'boosted_by_name' => $boosterCardId !== null ? ($names[$boosterCardId] ?? null) : null,

@@ -1130,17 +1130,17 @@ owns Scorn.
 
 Every in-play mood also carries `value_locked` -- true once a permanent
 one-time "after playing this mood, ... this mood's value becomes N"
-trigger (Dignity, Delight, Cynicism, and 7 other cards -- every one that
-calls `BoardState::setValueOverride()`) has actually fired, as opposed to
-a continuously recomputed "while in play" value (Determination): both
+trigger (Dignity, Delight, Cynicism, and others -- every one that calls
+`BoardState::setValueOverride()`) has actually fired, as opposed to a
+continuously recomputed "while in play" value (Determination): both
 kinds of card can end up with `value === alt_value`, but only the former
 locks it in via `effectState['valueOverride']`, which `valueOf()` checks
 first and unconditionally returns once set. The frontend uses this to
 rotate the card art 180 degrees, matching a suppressed mood's own 90
 degree rotation -- see "Card art rendering" in `web-static/README.md`.
-chaos_008/087/110/111 (`ChaosDiscardValueToBoostSelfEffect`) share this
-exact same "value BECOMES N" printed wording and correctly set
-`value_locked` too.
+`value_locked` only ever means the card's OWN printed ability fixed its
+own value -- see `chaos_value_override` below for the (superficially
+identical-looking) case where an attached chaos effect did it instead.
 
 **`chaos_value_delta` (issue #405 follow-up -- a bug caught live).** A
 DIFFERENT wording -- an attached chaos effect's own "permanently
@@ -1155,6 +1155,28 @@ adjustChaosValueDelta()` is the fix: a separate, cumulative signed
 result (already `valueOf()`'s job -- see its own docblock) so the two
 stack. Exposed as `chaos_value_delta` (0 for every card nothing has ever
 adjusted) purely for the frontend's own small "+N"/"-N" badge -- see
+"Card art rendering" in `web-static/README.md`.
+
+**`chaos_value_override` (issue #405 follow-up -- a second bug caught
+live, reported for chaos_033: "the UI should not rotate the card 180
+degrees").** An attached chaos effect's own ABSOLUTE "this mood's value
+becomes N" wording (chaos_001/008/033/058/062/087/095/108/110/111/118)
+shares Dignity's/Delight's exact printed wording, and the original fix
+for `chaos_value_delta` above deliberately left these calling the
+base-card `setValueOverride()` directly, reasoning they were conceptually
+identical to a card locking in its own value -- that reasoning was wrong.
+The card a chaos effect attaches to is essentially arbitrary (whatever
+hand card the round's offer got attached to), so its OWN printed ability
+almost never actually fixed a value at all; rotating the whole card 180
+degrees via `value_locked` misleadingly suggested it did.
+`BoardState::setChaosValueOverride()`/`chaosValueOverrideOf()` mirror
+`chaosValueDelta`'s own separate-effectState-key treatment: a distinct
+`effectState['chaosValueOverride']`, which `printedValueOf()` now checks
+*before* the base card's own `valueOverride` (giving an attached chaos
+effect final say if both are somehow set -- the same precedent
+`applyChaosValuePipeline()` already establishes for the while-in-play
+shape). Exposed as `chaos_value_override` (`null` for every card nothing
+has overridden) purely for the frontend's own non-rotating badge -- see
 "Card art rendering" in `web-static/README.md`.
 
 Suppression isn't the only "one in-play mood affects another" relationship
