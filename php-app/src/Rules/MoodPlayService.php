@@ -700,8 +700,9 @@ final class MoodPlayService
     /**
      * Chaos Draft (issue #405): fires every one of ChaosMoodEffect's
      * reactive hooks (onMoodPlayed/onMoodDiscarded/onMoodSuppressed, plus
-     * an immediate same-turn perpetualTurnStartGrants() application) that
-     * this one play could have triggered, once $cardId's own full
+     * an immediate same-turn perpetualTurnStartGrants() application --
+     * only for effects whose own perpetualGrantsIncludeTheTurnPlayed()
+     * says so) that this one play could have triggered, once $cardId's own full
      * afterPlaying chain (base effect, every Duplicity repeat's own base
      * effect and attached chaos afterPlaying -- see
      * continueAfterPlayingChain()'s own docblock -- and the reactor loop
@@ -752,8 +753,16 @@ final class MoodPlayService
 
         $playedChaosRow = $state->chaosEffectRow($cardId);
         if ($playedChaosRow !== null && $playedChaosRow['shape'] === 'while_in_play') {
-            foreach ($this->chaosRegistry->for($playedChaosRow['effectKey'])->perpetualTurnStartGrants($state, $cardId, $playerId) as $restriction) {
-                $state->grantExtraPlay(1, $restriction, sourceCardId: $cardId);
+            $playedChaosEffect = $this->chaosRegistry->for($playedChaosRow['effectKey']);
+            // issue #405 follow-up -- a bug caught live, reported for
+            // chaos_102: only apply this immediately, the same turn the
+            // card is played, for effects that actually say so -- see
+            // ChaosMoodEffect::perpetualGrantsIncludeTheTurnPlayed()'s
+            // own docblock.
+            if ($playedChaosEffect->perpetualGrantsIncludeTheTurnPlayed()) {
+                foreach ($playedChaosEffect->perpetualTurnStartGrants($state, $cardId, $playerId) as $restriction) {
+                    $state->grantExtraPlay(1, $restriction, sourceCardId: $cardId);
+                }
             }
         }
     }

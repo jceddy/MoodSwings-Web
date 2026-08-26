@@ -1188,6 +1188,56 @@
     const pendingDecisionPanel = document.getElementById('pending-decision-panel');
     const cardDetailDialog = document.getElementById('card-detail-dialog');
 
+    // Shared confirm/alert modal (a bug caught live, reported for the
+    // resign button, then confirmed to affect every window.confirm()/
+    // alert() in this file): iOS disables those entirely -- calls just
+    // silently do nothing -- for a page running inside a Safari window
+    // that was EVER launched in "standalone" mode (Add to Home Screen),
+    // including an unrelated tab opened from that same window afterward.
+    // See #confirm-dialog's own comment in game/index.html. A real
+    // <dialog> has no such restriction, so showConfirmDialog()/
+    // showAlertDialog() below replace every window.confirm()/alert() call
+    // in this file. Both return a Promise, so every call site needs
+    // `await` (and its enclosing function needs to be `async`) where a
+    // bare `if (!window.confirm(...))` used to work synchronously.
+    const confirmDialog = document.getElementById('confirm-dialog');
+    const confirmDialogMessage = document.getElementById('confirm-dialog-message');
+    const confirmDialogCancelButton = document.getElementById('confirm-dialog-cancel-button');
+
+    // method="dialog" on the <form> already sets confirmDialog.returnValue
+    // to the clicked button's own value ('ok'/'cancel') and closes the
+    // dialog with no JS needed for that part -- Escape closes it too,
+    // leaving returnValue at whatever it was reset to below ('', matching
+    // neither button's value), the same "dismissed" outcome Escape/backdrop-
+    // click gives window.confirm()'s own `false`.
+    function showConfirmDialog(message) {
+        return new Promise((resolve) => {
+            confirmDialogMessage.textContent = message;
+            confirmDialogCancelButton.hidden = false;
+            confirmDialog.returnValue = '';
+            confirmDialog.addEventListener('close', function onClose() {
+                confirmDialog.removeEventListener('close', onClose);
+                resolve(confirmDialog.returnValue === 'ok');
+            });
+            confirmDialog.showModal();
+        });
+    }
+
+    // Same shared dialog, minus the Cancel button -- window.alert()'s own
+    // "just acknowledge this" shape has nothing to decline.
+    function showAlertDialog(message) {
+        return new Promise((resolve) => {
+            confirmDialogMessage.textContent = message;
+            confirmDialogCancelButton.hidden = true;
+            confirmDialog.returnValue = '';
+            confirmDialog.addEventListener('close', function onClose() {
+                confirmDialog.removeEventListener('close', onClose);
+                resolve();
+            });
+            confirmDialog.showModal();
+        });
+    }
+
     // Loading overlay (see #loading-overlay's own comment in
     // game/index.html) -- shown for the span of a fresh view's own
     // initial data fetch (showLobby()/showBoard()/showSpectatorBoard()/
@@ -3724,7 +3774,7 @@
     async function downloadGameExport(gameId) {
         const { ok, body } = await getGameExport(gameId);
         if (!ok) {
-            window.alert('Could not download this game\'s data.');
+            await showAlertDialog('Could not download this game\'s data.');
             return;
         }
         downloadFile('game-' + gameId + '-export.json', JSON.stringify(body.export, null, 2), 'application/json');
@@ -3771,7 +3821,7 @@
             successEl.hidden = false;
         } catch (e) {
             successEl.hidden = true;
-            window.alert('Could not copy the game log to your clipboard.');
+            await showAlertDialog('Could not copy the game log to your clipboard.');
         }
     });
 
@@ -3796,7 +3846,7 @@
     document.getElementById('spectate-share-button').addEventListener('click', async () => {
         const { ok, body } = await getOrCreateSpectateCode(currentGameId);
         if (!ok) {
-            window.alert(body.message || 'Could not get a spectate code for this game.');
+            await showAlertDialog(body.message || 'Could not get a spectate code for this game.');
             return;
         }
         document.getElementById('spectate-code-value').textContent = body.code;
@@ -3815,7 +3865,7 @@
             successEl.hidden = false;
         } catch (e) {
             successEl.hidden = true;
-            window.alert('Could not copy the spectate code to your clipboard.');
+            await showAlertDialog('Could not copy the spectate code to your clipboard.');
         }
     });
 
@@ -5324,7 +5374,7 @@
     async function submitChaosDraftChoice(offer, chosenEffectId, attachGameCardId, teammateOwnerLabel) {
         boardError.hidden = true;
         boardMessage.hidden = true;
-        if (teammateOwnerLabel && !confirm('Attach this effect to ' + teammateOwnerLabel + "'s card? They'll need to confirm before it's final.")) {
+        if (teammateOwnerLabel && !(await showConfirmDialog('Attach this effect to ' + teammateOwnerLabel + "'s card? They'll need to confirm before it's final."))) {
             return;
         }
         const { ok, body } = offer.is_team_offer
@@ -5874,7 +5924,7 @@
     }
 
     document.getElementById('winston-draft-take-button').addEventListener('click', () => submitWinstonDraftAction('take'));
-    document.getElementById('winston-draft-pass-button').addEventListener('click', () => {
+    document.getElementById('winston-draft-pass-button').addEventListener('click', async () => {
         // Passing pile 3 replenishes it (if able) BEFORE the mandatory
         // top-of-deck draw fires (see GameService::submitWinstonDraftPick()'s
         // own 'pass' branch), so with 0 or 1 cards left in the deck that
@@ -5884,7 +5934,7 @@
         // click/bug if they didn't mean to pass -- confirm first.
         const drafting = currentState && currentState.winston_draft && currentState.winston_draft.drafting;
         if (drafting && drafting.is_your_turn && drafting.current_pile_number === 3 && drafting.remaining_deck_count <= 1) {
-            if (!window.confirm("Passing now won't draw a card -- you'll get nothing this round. Are you sure?")) {
+            if (!(await showConfirmDialog("Passing now won't draw a card -- you'll get nothing this round. Are you sure?"))) {
                 return;
             }
         }
@@ -6795,7 +6845,7 @@
         // a confirmation dialog first, the same "make sure they meant it"
         // gate any other hard-to-reverse, one-way action in this app would
         // get.
-        if (!window.confirm('Resign this game? This cannot be undone.')) {
+        if (!(await showConfirmDialog('Resign this game? This cannot be undone.'))) {
             return;
         }
 
@@ -7927,7 +7977,7 @@
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
         if (cardHasNoTargetSelected(selectedCard, choices)
-            && !window.confirm(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`)) {
+            && !(await showConfirmDialog(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`))) {
             return;
         }
         if (cardHasAnUncheckedConfirmBox(selectedCard, choices)) {
@@ -7938,7 +7988,7 @@
             // reliable here.
             const fieldKey = UNCHECKED_BOX_CONFIRM_FIELD_KEYS[selectedCard.effect_key];
             const field = selectedCard.choice_fields.find((f) => f.key === fieldKey);
-            if (!window.confirm(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`)) {
+            if (!(await showConfirmDialog(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`))) {
                 return;
             }
         }

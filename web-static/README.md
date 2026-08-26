@@ -167,6 +167,39 @@ correctly on desktop/emulated-viewport testing can still look subtly
 different on a real phone without it -- general defensive hygiene, not
 tied to any one page or feature.
 
+## Confirm/alert modal
+
+A bug caught live and reproduced: on iOS, `window.confirm()`/`alert()`/
+`prompt()` are disabled entirely -- calls just silently do nothing, no
+dialog, no return value -- for a page running inside a Safari window that
+was EVER launched in "standalone" mode (Add to Home Screen), including an
+unrelated tab opened from that same window afterward. Reported as "the
+resign button doesn't work" (the confirm dialog never appeared) and
+confirmed to affect every `window.confirm()`/`alert()` call in `game.js`
+once tested further (e.g. playing Cheer with no discard selected also did
+nothing). `showConfirmDialog(message)`/`showAlertDialog(message)` in
+`game.js` replace every one of them with a real `#confirm-dialog`
+`<dialog>` element instead -- a plain DOM element has no such platform
+restriction, so it works identically regardless of how the tab was
+opened. Both return a Promise (`showConfirmDialog()` resolves to
+`true`/`false` matching `window.confirm()`'s own semantics, `showAlertDialog()`
+resolves once acknowledged), so every call site needs `await` from an
+`async` function -- the same shape a `fetch()`-backed action already
+needed anyway. The dialog itself is a `<form method="dialog">` wrapping
+OK/Cancel buttons with `value="ok"`/`value="cancel"` -- clicking either
+sets `dialog.returnValue` and closes the dialog with no manual `.close()`
+call needed, and pressing Escape closes it too, leaving `returnValue` at
+neither value (read as `false`/dismissed, matching `window.confirm()`'s
+own Escape behavior). `showAlertDialog()` reuses the exact same dialog
+with the Cancel button hidden, since an alert has nothing to decline.
+Live-verified end to end (Chromium via Playwright, since the actual iOS
+standalone restriction can't be reproduced outside real Safari): the
+targetless-play confirm and the resign confirm both render this dialog
+instead of triggering any native one (confirmed via a
+`page.on('dialog', ...)` listener that never fires), and clicking OK
+carries the action through exactly as before (a resigned game correctly
+shows "Game complete!").
+
 ## Assets
 
 - `img/` -- Game-level art not tied to any specific printed card, e.g.
@@ -1558,7 +1591,7 @@ failure.
     Clicking a card calls `submitChaosDraftChoice()` --
     `chooseChaosDraftEffect()`/`POST /games/chaos-draft-effect` with
     `action: 'choose'` for `draft`/`closed_team`, confirming via
-    `window.confirm()` first when attaching to a teammate's own card
+    `showConfirmDialog()` first when attaching to a teammate's own card
     rather than the proposer's -- or, for Open Team Play,
     `proposeChaosDraftEffect()` (`action: 'propose'`) instead, after which
     the panel switches to a read-only "Waiting for your teammate to
@@ -1898,7 +1931,7 @@ failure.
       draw comes up empty and the drafter gets nothing that round. The
       click handler for `#winston-draft-pass-button` checks for exactly
       this condition (`current_pile_number === 3 && remaining_deck_count <=
-      1`, only when it's actually your turn) and shows a `window.confirm()`
+      1`, only when it's actually your turn) and shows a `showConfirmDialog()`
       warning before submitting, so an accidental click doesn't cost a
       drafter their pick without warning. A `#winston-draft-team-drafted`
       block (same `renderTeamDraftedCards()` helper as Quick Draft above)
@@ -2162,10 +2195,11 @@ failure.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
-    with a `window.confirm()` ("You haven't selected a target for
+    with `showConfirmDialog()` ("You haven't selected a target for
     &lt;name&gt; -- its ability won't do anything. Play it anyway?", the
-    same native-dialog pattern the board's own Pass/Resign buttons already
-    use for their own "are you sure" moments) before the request is ever
+    same shared confirm/alert modal the board's own Pass/Resign buttons
+    already use for their own "are you sure" moments -- see "Confirm/alert
+    modal" below) before the request is ever
     sent; declining leaves the panel open with nothing submitted, same as
     never having clicked Play. Deliberately narrow -- only a card whose
     *entire* choice_fields is exactly one optional `mood`/`player`/
@@ -2181,7 +2215,7 @@ failure.
     leaving either one's own single bare-`bool` field unchecked does
     nothing whatsoever beyond entering play (`WrathEffect` and
     `RageEffect` both return immediately -- `RageEffect`'s own docblock
-    even says "Like Wrath"), so each gets the identical `window.confirm()`
+    even says "Like Wrath"), so each gets the identical `showConfirmDialog()`
     treatment ("You haven't checked &lt;field label&gt; -- &lt;name&gt;'s
     ability won't do anything. Play it anyway?") on its own. Cards with
     no ability worth asking about (roughly half the 127-card
@@ -3075,7 +3109,7 @@ failure.
     once the game's over or the viewer has already resigned, and disabled
     while a decision is pending (mirrors the backend's own
     `assertNoPendingDecision()` gate -- resolve it first). Clicking it
-    shows a `window.confirm()` prompt first, since resigning can't be
+    shows a `showConfirmDialog()` prompt first, since resigning can't be
     undone, then calls `POST /games/resign` (`resignGame()` in `app.js`)
     and runs the exact same success path Pass does
     (`announceOutcome()`/`refreshBoard()`). For 2-player and team-format

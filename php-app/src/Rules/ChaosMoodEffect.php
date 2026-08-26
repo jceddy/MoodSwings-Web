@@ -70,12 +70,29 @@ interface ChaosMoodEffect
      * restriction-descriptor shape BoardState::grantExtraPlay() itself
      * accepts. Also invoked once immediately, the very turn this card
      * itself enters play (see MoodPlayService's own Chaos Draft
-     * integration point), for the handful of effects whose printed text
-     * says "including the turn you play this mood."
+     * integration point) -- but ONLY when
+     * perpetualGrantsIncludeTheTurnPlayed() below says so.
      *
      * @return list<array{type?: string, values?: int[], source?: string}>
      */
     public function perpetualTurnStartGrants(BoardState $state, int $cardId, int $ownerId): array;
+
+    /**
+     * Whether perpetualTurnStartGrants() above should ALSO be applied
+     * immediately the very turn this card enters play, not just from the
+     * owner's next turn onward (issue #405 follow-up -- a bug caught
+     * live, reported for chaos_102: "this should only give an extra play
+     * at the beginning of the owner's turn, not when it is played"). True
+     * (the Abstract default) for the handful of effects whose printed
+     * text explicitly says "including the turn you play this mood"
+     * (chaos_121/124) or is otherwise silent on timing (chaos_069) --
+     * false for chaos_102, whose own wording ("At the start of each of
+     * your turns, ...") explicitly scopes the grant to turns that have
+     * already STARTED with this mood already in play, which the turn
+     * it's played never is (the turn is already underway by the time a
+     * mood gets played into it).
+     */
+    public function perpetualGrantsIncludeTheTurnPlayed(): bool;
 
     /** Fires once at the start of every round, for every still-in-play mood carrying this effect -- e.g. a "put a token into play if you go first this round" ability. */
     public function roundStartHook(BoardState $state, int $cardId, int $ownerId): void;

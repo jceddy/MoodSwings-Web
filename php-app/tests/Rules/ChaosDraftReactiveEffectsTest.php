@@ -15,6 +15,7 @@ use MoodSwings\Rules\ChaosEffects\Chaos037Effect;
 use MoodSwings\Rules\ChaosEffects\Chaos040Effect;
 use MoodSwings\Rules\ChaosEffects\Chaos064Effect;
 use MoodSwings\Rules\ChaosEffects\Chaos089Effect;
+use MoodSwings\Rules\ChaosEffects\Chaos102Effect;
 use MoodSwings\Rules\ChaosEffects\Chaos124Effect;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\MoodPlayService;
@@ -271,6 +272,40 @@ final class ChaosDraftReactiveEffectsTest extends TestCase
         // same turn doesn't throw / leaves the request able to complete.
         $result = $service->playMood($state, 1, 55, new PlayerChoices([]));
         self::assertFalse($result->isPending);
+    }
+
+    /**
+     * A bug caught live: unlike chaos_124 above (whose own printed text
+     * explicitly says "including the turn you play this mood"), chaos_102's
+     * own wording ("At the start of each of your turns, if another player
+     * has more moods than you, ...") never covers the turn it's played --
+     * that turn is already underway by the time the mood enters play. The
+     * qualifying condition is deliberately kept true even AFTER the host
+     * card itself enters play (player 2 has TWO in-play moods, one more
+     * than player 1's own single mood once the host card joins it, so the
+     * dispatch-time count comparison itself would still pass if the bug
+     * regressed) -- proving the grant is withheld because of TIMING, not
+     * because the condition itself failed.
+     */
+    public function testPerpetualTurnStartGrantsDoesNotApplyImmediatelyTheSameTurnChaos102IsPlayed(): void
+    {
+        $chaosRegistry = new ChaosEffectRegistry();
+        $chaosRegistry->register('chaos_102', new Chaos102Effect());
+
+        $state = $this->boardState(
+            hands: [1 => [5], 2 => [7, 33]], // Complacency (host); Courage, Curiosity
+            chaosCatalog: [1 => $this->chaosCatalogRow('chaos_102', 'while_in_play')],
+            chaosEffectIdFor: [5 => 1],
+            chaosRegistry: $chaosRegistry,
+        );
+        $state->moveHandToInPlay(2, 7);
+        $state->moveHandToInPlay(2, 33); // player 2 now has 2 moods -- still more than player 1's 1 once the host card below joins play
+        $state->startTurn(1);
+
+        $service = new MoodPlayService(DefaultEffectRegistry::build(), $chaosRegistry);
+        $service->playMood($state, 1, 5, new PlayerChoices([]));
+
+        self::assertSame(0, $state->playsRemaining(), 'chaos_102 should not grant an extra play the same turn it is played');
     }
 
     public function testOnMoodDiscardedChaos064ReducesARandomOpponentMoodsValue(): void

@@ -26,6 +26,11 @@ abstract class AbstractChaosMoodEffect implements ChaosMoodEffect
         return [];
     }
 
+    public function perpetualGrantsIncludeTheTurnPlayed(): bool
+    {
+        return true;
+    }
+
     public function roundStartHook(BoardState $state, int $cardId, int $ownerId): void
     {
     }

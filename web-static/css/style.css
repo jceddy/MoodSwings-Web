@@ -1448,6 +1448,31 @@ dialog#card-detail-dialog {
     border-radius: 0.5rem;
 }
 
+/* Shared confirm/alert modal -- see showConfirmDialog()/showAlertDialog()
+   in game.js. Narrower than #new-game-dialog/#card-detail-dialog above
+   since it's never more than a sentence or two plus 1-2 buttons. */
+dialog#confirm-dialog {
+    box-sizing: border-box;
+    max-width: 22rem;
+    width: 85%;
+    padding: 1.5rem;
+    background-color: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 0.5rem;
+}
+
+#confirm-dialog-message {
+    margin-top: 0;
+    white-space: pre-line;
+}
+
+#confirm-dialog form {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
 /* Format/Deck are plain inline <label> elements by default, so with
    nothing else forcing a break between them they'd sit on the same line
    as each other -- only their own <select> wraps once it runs out of
