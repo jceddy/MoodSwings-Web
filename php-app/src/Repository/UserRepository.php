@@ -119,6 +119,44 @@ final class UserRepository
         $stmt->execute(['auto_apply_scoring_bonuses' => $autoApplyScoringBonuses ? 1 : 0, 'id' => $id]);
     }
 
+    /**
+     * "Board layout" (issue #417) as a personal preference (Settings
+     * dialog's "Display" section) -- 'above_play_area' (default) or
+     * 'below_hand', see applyBoardLayoutPreference() in game.js for what
+     * each actually does. $boardLayoutPreference is validated against
+     * those two values by the route handler (index.php) before this is
+     * ever called -- the users.board_layout_preference column's own
+     * ENUM(...) (migration 0174) would reject anything else anyway, but
+     * failing at the route with a clean 400 is friendlier than a raw SQL
+     * error. Defaults to 'above_play_area'; see migration 0174.
+     */
+    public function setBoardLayoutPreference(int $id, string $boardLayoutPreference): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET board_layout_preference = :board_layout_preference WHERE id = :id');
+        $stmt->execute(['board_layout_preference' => $boardLayoutPreference, 'id' => $id]);
+    }
+
+    /**
+     * "Custom card/effect formats" (issue #405 follow-up) as a personal
+     * preference (Settings dialog's "Game defaults" section) -- gates
+     * whether Chaos Draft's own fan-made 133-effect pool (and any future
+     * deck_type built on similarly custom/non-canonical content) is even
+     * offered to this user at all, in either direction: as a New Game
+     * dialog option (GameService::isDeckTypeAvailableForFormat() on the
+     * frontend) and as a seat GameService::createGame() will actually
+     * accept them into (every seated player must have this on, not just
+     * the creator -- see createGame()'s own chaos_draft validation).
+     * Defaults to false (off) -- unlike auto_pass_on_empty_hand/
+     * auto_apply_scoring_bonuses's own "on by default, pure convenience"
+     * shape, this is an explicit opt-IN, the same default-off shape
+     * default_selections_mode_preference already uses. See migration 0184.
+     */
+    public function setAllowCustomContent(int $id, bool $allowCustomContent): void
+    {
+        $stmt = Connection::get()->prepare('UPDATE users SET allow_custom_content = :allow_custom_content WHERE id = :id');
+        $stmt->execute(['allow_custom_content' => $allowCustomContent ? 1 : 0, 'id' => $id]);
+    }
+
     public function delete(int $id): void
     {
         $stmt = Connection::get()->prepare('DELETE FROM users WHERE id = :id');

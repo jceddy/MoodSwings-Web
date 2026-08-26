@@ -1,0 +1,20 @@
+-- No schema change: frontend-only fix in web-static/js/game.js. A bug
+-- caught live and reproduced: on iOS, window.confirm()/alert()/prompt()
+-- are disabled entirely -- calls silently do nothing at all -- for a page
+-- running inside a Safari window that was ever launched in "standalone"
+-- mode (Add to Home Screen), including an unrelated tab opened from that
+-- same window afterward. Reported as "the resign button doesn't work"
+-- (the confirm dialog never appeared) and confirmed to affect every
+-- window.confirm()/alert() call in game.js once tested further.
+-- showConfirmDialog()/showAlertDialog() replace all 9 call sites with a
+-- real <dialog> element (#confirm-dialog in game/index.html) instead,
+-- which has no such platform restriction. See web-static/README.md's own
+-- "Confirm/alert modal" section for the full writeup.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0196
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.53' WHERE id = 1;

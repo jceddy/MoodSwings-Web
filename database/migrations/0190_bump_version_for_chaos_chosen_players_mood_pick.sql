@@ -1,0 +1,16 @@
+-- No schema change: chaos_007/020/028/048/076/101 (all backed by
+-- ChaosActOnChosenPlayersMoodEffect) now let the acting player choose the
+-- target moods directly (`target_mood_ids`) instead of naming players and
+-- having the engine pick a random qualifying mood per player -- a
+-- maintainer ruling reversing this class's own original design (reported
+-- live: choosing which of a player's moods with value 3 or less goes to
+-- the discard pile "seems to currently be choosing randomly"). See
+-- php-app/README.md's Chaos Draft section for the full writeup.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0189
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.46' WHERE id = 1;

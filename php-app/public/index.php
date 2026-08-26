@@ -49,6 +49,7 @@ use MoodSwings\Repository\QueuedNotificationRepository;
 use MoodSwings\Repository\SessionRepository;
 use MoodSwings\Repository\UserDecklistRepository;
 use MoodSwings\Repository\UserRepository;
+use MoodSwings\Rules\ChaosDefaultEffectRegistry;
 use MoodSwings\Rules\DefaultEffectRegistry;
 use MoodSwings\Rules\Exceptions\EffectNotImplementedException;
 use MoodSwings\Rules\Exceptions\IllegalPlayException;
@@ -776,8 +777,9 @@ if ($path === '/decklists/delete' && $method === 'POST') {
 }
 
 $gameRegistry = DefaultEffectRegistry::build();
+$chaosRegistry = ChaosDefaultEffectRegistry::build();
 $cardStats = new CardStatsService();
-$games = new GameService(new BoardStateRepository($gameRegistry), new MoodPlayService($gameRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats);
+$games = new GameService(new BoardStateRepository($gameRegistry, $chaosRegistry), new MoodPlayService($gameRegistry, $chaosRegistry), new RoundScorer(), $userDecklists, new ReplayStateBuilder($gameRegistry), notifications: $notifications, cardStats: $cardStats, chaosRegistry: $chaosRegistry);
 
 // Lifetime game/match wins-losses (issue #106) -- see
 // GameService::lifetimeStatsFor()/recordGameCompletionStats()/
@@ -871,6 +873,58 @@ if ($path === '/user/auto-apply-scoring-bonuses-preference' && $method === 'POST
     (new UserRepository())->setAutoApplyScoringBonuses(
         (int) $currentUser['id'],
         (bool) $input['auto_apply_scoring_bonuses']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
+// "Board layout" (issue #417) as a personal preference (Settings dialog's
+// "Display" section) -- 'above_play_area' (default) leaves the
+// Round/Score/Players section exactly where it's always rendered;
+// 'below_hand' has game.js relocate it after "Your hand" and the
+// "selected card to play" panel instead. Current value is already
+// carried on GET /me's own user object, so this route is write-only,
+// same pattern as /user/auto-apply-scoring-bonuses-preference above.
+// Validated against the column's own two ENUM values here (rather than
+// just letting a bad value hit the database) so a typo'd/tampered
+// request gets a clean 400 instead of a raw SQL error.
+if ($path === '/user/board-layout-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('board_layout_preference', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'board_layout_preference is required.']);
+    }
+    if (!in_array($input['board_layout_preference'], ['above_play_area', 'below_hand'], true)) {
+        respond(400, ['status' => 'error', 'message' => 'board_layout_preference must be one of: above_play_area, below_hand.']);
+    }
+
+    (new UserRepository())->setBoardLayoutPreference(
+        (int) $currentUser['id'],
+        $input['board_layout_preference']
+    );
+    respond(200, ['status' => 'ok']);
+}
+
+// "Custom card/effect formats" (issue #405 follow-up) as a personal
+// preference (Settings dialog's "Game defaults" section) -- off by
+// default; gates whether Chaos Draft's own fan-made effect pool is
+// offered/joinable at all for this user, see
+// GameService::createGame()'s own chaos_draft validation for the
+// server-side half of this gate (every seated player must have this on,
+// not just whoever's creating the game). Current value is already
+// carried on GET /me's own user object, so this route is write-only,
+// same pattern as /user/board-layout-preference above.
+if ($path === '/user/allow-custom-content-preference' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $input = requestBody();
+
+    if (!array_key_exists('allow_custom_content', $input)) {
+        respond(400, ['status' => 'error', 'message' => 'allow_custom_content is required.']);
+    }
+
+    (new UserRepository())->setAllowCustomContent(
+        (int) $currentUser['id'],
+        (bool) $input['allow_custom_content']
     );
     respond(200, ['status' => 'ok']);
 }
@@ -969,6 +1023,10 @@ if ($path === '/games' && $method === 'POST') {
     // the creator's partner instead of requiring partner_user_id. See
     // createGame()'s own docblock.
     $randomTeams = (bool) ($body['random_teams'] ?? false);
+    // Issue #417's own "let the bot go first" item -- only meaningful for
+    // a non-team format with at least one practice bot seated. See
+    // createGame()'s own docblock.
+    $botGoesFirst = (bool) ($body['bot_goes_first'] ?? false);
     // Only meaningful for deck_type 'rotisserie_draft' -- see createGame()'s own docblock.
     $rotisserieDraftPoolSource = isset($body['rotisserie_draft_pool_source']) ? (string) $body['rotisserie_draft_pool_source'] : null;
     $rotisserieDraftCustomPoolText = isset($body['rotisserie_draft_custom_pool_text']) ? (string) $body['rotisserie_draft_custom_pool_text'] : null;
@@ -1024,6 +1082,7 @@ if ($path === '/games' && $method === 'POST') {
             $rotisserieDraftCutoffCount,
             $tieredRotisserieDraftMode,
             $tieredRotisserieDraftTiers,
+            $botGoesFirst,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1533,6 +1592,36 @@ if ($path === '/games/initial-pass' && $method === 'POST') {
         if ($autoResult !== null) {
             $result = $autoResult;
         }
+        respond(200, ['status' => 'ok', ...$result]);
+    } catch (GameStateException $e) {
+        respond(409, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/games/chaos-draft-offer' && $method === 'GET') {
+    $currentUser = requireAuth($auth);
+    $gameId = (int) ($_GET['game_id'] ?? 0);
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    respond(200, ['status' => 'ok', 'offer' => $games->chaosDraftOfferFor($gameId, $gamePlayerId)]);
+}
+
+if ($path === '/games/chaos-draft-effect' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $gameId = (int) ($body['game_id'] ?? 0);
+    $action = (string) ($body['action'] ?? '');
+
+    $gamePlayerId = requireGamePlayer($games, $gameId, (int) $currentUser['id']);
+
+    try {
+        $result = match ($action) {
+            'choose' => $games->chooseChaosDraftEffect($gameId, $gamePlayerId, (int) ($body['chosen_effect_id'] ?? 0), (int) ($body['attach_game_card_id'] ?? 0)),
+            'propose' => $games->proposeChaosDraftEffect($gameId, $gamePlayerId, (int) ($body['chosen_effect_id'] ?? 0), (int) ($body['attach_game_card_id'] ?? 0)),
+            'confirm' => $games->confirmChaosDraftEffect($gameId, $gamePlayerId, (bool) ($body['approve'] ?? false)),
+            default => throw new GameStateException('action must be "choose", "propose", or "confirm"'),
+        };
         respond(200, ['status' => 'ok', ...$result]);
     } catch (GameStateException $e) {
         respond(409, ['status' => 'error', 'message' => $e->getMessage()]);

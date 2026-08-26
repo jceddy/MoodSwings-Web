@@ -53,14 +53,14 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/reset-password` | `{"token", "password"}`                                        | Consumes a password reset token (single-use, same replay-proofing as Discord's OAuth state) and sets the new password (8-72 chars, same rule as registration). Also deletes every one of the account's sessions, logging it out everywhere -- a reset is treated as a signal any existing session may be compromised. `400` if the token is invalid/expired/already used or the password fails validation. See "Password reset" below. |
 | POST   | `/login`        | `{"username", "password"}`                                       | `401` on bad credentials, `403` if the email isn't verified yet. |
 | POST   | `/logout`       | —                                                                 | Invalidates the current session only (other logged-in devices/sessions are unaffected). |
-| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. |
+| GET    | `/me`           | —                                                                 | Returns the current user if authenticated, `401` otherwise. Now includes `share_presence` (issue #110) -- your own current opt-in/out of sharing your online/offline status with others; see "Online/presence indicator" below. Also includes `default_selections_mode_preference` -- your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section, distinct from `default_selections_mode` itself -- see "Default selections mode" below). Also includes `auto_pass_on_empty_hand` (defaults `true`) -- see "Auto-pass on empty hand" below. Also includes `auto_apply_scoring_bonuses` (defaults `true`) -- see "Auto-apply scoring bonuses" below. Also includes `board_layout_preference` (one of `'above_play_area'`/`'below_hand'`, defaults `'above_play_area'`) -- see "Board layout preference" below. Also includes `allow_custom_content` (defaults `false`) -- see "Custom card/effect formats preference" below. |
 | GET    | `/friends`      | —                                                                 | Requires auth. Lists accepted friends (`friend_id`, `friend_username`, `created_at`, `presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below). |
 | GET    | `/friends/invites` | —                                                              | Requires auth. Returns `{"incoming": [...], "outgoing": [...]}`, each entry has `other_user_id`/`other_username`/`created_at`. |
 | POST   | `/friends/invite` | `{"username_or_email"}`                                        | Requires auth. Sends a friend request; looks up the target by username first, then email. `404` if no such user, `409` if you already have a request/friendship/block with them (or if you invite yourself) — the message is deliberately generic when they've blocked you, so you aren't told that specifically. |
 | POST   | `/friends/respond` | `{"user_id", "action"}`                                        | Requires auth. `action` is `accept`, `decline`, or `block`, responding to the pending invite from `user_id`. Declining just removes the request (not punitive — they can invite you again); blocking permanently prevents future invites from that user. `403` if you try to respond to your own outgoing invite, `404` if there's no such pending invite, `400` for an invalid `action`. |
 | POST   | `/friends/remove` | `{"user_id"}`                                                  | Requires auth. Ends an existing (accepted) friendship — either side can do this, and it isn't punitive either (they can send a new request afterward). `404` if you're not currently friends with that user. |
 | GET    | `/games/bots`   | —                                                                 | Requires auth. The full practice-bot roster (issue #140) -- `{"bots": [{"user_id", "username"}]}`, every `users.is_bot` row (migration `0090`), same for every caller. See "Practice bots" below. |
-| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?, "bot_decklist_text"?, "bot_saved_decklist_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `bot_decklist_text`/`bot_saved_decklist_id` supply a practice bot's own decklist for `deck_type: 'custom_duel'` (the bot's creator picks it, since the bot can never submit one itself the normal way) -- exactly one is required whenever `opponent_user_ids` includes a bot for that `format`/`deck_type` combination, and both are ignored otherwise; see "Practice bots in Duel with a custom decklist" below. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft`, and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft` with any `format` other than `'draft'`/`'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), a bot is seated in a `custom_duel` game with neither `bot_decklist_text` nor `bot_saved_decklist_id` given, the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size, or -- for the bot's own decklist -- the same validation `POST /games/decklist` applies), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id`/`bot_saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
+| POST   | `/games`        | `{"opponent_user_ids": [int], "format"?, "wins_needed"?, "deck_type"?, "decklist_text"?, "saved_decklist_id"?, "duel_deck_rules"?, "partner_user_id"?, "quick_draft_pool_source"?, "quick_draft_custom_pool_text"?, "winston_draft_pool_source"?, "winston_draft_custom_pool_text"?, "grid_draft_pool_source"?, "grid_draft_custom_pool_text"?, "default_selections_mode"?, "bot_goes_first"?, "bot_decklist_text"?, "bot_saved_decklist_id"?}` | Requires auth. Creates a game seating you plus `opponent_user_ids` (2-4 players total, `format` defaults to `standard` -- one of `standard`/`duel`/`draft`/`team`/`closed_team` -- `wins_needed` defaults to `3`, `deck_type` defaults to `structure` -- one of `structure`/`power`/`jceddys_75`/`custom`/`custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`/`chaos_draft`/`one_of_each`, see below). `default_selections_mode` (bool, defaults `false`, issue #274) is a per-game setting fixed for the game's whole lifetime (and carried through to game 2/3 of a best-of-three draft match) -- see "Default selections mode" below. `opponent_user_ids` may include a practice bot's own user id (see `GET /games/bots`, issue #140) exactly like any real friend's -- no friendship check applies to either -- as long as `format`/`deck_type` are one of the combinations a bot actually supports; see "Practice bots" below. `bot_goes_first` (bool, defaults `false`, issue #417) has a practice bot go first instead of the ordinary game-1 coin flip -- only meaningful for a non-`team`/`closed_team` `format` with a bot actually seated (ignored otherwise, and never touches game 2/3 of a best-of-three draft match) -- see "Bot goes first" below. For `deck_type` `custom`, either `decklist_text` or `saved_decklist_id` is required (the latter loads one of your own or a friend's shared saved decklists instead of parsing text -- see "Saved decklists" below) and both are ignored otherwise. `duel_deck_rules` (`{"preset"?, "min_cards"?, "rarity_limits"?, "duplicate_limits"?, "even_color_distribution_rarities"?}`) is required when `deck_type` is `custom_duel` (see "Custom decklists for Duel games" below) and ignored otherwise. `bot_decklist_text`/`bot_saved_decklist_id` supply a practice bot's own decklist for `deck_type: 'custom_duel'` (the bot's creator picks it, since the bot can never submit one itself the normal way) -- exactly one is required whenever `opponent_user_ids` includes a bot for that `format`/`deck_type` combination, and both are ignored otherwise; see "Practice bots in Duel with a custom decklist" below. `partner_user_id` is required when `format` is `team` or `closed_team` (one of `opponent_user_ids` -- seated adjacent for `team`, across the table for `closed_team`, see "Open Team Play"/"Closed Team Play" below) and ignored otherwise. `quick_draft_pool_source` (one of `random_48`/`structure`/`jceddys_75`/`one_of_each`/`custom`/`saved_deck`) is required when `deck_type` is `quick_draft` OR `chaos_draft` (the same field, unchanged -- Chaos Draft's own drafting is identical to Quick Draft's, see "Chaos Draft" below), and `quick_draft_custom_pool_text` is required when that source is `custom` (see "Quick Draft" below) -- both ignored otherwise; when the source is `saved_deck` instead (issue #290), `saved_decklist_id` (the same field `custom` uses) supplies the decklist and `quick_draft_custom_pool_text` is ignored. `winston_draft_pool_source`/`winston_draft_custom_pool_text` are the same pool-source options, required/ignored under the same rules but for `deck_type: 'winston_draft'` (see "Winston Draft" below). `grid_draft_pool_source`/`grid_draft_custom_pool_text` are the same idea for `deck_type: 'grid_draft'`, except `'structure'` isn't a valid choice there (see "Grid Draft" below). `400` if that's more than 4 players or an opponent id doesn't exist, a `duel` game doesn't seat *exactly* 2 players total or a `draft` game doesn't seat 2-4 players total (see "Quick Draft"'s own "Multiplayer" section below, and "Winston Draft"/"Grid Draft" below for those two formats' own multiplayer sections), a `team`/`closed_team` game doesn't seat *exactly* 4 players total or `partner_user_id` is missing/not one of `opponent_user_ids`, `deck_type` is `custom` with `format: 'duel'`, `deck_type` is `custom_duel` with any `format` other than `'duel'`, `format` is `'draft'` with any `deck_type` other than `quick_draft`/`winston_draft`/`grid_draft`/`chaos_draft`, `deck_type` is `quick_draft`/`winston_draft`/`grid_draft`/`chaos_draft` with any `format` other than `'draft'`/`'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `deck_type` is `power` with `format: 'team'`/`'closed_team'` (see "Open Team Play"/"Closed Team Play" below), `opponent_user_ids` includes a practice bot with any `format`/`deck_type` combination it doesn't support (see "Practice bots" below), a bot is seated in a `custom_duel` game with neither `bot_decklist_text` nor `bot_saved_decklist_id` given, `deck_type` is `chaos_draft` and any non-bot seated player (including you) hasn't opted into `allow_custom_content` (see "Custom card/effect formats preference" below), the decklist/pool itself is invalid (unparseable line, unrecognized card name, too few cards, or -- for `grid_draft` specifically -- a pool source that comes up short of the player count's own target size, or -- for the bot's own decklist -- the same validation `POST /games/decklist` applies), or `duel_deck_rules` is missing/invalid (`min_cards` below 7 for a `user_defined` preset); `404`/`403` if `saved_decklist_id`/`bot_saved_decklist_id` doesn't exist or you can't access it (not yours, not shared with you). Returns `{"game_id"}`. |
 | POST   | `/games/decklist` | `{"game_id", "decklist_text"?, "saved_decklist_id"?}`           | Requires auth; `403` if you're not seated in that game. A `custom_duel` game's own two players each call this -- while the game is still `waiting` -- to submit their own decklist, either as pasted/uploaded text or by referencing one of their own or a friend's shared saved decklists (see "Saved decklists" below), validated against the game's own deck-building rules. `400` if the game isn't `custom_duel`, isn't `waiting`, or the decklist violates a rule (too few cards, a rarity/duplicate cap exceeded); `404`/`403` if `saved_decklist_id` doesn't exist or you can't access it. Re-submitting overwrites the previous attempt. See "Custom decklists for Duel games" below. |
 | GET    | `/cards/catalog` | —                                                                | Requires auth. Every printed card, hydrated the same way `/decklists/view` hydrates a saved decklist's cards (now including `rarity`, which no other card-view route needed until this one). Not scoped to a game/decklist -- the catalog itself is public knowledge, same reasoning as `/games/log`. Returns `{"cards": [...]}`. Powers the deck builder's (issue #93) own catalog-browsing panel -- see "Deck builder" below. |
 | GET    | `/decklists`    | —                                                                 | Requires auth. Returns `{"own": [...], "friends": [{"friend_id", "friend_username", "decklists": [...]}]}` -- summaries only (`id`/`name`/`card_count`/`sideboard_card_count`/`visibility`/`created_at`/`updated_at`, never card contents). `friends` only lists friends who have 1+ decks shared with you. See "Saved decklists" below. |
@@ -75,6 +75,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/games/draft/first-player-choice` | `{"game_id", "play_first": bool}`              | Requires auth; `403` if you're not seated in that game. Only callable once a best-of-three draft match's game 2/3 has actually started -- the loser of the previous game doesn't have to decide who goes first until they can see their own opening hand, and round 1 stays frozen (nobody can play/pass) until they do. Lets them go first themselves (`play_first: true`) or leave the previous winner going first again (`play_first: false`); either answer permanently unfreezes the round. `409` if the game isn't `quick_draft`/`winston_draft`/`grid_draft`, hasn't started yet, is game 1 of its match (nothing to base the choice on), the calling user wasn't the previous game's loser, or the decision was already made. See "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | POST   | `/games/team-decision` | `{"game_id", "action", ...}`                              | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `team`/`closed_team` format or has no open team decision. `action: 'propose'` takes `{"proposed_game_player_id"}` (any candidate teammate may propose); `action: 'confirm'` takes `{"approve": bool}` (the OTHER teammate approves or rejects the pending proposal). See "Open Team Play"/"Closed Team Play" below. Same return shape as `/games/play` once a proposal is confirmed; otherwise `{"round_scored": false, "game_completed": false}` (propose, or a rejected confirm sent back to 'propose'). |
 | POST   | `/games/initial-pass` | `{"game_id", "card_ids": [int, int]}`                        | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `closed_team`, `card_ids` isn't exactly 2 distinct cards currently in your hand, or you've already submitted your pass this game. `closed_team`'s own pregame mechanic -- see "Closed Team Play" below. Returns `{"round_scored": false, "game_completed": false, "pending_decision": bool}` (`pending_decision` is `true` until all 4 players have submitted). |
+| GET    | `/games/chaos-draft-offer` | query param `game_id`                                | Requires auth; `403` if you're not seated in that game. `chaos_draft`'s own round-start choice -- returns `null` if you (or, for Open Team Play, your team) have no offer this round (e.g. empty hand), otherwise `{"effect_1", "effect_2", "is_team_offer", "phase", "proposer_game_player_id"}` (`effect_1`/`effect_2` each `{"id", "rarity", "shape", "rules_text"}`; `phase`/`proposer_game_player_id` are only meaningful once `is_team_offer` is `true` -- Open Team Play's own `'propose'`/`'confirm'` two-step, see below -- and stay at their unused defaults otherwise). Deliberately kept OUT of `GET /games/state`'s own read path since the first call each round is a lazy WRITE (rolling that round's two offered effects) -- see "Chaos Draft" below. |
+| POST   | `/games/chaos-draft-effect` | `{"game_id", "action", "chosen_effect_id"?, "attach_game_card_id"?, "approve"?}` | Requires auth; `403` if you're not seated in that game; `409` if the game isn't `chaos_draft` or there's no open offer. `action: 'choose'` (individual `draft`/`closed_team`) takes `{"chosen_effect_id", "attach_game_card_id"}` -- immediately attaches. `action: 'propose'`/`action: 'confirm'` are Open Team Play's own two-step counterpart to `/games/team-decision`: `'propose'` takes the same `chosen_effect_id`/`attach_game_card_id` (the card may be either teammate's own hand card) from either teammate, `'confirm'` takes `{"approve": bool}` from the other teammate (never the proposer). `409` if `action` doesn't match the game's own format (`'choose'` for anything but Open Team Play, or `'propose'`/`'confirm'` for Open Team Play), the offer's own `phase` doesn't match the action (e.g. `'confirm'` with nothing proposed yet, or the proposer trying to also confirm), `chosen_effect_id` wasn't one of the two actually offered, or `attach_game_card_id` isn't a card in the right hand. See "Chaos Draft" below. Same `{"round_scored": false, "game_completed": false}` shape `/games/team-decision` uses, plus `pending_decision: true` for `'propose'` and a rejected `'confirm'` (mirroring that route's own convention). |
 | GET    | `/games`        | —                                                                 | Requires auth. Lists games you're seated in that still belong in the main lobby -- every `waiting`/`in_progress` game, plus a `completed`/`abandoned` one ONLY if it's still part of a best-of-three draft match (`quick_draft`/`winston_draft`/`grid_draft`) that isn't itself fully decided yet (see "Past games" below); every other `completed`/`abandoned` game has moved to `GET /games/past` instead. `waiting`/`in_progress` games always sort above still-current-`completed`/`abandoned` ones regardless of recency, most-recently-active first within each of those two tiers -- each with `players` (`user_id`/`username`/`seat_order`/`is_bot` -- issue #140, see "Practice bots" below), `is_your_turn`, `is_awaiting_your_response` (a delayed choice is on you specifically -- a Compulsion-style pending decision targeting you, your team's own turn_order/draw_recipient decision needing your propose/confirm, `closed_team`'s still-unsubmitted pregame card pass, or -- for a best-of-three draft match's game 2/3 -- being the previous game's loser while round 1 is still frozen awaiting your own `setPlayFirstNextMatchGame()` call; see `isAwaitingResponseFrom()`/`isAwaitingFirstPlayerChoiceFrom()` -- unlike `is_your_turn`, none of these require it to actually be your own turn), `current_turn_username` (whichever seated player `current_turn_game_player_id` actually belongs to, by username -- null whenever the game isn't `in_progress` or the round is between turns, e.g. an Open Team Play `turn_order` decision still open), `awaiting_response_usernames` (the generalized, all-players version of `is_awaiting_your_response` -- every seated player `isAwaitingResponseFrom()` currently returns `true` for, which can be more than one at once, e.g. `closed_team`'s pregame card pass before every player has submitted; for a still-`waiting` `quick_draft`/`winston_draft`/`grid_draft` game, both `current_turn_username`/`is_your_turn`/`is_awaiting_your_response` stay at their game-less-in-progress defaults but `awaiting_response_usernames` is instead populated by `draftAwaitingResponseUsernames()` -- both players at once for quick_draft's own simultaneous-blind draw/received pick stages until each has submitted, or exactly whoever's turn it currently is for winston_draft's/grid_draft's single active turn player, or whoever hasn't yet submitted a deck once the match reaches `deck_building`), `winner_usernames` (empty until the game actually completes; both teammates' for a team-format win, same "credit the whole winning team" logic `GET /games/state`'s own field of the same name uses), `default_selections_mode` (bool, issue #274 -- see "Default selections mode" below), and all four of `created_at`/`started_at`/`last_move_at`/`completed_at` (see "Game timestamps" below). `quick_draft`/`winston_draft`/`grid_draft` games additionally carry `draft_match_id`, `match_game_number`, and `draft_match` (`{"status", "your_wins", "opponent_wins", "games_to_win", "winner_username", "players"}`, `winner_username` only set once the match's own status is `completed`, `players` -- issue #189 -- every seated player's own `user_id`/`username`/`wins`/`is_you`, the field a 3-4 player Quick Draft match's own scoreline should actually be read from since `your_wins`/`opponent_wins` only ever reflect the first non-viewer seat) -- all three `null` for every other `deck_type`. The lobby UI uses these to group a match's up-to-3 games together and show the match's own result once it's decided; see "Quick Draft"/"Winston Draft"/"Grid Draft" below. |
 | GET    | `/games/past`   | —                                                                 | Requires auth. The complement of `GET /games` above: every `completed`/`abandoned` game NOT still tied to an undecided draft match -- i.e. exactly the games `GET /games` excludes. Same row shape as `GET /games` (`GameService::gameSummaryFor()` hydrates both), sorted most-recently-completed first rather than by actionability, since nothing here is actionable. See "Past games" below. |
 | GET    | `/games/state`  | query param `game_id`                                            | Requires auth; `403` if you're not seated in that game. Full board view: `game`, `players` (with `hand_count`/`total_wins`/`team_id`/`is_bot`/`presence` -- `'online'`/`'offline'`/`'hidden'`, see "Online/presence indicator" below -- per seat; `is_bot` is issue #140's own practice-bot flag, see "Practice bots" below), `you` (your `game_player_id`, and — once started — your full `hand`), `round` (turn/plays-remaining/banned-colors/`pending_decision`/etc., `null` before the game starts), `in_play`, `discard_pile`, and `deck_count` (never the deck's order). Every serialized card also carries `choice_fields` — see below. `game.default_selections_mode` (bool, issue #274) is fixed for the game's whole lifetime; when `true`, `choice_fields` (and `round.pending_decision.field`, once one is open) come back with a `default` key pre-filled on some fields -- see "Default selections mode" below. `team`/`closed_team` format games additionally get `teams` and `team_decision` (both `null` otherwise) and `you.teammate_game_player_id` -- see "Open Team Play"/"Closed Team Play" below. `you.teammate_hand` is only ever populated for `team` (Open Team Play's own "open information" premise); `closed_team` games additionally get `initial_card_pass` (`null` once every player has submitted their pregame card pass). `chat_messages` (issue #109) is the game's full in-game chat history so far, oldest first -- omitted entirely for a still-`waiting` game, the same early return that keeps `round`/`in_play`/etc. absent then too (chat only ever gets appended to via `POST /games/chat` once `in_progress`, see "In-game chat" below). `quick_draft` games additionally get `game.match_game_number` and a `quick_draft` field (both `null` for every other deck_type, and populated regardless of `game.status` -- see "Quick Draft" below); `winston_draft`/`grid_draft` games likewise get `game.match_game_number` and a `winston_draft`/`grid_draft` field -- see "Winston Draft"/"Grid Draft" below. Also includes `game.created_by_user_id` and, only for a bot's own seat in a `custom_duel` game and only in the game's own creator's view, `players[].bot_decklist_cards` (issue #398's own Rematch prompt) -- see "Rematch" below. |
@@ -82,8 +84,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | GET    | `/games/deck`   | query params `game_id`, `code`?                                   | Requires auth; `403` unless you're seated in that game OR authorized to spectate it (issue #128 -- friends with a seated player, or `code` matches the game's own spectate code; same `canSpectateGame()` check `GET /games/spectate/state` uses). A shared-deck game's entire deck (issue #197) -- every `deck_type` except `custom_duel`/`quick_draft`/`winston_draft`/`grid_draft`, where each player has their own deck rather than one shared pool (see `GameService::isSharedDeckType()`). Returns `{"cards": [...]}`, hydrated the same way `/decklists/view` hydrates a saved decklist's cards, sorted white/blue/black/red/green then alphabetically by name within a color. `409` if the game's `deck_type` has no single shared deck, or the game is still `waiting` (nothing dealt yet). See "Shared deck view" below. |
 | GET    | `/games/export` | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game -- deliberately narrower than `/games/log` above (no spectator path), since this is a personal offline archive rather than a shareable view. A raw, complete dump of every row related to this game (issue #99), across every table with any FK relationship to `games.id` -- not the curated, human-readable view `/games/log` already provides. Returns `{"export": {...}}`; see `GameService::exportGameData()` and "Download complete game data" below for the full shape. |
 | POST   | `/games/start`  | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. Deals hands and begins round 1. `409` if the game isn't `waiting` or has fewer than 2 seated players. |
-| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
-| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn or a decision is pending. Same return shape as `/games/play`. |
+| POST   | `/games/play`   | `{"game_id", "card_id", "choices"?}`                              | Requires auth; `403` if you're not seated in that game. `choices` is an opaque object passed straight through to the rules engine — its shape (a target player id, a discard, a mode string, etc.) is entirely card-specific; see `src/Rules/PlayerChoices.php` and `CardChoiceSchema` below. `400` on an invalid/missing choice for that card, `409` if it's not your turn, a decision is already pending, this round's own Chaos Draft offer is still unresolved for you (see "Chaos Draft" below), or the play is otherwise illegal. Returns `{"round_scored", "game_completed", "winner_game_player_id"?}`, or `{"pending_decision": true}` if the play now needs another player's own answer before it can finish — see `RequiresOpponentDecision` below. |
+| POST   | `/games/pass`   | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if it's not your turn, a decision is pending, or this round's own Chaos Draft offer is still unresolved for you (see "Chaos Draft" below). Same return shape as `/games/play`. |
 | POST   | `/games/respond` | `{"game_id", "choices"}`                                        | Requires auth; `403` if you're not seated in that game. Answers the one outstanding pending decision targeting you (see `round.pending_decision` in `/games/state`). `409` if you have no decision pending in that game. `400` on an invalid answer. Returns `{"pending_decision": true}` if the batch has other targets still waiting (or a Duplicity repeat of the same card also needs an answer), otherwise the same `{"round_scored", "game_completed", ...}` shape as `/games/play`. |
 | POST   | `/games/resign` | `{"game_id"}`                                                     | Requires auth; `403` if you're not seated in that game. `409` if the game isn't `in_progress` (unless it's a `quick_draft`/`winston_draft`/`grid_draft` match still `'waiting'` through drafting/deck-building -- see "Resigning from a draft match" below), you've already resigned, or a decision is pending. Gives up instead of playing the game/draft out -- see "Resigning" below. Returns `{"round_scored": false, "game_completed", "winner_game_player_id"?}`. |
 | GET    | `/games/notes`  | query param `game_id`                                             | Requires auth; `403` if you're not seated in that game. Returns `{"note_text"}` -- your own private note for that seat (issue #258), `""` if you've never saved one. Always readable, regardless of the game's status. See "In-game notepad" below. |
@@ -101,6 +103,8 @@ HTML maintenance page) — see "Maintenance mode" below.
 | POST   | `/user/default-selections-mode-preference` | `{"default_selections_mode_preference": bool}`          | Requires auth. Sets your own personal default for the New Game dialog's default-selections-mode checkbox (Settings dialog's "Game defaults" section) -- write-only, since the current value already rides on `GET /me`'s own user object. Distinct from `default_selections_mode` itself, the actual per-game setting `POST /games` accepts -- this only controls that checkbox's initial state, and has no effect on any already-created game. `400` if `default_selections_mode_preference` is missing. See "Default selections mode" below. |
 | POST   | `/user/auto-pass-on-empty-hand-preference` | `{"auto_pass_on_empty_hand": bool}`                     | Requires auth. Opts you in/out of automatically passing whenever it's your turn and your hand is empty (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_pass_on_empty_hand` is missing. See "Auto-pass on empty hand" below. |
 | POST   | `/user/auto-apply-scoring-bonuses-preference` | `{"auto_apply_scoring_bonuses": bool}`               | Requires auth. Opts you in/out of automatically applying Enthusiasm's/Passion's own obviously-correct per-round scoring bonus (Settings dialog's "Game defaults" section, defaults `true`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `auto_apply_scoring_bonuses` is missing. See "Auto-apply scoring bonuses" below. |
+| POST   | `/user/board-layout-preference` | `{"board_layout_preference": "above_play_area"\|"below_hand"}` | Requires auth. Chooses where the board's Round/Score/Players section renders (Settings dialog's own "Display" section, defaults `"above_play_area"`) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `board_layout_preference` is missing or isn't one of those two exact strings. See "Board layout preference" below. |
+| POST   | `/user/allow-custom-content-preference` | `{"allow_custom_content": bool}`                | Requires auth. Opts you in/out of seeing/joining `chaos_draft` games (Settings dialog's "Game defaults" section, defaults `false` -- an explicit opt-IN, unlike the two auto-* preferences above) -- write-only, since the current value already rides on `GET /me`'s own user object. `400` if `allow_custom_content` is missing. See "Custom card/effect formats preference" below. |
 | GET    | `/notifications/vapid-public-key` | —                                                | No auth required -- the VAPID public key isn't secret (that's the point of asymmetric VAPID auth), same reasoning as `/cards/catalog` being public. Returns `{"public_key"}` (empty string if the server has none configured). See "Browser push notifications" below. |
 | POST   | `/notifications/subscribe` | `{"endpoint", "keys": {"p256dh", "auth"}}`                | Requires auth. Stores (or updates, if the endpoint's already known) a `PushSubscription` for the current user. `400` if `endpoint`/`keys.p256dh`/`keys.auth` are missing. See "Browser push notifications" below. |
 | POST   | `/notifications/unsubscribe` | `{"endpoint"}`                                          | Requires auth. Removes the current user's subscription for that endpoint, if any (silently a no-op otherwise). |
@@ -1126,14 +1130,54 @@ owns Scorn.
 
 Every in-play mood also carries `value_locked` -- true once a permanent
 one-time "after playing this mood, ... this mood's value becomes N"
-trigger (Dignity, Delight, Cynicism, and 7 other cards -- every one that
-calls `BoardState::setValueOverride()`) has actually fired, as opposed to
-a continuously recomputed "while in play" value (Determination): both
+trigger (Dignity, Delight, Cynicism, and others -- every one that calls
+`BoardState::setValueOverride()`) has actually fired, as opposed to a
+continuously recomputed "while in play" value (Determination): both
 kinds of card can end up with `value === alt_value`, but only the former
 locks it in via `effectState['valueOverride']`, which `valueOf()` checks
 first and unconditionally returns once set. The frontend uses this to
 rotate the card art 180 degrees, matching a suppressed mood's own 90
 degree rotation -- see "Card art rendering" in `web-static/README.md`.
+`value_locked` only ever means the card's OWN printed ability fixed its
+own value -- see `chaos_value_override` below for the (superficially
+identical-looking) case where an attached chaos effect did it instead.
+
+**`chaos_value_delta` (issue #405 follow-up -- a bug caught live).** A
+DIFFERENT wording -- an attached chaos effect's own "permanently
+increase/decrease this mood's value BY N" (chaos_056/064/120/133) -- used
+to also call `setValueOverride()`, which was wrong on two counts: it
+incorrectly set `value_locked` (rotating a card whose own printed ability
+never fixed anything), and being an absolute replacement rather than a
+delta, it silently clobbered whatever the card's own dice/alt-value
+computation had already produced instead of adjusting it. `BoardState::
+adjustChaosValueDelta()` is the fix: a separate, cumulative signed
+`effectState['chaosValueDelta']`, added on top of `printedValueOf()`'s
+result (already `valueOf()`'s job -- see its own docblock) so the two
+stack. Exposed as `chaos_value_delta` (0 for every card nothing has ever
+adjusted) purely for the frontend's own small "+N"/"-N" badge -- see
+"Card art rendering" in `web-static/README.md`.
+
+**`chaos_value_override` (issue #405 follow-up -- a second bug caught
+live, reported for chaos_033: "the UI should not rotate the card 180
+degrees").** An attached chaos effect's own ABSOLUTE "this mood's value
+becomes N" wording (chaos_001/008/033/058/062/087/095/108/110/111/118)
+shares Dignity's/Delight's exact printed wording, and the original fix
+for `chaos_value_delta` above deliberately left these calling the
+base-card `setValueOverride()` directly, reasoning they were conceptually
+identical to a card locking in its own value -- that reasoning was wrong.
+The card a chaos effect attaches to is essentially arbitrary (whatever
+hand card the round's offer got attached to), so its OWN printed ability
+almost never actually fixed a value at all; rotating the whole card 180
+degrees via `value_locked` misleadingly suggested it did.
+`BoardState::setChaosValueOverride()`/`chaosValueOverrideOf()` mirror
+`chaosValueDelta`'s own separate-effectState-key treatment: a distinct
+`effectState['chaosValueOverride']`, which `printedValueOf()` now checks
+*before* the base card's own `valueOverride` (giving an attached chaos
+effect final say if both are somehow set -- the same precedent
+`applyChaosValuePipeline()` already establishes for the while-in-play
+shape). Exposed as `chaos_value_override` (`null` for every card nothing
+has overridden) purely for the frontend's own non-rotating badge -- see
+"Card art rendering" in `web-static/README.md`.
 
 Suppression isn't the only "one in-play mood affects another" relationship
 worth surfacing: a mood with a printed dice value (`has_dice_value`) can
@@ -2241,6 +2285,32 @@ this game"), the same way `team_turn_order_decided`/
 `team_draw_recipient_decided` get their own phrasing rather than
 falling through to the generic "{actor} played {card}" default.
 
+**Bot goes first** (`games.bot_goes_first`, migration `0171`, issue
+`#417`) -- a per-game toggle, same shape as `default_selections_mode`
+(chosen once at `POST /games` time, fixed for the game's whole
+lifetime), that lets the creator have a seated practice bot go first
+instead of leaving `resolveFirstPlayerId()`'s own game-1 coin flip to
+chance. Deliberately narrow: only consulted for that SAME game-1 coin
+flip above (`$game['draft_match_id'] === null || $matchGameNumber ===
+null || $matchGameNumber <= 1`) and only when `format` is neither
+`'team'` nor `'closed_team'` -- Open/Closed Team Play's own "who
+actually takes the opening turn" is the separate, later `team_turn_1/2`
+decision described elsewhere in this doc, never decided at game
+creation, so `first_game_player_id` for a team game only ever
+identifies a representative member of whichever TEAM went first, not a
+literal player `bot_goes_first` could sensibly pick. Game 2/3 of a
+best-of-three draft match keeps its own existing "loser decides, bot
+never opts to go first" policy (`advanceBotFirstPlayerDecision()`
+above) completely untouched regardless of this flag. When set and at
+least one practice bot is seated in an eligible game, `botGamePlayerIds()`
+(the same helper used elsewhere for bot lookups) supplies the candidate
+seat(s); with more than one bot seated (a 3-4 player standard game),
+`array_rand()` still picks among just those bot seats, so `bot_goes_first`
+guarantees "a bot goes first," not "which one" when several are seated.
+Defaults to `false` so every existing/new game is unaffected unless
+explicitly chosen. See the `POST /games` row above for the request
+field.
+
 **State exposure** -- `getState()`'s own `game.match_game_number` and
 `quick_draft` field (`null` for every other deck_type) are populated
 regardless of the game's own `status` (a Quick Draft match's drafting/
@@ -2393,6 +2463,539 @@ their own sections below rather than repeated here):
   `opponent_submitted` kept as a single-value fallback from the first of
   them. `draft_match` (the lobby-grouping summary) gains the same
   `players` array.
+
+### Chaos Draft (issue #405)
+
+Its own `deck_type`, `'chaos_draft'`. Drafting and deck-building are
+*identical* to Quick Draft above -- same pool sources, same blind
+simultaneous per-round pick stages, same best-of-three match/deck-building
+flow, same `draft`/`team`/`closed_team` format support, same
+`draft_matches`/`draft_match_players` plumbing (`isSharedDeckType()`
+excludes it exactly the way it excludes `quick_draft`, and every place the
+frontend gates on `deck_type === 'quick_draft'` for reused UI also checks
+`=== 'chaos_draft'`). The only addition: once a match reaches
+`in_progress`, EVERY round opens with each player (or, for Open Team Play,
+each team) offered a choice between two randomly-drawn effects from a
+133-entry curated pool, which they attach permanently to one card in their
+own hand -- stacking with, never replacing, that card's own printed
+ability.
+
+**The effect pool -- `chaos_effects`** (migration `0183`). 133 rows, each
+with an `effect_key` (`chaos_001`..`chaos_133`, arbitrary -- these effects
+have no in-fiction name of their own, unlike a printed card), a `rarity`
+(`common`/`uncommon`/`rare`/`mythic`), a `shape` (`after_playing` or
+`while_in_play` -- never a "to play" cost, per the issue's own scoping),
+and `rules_text`. Confirmed by the maintainer via spreadsheet at
+23 common / 14 uncommon / 6 rare / 2 mythic per 45-effect "weight" (i.e.
+common is roughly 4x as likely to be offered as mythic). The same
+migration adds 5 catalog `cards` rows (ids 134-138: Smugness/white,
+Unconcern/blue, Passivity/black, Tedium/red, Idleness/green, each value 1,
+no ability of their own) flagged `is_token`, for the handful of effects
+that conjure a brand-new mood into play -- a real `cards` row rather than
+a synthetic one, so every existing rendering/scoring/history path handles
+it with zero special-casing.
+
+**Round-start offer -- `chaos_draft_offers`.** Rolled and persisted
+LAZILY, the first time `chaosDraftOfferFor($gameId, $gamePlayerId)` is
+called for that round (mirroring the same "no single round-creation call
+site, so hook the first read instead" pattern draft state elsewhere in
+this codebase already uses) -- `ensureChaosDraftOffersForRound()` rolls
+one row per player (or, for Open Team Play, one row per TEAM -- `team_id`
+set instead of `game_player_id`) at that point, drawing two DISTINCT
+`chaos_effects.id`s (rarity-weighted per the distribution above) and
+storing them as `effect_1_id`/`effect_2_id`/`effect_1_rarity`/
+`effect_2_rarity`. A player with an empty hand gets no offer row created
+at all (or, for Open Team Play, no row for a team with no cards in EITHER
+teammate's hand). That's only a snapshot taken once, though -- a player
+who HAD cards then but loses their last one later the same round (e.g.
+chaos_058/118 taking it) would otherwise stay shown/blocked by an
+already-created offer with nothing left to attach it to (issue #405
+follow-up -- a bug caught live: "if a player has no cards in hand, the
+game should not present them with a chaos effect to choose from"), so
+`chaosDraftOfferFor()` (returns `null`) and `chaosDraftOfferBlocksPlayer()`
+(returns `false`) both re-check current hand state dynamically too, via
+`chaosDraftOfferHasNothingToAttachTo()` -- per-team for Open Team Play
+(mirroring `proposeChaosDraftEffect()`'s own "either teammate's hand"
+rule: the team offer only has nothing to attach to once BOTH teammates
+are empty-handed), per-player everywhere else. Safe to leave such an
+offer permanently unresolved -- nothing in round-completion/scoring
+depends on every `chaos_draft_offers` row ending up resolved.
+`advanceBotChaosDraftOffer()` applies the same check before asking
+`BotPlayerService::chooseChaosDraftEffectAttachment()` to pick a card,
+since that method's own unconditional first-candidate indexing would
+otherwise crash a bot's turn on an empty hand the exact same way a human
+would otherwise be wrongly blocked/prompted.
+Deliberately kept OUT of `getState()`'s regular unlocked read path (it's a
+lazy write, needing `withGameLock()`) -- the frontend polls it via its own
+`GET /games/chaos-draft-offer` route instead (see below).
+
+- **`chooseChaosDraftEffect($gameId, $gamePlayerId, $chosenEffectId, $attachGameCardId)`**
+  -- the individual (non-team) path. Validates the effect was actually one
+  of the two offered and the target card is in the caller's own hand, then
+  `BoardState::attachChaosEffect()` sets `game_cards.chaos_effect_id` and
+  persists, and the offer row is marked resolved
+  (`chosen_effect_id`/`attach_game_card_id`/`resolved_at`). Gates only the
+  offering player's OWN turn -- nobody else in the round is blocked
+  waiting for them to choose (a deliberate scope decision: the whole round
+  doesn't freeze, unlike a team `turn_order`/`draw_recipient` decision).
+- **`proposeChaosDraftEffect()`/`confirmChaosDraftEffect()`** -- Open Team
+  Play's own two-step counterpart, mirroring the existing
+  `turn_order`/`draw_recipient` team-decision propose/confirm shape
+  exactly: either teammate may propose an effect+card (the card may belong
+  to EITHER teammate's hand, not just the proposer's own), the other
+  teammate approves or rejects (rejecting returns the offer to "propose"
+  phase with nothing chosen yet, same as an ordinary team decision's own
+  reject path). Closed Team Play, by contrast, resolves individually per
+  player exactly like `draft`/non-team, since -- unlike Open Team Play --
+  there's no shared open information/single shared turn order to propose
+  into.
+- Every successful attach logs a `chaos_draft_effect_attached` game event
+  (`describeEvent()`: "`{player}` attached a/an `{rarity}` chaos effect to
+  `{card}`" -- a bug caught live: this case was originally missing, so it
+  fell through to the generic "played" template and misleadingly read as
+  though the card had just been PLAYED, when attaching never moves it out
+  of hand at all).
+
+**Effect composition.** A card's own printed effect and its attached
+chaos effect are two independent `MoodEffect`/`ChaosMoodEffect`
+implementations dispatched back-to-back, not merged into one -- see
+`BoardState::chaosEffectRow()`/the composition call sites in
+`MoodPlayService`/`GameService` for exactly where each hook layers on top
+of the card's own. `ChaosMoodEffect` extends the base `computeValue()`/
+`afterPlaying()` shape with 8 more hooks, each defaulting to a no-op in
+`AbstractChaosMoodEffect` so a "simple" effect (most of the 133) only
+implements the one or two it actually needs:
+
+- `perpetualTurnStartGrants()` -- zero or more `grantExtraPlay()`-style
+  restriction arrays, applied at every future turn start
+  (`GameService::computeFreshGrants()`) AND, for an effect whose own
+  `perpetualGrantsIncludeTheTurnPlayed()` returns `true` (the Abstract
+  default), immediately the turn a `while_in_play` chaos effect's own
+  card is played too (covering "including the turn you play this mood"
+  printed text, e.g. chaos_121/124). **`perpetualGrantsIncludeTheTurnPlayed()`
+  (issue #405 follow-up -- a bug caught live, reported for chaos_102:
+  "this should only give an extra play at the beginning of the owner's
+  turn, not when it is played").** chaos_102's own printed text ("At the
+  start of each of your turns, ...") never says "including the turn you
+  play this mood" the way chaos_121/124 explicitly do -- the turn a mood
+  is played into is already underway by the time it enters play, so it
+  was never "the start of" that turn to begin with. Before this fix, the
+  immediate-application call site above applied unconditionally to every
+  `while_in_play` chaos effect using `perpetualTurnStartGrants()`,
+  regardless of whether its own wording actually said so; chaos_102 now
+  overrides this to `false` so it only ever grants via
+  `computeFreshGrants()`'s own future-turn-start call site.
+- `roundStartHook()` -- dispatched exactly once per round, lazily from
+  inside `ensureChaosDraftOffersForRound()` itself (the same "no single
+  round-creation call site" reasoning as the offer rows above).
+- `onMoodPlayed()` -- swept over every in-play chaos-carrying mood once a
+  play's own full effect chain (base effect + reactors + its own attached
+  chaos `afterPlaying`) finishes.
+- `onMoodDiscarded()` / `onMoodSuppressed()` -- driven by two dedicated
+  `BoardState` event queues, deliberately separate from the existing
+  `$pendingCardMoves` history queue so as not to double-drain it. Covers a
+  card reacting to its OWN discard/suppression, not just another mood's.
+- `scoringBonus()` -- additive score points folded in via
+  `GameService::applyChaosScoringBonuses()`, right after the base
+  `RoundScorer::score()` call and before `applyScoreSwaps()` -- unlike
+  Enthusiasm/Passion's own scoring bonus, this always applies (chaos
+  effects never pause for a decision, per the pool's own single-request
+  scope) rather than reading from `$scoringDecisions`.
+- `afterScoring()` -- dispatched from both `finishScoringAndAdvance()` and
+  `finishTeamScoringAndAdvance()`, right alongside the existing
+  `applyAfterScoringHooks()`, once final scores/winner/lowest-scorer are
+  settled.
+
+Every printed "another player chooses/reveals..." in the pool is resolved
+with a uniformly-random pick instead of a real decision, for the same
+"chaos effects never pause for another player's own choice" reason
+`scoringBonus()` above does -- documented per-effect in each
+`ChaosEffects/Chaos0NNEffect.php` class's own docblock.
+
+A handful of generic engine mechanisms already built for printed cards
+needed zero new code to support their chaos-pool equivalents: the
+`swapScoreWithPlayerId`/`awardsExtraWin` effect-state keys, `BoardState::
+markSkipScoringThisRound()`, the `bannedColors`/`'afterScoring'`
+self-tag conventions, and `'returnsToOwnerIfCardLeavesPlay'` +
+`cascadeMoodLeavingPlay()` all get reused as-is by one or more of the 133
+effects.
+
+**Exposure.** `GameService::serializeCard()` adds a `chaos_effect` key to
+every serialized card (`null`, or `{effect_key, rarity, shape,
+rules_text}`) -- keyed by the card's own raw instance id, since an
+attached chaos effect belongs to the physical card, not whichever
+effective/copied identity it might currently be showing as.
+
+**Attached-effect choices (issue #405 follow-up -- a bug caught live).**
+~60 of the 133 effects read a player choice out of the `PlayerChoices::
+sub('chaos')` bag documented on `ChaosMoodEffect`'s own interface docblock
+(chaos_035's own "you may choose a number" is the one a user actually hit:
+attached and played, but never prompted for the number). That sub-bag
+mechanism was built and worked correctly server-side from day one, but
+nothing declared WHICH fields a given attached effect needs -- unlike a
+base card's own `CardChoiceSchema::forEffectKey()`, there was no
+`chaos_effect_key => fields` schema at all, so `serializeCard()` had
+nothing to expose and the frontend never rendered a prompt. Every such
+effect silently no-opped. `ChaosCardChoiceSchema::forEffectKey()`
+(`src/Rules/ChaosCardChoiceSchema.php`) is the fix, covering every chaos
+effect key that reads a choice, using the exact same field-descriptor DSL
+`CardChoiceSchema` already defines (see that class's own docblock).
+`serializeCard()` appends a single synthetic field to `choice_fields` when
+an attached effect has one -- `{key: 'chaos', type: 'nested', fields: [...]}`
+-- rather than merging its fields flat: that's exactly the shape
+`buildFieldRow()`/`buildChoicesFromFields()` in `game.js` already know how
+to render and collect (the same nested-field machinery Duplicity's
+repeat-with-fresh-choices sub-form uses), so it lands the submitted
+choices at `choices['chaos']` with zero frontend-specific code needed --
+precisely where `PlayerChoices::sub('chaos')` expects to read them from.
+
+**Duplicity repeats an attached chaos effect too (issue #405 follow-up --
+a bug caught live, reported by the maintainer).** Duplicity's own "each
+time you play another mood, you may have that mood's after-playing
+effect happen an additional time" was only ever repeating the card's own
+PRINTED after-playing effect -- `MoodPlayService::
+resolveAttachedChaosAfterPlaying()` used to be called exactly once per
+PLAY, from the very end of the whole resolution chain
+(`finishAfterPlayingChain()`), regardless of how many times Duplicity had
+repeated the base effect in between. Now it's called once per
+INVOCATION instead -- from `continueAfterPlayingChain()`, the one choke
+point every invocation (the original play, and each accepted repeat)
+reaches exactly once, however its own base effect got there (a card with
+no base `afterPlaying()` at all reaches an equivalent call directly from
+`resolveAfterPlayingChain()`'s own early return instead, since such a
+card never gets a repeat opportunity to begin with). Each repeat's own
+choices come from `duplicityRepeatOfferRequest()`'s existing nested
+`'choices'` field, which now also appends a `'chaos'` nested field (built
+the same way `GameService::serializeCard()` already builds one for the
+original play) whenever the repeated card carries an attached
+`'after_playing'`-shaped chaos effect -- so a human repeating, say, a
+`chaos_099`-carrying card gets asked to choose a fresh value for the
+repeat too, not just for the printed effect.
+
+**Creativity now copies an attached chaos effect too (issue #405
+follow-up -- a maintainer ruling, reversing this method's own original
+design).** Creativity's own printed text is "an exact copy of that
+printed card... including dice, color, and abilities" -- `BoardState::
+chaosEffectRow()` originally read `$chaosEffectIdFor` by the RAW
+instance id only, deliberately independent of whatever a card was
+currently copying or being copied by (an attached chaos effect isn't
+part of the "printed card" a Creativity copy is defined against). The
+maintainer confirmed this should change: a chaos effect attached to
+whatever Creativity is copying is now treated as part of what that mood
+currently does, the same way its value/color/dice already fully replace
+Creativity's own (nonexistent) printed ones. `chaosEffectRow()` now
+resolves `$chaosEffectIdFor` through `effectiveCardId()` instead of the
+raw id -- a no-op for every card that isn't (or isn't currently)
+copying anything, so nothing changes for the other 132 cards. This is a
+full REPLACEMENT, not a stack (confirmed by the maintainer): if
+Creativity itself separately carries its own attached chaos effect
+while copying a card that carries a different one, only the copied
+card's effect applies -- `$chaosEffectIdFor[$cardId]` (Creativity's own
+raw attachment) is never consulted once `effectiveCardId()` resolves to
+a different card. `chaosEffectId()` (persistence -- what
+`BoardStateRepository::save()` writes to `game_cards.chaos_effect_id`)
+deliberately keeps the old RAW-id-only behavior: what's actually
+attached to a card's own database row can't depend on what it happens
+to be copying at read time.
+
+**Spawned token duplication (issue #405 follow-up -- a bug caught
+live, reported by the maintainer)**: a player who played Hate with a
+token-spawning chaos effect attached, then played Creativity copying
+it, ended up with 4 Passivity tokens in play instead of 2. Root cause,
+unrelated to the Creativity ruling above -- `BoardState::
+spawnMoodInPlay()`'s own docblock claimed "nothing within the same
+request needs the real id back" once `BoardStateRepository::save()`
+INSERTs a real row for a spawned token's negative placeholder id, an
+assumption that turned out to be wrong: `GameService::finishPlay()`
+saves once, then (whenever the play also ends the acting player's own
+turn -- the common case, not a rare one) `advanceTurn()` saves AGAIN
+against the very same `BoardState`, to persist
+`computeFreshGrants()`'s own side effect for the next player. A
+spawned token's own placeholder id never changes in memory, so
+`save()`'s own "negative id means insert a new row" check couldn't
+tell "a token I already inserted earlier THIS SAME request" apart from
+"a token I haven't inserted yet" -- the second `save()` call blindly
+INSERTed a second row for the same token. Two new `BoardState` methods
+close the gap: `recordSpawnedCardPersisted()` (called by `save()`
+immediately after a successful INSERT, once it learns the real
+`game_cards.id` via `lastInsertId()`) and `persistedCardIdFor()`
+(checked by `save()` on every subsequent call for that same card,
+before deciding INSERT vs. UPDATE). A player who plays Hate (with a
+token-spawning chaos effect) and then Creativity copying it now
+correctly ends up with 2 tokens, matching the two actual "after playing
+this mood" triggers.
+
+Nine `ChaosCardChoiceSchema` fields (chaos_012/014/041/049/058/059/062/096/118's
+own "if you do"/"if choosing X above"/"if mode is Y" companion fields) were
+originally marked `required: true` unconditionally, when the underlying
+effect class only ever reads them once a companion optional field is also
+engaged -- the same conditionally-required shape `CardChoiceSchema`'s own
+faith/guile entries already use. Corrected to `required: false` (the
+effect class, not the schema, still enforces the real requirement via
+`requireInt()`/`requireString()` once the optional trigger field is set).
+
+**Practice bots and attached chaos-effect choices (issue #405 follow-up --
+a bug caught live).** `ChaosCardChoiceSchema` above only solved the
+frontend half -- `BotPlayerService::buildChoicesForCard()` never learned
+to fill an attached effect's own required fields (chaos_006/029/031/051/
+068/086/099/107/133, the nine chaos effects with a genuinely
+unconditionally-required field), so a bot playing a card carrying one of
+them submitted no `'chaos'` choices at all, and `PlayerChoices::
+requireInt()`/`requireString()` threw uncaught inside
+`advanceAutomatedTurns()`, crashing the whole request. The original
+function was renamed to `buildBaseChoicesForCard()`, and a new thin
+`buildChoicesForCard()` wrapper calls it, then -- regardless of which of
+`buildBaseChoicesForCard()`'s many per-effect-key branches produced the
+base result -- separately resolves `state->chaosEffectKeyFor($cardId)`'s
+own `ChaosCardChoiceSchema` fields through the exact same generic,
+field-shape-driven `BotChoiceResolver` the card's own fields already use
+(`resolveSchemaFields()`, factored out of the original per-field loop so
+both a card's own fields and its attached effect's fields share one
+policy). A required chaos field with no legal answer makes the whole card
+unplayable this way, same as an unfillable base field already does. No
+new resolver logic was needed -- `BotChoiceResolver`'s only effect-key-
+specific tables (`MODE_FIELD_OVERRIDES`, `ALWAYS_FILLED_OPTIONAL_FIELDS`)
+don't contain any `chaos_NNN` key, so its generic per-field-type policy
+(see that class's own docblock) already covered every shape these nine
+fields use.
+
+**Resolving the round's own offer is mandatory (issue #405 follow-up --
+maintainer request).** `GameService::assertChaosDraftOfferResolved()` is
+called from both `playMood()` and `pass()`, right after
+`assertNoPendingDecision()`: if the acting player (or, in Open Team Play,
+their TEAM) still has this round's own offer sitting unresolved, both
+throw a `409` rather than let the play/pass go through -- "the player
+needs to choose and apply a chaos effect before they can take their
+turn." It rolls the round's offer itself
+(`ensureChaosDraftOffersForRound()`) rather than trusting the frontend's
+own `GET /games/chaos-draft-offer` poll to have already done so, so a
+request racing ahead of that poll can't slip through with no offer row to
+check yet. Only the ACTING player/team is blocked -- someone else's own
+still-open offer this round never stops you, matching
+`chaosDraftOfferFor()`'s own "resolved independently, not turn-gated"
+design. A player with an empty hand at the start of the round gets no
+offer at all (unchanged), so nothing to block them on.
+
+Practice bots (issue #140) never had any policy for choosing a chaos
+effect -- previously harmless (the offer was always optional), but a bot
+seated in a chaos_draft game would now get stuck forever the instant this
+gate applied to it. `GameService::advanceBotChaosDraftOffer()` (dispatched
+from `advanceAutomatedTurns()`, positioned the same way
+`advanceBotTeamDecision()` already is -- resolved before that iteration's
+own turn/decision dispatch, so the gate above is always already
+satisfied by the time a bot's own `playMood()`/`pass()` is tried) gives
+every bot `BotPlayerService::chooseChaosDraftEffectAttachment()`'s own
+simple, deterministic policy: always take `effect_1` (the first offered),
+attached to the lowest-value candidate hand card (the same "buff your
+weakest card" bias `chooseInitialCardPass()` already applies to a
+mandatory discard). Open Team Play's own propose/confirm two-step is
+handled the same way `advanceBotTeamDecision()` handles
+`turn_order`/`draw_recipient`: either bot teammate may propose (attaching
+to whichever of the two teammates' own hands has the lowest-value
+candidate, since the offer accepts either), and only the NON-proposing
+teammate may confirm (always approves, never rejects). A bot paired with
+a real human teammate proposes on its own initiative but correctly stops
+there -- confirmation is that human's own call, so the offer stays open
+until they act.
+
+One more wrinkle `advanceAutomatedTurns()` itself has to guard against: a
+bot whose own turn comes up while its TEAM's offer is proposed but still
+awaiting a human teammate's own confirm is legitimately still blocked by
+the gate above even though it's a bot's turn nominally -- dispatching to
+its own `playMood()`/`pass()` unconditionally would let that exception
+escape uncaught mid-loop. `GameService::chaosDraftOfferBlocksPlayer()`
+(the shared, non-throwing predicate half of
+`assertChaosDraftOfferResolved()`) is checked immediately before that
+dispatch, falling through to the loop's own "waiting on a real player"
+`break` instead.
+
+**`ChaosActOnChosenPlayersMoodEffect` lets the acting player choose the
+target moods directly (issue #405 follow-up -- a maintainer ruling
+reversing this class's own original design).** chaos_007/020/028/048/076/
+101 ("choose up to two players; for each, [discard/suppress/return to
+hand] one of their moods [matching some filter]") originally read a
+`target_player_ids` field and picked a uniformly-random qualifying mood
+per chosen player -- the same "an opponent's own decision becomes
+randomized" reading `Effects/CrueltyEffect.php`'s own docblock uses for a
+genuinely different shape. The maintainer flagged this as wrong for this
+class specifically: unlike Cruelty, it's the ACTING player naming a
+target, not an opponent making their own choice, so randomizing it away
+just took a real decision away from the player (reported live: choosing
+which of a player's moods with value 3 or less goes to the discard pile
+"seems to currently be choosing randomly"). The class now reads
+`target_mood_ids` directly instead -- the concrete target moods (up to
+`$maxPlayers`, one per owner) rather than "players" plus a separate
+"which of their moods" step -- mirroring the exact shape and validation
+its printed-card analogs already use: Courage/chaos_007, Pacifism/
+chaos_020, Anxiety/chaos_028, Panic/chaos_048, Spite/chaos_076, Shock/
+chaos_101. `ChaosCardChoiceSchema`'s six entries for these keys were
+updated to match (`target_mood_ids`, `multi: true`, the same `filter` each
+already had, and a `distinct_owners` constraint -- an existing constraint
+type already used by the six printed-card entries above and already
+implemented client-side in `game.js`'s `constraintMessage()`, just never
+previously exercised by any chaos effect). The constructor signature
+(`$action`, `$maxPlayers`, `$qualifies`, `$excludeThisCard`) is unchanged,
+so all six `ChaosDefaultEffectRegistry` registrations needed no changes.
+
+**Chaos effects can now pause for an opponent's own real decision too
+(issue #405 follow-up -- a maintainer ruling reversing 10 classes' own
+original design).** Reported live for chaos_086 ("Choose another player.
+That player chooses a card from their hand and gives it to you."):
+"the other player should choose the card from their hand to give to me --
+it should not be random." `ChaosMoodEffect`'s own class docblock had
+documented the uniformly-random simplification as deliberate from the
+start ("chaos effects never pause for another player's own decision"),
+mirroring `RequiresOpponentDecision`'s own reasoning for a genuinely
+different reason -- but for the handful of chaos effects whose printed
+text has an EXACT identically-shaped printed-card precedent already using
+`RequiresOpponentDecision`, that reasoning doesn't hold: the other
+player's own hidden-information choice is real, not an ambiguity worth
+randomizing away. Ten effects share this shape (each cited its own
+printed-card analog in its own docblock even before this fix, since they
+were literally implemented by copying that analog's afterPlaying()):
+chaos_010/Disillusionment, chaos_029/Avoidance, chaos_031/Confusion,
+chaos_067/Intimidation, chaos_068 (new -- "that player chooses two of
+their moods," a single multi-select field rather than two sequential
+one-mood requests, mirroring how an ordinary "choose exactly 2" field
+already works elsewhere, e.g. Regret's `hand_mood_ids`), chaos_078 (new --
+"each chosen player discards a card," Confusion's own "every targeted
+player answers their own field" shape scoped to a chosen subset rather
+than every active player), chaos_082/Arrogance, chaos_086/Compulsion, and
+chaos_096 (new -- the acting player names two candidate moods
+up front and the opponent picks which of THOSE TWO to give up, via
+`PendingDecisionRequest.field.candidate_card_ids`, the same narrowing
+`Chaos091Effect`/printed Fury already use for "tied for highest"). Two
+more (chaos_043/061) explicitly say "a RANDOM one of their moods" in
+their own printed rules text -- genuinely random by design, left
+unchanged.
+
+**New interface, `ChaosRequiresOpponentDecision`** (mirrors
+`RequiresOpponentDecision` method-for-method: `pendingDecisionsFor()`/
+`resolveDecisions()`, same `PendingDecisionRequest[]` shape, deliberately
+standalone rather than extending `ChaosMoodEffect` for the identical
+reason `RequiresOpponentDecision` stays standalone from `MoodEffect`).
+`$choices` here is always the attached effect's own already-unwrapped
+`PlayerChoices::sub('chaos')` bag -- exactly what `afterPlaying()` itself
+would have received.
+
+**`MoodPlayService::resolveAttachedChaosAfterPlaying()`** now returns
+`PendingDecisionRequest[]` instead of resolving synchronously and
+returning void: `[]` still means fully resolved (no attached effect, a
+`'while_in_play'` shape, a plain `ChaosMoodEffect` resolved via its
+ordinary `afterPlaying()`, or a `ChaosRequiresOpponentDecision` that
+didn't actually need anyone's input for this play). Both of its call
+sites -- `resolveAfterPlayingChain()`'s own early-return branch (a base
+card with no `afterPlaying()` of its own) and `continueAfterPlayingChain()`
+(a base card that does) -- pause with a fresh
+`PlayResult::pending(..., pendingSource: 'chaos_effect')` on a non-empty
+return instead of continuing the chain. A new `continueAfterChaosResolved()`
+helper holds exactly the "what continueAfterPlayingChain() does after its
+own chaos-resolution call" tail (the Duplicity-repeat-offer eligibility
+check, then `finishAfterPlayingChain()`) -- factored out so
+`resolvePendingDecisions()`'s own resumption path can reach it directly
+without looping back through `continueAfterPlayingChain()` and
+re-invoking `resolveAttachedChaosAfterPlaying()` a second time for the
+same invocation. The early-return branch passes `duplicityEligibleSources:
+0` into its own pause (unchanged from before this feature -- a card with
+no base `afterPlaying()` never offered a Duplicity repeat, chaos pause or
+not), which `continueAfterChaosResolved()`'s own eligibility check then
+naturally honors on resume without needing to know which of the two
+origins it came from.
+
+**`PlayResult::pending()` gained `$pendingSource`** (`'effect'` | `'chaos_effect'`,
+default `'effect'` so every existing call site is unchanged) --
+`MoodPlayService::resolvePendingDecisions()` needs to know, when resuming
+a pause, whether to resolve it through the base card's own
+`EffectRegistry` (unchanged path) or the attached chaos effect's own
+`ChaosEffectRegistry` (new). `played_card_id` alone can't disambiguate: a
+single card can carry BOTH a base `RequiresOpponentDecision` effect and an
+attached chaos effect at once (they "stack," per the composition layer's
+own rule), so a pause opened by one can't be told apart from a pause that
+would be opened by the other just by which card it's for. Persisted as
+`game_pending_decision_batches.pending_source` (migration 0191), following
+the exact precedent migrations 0107/0127 already set for
+`duplicity_eligible_sources`/`reactor_candidate_card_ids` -- a
+`PlayResult` field that has to survive a real request round-trip, read
+back the same way in `GameService::respondToDecision()` before calling
+`resolvePendingDecisions()` again. `GameService::serializePendingDecision()`'s
+own `withChoiceDefault()` call was also fixed to derive its `$effectKey`
+from `chaosEffectRow()` rather than `catalogRow()` when `pending_source`
+is `'chaos_effect'` -- inert today (its only effect-key-specific branch,
+Imagination's own color default, can never collide with a chaos
+`effect_key`), but correct rather than accidentally-harmless.
+
+**Bots** need no new policy for 9 of the 10 -- every required field these
+effects' own `PendingDecisionRequest`s use (`hand_card`, `mood` with
+`scope: 'own'`, `mood` with `candidate_card_ids`, a `multi` `mood` field
+with `count.min`/`count.max`) is a shape `BotChoiceResolver`'s existing
+generic policy already resolves correctly with zero special-casing
+(exactly the same policy that already answers Compulsion's/Intimidation's/
+Arrogance's/Fury's/Avoidance's/Confusion's own identically-shaped
+decisions today). Only chaos_010 needed anything: its own field is
+OPTIONAL (`required: false`, mirroring Disillusionment's own "may choose a
+color"), and `BotChoiceResolver` never fills an optional field at all (see
+its own docblock) -- so `BotPlayerService::chooseDecisionAnswer()`'s
+existing `disillusionment_choose_color` special case (a "safe color"
+policy: never pick a color matching the responding bot's own board, since
+every mood of a chosen color gets discarded regardless of owner) now also
+covers `chaos_010_choose_color`, since chaos_010 is Disillusionment's own
+chaos analog with an identical field shape.
+
+Six `ChaosCardChoiceSchema` labels (chaos_067/068/078/082/086/096's own
+SYNCHRONOUS "who to target" fields, unchanged in shape, still read
+up-front exactly as before) had their wording updated from "random"/
+describing the old simplification to describing the real choice that now
+follows -- these fields themselves were never the bug (the acting
+player's own "who" was always a real choice); only what happened
+afterward, inside the target's own hand/board, was ever simplified away.
+
+**Chaos effects deferred a HAND CARD choice from the acting player's own
+hand too (issue #405 follow-up -- a bug caught live).** Reported live:
+attaching chaos_058 ("you may give a card from your hand to another
+player; if you do, this mood's value becomes 6") to Rationalization and
+choosing Rationalization's own "rotate hands" mode threw "Card is not in
+your hand" instead of letting the player choose which of their NEW
+(post-rotate) cards to give away. Root cause: chaos_058's own
+`hand_card_id` was collected in the SAME up-front `choice_fields` request
+that plays the host card -- submitted, and thus validated, against
+whatever the acting player's hand looked like BEFORE the host card's own
+afterPlaying() ran. Rationalization's own "rotate" (and "refresh") modes
+each fully replace the acting player's ENTIRE hand as part of resolving,
+so any hand card chosen up front for an attached chaos effect was
+virtually guaranteed to no longer be in hand by the time it was actually
+checked. Eleven chaos effects share this exact same shape -- reading a
+hand card from the ACTING PLAYER'S OWN hand: chaos_008/087/110/111 (the
+shared `ChaosDiscardValueToBoostSelfEffect` class), chaos_012, chaos_025,
+chaos_036, chaos_053, chaos_058, chaos_106, chaos_118.
+
+Each now defers its own hand-card choice to a SELF-targeted
+`ChaosRequiresOpponentDecision` (the same interface issue #405's
+opponent-decision follow-up above introduced, just with `targetPlayerId:
+$playerId` instead of another player) -- asked only once the host card's
+own afterPlaying() has fully resolved, mirroring exactly why Betrayal's
+own printed `RequiresOpponentDecision` implementation is self-targeted:
+"deferred because the played card's own board effect... isn't available
+until after the card has actually entered play." `pendingDecisionsFor()`
+always asks (no up-front gate) for the 9 effects whose hand-card field IS
+their own entire "you may"; chaos_058/118 keep their own
+`recipient_player_id` field as a SYNCHRONOUS, up-front choice (who to
+give a card to doesn't depend on hand contents, so there's no reason to
+defer it), which doubles as the "would you like to?" gate before the
+deferred hand-card pause is even offered. chaos_012's two fields
+(`discard_card_id` + `suppress_mood_card_id`) are bundled into ONE nested
+pending decision (mirroring `MoodPlayService::duplicityRepeatOfferRequest()`'s
+own nested shape) since which mood to suppress never depended on which
+card was discarded -- no reason to force two separate round trips.
+
+`ChaosCardChoiceSchema`'s own entries for these 11 keys were updated to
+match: the 9 fully-deferred ones have no entry at all anymore (their own
+choice happens entirely via the pending-decision pause now); chaos_058/118
+keep only their own `recipient_player_id` entry. No bot policy changes
+were needed -- every field shape these pauses use (`hand_card`, a
+`nested` field wrapping two more) is one `BotChoiceResolver`'s existing
+generic policy already resolves correctly, the same policy that already
+answers Compulsion's/Intimidation's own identically-shaped pending
+decisions.
 
 ### Winston Draft
 
@@ -5812,6 +6415,26 @@ since it already holds that dependency):
   pile is enough. The instant the pile has even one card in it, Harmony
   reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS` boosted treatment.
 
+  **Nostalgia** (confirmed by the maintainer) gets the identical
+  `sortPriorityValue()` `PHP_INT_MIN` treatment as Harmony above,
+  "save it until there's something in the discard pile for it to
+  target" -- its own "you may put a card from the discard pile into
+  your hand" half of the effect has nothing to take from with the pile
+  completely empty, the same dead-half situation Harmony's own
+  discard-sourced grant is in. Unlike Harmony, though, Nostalgia's OWN
+  extra-play grant (`NostalgiaEffect::afterPlaying()`'s own
+  `grantExtraPlay(sourceCardId: $cardId)`, with no `['source' =>
+  'discard']` restriction) is unconditional and completely
+  unrestricted, so deprioritizing it here never gives up anything but
+  the already-worthless discard pickup -- the extra play itself is
+  exactly as good with an empty pile as a full one, and `chooseAction()`'s
+  own "deprioritized WHEN, never skipped outright" ordering still plays
+  Nostalgia purely for that extra play whenever nothing better is
+  available. The instant the discard pile has even one card in it,
+  Nostalgia reverts to its ordinary `EARLY_PRIORITY_EFFECT_KEYS`
+  boosted treatment (it's already listed there, alongside Charity/
+  Duplicity/Harmony/Grief and the rest of the extra-play family).
+
   **Anger** (confirmed by the maintainer) gets its own targeting
   exception too, via `angerTargetMoodIds()` -- `buildChoicesForCard()`
   special-cases `effectKey === 'anger'` the same way it does
@@ -5858,6 +6481,16 @@ since it already holds that dependency):
     that opponent likely to reach it before the bot's own recursion ever
     gets a turn, regardless of who has more of it on paper.
 
+  Anger also gets a `sortPriorityValue()` veto (confirmed by the
+  maintainer, the same `PHP_INT_MIN` "deprioritized WHEN, never skipped
+  outright" treatment Pacifism gets above): whenever `angerTargetMoodIds()`
+  itself comes back completely empty -- no opponent mood worth
+  discarding AND `angerShouldAlsoTargetItself()` also says no -- Anger is
+  deprioritized behind everything else, rather than led with purely as a
+  worthless 0-point opening play with nothing to actually discard. The
+  instant a legal target exists (either kind), Anger reverts to plain
+  `baseValue()` ordering (0) like any other unboosted card.
+
   **Sneakiness** gets a targeting exception of its own, via
   `sneakinessTargetPlayerId()`, used by both `isWorthPlaying()` (a veto)
   and `buildChoicesForCard()` (`opponent_player_id` is required and not
@@ -5894,6 +6527,137 @@ since it already holds that dependency):
     past the round it's played in, ready to swap in some later round
     instead), targeting an arbitrary non-teammate opponent (the first one
     found) since who gets tagged this round is inconsequential.
+
+  **Denial** (confirmed by the maintainer) gets a targeting exception via
+  `denialTargetMoodIds()` -- `buildChoicesForCard()` special-cases
+  `effectKey === 'denial'` the same way it does `'pacifism'`/`'anger'`
+  above, since `target_mood_ids` is optional and not in
+  `ALWAYS_FILLED_OPTIONAL_FIELDS`, so the generic resolver would
+  otherwise always leave it unfilled. "Put two chosen moods that share a
+  color or value into their players' hands" is used for one of two
+  purposes, tried in order, both constrained to a legal
+  same-color-or-value pair the same way `DenialEffect` itself validates
+  (`sameColorOrValuePairs()`, shared by both):
+  - `denialWinningTargetMoodIds()` -- targeting opponent card(s) to
+    remove them from play and win the round outright. Every pair of
+    non-teammate opponents' own in-play moods that satisfies the
+    color-or-value constraint (either one opponent's own two, or one
+    each from two different ones -- unlike Pacifism, this field has no
+    `distinct_owners` constraint) is a candidate; each target's own live
+    value is subtracted from ITS owner's live round score
+    (`(new RoundScorer())->score($state)`, the same grouped-by-team
+    approach `wouldBecomeHighestScore()` uses for a value boost,
+    generalized here to a per-owner removal instead of an add-to-self),
+    Denial's own base value is added to the bot's own group (still an
+    ordinary mood contributing to the bot's own total once played),
+    and only a pair that moves the bot's group to AT OR ABOVE the best
+    remaining rival group's total is played -- the highest-combined-value
+    qualifying pair, when more than one exists, same "maximize the
+    swing" preference Anger's own knapsack applies. `skipScoringOwnerId()
+    !== null` (Awe or similar) short-circuits straight to "no winning
+    pair," the same "nothing to win this round regardless of who's
+    targeted" guard `sneakinessTargetPlayerId()` already applies.
+  - Failing that, `denialReplayTargetMoodIds()` -- picking up one of the
+    bot's OWN low-point (`DENIAL_REPLAY_MAX_VALUE`, 0-2) moods with its
+    own "after playing this mood" ability to re-play: `DenialEffect`
+    returns a targeted mood to its own OWNER's hand (`BoardState::
+    moveInPlayToHand()`, not the discard pile -- contrast Rejection's
+    identical qualifying condition, which discards instead), and
+    `MoodPlayService` re-runs a mood's own `afterPlaying()` hook in full
+    every time it's played, with no once-per-game memory of it -- so a
+    mood cheap enough to be worth sacrificing the board presence of is
+    effectively a second copy of its own ability for a play. Every one
+    of the bot's own in-play moods meeting that value/ability bar is a
+    replay candidate; a pair of TWO such candidates satisfying the
+    color-or-value constraint is preferred first (a double payoff --
+    both return to hand and can both be replayed), before falling back
+    to pairing a single candidate with whatever else qualifies
+    (`bestDenialReplayPartner()`) -- a non-teammate opponent's own mood
+    (preferring their highest-value one, since the bot loses nothing by
+    touching it) over a SECOND one of the bot's own moods, so the
+    "filler" second target never costs the bot a good card of its own
+    just to enable one cheap replay.
+
+  Returns `[]` (Denial still legally playable as a plain 1-point blue
+  mood, per `DenialEffect`'s own `if ($targets === []) { return; }`)
+  when NEITHER priority finds a qualifying pair -- unlike Harmony/
+  Nostalgia/Pacifism above, this doesn't deprioritize Denial itself via
+  `sortPriorityValue()` in that case; a same-color-or-value pair
+  genuinely doesn't always exist among whatever's in play, and Denial's
+  own printed value (1) is ordinary enough that leading with it purely
+  by `baseValue()` the way most cards do is still a reasonable default
+  then.
+- **Nostalgia's own discard-pickup targeting** (confirmed by the
+  maintainer), via `nostalgiaDiscardCardId()`: always takes the
+  highest-`baseValue()` card currently in the discard pile when playing
+  Nostalgia, filling its own optional `discard_card_id` field -- unlike
+  every other optional field this class leaves unfilled by default (see
+  `BotChoiceResolver`'s own docblock), Nostalgia's pickup is a pure
+  benefit with no cost, so there's no reason not to take the best
+  available card. The one exception: if the bot already has a Sadness-
+  or Wonder-family mood (`DISCARD_PILE_VALUE_SOURCE_EFFECT_KEYS` --
+  `SadnessEffect` scales its own value +2 per card in the discard pile
+  unconditionally, `WonderEffect` scales +2 per in-play mood AND per
+  discard-pile card matching whichever color was chosen after playing
+  it) currently in play, `discard_card_id` is left unfilled instead --
+  taking a card out of the pile would shrink the very resource that
+  mood's own `whileInPlay` value depends on, undoing part of what it's
+  already contributing. This is a pure targeting policy, distinct from
+  `sortPriorityValue()`'s own "deprioritize Nostalgia when the discard
+  pile is completely empty" check above -- that decides WHETHER/WHEN to
+  lead with playing Nostalgia at all; this decides what to do with the
+  optional field once it's actually being played, and returns `null`
+  (leaving the field unfilled) both when the pile is empty and when a
+  Sadness/Wonder-family mood is guarding it.
+- **Envy's own "don't feed it for free" veto** (confirmed by the
+  maintainer), via `envyDiscouragesPlayingThisCard()`/
+  `sortPriorityValue()`: deprioritizes (the same `PHP_INT_MIN` treatment
+  as Rationalization/Cynicism/Intimidation/Paranoia/Pacifism above) any
+  card worth `ENVY_AVOIDANCE_MAX_VALUE` (1) or less whenever a
+  non-teammate opponent currently has Envy in play. `EnvyEffect::
+  computeValue()` scales Envy's own value +2 for each mood the
+  "moodiest" opponent (relative to ITS OWN owner) has in play, so
+  growing the acting bot's own in-play mood count for next to nothing
+  risks making the bot itself that moodiest opponent, indirectly pumping
+  an Envy-holding opponent's own value -- a genuinely valuable play (2+)
+  is still worth that risk, but a near-worthless one (0-1) generally
+  isn't. Checked only against non-teammate opponents, mirroring
+  `EnvyEffect::computeValue()` itself, which only ever counts a
+  non-teammate's own mood total toward "moodiest opponent" (see
+  `BoardState::isTeammate()`).
+
+  The one exception: a card whose own effect grants an extra play
+  (`EXTRA_PLAY_GRANTING_EFFECT_KEYS` -- just the "grants the acting
+  player an extra play" third of `EARLY_PRIORITY_EFFECT_KEYS` above,
+  its own hand-steal and forced-discard entries excluded) is exempt
+  whenever at least one OTHER currently-playable card is worth 4 or
+  more -- playing the cheap card "enables" that bigger play the very
+  same turn (the extra play it grants is what makes room for it) in
+  exchange for the very same one point of Envy risk either way, a trade
+  worth making. Like every other `sortPriorityValue()` veto in this
+  class, this is "deprioritized WHEN, never skipped outright" -- a
+  low-value card still gets played if it's genuinely the only legal
+  option once `chooseAction()`'s own loop runs out of anything better.
+- **Contempt's own "don't play it blind" policy** (confirmed by the
+  maintainer), via `contemptHasAGoodReasonToPlayNow()`/
+  `contemptTargetMoodId()`/`sortPriorityValue()` once more: the same
+  `PHP_INT_MIN` deprioritization as Cynicism above, unless either a
+  non-teammate opponent currently has a green or white mood in play for
+  Contempt to remove (`contemptTargetMoodId()` -- the highest-value
+  qualifying mood among non-teammate opponents only; ContemptEffect's
+  own field has no owner restriction, so the bot's own or a teammate's
+  qualifying mood is deliberately excluded the same way Pacifism's own
+  targeting already excludes them), OR playing it for its own plain
+  printed value (1, no ability at all) would be the deciding difference
+  between the bot's own group NOT currently having the highest score
+  this round and having it (`wouldBecomeHighestScore()`, reused with an
+  `$unboostedValue` of 0, the identical reuse `cynicismHasAGoodReasonToPlayNow()`
+  already makes of it). When a legal target exists,
+  `buildChoicesForCard()` always plays it in `'single'` mode against
+  that one mood -- never `'all'`, since `ContemptEffect`'s own "all
+  green and white moods" option has no owner filter of its own and
+  would just as happily sweep up the bot's own qualifying moods
+  alongside any opponent's.
 - `chooseDecisionAnswer(BoardState $state, array $field, int
   $botGamePlayerId, string $decisionType = ''): array` -- `[]` (submits
   as a plain empty answer, i.e. "declined") for an optional pending-
@@ -6327,6 +7091,75 @@ other per-card exception in this codebase (Fury's veto, Harmony's
 empty-discard-pile deprioritization, Anger's own targeting policy) is
 hardcoded to that specific card rather than built out for a need that
 doesn't exist yet.
+
+### Board layout preference (issue #417)
+
+"Move the whole Round / Score / Players section under my hand" -- rather
+than moving it unconditionally, this is a personal preference
+(`users.board_layout_preference`, migration `0174`, `ENUM('above_play_area',
+'below_hand')`, defaults `'above_play_area'`), confirmed by the
+maintainer: the default leaves that section exactly where it's always
+rendered, so no existing/new player's board changes unless they
+explicitly opt in; `'below_hand'` instead has the frontend (`game.js`'s
+own `applyBoardLayoutPreference()`) relocate it after "Your hand" AND
+after the "selected card to play" panel, per the maintainer's own
+follow-up clarification -- see "Board layout preference" in
+`web-static/README.md` for exactly which DOM elements move and how. This
+is purely a client-side rendering concern; the server's only role is
+storing and returning the two-value preference itself, the same
+write-only, no-separate-GET pattern `default_selections_mode_preference`/
+`auto_pass_on_empty_hand`/`auto_apply_scoring_bonuses` above already
+established (`POST /user/board-layout-preference`, see the API table
+above -- `400` if the value is missing or isn't one of the two allowed
+strings, checked at the route before it ever reaches `UserRepository::
+setBoardLayoutPreference()`, since the column's own `ENUM` would
+otherwise surface as a raw SQL error instead of a clean `400`). Unlike
+the other three "Game defaults" preferences, this one is deliberately
+its own Settings dialog section ("Display", alongside issue #417's own
+card size slider) rather than joining "Game defaults" -- it's not a
+default for anything chosen at game creation, just where a fixed board
+region renders.
+
+### Custom card/effect formats preference (issue #405 follow-up)
+
+Chaos Draft's own 133-effect pool (see "Chaos Draft" above) is entirely
+fan-made content layered on top of a real published TCG's card catalog --
+there's a real concern (confirmed by the maintainer) that an employee of
+the game's publisher could stumble onto it, most plausibly as an invited
+opponent, and get the wrong impression about what this project is. Rather
+than gate that behind anything implicit, this is its own explicit
+personal preference (`users.allow_custom_content`, migration `0184`,
+`TINYINT(1)`, defaults `0`/off) -- the same "must opt in" shape
+`default_selections_mode_preference` already uses, unlike the three "on
+by default, pure convenience" preferences above it. Named for the general
+category rather than `chaos_draft` specifically, so any future
+similarly-custom deck_type is covered without another migration.
+
+Two independent halves, since a client-side hide alone can't stop a
+direct API request:
+
+- **Visibility** -- `isDeckTypeAvailableForFormat()` in `game.js` hides
+  the "Chaos Draft" New Game dialog option entirely (regardless of
+  format) unless `user.allow_custom_content` is true for the CURRENT
+  VIEWER. Pure convenience, not enforcement -- see "Custom card/effect
+  formats preference" in `web-static/README.md`.
+- **Enforcement** -- `createGame()` rejects a `chaos_draft` game (`400`,
+  same as every other `createGame()` validation failure) unless EVERY
+  seated player in `$userIds` has this on, not just whoever's creating
+  the game (confirmed by the maintainer: an opted-in creator
+  could otherwise still seat a non-opted-in player with no say in the
+  matter, defeating the whole point of the preference) --
+  `usersWithoutCustomContentOptIn()` names exactly who's still missing it
+  in the error message. A practice bot (`is_bot = 1`) is exempt from this
+  check entirely -- it isn't a real person the preference exists to
+  protect, and a bot account has no Settings UI to ever opt in through, so
+  requiring it of one would just silently break Chaos Draft's own
+  existing bot support (`DRAFT_DECK_TYPES` already includes it, see
+  "Practice bots" above) for every opted-in human.
+
+Same write-only, no-separate-GET pattern every preference above already
+established (`POST /user/allow-custom-content-preference`, see the API
+table above; current value already rides on `GET /me`'s own user object).
 
 ### Rematch (issue #398)
 

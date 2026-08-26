@@ -1,0 +1,15 @@
+-- No schema change: Creativity's own "an exact copy of that printed
+-- card... including dice, color, and abilities" now also copies
+-- whatever chaos effect is attached to the card it's copying (a
+-- maintainer ruling reversing BoardState::chaosEffectRow()'s own
+-- original raw-instance-only design) -- a full replacement, not a
+-- stack, matching how a copy already fully replaces Creativity's own
+-- value/color/ability. See php-app/README.md's "Chaos Draft" section.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0186
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.43' WHERE id = 1;

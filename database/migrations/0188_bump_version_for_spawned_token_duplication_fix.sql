@@ -1,0 +1,18 @@
+-- No schema change: fixes a spawned chaos-effect token (chaos_005/044/
+-- 055/083/126, via BoardState::spawnMoodInPlay()) getting duplicated
+-- whenever BoardStateRepository::save() ran more than once against the
+-- same BoardState within a single request -- GameService::finishPlay()
+-- saves once, then advanceTurn() saves again for the same $state
+-- whenever the play also ends the acting player's own turn. A token's
+-- own negative placeholder id never changes in memory, so save() had no
+-- way to tell "already inserted this request" apart from "not yet
+-- inserted" and blindly re-INSERTed a second row. See
+-- php-app/README.md's "Chaos Draft" section.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0187
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.44' WHERE id = 1;

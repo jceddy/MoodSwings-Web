@@ -1,0 +1,27 @@
+-- No schema change: chaosValueOverride is a new BoardState effectState key,
+-- not a new column. Issue #405 follow-up (reported live for chaos_033):
+-- "the UI should not rotate the card 180 degrees". chaos_001/008/033/058/
+-- 062/087/095/108/110/111/118 share Dignity's/Delight's exact absolute
+-- "this mood's value becomes N" printed wording, and the original
+-- chaos_value_delta fix (migration 0177-ish, see BoardState::
+-- adjustChaosValueDelta()'s own docblock) deliberately left these calling
+-- the base-card BoardState::setValueOverride() directly, reasoning they
+-- were conceptually identical to a card locking in its own value -- that
+-- reasoning was wrong. The card a chaos effect attaches to is essentially
+-- arbitrary, so its OWN printed ability almost never actually fixed a
+-- value at all; reusing setValueOverride() meant the frontend's
+-- 'value_locked' 180-degree rotation fired anyway, misleadingly
+-- suggesting it did.
+-- BoardState::setChaosValueOverride()/chaosValueOverrideOf() now keep this
+-- separate the same way adjustChaosValueDelta() already does for the
+-- delta-shaped effects, exposed as GameService's own 'chaos_value_override'
+-- field and rendered as a non-rotating frontend badge instead. See
+-- php-app/README.md's Chaos Draft section for the full writeup.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0193
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.50' WHERE id = 1;

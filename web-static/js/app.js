@@ -129,7 +129,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -187,6 +187,10 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // "Tiered Rotisserie Draft" in web-static/README.md.
             tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
             tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
+            // Only meaningful for a non-team format with a practice bot
+            // seated (issue #417) -- see "Practice bots" in
+            // web-static/README.md.
+            bot_goes_first: botGoesFirst,
         }),
     });
 }
@@ -204,6 +208,39 @@ function proposeTeamDecision(gameId, proposedGamePlayerId) {
 
 function confirmTeamDecision(gameId, approve) {
     return apiRequest('/games/team-decision', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'confirm', approve }),
+    });
+}
+
+// Chaos Draft (issue #405): the round-start choice/attach mechanic. The
+// offer itself is fetched (and, on its very first call this round,
+// lazily created server-side) via its own dedicated endpoint rather than
+// through getGameState() -- see GameService::chaosDraftOfferFor()'s own
+// docblock for why. chooseChaosDraftEffect() is the 'draft'/'closed_team'
+// formats' own direct resolve; proposeChaosDraftEffect()/
+// confirmChaosDraftEffect() are Open Team Play's two-step counterpart,
+// mirroring proposeTeamDecision()/confirmTeamDecision() above exactly.
+function getChaosDraftOffer(gameId) {
+    return apiRequest('/games/chaos-draft-offer?game_id=' + gameId);
+}
+
+function chooseChaosDraftEffect(gameId, chosenEffectId, attachGameCardId) {
+    return apiRequest('/games/chaos-draft-effect', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'choose', chosen_effect_id: chosenEffectId, attach_game_card_id: attachGameCardId }),
+    });
+}
+
+function proposeChaosDraftEffect(gameId, chosenEffectId, attachGameCardId) {
+    return apiRequest('/games/chaos-draft-effect', {
+        method: 'POST',
+        body: JSON.stringify({ game_id: gameId, action: 'propose', chosen_effect_id: chosenEffectId, attach_game_card_id: attachGameCardId }),
+    });
+}
+
+function confirmChaosDraftEffect(gameId, approve) {
+    return apiRequest('/games/chaos-draft-effect', {
         method: 'POST',
         body: JSON.stringify({ game_id: gameId, action: 'confirm', approve }),
     });
@@ -285,6 +322,37 @@ function saveAutoApplyScoringBonusesPreference(autoApplyScoringBonuses) {
     return apiRequest('/user/auto-apply-scoring-bonuses-preference', {
         method: 'POST',
         body: JSON.stringify({ auto_apply_scoring_bonuses: autoApplyScoringBonuses }),
+    });
+}
+
+// Board layout (issue #417) as a personal preference (Settings dialog's
+// "Display" section) -- write-only, same reasoning as
+// saveAutoApplyScoringBonusesPreference() above: the current value
+// already rides on getCurrentUser()'s own user.board_layout_preference
+// field. Unlike the auto-pass/auto-apply preferences above, this DOES
+// have a client-side effect beyond persisting it -- see
+// applyBoardLayoutPreference() in game.js, called right alongside this
+// on change.
+function saveBoardLayoutPreference(boardLayoutPreference) {
+    return apiRequest('/user/board-layout-preference', {
+        method: 'POST',
+        body: JSON.stringify({ board_layout_preference: boardLayoutPreference }),
+    });
+}
+
+// "Custom card/effect formats" (issue #405 follow-up) as a personal
+// preference (Settings dialog's "Game defaults" section) -- write-only,
+// same reasoning as saveAutoApplyScoringBonusesPreference() above: the
+// current value already rides on getCurrentUser()'s own
+// user.allow_custom_content field. Gates whether Chaos Draft's own
+// fan-made effect pool is even offered as a New Game dialog option
+// (isDeckTypeAvailableForFormat() in game.js) -- GameService::
+// createGame() independently re-checks every seated player server-side,
+// so this is a convenience, not the actual enforcement.
+function saveAllowCustomContentPreference(allowCustomContent) {
+    return apiRequest('/user/allow-custom-content-preference', {
+        method: 'POST',
+        body: JSON.stringify({ allow_custom_content: allowCustomContent }),
     });
 }
 
@@ -713,6 +781,7 @@ const DECK_TYPE_LABELS = {
     grid_draft: 'Grid Draft',
     rotisserie_draft: 'Rotisserie Draft',
     tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
+    chaos_draft: 'Chaos Draft',
     one_of_each: 'One of Each Card',
 };
 

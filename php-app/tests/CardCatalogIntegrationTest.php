@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MoodSwings\Tests;
 
+use MoodSwings\Game\CardCatalog;
 use MoodSwings\Repository\CardRepository;
 use PDO;
 use PDOException;
@@ -47,18 +48,24 @@ final class CardCatalogIntegrationTest extends TestCase
         $this->cards = new CardRepository();
     }
 
+    /** Excludes migration 0183's own five Chaos Draft token cards (Smugness/Unconcern/Passivity/Tedium/Idleness, issue #405) -- conjured into play by certain chaos effects, never part of the official 133-card printed gallery these two tests verify against. */
+    private function officialGalleryOnly(array $rows): array
+    {
+        return array_values(array_filter($rows, static fn (array $row): bool => (int) $row['is_token'] === 0));
+    }
+
     public function testCatalogHasExactlyOneHundredThirtyThreeCards(): void
     {
-        self::assertCount(133, $this->cards->all());
+        self::assertCount(133, $this->officialGalleryOnly($this->cards->all()));
     }
 
     public function testColorCountsMatchTheOfficialGallery(): void
     {
-        self::assertCount(26, $this->cards->findByColor('white'));
-        self::assertCount(26, $this->cards->findByColor('blue'));
-        self::assertCount(27, $this->cards->findByColor('black'));
-        self::assertCount(27, $this->cards->findByColor('red'));
-        self::assertCount(27, $this->cards->findByColor('green'));
+        self::assertCount(26, $this->officialGalleryOnly($this->cards->findByColor('white')));
+        self::assertCount(26, $this->officialGalleryOnly($this->cards->findByColor('blue')));
+        self::assertCount(27, $this->officialGalleryOnly($this->cards->findByColor('black')));
+        self::assertCount(27, $this->officialGalleryOnly($this->cards->findByColor('red')));
+        self::assertCount(27, $this->officialGalleryOnly($this->cards->findByColor('green')));
     }
 
     public function testNoDuplicateNamesOrEffectKeys(): void
@@ -140,6 +147,51 @@ final class CardCatalogIntegrationTest extends TestCase
             self::assertSame(0, (int) $card['has_to_play_ability']);
             self::assertSame(0, (int) $card['has_while_in_play_ability']);
             self::assertSame(0, (int) $card['has_after_playing_ability']);
+        }
+    }
+
+    public function testChaosDraftTokenCardsAreFlaggedAndVanilla(): void
+    {
+        $tokensByColor = [
+            'smugness_token' => 'white',
+            'unconcern_token' => 'blue',
+            'passivity_token' => 'black',
+            'tedium_token' => 'red',
+            'idleness_token' => 'green',
+        ];
+
+        foreach ($tokensByColor as $effectKey => $color) {
+            $card = $this->cards->findByEffectKey($effectKey);
+
+            self::assertNotNull($card, "Expected a token card with effect_key {$effectKey}");
+            self::assertSame(1, (int) $card['is_token']);
+            self::assertSame($color, $card['color']);
+            self::assertSame(1, (int) $card['base_value']);
+            self::assertNull($card['alt_value']);
+            self::assertSame(0, (int) $card['has_to_play_ability']);
+            self::assertSame(0, (int) $card['has_while_in_play_ability']);
+            self::assertSame(0, (int) $card['has_after_playing_ability']);
+        }
+    }
+
+    /**
+     * A bug caught live: CardCatalog::load() -- the idsByName/rowsById map
+     * DecklistParser (custom decklists/draft pools), UserDecklistService's
+     * own card-id validation, CardStatsService's stats page, and Tiered
+     * Rotisserie Draft's own 'rarity' tiering mode all read from -- had no
+     * is_token filter, so a token was resolvable by name in a custom
+     * decklist/pool, savable into a persistent decklist by id, and would
+     * have shown up as its own row on the public stats page.
+     */
+    public function testCardCatalogLoadExcludesTokenCards(): void
+    {
+        $catalog = CardCatalog::load();
+
+        foreach (['smugness', 'unconcern', 'passivity', 'tedium', 'idleness'] as $tokenName) {
+            self::assertArrayNotHasKey($tokenName, $catalog['idsByName']);
+        }
+        foreach ([134, 135, 136, 137, 138] as $tokenCardId) {
+            self::assertArrayNotHasKey($tokenCardId, $catalog['rowsById']);
         }
     }
 }

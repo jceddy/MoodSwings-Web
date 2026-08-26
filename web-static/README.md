@@ -167,6 +167,39 @@ correctly on desktop/emulated-viewport testing can still look subtly
 different on a real phone without it -- general defensive hygiene, not
 tied to any one page or feature.
 
+## Confirm/alert modal
+
+A bug caught live and reproduced: on iOS, `window.confirm()`/`alert()`/
+`prompt()` are disabled entirely -- calls just silently do nothing, no
+dialog, no return value -- for a page running inside a Safari window that
+was EVER launched in "standalone" mode (Add to Home Screen), including an
+unrelated tab opened from that same window afterward. Reported as "the
+resign button doesn't work" (the confirm dialog never appeared) and
+confirmed to affect every `window.confirm()`/`alert()` call in `game.js`
+once tested further (e.g. playing Cheer with no discard selected also did
+nothing). `showConfirmDialog(message)`/`showAlertDialog(message)` in
+`game.js` replace every one of them with a real `#confirm-dialog`
+`<dialog>` element instead -- a plain DOM element has no such platform
+restriction, so it works identically regardless of how the tab was
+opened. Both return a Promise (`showConfirmDialog()` resolves to
+`true`/`false` matching `window.confirm()`'s own semantics, `showAlertDialog()`
+resolves once acknowledged), so every call site needs `await` from an
+`async` function -- the same shape a `fetch()`-backed action already
+needed anyway. The dialog itself is a `<form method="dialog">` wrapping
+OK/Cancel buttons with `value="ok"`/`value="cancel"` -- clicking either
+sets `dialog.returnValue` and closes the dialog with no manual `.close()`
+call needed, and pressing Escape closes it too, leaving `returnValue` at
+neither value (read as `false`/dismissed, matching `window.confirm()`'s
+own Escape behavior). `showAlertDialog()` reuses the exact same dialog
+with the Cancel button hidden, since an alert has nothing to decline.
+Live-verified end to end (Chromium via Playwright, since the actual iOS
+standalone restriction can't be reproduced outside real Safari): the
+targetless-play confirm and the resign confirm both render this dialog
+instead of triggering any native one (confirmed via a
+`page.on('dialog', ...)` listener that never fires), and clicking OK
+carries the action through exactly as before (a resigned game correctly
+shows "Game complete!").
+
 ## Assets
 
 - `img/` -- Game-level art not tied to any specific printed card, e.g.
@@ -224,7 +257,39 @@ rotating it 180 degrees. Both classes
 can apply at once (a suppressed, value-locked mood), for which a third
 CSS rule (`.card-thumb--suppressed.card-thumb--value-locked`) rotates
 270 degrees rather than letting the two `transform`s silently clobber
-each other. The card-detail dialog's enlarged
+each other.
+
+An attached chaos effect's own "permanently increase/decrease ... BY N"
+(issue #405 follow-up -- a bug caught live: this used to incorrectly
+trigger `value_locked`'s own 180-degree rotation too, as if the card's
+OWN printed ability had fixed its value, and silently replaced rather
+than stacked with whatever alt/dice value the card's own printed ability
+already produced -- see `chaos_value_delta` in `php-app/README.md`) gets
+its own small red `.card-thumb__badge--chaos-delta` badge instead,
+reading `+N`/`-N`, positioned immediately left of the value badge --
+never a rotation, since nothing about the card's own printed ability
+locked anything. Shown whenever `card.chaos_value_delta` is nonzero
+(0 -- the common case, nothing to show -- reads as falsy in JS, so the
+badge is simply omitted). The card-detail dialog's own meta line
+(`openCardDetail()`) surfaces the same net delta as a parenthetical
+(`(chaos: +N)`) alongside its existing base/alt/current value line.
+
+An attached chaos effect's own absolute "this mood's value becomes N"
+wording (chaos_001/008/033/058/062/087/095/108/110/111/118 -- issue #405
+follow-up, reported live for chaos_033: "the UI should not rotate the
+card 180 degrees") shares Dignity's/Delight's exact printed wording, but
+the card it's attached to is essentially arbitrary, so its OWN printed
+ability almost never actually fixed a value -- `value_locked`'s own
+180-degree rotation would misleadingly suggest it did. Kept separate the
+same way `chaos_value_delta` is, and shown the same way: its own small
+red `.card-thumb__badge--chaos-override` badge (sharing the delta
+badge's exact position -- the two are mutually exclusive per card, so
+there's nothing to stack), reading `=N`, whenever `card.chaos_value_override`
+is non-null (see `chaos_value_override` in `php-app/README.md`). The
+card-detail dialog's meta line surfaces the same fixed value as a
+parenthetical (`(chaos: fixed at N)`).
+
+The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
 a `<p>` rules-text paragraph -- both now conveyed only via that image's
 `alt` text -- while every other line in the dialog (color, value, alt
@@ -248,10 +313,15 @@ into columns, rendered as `<li class="discard-stack__column">` elements
 holding `buildCardThumb()` buttons directly (no per-card `<li>` needed,
 unlike hand/in-play). How many columns exist is recomputed on every render
 from `discardStackColumnCount()` -- `#discard-list`'s own current
-`clientWidth` divided by `.card-thumb`'s fixed 5.5rem width plus the list's
-own 0.5rem gap (both hardcoded in pixels assuming the default 16px root
-font-size the rest of this file's own rem/px math already assumes)  --
-rather than a fixed cards-per-column cap, so however many columns actually
+`clientWidth` divided by `.card-thumb`'s own current width (`discardStackCardWidthPx()`,
+`11 * 16` at `window.innerWidth >= 1280`, `5.5 * 16` otherwise -- matching
+style.css's own desktop-doubling breakpoint, see "Bigger default card size
+on desktop" above; `#discard-list` is never touched by the phone-narrow
+shrink, so `.card-thumb`'s base width already applied here at every OTHER
+viewport even before that) plus the list's own 0.5rem gap (both hardcoded
+in pixels assuming the default 16px root font-size the rest of this file's
+own rem/px math already assumes) -- rather than a fixed cards-per-column
+cap, so however many columns actually
 fit side by side is however many there are: cards are dealt round-robin
 across them (card 0 into column 0, card 1 into column 1, ..., wrapping
 back to column 0 once every column has one), filling the available width
@@ -364,6 +434,265 @@ inside `.in-play-zone` only (hand/discard cards keep their normal size
 everywhere) -- enough for two cards to fit per row again. The suppressed-card
 width/badge-offset overrides (see above) get scaled-down counterparts here
 too, proportional to the smaller card width.
+
+### Bigger default card size on desktop (issue #417)
+
+`.card-thumb`'s plain `5.5rem` width (the size everywhere from phone widths
+on up, aside from the narrower phone-only shrinks above) reads fine held
+close on a phone, but small and hard to make out on a large desktop
+monitor viewed from further away -- confirmed by the maintainer, along
+with the actual mechanism: a `min-width: 1280px` (genuinely wide
+desktop/laptop displays; tablets and smaller laptops in the 600-1280px
+range keep today's size) media query, deliberately placed at the very end
+of `style.css` -- after every rule it doubles, all sharing the same
+class-selector specificity -- so it wins the cascade on source order
+alone rather than needing `!important` or a heavier selector (an earlier
+draft of this same block placed near the top of the file, before the base
+`.card-thumb` rule, silently lost the cascade to that later-appearing
+rule at the same specificity). `min-width` was picked over trying to key
+off the device's own physical panel resolution -- a CSS width media query
+already operates on CSS/layout pixels (post-`devicePixelRatio` scaling,
+via the `<meta name="viewport" content="width=device-width">` tag every
+page already carries -- see e.g. `game/index.html`), not a phone's raw
+physical pixel count, so a modern phone with a dense panel still reports
+a narrow CSS viewport width (typically ~390-430px) well under the 1280px
+threshold regardless of how many physical pixels it packs into that
+space.
+
+Doubles `.card-thumb`/`.card-thumb__art` to `11rem` everywhere the class
+is used at all -- hand, in-play, discard, the deck builder's catalog/deck
+grids, the draft pool dialog, saved/shared deck views -- since none of
+those containers constrain their own card grid to a fixed column count
+(each is a plain `flex-wrap` row/grid sized to its own content), so a
+wider card just means fewer per row, never broken layout. Alongside that,
+doubled counterparts of every OTHER width-dependent rule that's actually
+proportional to `.card-thumb`'s own width, the same relationship the
+phone shrink above already establishes for `.card-thumb--suppressed`'s
+own rotation-clearance offsets (scaled down there; scaled up here) and
+`.grid-draft-cell`/`.grid-draft-cell--empty`'s own sizing (an empty
+Grid Draft cell's placeholder, see `#grid-draft-grid` below) -- plus a
+doubled `.discard-stack__column .card-thumb:not(:last-child)`
+overlap margin (see "Discard pile stacking" below, and its own
+`discardStackCardWidthPx()` companion in `game.js`, which has to know
+about this same `1280px` breakpoint too -- there's no way for CSS and JS
+to share one literal source of truth here, so the two are kept in sync by
+comment cross-reference instead). Badge font-size/padding and the plain
+`0.25rem` corner insets are deliberately left alone, matching the phone
+shrink's own precedent -- those already read fine at any card size, so
+there's nothing to scale.
+
+**Bigger top-of-board icons on desktop.** Issue #417's own "bigger and
+more distinct icons at the top" item -- the same `min-width: 1280px`
+block also doubles `#players-list`'s own `.player-stat`/`.player-flag`
+icons (`1.5rem`/`1.25rem` → `3rem`/`2.5rem`) and their overlaid
+`.player-stat__badge` numeral (see "Players list" below), scoped to
+`#players-list` specifically rather than a bare `.player-stat`/
+`.player-flag` rule, since those same classes are also reused for the
+Decks dialog's own friends-shared/card-count icons and the lobby's own
+play-arrow/waiting-hourglass icons -- neither of which the issue is
+asking to resize. These same icons are ALSO scaled by the "Card/icon
+size" slider below, on top of this fixed desktop double -- see that
+section's own follow-up paragraph.
+
+### Card/icon size slider (issue #417)
+
+A `--card-scale` custom property (default `1`, defined on the plain
+`:root` block at the very top of `style.css`, alongside the `--color-*`
+tokens) that every width-dependent `.card-thumb`-related rule in the file
+is now wrapped in a `calc(<value> * var(--card-scale, 1))` for --
+`.card-thumb`/`.card-thumb__art` at every breakpoint (the phone-narrow
+shrinks, the plain base size, the 1280px+ desktop double from "Bigger
+default card size on desktop" above), `.card-thumb--suppressed`'s own
+rotation-clearance width, `.grid-draft-cell`/`.grid-draft-cell--empty`,
+and the discard pile's own stacking overlap margin. A player's chosen
+scale (50%-200%, in 5% steps -- 10% originally, narrowed for finer
+control per the maintainer's own follow-up) therefore resizes literally
+everywhere `.card-thumb` appears -- hand, in-play, discard, the deck
+builder, the draft pool, saved/shared deck views -- confirmed by the
+maintainer over the narrower alternative of only resizing the live
+board's own hand/in-play/discard cards.
+
+**Also the top-of-board players list's own icons (follow-up, confirmed
+by the maintainer).** The same `--card-scale` multiplier now ALSO applies
+to `#players-list`'s own `.player-stat`/`.player-flag` icons and their
+overlaid `.player-stat__badge` numeral -- the same "Bigger and more
+distinct icons at the top" icons from issue #417's own desktop-doubling
+item above, now user-adjustable via this one slider instead of only
+ever doubling at the 1280px breakpoint. Two new `#players-list`-scoped
+rule blocks apply it: one right after `.player-stat__badge`'s own base
+definition (multiplying THIS file's un-doubled 1.5rem/1.25rem/etc.
+starting sizes), and another inside the existing `min-width: 1280px`
+block's own `#players-list` rules (multiplying the ALREADY-doubled
+3rem/2.5rem/etc. sizes instead) -- so a desktop viewer's icons are both
+doubled AND scaled by the slider, exactly mirroring how `.card-thumb`
+itself already stacks the two. Scoped to `#players-list` specifically,
+not a bare `.player-stat`/`.player-flag` rule, for the same reason the
+original desktop-doubling rule was -- those same classes are also
+reused for the Decks dialog's own friends-shared/card-count icons and
+the lobby's own play-arrow/waiting-hourglass icons, neither of which
+this slider is meant to resize. The Settings dialog's own label was
+renamed from "Card size" to "Card/icon size" to reflect the wider scope.
+
+**The corner badges scale too (follow-up, confirmed by the maintainer,
+reversing an earlier call in this same section).** "The points/copy/
+color badges on cards need their sizes to scale with the sizes of the
+cards" -- `.card-thumb__badge` and its own `--value`/`--copy`/
+`--recolored*`/`--suppressed` variants now wrap their own font-size,
+padding, and every corner-inset position in `* var(--card-scale, 1)`
+too, at both the plain base size and (a NEW doubled block inside the
+`min-width: 1280px` rule, since these badges previously had no
+desktop-specific override at all) the desktop-doubled size -- see
+`.card-thumb__badge`'s own definition in `style.css` for the exact
+numbers (0.25rem→0.5rem, 0.65rem→1.3rem, 0.1rem/0.35rem→0.2rem/0.7rem,
+20px/22px→40px/44px). This is a direct reversal of "Bigger default card
+size on desktop"'s own original call to leave these badges (and the
+plain `0.25rem` corner insets generally) a fixed size at any card size
+-- at extreme slider settings a flat 0.65rem badge on an otherwise tiny
+or huge card read as either dominating the art or unreadably small, so
+the whole badge scales together instead now. The suppressed-badge
+repositioning offsets (`.card-thumb--suppressed .card-thumb__badge--value`/
+`--suppressed`, `top`/`bottom: calc((0.25rem + <N>px) * var(--card-scale,
+1))`) were updated to match -- their own `0.25rem` corner-inset term is
+now wrapped in the same `calc()` as the `<N>px` clearance term, rather
+than sitting outside it unscaled, so they stay consistent with the base
+`.card-thumb__badge--value`/`--suppressed` rules they layer on top of.
+
+A purely client-side, per-device preference -- no per-game behavior for
+the server to know about, so unlike `default_selections_mode_preference`/
+`auto_pass_on_empty_hand`/`auto_apply_scoring_bonuses` above (each a real
+`users` column, round-tripped via its own `POST /user/...` route) this is
+`localStorage`-only (key `cardScalePreference`, storing the raw
+`0.5`-`2` multiplier), the same mechanism `app.js`'s own
+`THEME_STORAGE_KEY`/`initThemeSelect()` already established for the
+theme preference -- confirmed by the maintainer over adding a new
+`users` column + API round-trip for what's purely cosmetic. `getCardScale()`/
+`applyCardScale()` in `game.js` read/write it and the `--card-scale`
+custom property respectively (a plain inline style on
+`document.documentElement`, the same "set a custom property on the root
+element" mechanism `initThemeSelect()` uses for its own `data-theme`
+attribute, just a numeric property instead); `getCardScale()` clamps a
+missing/corrupted/out-of-range stored value back to `1` (100%, i.e. no
+scaling) rather than letting a bad value render every card at a broken
+size. Applied once, unconditionally, as soon as `game.js` runs -- not
+deferred until the Settings dialog is first opened -- since cards can
+render on the very first board view long before a player ever opens
+Settings.
+
+The control itself (`#settings-card-size-slider`, a plain `<input
+type="range" min="50" max="200" step="5">`, plus a live `#settings-card-
+size-value` percentage readout, labeled "Card/icon size") lives in the
+Settings dialog's own new "Display" section (`#settings-display-section`,
+right after "Game
+defaults") -- confirmed by the maintainer over an always-visible control
+on the board itself. Wired on `'input'` (not `'change'`) so both the
+readout and every on-screen card resize live while dragging, matching
+ordinary slider expectations. One thing does need an explicit nudge on
+every change, though: the discard pile's own `discardStackColumnCount()`
+bakes the card's rendered pixel width into a column count computed in
+`game.js` (see "Discard pile stacking" below), so unlike every other
+`.card-thumb` on the page -- which just reflows for free under the new
+CSS -- nothing would otherwise prompt that count to recompute until the
+next window resize or board poll; the slider's own `'input'` handler
+calls `renderDiscardPile(lastDiscardPile, lastDiscardCanAct)` directly to
+force it. `discardStackCardWidthPx()` itself now also multiplies by
+`getCardScale()`, so that computed column count matches what's actually
+on screen at any slider position, not just the unscaled breakpoint
+default.
+
+### Board layout preference (issue #417)
+
+"Move the whole Round / Score / Players section under my hand" -- rather
+than moving it unconditionally, this is a new personal preference
+(`users.board_layout_preference`, migration `0174`), confirmed by the
+maintainer: `'above_play_area'` (the section's current position, between
+the top banners and the draft/in-play area -- **default**, so every
+existing/new player's board renders exactly as it always has unless they
+explicitly opt in) or `'below_hand'` (the section instead renders after
+"Your hand" **and** after the "selected card to play" panel
+(`#choices-panel`), per the maintainer's own follow-up clarification --
+"below hand" alone would have left it sitting awkwardly above the very
+panel a player uses to actually play the card they just picked).
+
+Unlike the card/icon size slider above, this IS a real server-synced
+preference (`users.board_layout_preference`, `POST
+/user/board-layout-preference`, mirroring `default_selections_mode_preference`/
+`auto_pass_on_empty_hand`/`auto_apply_scoring_bonuses`'s own "sync on
+open, save on change" shape exactly) rather than `localStorage` --
+confirmed by the maintainer: where this section renders is meaningful
+enough to want it to follow the player across devices, unlike a purely
+cosmetic card/icon size. The control (`#settings-board-layout-select`, a
+plain two-option `<select>`) lives right below the card/icon size slider
+in the same Settings dialog "Display" section.
+
+**The move itself** (`applyBoardLayoutPreference()` in `game.js`) is a
+real DOM relocation (`insertAdjacentElement`), not a CSS reorder --
+`#board-view` interleaves this section with a lot of unrelated content
+(draft panels, the in-play board, etc.) that must never move, so giving
+the whole section a CSS `order` would mean assigning one to every single
+sibling instead of just the two pieces that actually move. Those two
+pieces:
+
+- `#board-round-status` (the "Round 1 — your turn" text) on its own --
+  it can't join the group below, since the banners between it and that
+  group (`#draft-match-scoreline`, `#rematch-button`,
+  `#replay-controls`, `#board-message`/`#board-error`,
+  `#pending-decision-banner`) have to stay at the top in EITHER layout,
+  so this element's own original position has to stay anchored to
+  `#board-title` specifically, independent of the group below.
+- `#board-status-group` -- a new wrapper `<div>` (purely structural, no
+  styling of its own) around `#scoring-preview` ("Scores so far this
+  round"), the "Players" `<h3>`/`#players-list`, and `#team-scores` --
+  these four were already contiguous in the markup, so wrapping them
+  changes nothing about the default layout; it just turns what would
+  otherwise be a 4-element relocation into a single one.
+
+`'below_hand'` moves both pieces, in order, to sit right after
+`#choices-panel` (`choicesPanel.insertAdjacentElement('afterend',
+boardRoundStatus)`, then `boardRoundStatus.insertAdjacentElement('afterend',
+boardStatusGroup)`); `'above_play_area'` (and any unrecognized value,
+e.g. a future rollback) restores them to their original position using
+the same mechanism, anchored to their own true original previous
+siblings (`#board-title` and `#pending-decision-banner` respectively) --
+which never move themselves, so this is exactly reversible regardless of
+how many times the preference flips back and forth. Idempotent in both
+directions: calling either branch again while already in that state is a
+harmless no-op (`insertAdjacentElement` just re-confirms the current
+position), so there's no "was this already applied" tracking needed
+anywhere. Applied once, unconditionally, as soon as `game.js` runs --
+same "don't wait for Settings to be opened" reasoning as
+`applyCardScale()` above -- and re-applied immediately on change from
+the Settings dialog, so switching the preference takes effect live
+without a reload.
+
+### Custom card/effect formats preference (issue #405 follow-up)
+
+`#settings-allow-custom-content-checkbox`, in the Settings dialog's
+"Game defaults" section, right below the auto-apply-scoring-bonuses
+checkbox -- unlike every checkbox above it, this one starts **unchecked**
+(`users.allow_custom_content`, migration `0184`, defaults `false`): an
+explicit opt-IN, not a convenience someone might want to turn off. Gates
+whether "Chaos Draft" (issue #405's own fan-made 133-effect pool, layered
+on top of a real published TCG's card catalog) is even offered as a New
+Game dialog option at all -- confirmed by the maintainer: there's a real
+concern an employee of the game's publisher could stumble onto it (most
+plausibly as an invited opponent) and get the wrong impression about
+what this project is, so nobody sees it unless they explicitly ask to.
+
+Same "sync on open, save on change" wiring as every other Settings
+checkbox (`POST /user/allow-custom-content-preference`, mutating
+`user.allow_custom_content` in place on change) -- what makes this one
+actually take effect is `isDeckTypeAvailableForFormat()` (`game.js`)
+reading that same `user.allow_custom_content` field: the "Chaos Draft"
+`<option>` is hidden from `#new-game-deck-type` entirely, for every
+format, unless it's `true`. This is purely a client-side convenience,
+not the real enforcement -- `GameService::createGame()` independently
+re-checks EVERY seated player server-side (not just whoever's creating
+the game), since a non-opted-in friend could otherwise still be invited
+into a live game with no say in the matter; see "Custom card/effect
+formats preference" in `php-app/README.md`. A `createGame()` rejection
+from a non-opted-in invitee surfaces through the New Game dialog's own
+ordinary `#new-game-error` element, the same as any other creation
+failure.
 
 ## Pages
 
@@ -844,7 +1173,37 @@ too, proportional to the smaller card width.
     `bot_saved_decklist_id` is populated (mirroring how the dialog's
     other saved-deck-vs-paste fields already resolve to one shared
     param) alongside the rest of the request -- both omitted whenever no
-    bot is checked or `deckType` isn't `custom_duel`. A
+    bot is checked or `deckType` isn't `custom_duel`.
+
+    Checking a bot in a non-team format reveals a third field,
+    `#new-game-bot-goes-first-label` (issue #417, migration `0171`) -- a
+    plain checkbox, "Let the bot go first", that sends `bot_goes_first`
+    on submit. `updateBotGoesFirstFieldVisibility()` computes its
+    visibility the same two-input way `updateBotDecklistFieldsVisibility()`
+    does above: `anyBotChecked()` AND `format` is NOT `'team'`/
+    `'closed_team'` (Open/Closed Team Play's own "who actually takes the
+    opening turn" is a separate, later decision this checkbox can't
+    influence -- see "Bot goes first" in `php-app/README.md` for the full
+    server-side policy, including why game 2/3 of a best-of-three draft
+    match is untouched regardless of this flag) -- called from the same
+    three places: `updateDeckTypeDescription()`, `updateBotCheckboxAvailability()`
+    (which also handles the format-change case), and every bot checkbox's
+    own `change` listener. Like the bot-decklist fields above, it's
+    force-unchecked (not just hidden) whenever it goes out of view, so a
+    stale `true` from an earlier format/bot selection is never submitted
+    for a combination where it wouldn't do anything; `openNewGameDialog()`'s
+    own `newGameForm.reset()` already resets it to unchecked on every
+    dialog open, same as any other plain checkbox with no `checked`
+    attribute in the markup. `.new-game-field`'s own base rule
+    (`display: block`) otherwise beats the browser's default
+    `[hidden] { display: none }` UA-stylesheet rule for any element
+    carrying that class -- the same class of bug `#replay-controls[hidden]`
+    already has a fix for elsewhere in `style.css` -- so
+    `#new-game-bot-goes-first-label` (the first `.new-game-field`-classed
+    element to ever be hidden directly via its own `hidden` attribute,
+    rather than via an unclassed wrapping `<div>`/`<label>`) needed its
+    own `.new-game-field[hidden] { display: none; }` override to actually
+    disappear. A
     `#new-game-default-selections` checkbox (issue #274) sends
     `default_selections_mode` alongside the rest -- see "Default
     selections mode" in `php-app/README.md` for what it actually does
@@ -939,13 +1298,14 @@ too, proportional to the smaller card width.
     selected (Power's 15 cards fall short of the 45-card minimum both team
     formats share -- see "Open Team Play"/"Closed Team Play" in
     `php-app/README.md`), and -- since the Draft format supports only Quick
-    Draft/Winston Draft/Grid Draft -- every option *except* those three
-    whenever Draft is selected. Quick Draft/Winston Draft/Grid Draft
-    themselves are available whenever Draft, Closed Team Play, *or Open Team
-    Play* is selected (issue #362 -- each of the 4 players drafts and builds
-    their own deck completely independently either team format, exactly
-    like a normal individual draft; Open Team Play's teammates additionally
-    get to SEE each other's own drafted cards throughout the draft and
+    Draft/Winston Draft/Grid Draft/Chaos Draft -- every option *except*
+    those four whenever Draft is selected. Quick Draft/Winston Draft/Grid
+    Draft/Chaos Draft themselves are available whenever Draft, Closed Team
+    Play, *or Open Team Play* is selected (issue #362, extended to Chaos
+    Draft by issue #405 -- each of the 4 players drafts and builds their
+    own deck completely independently either team format, exactly like a
+    normal individual draft; Open Team Play's teammates additionally get
+    to SEE each other's own drafted cards throughout the draft and
     deck-building, matching this format's existing "open information"
     premise -- see "Open Team Play" in `php-app/README.md`), and hidden for
     every other format. If
@@ -991,7 +1351,13 @@ too, proportional to the smaller card width.
     "Paste/upload a decklist instead", which wouldn't make sense here since
     there's no paste/upload fallback within this dropdown itself -- picking
     Custom pool from the Pool dropdown above it is that fallback instead).
-    Selecting Winston Draft reveals `#new-game-winston-draft-fields`
+    Selecting Chaos Draft reveals the exact same `#new-game-quick-draft-fields`
+    block Quick Draft does -- not a separate set of fields (`deckType ===
+    'quick_draft' || deckType === 'chaos_draft'` is the visibility check,
+    same `quick_draft_pool_source`/`quick_draft_custom_pool_text`/
+    `saved_decklist_id` params sent to `POST /games`, since drafting itself
+    is identical between the two -- see "Chaos Draft" in
+    `php-app/README.md`). Selecting Winston Draft reveals `#new-game-winston-draft-fields`
     instead -- the exact same shape one level down
     (`#new-game-winston-draft-pool-source`, same 6 options, its own
     `WINSTON_DRAFT_POOL_SOURCE_DESCRIPTIONS` wording reflecting its own
@@ -1200,6 +1566,88 @@ too, proportional to the smaller card width.
     border/padding and no `margin: 1rem 0` below it, so its own "Pass
     cards" button sat flush against the ordinary "Pass" turn button
     directly underneath it (a bug caught live).
+
+    A `#chaos-draft-offer-panel` (`checkChaosDraftOffer()`/
+    `renderChaosDraftOffer()`) is `chaos_draft`'s own round-start
+    mechanic (issue #405) -- entirely separate from every other
+    `chaos_draft` panel on this page, which all reuse Quick Draft's own
+    drafting/deck-building UI verbatim (`state.game.deck_type ===
+    'chaos_draft'` is simply added alongside `=== 'quick_draft'` at every
+    relevant check -- dropdown visibility, `isDeckTypeAvailableForFormat()`,
+    `botsSupportedFor()`, `isSharedDeckType()`, and so on; see "Chaos
+    Draft" in `php-app/README.md`). Driven by its OWN polled endpoint
+    (`getChaosDraftOffer()`, `GET /games/chaos-draft-offer`) rather than
+    the regular board poll, since resolving an offer is a lazy WRITE the
+    ordinary unlocked `GET /games/state` read path deliberately stays out
+    of. `null` (nothing to show this round) hides the panel entirely;
+    otherwise it shows the two offered effects
+    (`chaosDraftEffectSummary()`: rarity + rules text) as clickable
+    buttons. Picking one reveals a second step -- a card-thumbnail picker
+    (`#chaos-draft-offer-attach-cards`, reusing `buildCardThumb()`) over
+    the viewer's own hand (or, for Open Team Play, both teammates' hands
+    combined, reading `state.you.hand`/`state.you.teammate_hand`) to
+    choose which card to attach it to, with a "Back" button
+    (`#chaos-draft-offer-back-button`) to return to the effect choice.
+    Clicking a card calls `submitChaosDraftChoice()` --
+    `chooseChaosDraftEffect()`/`POST /games/chaos-draft-effect` with
+    `action: 'choose'` for `draft`/`closed_team`, confirming via
+    `showConfirmDialog()` first when attaching to a teammate's own card
+    rather than the proposer's -- or, for Open Team Play,
+    `proposeChaosDraftEffect()` (`action: 'propose'`) instead, after which
+    the panel switches to a read-only "Waiting for your teammate to
+    confirm your choice" status for the proposer, or an "X proposed a
+    Chaos effect. Do you agree?" prompt with an Approve/Reject pair
+    (`#chaos-draft-offer-confirm-button`/`#chaos-draft-offer-reject-button`,
+    `action: 'confirm'`) for the other teammate, mirroring
+    `#team-decision-panel`'s own propose/confirm shape immediately above.
+
+    Resolving the round's own offer is mandatory (issue #405 follow-up):
+    `GameService::assertChaosDraftOfferResolved()` now rejects
+    `playMood()`/`pass()` for whoever still has one open. `chaosDraftOfferOpenForViewer`
+    (set from `renderChaosDraftOffer()`'s own poll -- non-null `offer`
+    always means unresolved) feeds both `canAct` (via the shared
+    `passButtonCanAct()`/`refreshPassButtonDisabled()` pair, so `#pass-button`
+    reflects it immediately rather than waiting for the next full board
+    poll) and an early check in `updatePlayButtonEnabled()` (disabling
+    `#play-card-button` with "Choose and attach this round's Chaos Draft
+    effect first" -- checked ahead of `is_playable`, since that's a purely
+    per-card server flag that knows nothing about this DB-level
+    restriction). Hand cards stay clickable regardless, same as any other
+    unplayable-right-now card -- only the panel's own Play button is
+    gated.
+
+    `chaosDraftOfferOpenForViewer` ALSO feeds `canAct` itself
+    (`passButtonCanAct()`), which the hand-rendering code in
+    `renderBoard()` uses to decide whether a hand-card click opens the
+    Play panel (`handleHandCardClick()`) or the read-only detail view
+    (`openCardDetail()`) at all -- not just whether the Play button
+    inside the panel is enabled. A bug caught live (issue #405
+    follow-up): resolving the round's own offer (the pick-and-attach
+    step, or the team confirm/reject step) called `refreshBoard()`
+    straight away, but `chaosDraftOfferOpenForViewer` is only ever
+    updated by `checkChaosDraftOffer()`'s own unawaited fetch, fired
+    near the END of that same render pass -- so the hand, rendered
+    EARLIER in that pass, still saw the JUST-RESOLVED offer as open and
+    routed every hand-card click to the detail view instead of the Play
+    panel, until the next full poll happened to land. Each of the three
+    offer-resolving call sites (`submitChaosDraftChoice()`, the
+    confirm-button handler, the reject-button handler) now `await
+    checkChaosDraftOffer(currentState)` before calling `refreshBoard()`,
+    so `chaosDraftOfferOpenForViewer` is already correct by the time the
+    hand renders.
+
+    A card carrying an attached chaos effect gets a "Chaos" badge
+    (`buildCardThumb()`, `.card-thumb__badge--chaos`, tinted by
+    `--chaos-common`/`--chaos-uncommon`/`--chaos-rare`/`--chaos-mythic`)
+    reading `card.chaos_effect.rules_text` as its own `title` tooltip, and
+    `openCardDetail()`'s `#card-detail-chaos-effect` line (plus
+    `#choices-card-chaos-effect` in the Play-card confirmation panel,
+    `#choices-panel` -- a card carrying an attached effect is USUALLY
+    reached through that panel rather than the read-only detail view,
+    since `is_playable` already routes a playable hand card there, so the
+    effect needs to be visible there too, not just in the read-only view)
+    shows the same rarity + rules text alongside the card's own printed
+    ability, additive rather than replacing it.
 
     A `#draft-match-scoreline` line (`renderDraftMatchScoreline()`, reading
     whichever of `state.quick_draft`/`state.winston_draft`/`state.grid_draft`
@@ -1483,7 +1931,7 @@ too, proportional to the smaller card width.
       draw comes up empty and the drafter gets nothing that round. The
       click handler for `#winston-draft-pass-button` checks for exactly
       this condition (`current_pile_number === 3 && remaining_deck_count <=
-      1`, only when it's actually your turn) and shows a `window.confirm()`
+      1`, only when it's actually your turn) and shows a `showConfirmDialog()`
       warning before submitting, so an accidental click doesn't cost a
       drafter their pick without warning. A `#winston-draft-team-drafted`
       block (same `renderTeamDraftedCards()` helper as Quick Draft above)
@@ -1523,23 +1971,58 @@ too, proportional to the smaller card width.
       ** 2` cells of `drafting.grid_cards` (always fully visible to every
       seated player -- unlike Winston Draft's face-down piles, a dealt
       grid is face-up on the table) in the same row-major order
-      `getState()` reports them in, via a CSS grid whose
-      `grid-template-columns` `renderGridDraftDrafting()` sets inline from
-      `drafting.grid_size` on every render (`#grid-draft-grid`'s own CSS
-      rule only supplies the common 3-column default -- `grid_size` is 4,
-      not 3, for exactly 4 players, see `GameService::gridDraftGridSize()`);
-      a cell already taken and not yet refilled this round (`null` in
-      `grid_cards`) renders as a plain dashed placeholder
-      (`.grid-draft-cell--empty`) instead of a card thumbnail.
-      `#grid-draft-picks` renders 2 * `drafting.grid_size` buttons (Row
-      1-N, Column 1-N), each labeled with however many cells are actually
-      still non-null along that line (`gridDraftLineCells(axis, index,
+      `getState()` reports them in; a cell already taken and not yet
+      refilled this round (`null` in `grid_cards`) renders as a plain
+      dashed placeholder (`.grid-draft-cell--empty`) instead of a card
+      thumbnail.
+
+      **Row/column pick buttons (issue #417).** Rather than two
+      disconnected button rows below the grid (the pre-#417 layout --
+      `#grid-draft-picks`, "Row 1 (3 cards)"/"Column 1 (2 cards)", etc.,
+      now removed), confirmed by the maintainer: every pick button now
+      lives INSIDE `#grid-draft-grid` itself, as an arrow pointing at the
+      exact row/column it drafts -- one down the grid's own left edge per
+      row (pointing right, into that row) and one along its own bottom
+      edge per column (pointing up, into that column). One CSS grid does
+      the alignment: `grid-template-columns`/`grid-template-rows`
+      (`renderGridDraftDrafting()` sets both inline from
+      `drafting.grid_size` on every render, since `grid_size` is 4, not
+      3, for exactly 4 players -- see `GameService::gridDraftGridSize()`)
+      each gain one extra `min-content` track beyond the `grid_size` cell
+      tracks -- a leading column for row arrows, a trailing row for
+      column arrows -- and every cell's own `grid-column` is offset by 1
+      (`buildGridDraftArrowButton()`/the `grid_cards.forEach` below it
+      set each element's `style.gridColumn`/`style.gridRow` explicitly,
+      rather than relying on source order, since row buttons/cells/column
+      buttons are appended in three separate passes). Placing a button in
+      the SAME row/column track as its own cells means it stretches to
+      that track's size automatically (CSS grid's own default
+      `stretch`), so a row button's height always matches its row's
+      tallest cell and a column button's width always matches its
+      column's own card width, at any card-scale/breakpoint, with no
+      separate fixed-size rule to keep in sync -- unlike the old
+      `.grid-draft-pick-button`'s own hardcoded `width: 5rem`, which this
+      replaces.
+
+      Each button (`.grid-draft-arrow-button`, built by
+      `buildGridDraftArrowButton(axis, index, glyph)`) shows a large
+      direction glyph (`→` for a row button, `↑` for a column button,
+      `.grid-draft-arrow-button__glyph`) over a small remaining-count
+      readout (`.grid-draft-arrow-button__count`) -- both `aria-hidden`,
+      since the button's own `title`/`aria-label` ("Draft row 2 (3 cards
+      left)") already carries the full meaning, the same title/
+      aria-label-on-the-wrapper convention `buildPlayerStat()`'s own
+      icon+badge established elsewhere on this page. The remaining count
+      itself still comes from `gridDraftLineCells(axis, index,
       gridSize)`, a client-side mirror of
-      `GameService::submitGridDraftPick()`'s own cell-counting logic) --
-      "Row 2 (3 cards)", "Column 1 (2 cards)", etc. A line with 0 cards
-      left renders disabled rather than being sent to the server only to
-      be rejected. Clicking a button calls `submitGridDraftAction(axis,
-      index)` (`submitGridDraftPick()`, `POST /games/draft/grid-pick`).
+      `GameService::submitGridDraftPick()`'s own cell-counting logic; a
+      line with 0 cards left still renders disabled rather than being
+      sent to the server only to be rejected, and clicking an enabled one
+      still calls the exact same `submitGridDraftAction(axis, index)`
+      (`submitGridDraftPick()`, `POST /games/draft/grid-pick`) as before
+      -- issue #417 only changed where/how the button renders, not what
+      clicking it does.
+
       The status line (`#grid-draft-drafting-status`) reads whose turn it
       is by `drafting.current_turn_username` when it isn't yours (issue
       #189 -- for a 3-4 player match, "not your turn" alone doesn't say
@@ -1712,10 +2195,11 @@ too, proportional to the smaller card width.
     Clicking Play on a card whose entire `choice_fields` is a single
     optional target left blank -- Anger, Hate, Denial, Shock, Creativity
     with no copy target, etc., `cardHasNoTargetSelected()` -- interrupts
-    with a `window.confirm()` ("You haven't selected a target for
+    with `showConfirmDialog()` ("You haven't selected a target for
     &lt;name&gt; -- its ability won't do anything. Play it anyway?", the
-    same native-dialog pattern the board's own Pass/Resign buttons already
-    use for their own "are you sure" moments) before the request is ever
+    same shared confirm/alert modal the board's own Pass/Resign buttons
+    already use for their own "are you sure" moments -- see "Confirm/alert
+    modal" below) before the request is ever
     sent; declining leaves the panel open with nothing submitted, same as
     never having clicked Play. Deliberately narrow -- only a card whose
     *entire* choice_fields is exactly one optional `mood`/`player`/
@@ -1731,7 +2215,7 @@ too, proportional to the smaller card width.
     leaving either one's own single bare-`bool` field unchecked does
     nothing whatsoever beyond entering play (`WrathEffect` and
     `RageEffect` both return immediately -- `RageEffect`'s own docblock
-    even says "Like Wrath"), so each gets the identical `window.confirm()`
+    even says "Like Wrath"), so each gets the identical `showConfirmDialog()`
     treatment ("You haven't checked &lt;field label&gt; -- &lt;name&gt;'s
     ability won't do anything. Play it anyway?") on its own. Cards with
     no ability worth asking about (roughly half the 127-card
@@ -2437,13 +2921,13 @@ too, proportional to the smaller card width.
     "(you)"/"(resigned)" tags -- and the lobby's own opponent-list line
     (`appendPlayersWithFlags()`, `buildGameRow()`) appends the same
     `" (bot)"` as plain text there instead, since that whole line is
-    already just comma-joined plain text with no per-name styling. It also shows each player's seat,
+    already just comma-joined plain text with no per-name styling. It also shows each player's
     current point total, win count, and hand size as small inline SVG
-    icons (issue #143) rather than spelled-out text — a bench (seat), a
-    star (points), a trophy (wins), and two overlapping cards (hand size)
+    icons (issue #143) rather than spelled-out text — a star (points), a
+    trophy (wins), and two overlapping cards (hand size)
     — each colored to match what it depicts rather than every one
-    defaulting to the same muted gray: seat/hand-count in brown
-    (`--color-brown`, a bench and a hand of cards), points/wins in gold
+    defaulting to the same muted gray: hand-count in brown
+    (`--color-brown`, a hand of cards), points/wins in gold
     (`--color-gold`, a star and a trophy), and the went-first pennant in
     red (reusing `--color-error`, already theme-tuned for both light and
     dark). The on-turn triangle keeps its own existing green
@@ -2455,12 +2939,16 @@ too, proportional to the smaller card width.
     than solid, so the icon underneath is still partly visible through it
     instead of being almost entirely hidden behind an opaque plate — the
     number is the point of the badge, not full coverage of the icon it
-    sits on. `player.total_score` is
+    sits on. There used to be a fourth icon here too, a "seat" bench
+    showing `player.seat_order` -- removed per issue #417 (a player's seat
+    is already unambiguous from this list's own top-to-bottom ordering,
+    and the icon itself read as too similar to the hand-count icon right
+    next to it). `player.total_score` is
     a live sum of what's actually on the board right now, i.e. what each
     player would score if the round ended this instant, not anything
     accumulated from earlier rounds; distinct from `total_wins`, which only
     counts outright round victories. Every icon keeps its full original
-    text (e.g. "12 point(s)", "Seat 0") as both a `title` tooltip and an
+    text (e.g. "12 point(s)") as both a `title` tooltip and an
     `aria-label` on its wrapping `<span role="img">`, so a screen reader or
     a sighted user hovering for a reminder still gets the exact same
     information the old plain-text clauses gave (see `buildPlayerStat()`/
@@ -2621,7 +3109,7 @@ too, proportional to the smaller card width.
     once the game's over or the viewer has already resigned, and disabled
     while a decision is pending (mirrors the backend's own
     `assertNoPendingDecision()` gate -- resolve it first). Clicking it
-    shows a `window.confirm()` prompt first, since resigning can't be
+    shows a `showConfirmDialog()` prompt first, since resigning can't be
     undone, then calls `POST /games/resign` (`resignGame()` in `app.js`)
     and runs the exact same success path Pass does
     (`announceOutcome()`/`refreshBoard()`). For 2-player and team-format

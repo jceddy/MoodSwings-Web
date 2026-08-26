@@ -1,0 +1,27 @@
+-- Two practice-bot targeting policy improvements, confirmed by the
+-- maintainer:
+--
+-- Nostalgia: sortPriorityValue() now deprioritizes it (PHP_INT_MIN, the
+-- same treatment Harmony already gets) whenever the discard pile is
+-- completely empty -- "save it until there's something in the discard
+-- pile for it to target." Its own extra-play grant is unconditional and
+-- unrestricted (unlike Harmony's discard-sourced one), so this only ever
+-- costs the bot the already-worthless discard pickup, never the extra
+-- play itself; still played as a last resort when nothing else is
+-- playable.
+--
+-- Denial: a new denialTargetMoodIds() targeting policy, tried in
+-- priority order -- first, a same-color-or-value pair of non-teammate
+-- opponents' own in-play moods whose combined removal would win the
+-- round outright (denialWinningTargetMoodIds()); failing that, one of
+-- the bot's own low-point (0-2) moods with its own "after playing this
+-- mood" ability, paired with whatever else qualifies
+-- (denialReplayTargetMoodIds()), so the bot can return it to its own
+-- hand and replay its ability all over again.
+--
+-- See "Practice bots" in php-app/README.md for the full policy.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0175 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.32' WHERE id = 1;

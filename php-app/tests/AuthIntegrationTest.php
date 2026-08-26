@@ -234,6 +234,27 @@ final class AuthIntegrationTest extends TestCase
         self::assertTrue($currentAfterOptIn['user']['default_selections_mode_preference']);
     }
 
+    /**
+     * "Board layout" (issue #417) as a personal preference (Settings
+     * dialog's "Display" section) -- defaults to 'above_play_area' for
+     * every user, and currentUser()'s own user object reflects a later
+     * update immediately, same pattern share_presence's/default selections
+     * mode's own tests above cover.
+     */
+    public function testCurrentUserBoardLayoutPreferenceDefaultsAbovePlayAreaAndReflectsUpdates(): void
+    {
+        $registered = $this->registerAndVerify('nadia');
+        $result = $this->auth->login('nadia', 'correcthorsebattery', null, null);
+
+        $current = $this->auth->currentUser($result['token']);
+        self::assertSame('above_play_area', $current['user']['board_layout_preference']);
+
+        (new UserRepository())->setBoardLayoutPreference((int) $registered['user']['id'], 'below_hand');
+
+        $currentAfterOptIn = $this->auth->currentUser($result['token']);
+        self::assertSame('below_hand', $currentAfterOptIn['user']['board_layout_preference']);
+    }
+
     public function testResendVerificationIssuesNewTokenAndRevokesOld(): void
     {
         $registered = $this->auth->register('henry', 'henry@example.com', 'correcthorsebattery', null);

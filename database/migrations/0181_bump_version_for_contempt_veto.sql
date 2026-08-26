@@ -1,0 +1,22 @@
+-- Practice bots (issue #140), confirmed by the maintainer: "Bots should
+-- avoid playing Contempt unless an opponent has green/white mood(s) for
+-- it to target - only play it for points if its point will make the
+-- difference between winning and losing a round." Adds
+-- BotPlayerService::contemptTargetMoodId()/contemptHasAGoodReasonToPlayNow(),
+-- a sortPriorityValue() veto (the same PHP_INT_MIN "deprioritized WHEN,
+-- never skipped outright" treatment cynicismHasAGoodReasonToPlayNow()
+-- already uses) for Contempt unless either a non-teammate opponent
+-- currently has a green or white mood in play to remove, or playing it
+-- for its own plain printed value (1) would swing the round from losing
+-- to winning (wouldBecomeHighestScore(), reused with an $unboostedValue
+-- of 0). Also wires a dedicated buildChoicesForCard() branch so Contempt
+-- actually USES its own optional ability when a legal target exists
+-- (mode 'single' against the highest-value qualifying opponent mood --
+-- previously always left unfilled, since both of Contempt's own
+-- choice_fields are optional and the generic bot resolver never
+-- volunteers for those). See "Practice bots" in php-app/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0180 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.37' WHERE id = 1;

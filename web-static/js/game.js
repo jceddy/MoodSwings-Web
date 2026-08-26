@@ -125,6 +125,92 @@
         return outputArray;
     }
 
+    // Card/icon size slider (issue #417) -- a pure client-side, per-device
+    // rendering preference, same localStorage-backed mechanism as
+    // app.js's own THEME_STORAGE_KEY/initThemeSelect() (a plain custom
+    // property here, --card-scale, instead of a data-theme attribute; see
+    // its own definition in style.css for the full list of rules it
+    // scales, including -- per this slider's own later rename -- the
+    // top-of-board players list's own .player-stat/.player-flag icons,
+    // not just .card-thumb). Read by both initSettings() below (to apply
+    // it, and keep the slider/readout in sync) and
+    // discardStackCardWidthPx() (so the discard pile's own column-count
+    // math still reflects whatever size is actually rendered, not just
+    // the unscaled breakpoint default).
+    const CARD_SCALE_STORAGE_KEY = 'cardScalePreference';
+
+    function getCardScale() {
+        try {
+            const stored = Number(localStorage.getItem(CARD_SCALE_STORAGE_KEY));
+            // Guards against a corrupted/hand-edited localStorage value
+            // (0, negative, NaN, or wildly out of the slider's own
+            // 50-200% range) rendering every card at a broken size --
+            // falls back to 100% (no scaling) instead.
+            if (stored >= 0.5 && stored <= 2) {
+                return stored;
+            }
+        } catch (e) {
+            // localStorage unavailable (e.g. private browsing) -- falls
+            // back to 100% below, same as app.js's own theme preference.
+        }
+        return 1;
+    }
+
+    function applyCardScale(scale) {
+        document.documentElement.style.setProperty('--card-scale', String(scale));
+    }
+
+    // Applied immediately (not deferred until the Settings dialog is
+    // first opened) since cards can render well before that -- the
+    // slider/readout inside the dialog are only synced to this same
+    // value once initSettings() itself runs, right below.
+    applyCardScale(getCardScale());
+
+    // "Board layout" (issue #417) -- unlike card size above, this IS a
+    // real server-synced preference (users.board_layout_preference,
+    // migration 0174), since where this section renders is meaningful
+    // enough to want it to follow the player across devices. Relocates
+    // the Round/Score/Players section (#board-round-status +
+    // #board-status-group, see that element's own docblock in
+    // index.html for why it's two pieces rather than one) to sit right
+    // after #choices-panel -- "Your hand" and the "selected card to
+    // play" panel, per the maintainer's own explicit clarification --
+    // instead of its default position between the top banners and the
+    // draft/in-play area. Pure DOM relocation (insertAdjacentElement),
+    // not a CSS reorder -- #board-view interleaves this section with a
+    // lot of unrelated content (draft panels, in-play board, etc.) that
+    // must NOT move, so giving the whole section a CSS `order` would
+    // require assigning one to every sibling instead of just these two
+    // pieces. Idempotent in both directions: calling either branch again
+    // when already in that state is a harmless no-op (insertAdjacentElement
+    // just re-confirms the current position), so this is safe to call on
+    // every preference change with no "was it already applied" tracking
+    // needed.
+    function applyBoardLayoutPreference(preference) {
+        const boardRoundStatus = document.getElementById('board-round-status');
+        const boardStatusGroup = document.getElementById('board-status-group');
+
+        if (preference === 'below_hand') {
+            const choicesPanel = document.getElementById('choices-panel');
+            choicesPanel.insertAdjacentElement('afterend', boardRoundStatus);
+            boardRoundStatus.insertAdjacentElement('afterend', boardStatusGroup);
+        } else {
+            // 'above_play_area' (the default) and any unrecognized value
+            // (e.g. a future rollback) both fall back to the original,
+            // always-safe layout rather than leaving the section wherever
+            // a previous 'below_hand' call last put it.
+            const boardTitle = document.getElementById('board-title');
+            const pendingDecisionBanner = document.getElementById('pending-decision-banner');
+            boardTitle.insertAdjacentElement('afterend', boardRoundStatus);
+            pendingDecisionBanner.insertAdjacentElement('afterend', boardStatusGroup);
+        }
+    }
+
+    // Applied immediately, same reasoning as applyCardScale() above --
+    // the board can render (and this section along with it) before the
+    // Settings dialog is ever opened.
+    applyBoardLayoutPreference(user.board_layout_preference);
+
     // Settings dialog (formerly a standalone Notifications dialog, issue
     // #108) -- now also hosts the "Default selections mode" personal
     // preference (see settings-default-selections-checkbox's own wiring
@@ -247,6 +333,75 @@
         autoApplyScoringBonusesCheckbox.addEventListener('change', () => {
             user.auto_apply_scoring_bonuses = autoApplyScoringBonusesCheckbox.checked;
             saveAutoApplyScoringBonusesPreference(autoApplyScoringBonusesCheckbox.checked);
+        });
+
+        // "Custom card/effect formats" (issue #405 follow-up) -- same
+        // wiring pattern as the checkboxes above, except this one starts
+        // UNCHECKED (off) by default, matching users.allow_custom_content's
+        // own DEFAULT 0 -- an explicit opt-in, not a convenience. Mutating
+        // user.allow_custom_content in place here is what actually makes
+        // isDeckTypeAvailableForFormat() (read the next time the New Game
+        // dialog's own updateDeckTypeAvailability() runs) show/hide the
+        // Chaos Draft option without needing a page reload.
+        const allowCustomContentCheckbox = document.getElementById('settings-allow-custom-content-checkbox');
+        allowCustomContentCheckbox.checked = user.allow_custom_content;
+        allowCustomContentCheckbox.addEventListener('change', () => {
+            user.allow_custom_content = allowCustomContentCheckbox.checked;
+            saveAllowCustomContentPreference(allowCustomContentCheckbox.checked);
+        });
+
+        // Card/icon size slider (issue #417) -- a client-only preference
+        // (see CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale()
+        // above, already applied once at page load independent of this
+        // dialog ever being opened); this just keeps the slider/readout in
+        // sync with that same value and reacts to it changing, the same
+        // "sync on open, save on change" shape as the two server-synced
+        // preferences above -- just to localStorage instead of the
+        // server. 'input' (not 'change') so the readout/cards/icons
+        // update live while dragging, matching how a slider control is
+        // normally expected to behave; 5% steps (the slider's own HTML
+        // step="5") for finer control than the original 10% over the
+        // final size, read straight from the element rather than
+        // hardcoded here. The discard pile is explicitly re-rendered
+        // afterward -- unlike every other .card-thumb on the page, it
+        // doesn't just reflow for free on a CSS-only size change, since
+        // discardStackColumnCount() (see its own definition below) bakes
+        // the card width into a column count computed in JS, and nothing
+        // else would otherwise prompt that to recompute until the next
+        // window resize or board poll.
+        const cardSizeSlider = document.getElementById('settings-card-size-slider');
+        const cardSizeValueEl = document.getElementById('settings-card-size-value');
+        const initialCardSizePercent = Math.round(getCardScale() * 100);
+        cardSizeSlider.value = String(initialCardSizePercent);
+        cardSizeValueEl.textContent = initialCardSizePercent + '%';
+        cardSizeSlider.addEventListener('input', () => {
+            const percent = Number(cardSizeSlider.value);
+            const scale = percent / 100;
+            cardSizeValueEl.textContent = percent + '%';
+            applyCardScale(scale);
+            try {
+                localStorage.setItem(CARD_SCALE_STORAGE_KEY, String(scale));
+            } catch (e) {
+                // ignore -- the selection just won't persist across reloads
+            }
+            renderDiscardPile(lastDiscardPile, lastDiscardCanAct);
+        });
+
+        // Board layout (issue #417) -- a real server-synced preference
+        // (see saveBoardLayoutPreference()/user.board_layout_preference),
+        // same "sync on open, save on change" shape as
+        // default_selections_mode_preference/auto_pass_on_empty_hand/
+        // auto_apply_scoring_bonuses above, just also re-applying the
+        // layout itself immediately (applyBoardLayoutPreference() already
+        // ran once at page load with whatever value getCurrentUser()
+        // returned; this keeps it in sync with any change made here
+        // without needing a reload).
+        const boardLayoutSelect = document.getElementById('settings-board-layout-select');
+        boardLayoutSelect.value = user.board_layout_preference;
+        boardLayoutSelect.addEventListener('change', () => {
+            user.board_layout_preference = boardLayoutSelect.value;
+            applyBoardLayoutPreference(boardLayoutSelect.value);
+            saveBoardLayoutPreference(boardLayoutSelect.value);
         });
 
         // The dialog itself (and its "not supported" message) must still be
@@ -1033,6 +1188,56 @@
     const pendingDecisionPanel = document.getElementById('pending-decision-panel');
     const cardDetailDialog = document.getElementById('card-detail-dialog');
 
+    // Shared confirm/alert modal (a bug caught live, reported for the
+    // resign button, then confirmed to affect every window.confirm()/
+    // alert() in this file): iOS disables those entirely -- calls just
+    // silently do nothing -- for a page running inside a Safari window
+    // that was EVER launched in "standalone" mode (Add to Home Screen),
+    // including an unrelated tab opened from that same window afterward.
+    // See #confirm-dialog's own comment in game/index.html. A real
+    // <dialog> has no such restriction, so showConfirmDialog()/
+    // showAlertDialog() below replace every window.confirm()/alert() call
+    // in this file. Both return a Promise, so every call site needs
+    // `await` (and its enclosing function needs to be `async`) where a
+    // bare `if (!window.confirm(...))` used to work synchronously.
+    const confirmDialog = document.getElementById('confirm-dialog');
+    const confirmDialogMessage = document.getElementById('confirm-dialog-message');
+    const confirmDialogCancelButton = document.getElementById('confirm-dialog-cancel-button');
+
+    // method="dialog" on the <form> already sets confirmDialog.returnValue
+    // to the clicked button's own value ('ok'/'cancel') and closes the
+    // dialog with no JS needed for that part -- Escape closes it too,
+    // leaving returnValue at whatever it was reset to below ('', matching
+    // neither button's value), the same "dismissed" outcome Escape/backdrop-
+    // click gives window.confirm()'s own `false`.
+    function showConfirmDialog(message) {
+        return new Promise((resolve) => {
+            confirmDialogMessage.textContent = message;
+            confirmDialogCancelButton.hidden = false;
+            confirmDialog.returnValue = '';
+            confirmDialog.addEventListener('close', function onClose() {
+                confirmDialog.removeEventListener('close', onClose);
+                resolve(confirmDialog.returnValue === 'ok');
+            });
+            confirmDialog.showModal();
+        });
+    }
+
+    // Same shared dialog, minus the Cancel button -- window.alert()'s own
+    // "just acknowledge this" shape has nothing to decline.
+    function showAlertDialog(message) {
+        return new Promise((resolve) => {
+            confirmDialogMessage.textContent = message;
+            confirmDialogCancelButton.hidden = true;
+            confirmDialog.returnValue = '';
+            confirmDialog.addEventListener('close', function onClose() {
+                confirmDialog.removeEventListener('close', onClose);
+                resolve();
+            });
+            confirmDialog.showModal();
+        });
+    }
+
     // Loading overlay (see #loading-overlay's own comment in
     // game/index.html) -- shown for the span of a fresh view's own
     // initial data fetch (showLobby()/showBoard()/showSpectatorBoard()/
@@ -1342,7 +1547,7 @@
     // six are the only deck_types with no single "the deck" for
     // openSharedDeckView() (issue #197) to show.
     function isSharedDeckType(deckType) {
-        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(deckType);
+        return !['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(deckType);
     }
 
     // Plain-language explanation shown under the New Game dialog's own
@@ -1361,6 +1566,7 @@
         grid_draft: '2-4 players each draft their own deck from a shared pool (54/72/96 cards for 2/3/4 players) over 6 rounds (4 for exactly 4 players, so each player picks first exactly once): each round, cards are dealt into a 3x3 grid (4x4 for exactly 4 players), and each player in turn takes a whole row or column, refilling it for the next player except the round\'s last two picks. Trim to 12+ cards; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         rotisserie_draft: '2-4 players draft one card at a time from a shared, fully face-up pool -- no packs, piles, or grid, just the whole pool laid out at once. A snake-style turn order (choosable cutoff of 13-20 cards per player, default 14) continues until every player has picked that many; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
+        chaos_draft: 'Quick Draft\'s own drafting, deck-building, and match structure, unchanged -- but at the start of every round, each player (or team, in Open Team Play) is offered a choice between two randomly-generated effects and attaches the chosen one permanently to a card in their hand, stacking with that card\'s own printed ability.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1635,7 +1841,7 @@
         document.getElementById('new-game-decklist-paste-fields').hidden =
             deckType !== 'custom' || document.getElementById('new-game-saved-decklist').value !== '';
         document.getElementById('new-game-duel-rules-fields').hidden = deckType !== 'custom_duel';
-        document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft';
+        document.getElementById('new-game-quick-draft-fields').hidden = deckType !== 'quick_draft' && deckType !== 'chaos_draft';
         document.getElementById('new-game-winston-draft-fields').hidden = deckType !== 'winston_draft';
         document.getElementById('new-game-grid-draft-fields').hidden = deckType !== 'grid_draft';
         document.getElementById('new-game-rotisserie-draft-fields').hidden = deckType !== 'rotisserie_draft';
@@ -1643,7 +1849,7 @@
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
-        if (deckType === 'quick_draft') {
+        if (deckType === 'quick_draft' || deckType === 'chaos_draft') {
             updateQuickDraftPoolSourceVisibility();
         }
         if (deckType === 'winston_draft') {
@@ -1770,8 +1976,19 @@
     // the first place, so the three draft deck types are deliberately
     // exempt from this same rule below.
     function isDeckTypeAvailableForFormat(deckType, format) {
+        // "Custom card/effect formats" (issue #405 follow-up) -- off by
+        // default; Chaos Draft is never offered as an option at all
+        // unless the viewer has explicitly opted in via Settings,
+        // regardless of format. Purely a client-side convenience so a
+        // non-opted-in player never even sees the option to try --
+        // GameService::createGame() independently re-checks EVERY seated
+        // player server-side (not just whoever's creating the game), so
+        // this alone can't be relied on for enforcement.
+        if (deckType === 'chaos_draft' && !user.allow_custom_content) {
+            return false;
+        }
         if (format === 'draft') {
-            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft';
+            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft' || deckType === 'chaos_draft';
         }
         switch (deckType) {
             case 'custom': return format !== 'duel';
@@ -1781,6 +1998,7 @@
             case 'grid_draft': return format === 'closed_team' || format === 'team';
             case 'rotisserie_draft': return format === 'closed_team' || format === 'team';
             case 'tiered_rotisserie_draft': return format === 'closed_team' || format === 'team';
+            case 'chaos_draft': return format === 'closed_team' || format === 'team';
             case 'power': return format !== 'team' && format !== 'closed_team';
             default: return true;
         }
@@ -2315,7 +2533,7 @@
         if (format === 'duel' && deckType === 'custom_duel') {
             return true;
         }
-        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(deckType)) {
+        if (['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(deckType)) {
             return true;
         }
         return ['structure', 'power', 'jceddys_75', 'one_of_each', 'custom'].includes(deckType);
@@ -2342,6 +2560,25 @@
             !show || document.getElementById('new-game-bot-saved-decklist').value !== '';
     }
 
+    // Issue #417's own "let the bot go first" item -- only meaningful
+    // when at least one bot is checked AND the format isn't 'team'/
+    // 'closed_team' (Open/Closed Team Play's own "who actually takes the
+    // opening turn" is a separate, later turn_order decision this can't
+    // influence -- see GameService::resolveFirstPlayerId()'s own
+    // docblock). Unchecked (not just hidden) whenever it goes out of
+    // view, same as a bot checkbox itself above, so a stale "true" from
+    // an earlier format/bot selection never gets submitted for a
+    // combination where it wouldn't do anything.
+    function updateBotGoesFirstFieldVisibility() {
+        const format = document.getElementById('new-game-format').value;
+        const isTeamFormat = format === 'team' || format === 'closed_team';
+        const show = anyBotChecked() && !isTeamFormat;
+        document.getElementById('new-game-bot-goes-first-label').hidden = !show;
+        if (!show) {
+            document.getElementById('new-game-bot-goes-first').checked = false;
+        }
+    }
+
     // Hides (and, if checked, unchecks) every bot checkbox -- and their
     // own "Practice bots" heading -- whenever the current format/deck_type
     // combination doesn't support seating one (see botsSupportedFor()).
@@ -2365,6 +2602,7 @@
 
         updateOpponentSelectionLimit();
         updateBotDecklistFieldsVisibility();
+        updateBotGoesFirstFieldVisibility();
     }
 
     function updateOpponentSelectionLimit() {
@@ -2628,6 +2866,7 @@
                 checkbox.addEventListener('change', updateOpponentSelectionLimit);
                 checkbox.addEventListener('change', updateTeamFields);
                 checkbox.addEventListener('change', updateBotDecklistFieldsVisibility);
+                checkbox.addEventListener('change', updateBotGoesFirstFieldVisibility);
                 label.appendChild(checkbox);
                 label.append(' ' + bot.username + ' (practice bot)');
                 opponentCheckboxes.appendChild(label);
@@ -2757,8 +2996,8 @@
             ? document.getElementById('new-game-decklist-text').value
             : undefined;
         const duelDeckRules = deckType === 'custom_duel' ? collectDuelDeckRules() : undefined;
-        const quickDraftPoolSource = deckType === 'quick_draft' ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
-        const quickDraftCustomPoolText = deckType === 'quick_draft' && quickDraftPoolSource === 'custom'
+        const quickDraftPoolSource = (deckType === 'quick_draft' || deckType === 'chaos_draft') ? document.getElementById('new-game-quick-draft-pool-source').value : undefined;
+        const quickDraftCustomPoolText = (deckType === 'quick_draft' || deckType === 'chaos_draft') && quickDraftPoolSource === 'custom'
             ? document.getElementById('new-game-quick-draft-custom-pool-text').value
             : undefined;
         const winstonDraftPoolSource = deckType === 'winston_draft' ? document.getElementById('new-game-winston-draft-pool-source').value : undefined;
@@ -2810,7 +3049,7 @@
         // GameService::createGame() itself reuses one $savedDecklistId
         // param across all five -- see its own docblock.
         const savedDecklistId = deckType === 'custom' ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
-            : deckType === 'quick_draft' && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
+            : (deckType === 'quick_draft' || deckType === 'chaos_draft') && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
             : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
             : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
             : deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-rotisserie-draft-saved-decklist').value) || undefined
@@ -2826,6 +3065,12 @@
         const botDecklistText = botCheckedForCustomDuel && botSavedDecklistId === undefined
             ? document.getElementById('new-game-bot-decklist-text').value
             : undefined;
+        // Only meaningful for a non-team format with a bot checked -- see
+        // updateBotGoesFirstFieldVisibility() for when this field is
+        // actually shown to the creator; #new-game-bot-goes-first is
+        // itself unchecked whenever hidden, so reading .checked
+        // unconditionally here already reflects that.
+        const botGoesFirst = document.getElementById('new-game-bot-goes-first').checked;
         const { ok, body } = await createGame(
             opponentUserIds,
             format,
@@ -2850,6 +3095,7 @@
             rotisserieDraftCutoffCount,
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
+            botGoesFirst,
         );
 
         if (!ok) {
@@ -2923,6 +3169,44 @@
             button.appendChild(valueBadge);
         }
 
+        // Chaos Draft (issue #405 follow-up): the net permanent delta an
+        // attached chaos effect's own "permanently increase/decrease this
+        // mood's value BY N" wording has applied (chaos_056/064/120/133) --
+        // shown as its own signed badge immediately left of the value
+        // badge above, since it STACKS with whatever the card's own
+        // printed/dice/alt-value computation already produced rather than
+        // replacing it (see BoardState::adjustChaosValueDelta()'s own
+        // docblock). Deliberately independent of card.value_locked, which
+        // only ever means the card's OWN printed ability fixed its value
+        // (Dignity/Delight-style) -- a chaos delta never sets that flag,
+        // so it never rotates the card the way value_locked does.
+        if (card.chaos_value_delta) {
+            const deltaBadge = document.createElement('span');
+            deltaBadge.className = 'card-thumb__badge card-thumb__badge--chaos-delta';
+            deltaBadge.textContent = (card.chaos_value_delta > 0 ? '+' : '') + card.chaos_value_delta;
+            deltaBadge.title = 'Permanently ' + (card.chaos_value_delta > 0 ? 'increased' : 'decreased')
+                + ' by an attached chaos effect (net ' + (card.chaos_value_delta > 0 ? '+' : '') + card.chaos_value_delta + ')';
+            button.appendChild(deltaBadge);
+        }
+
+        // Chaos Draft (issue #405 follow-up, reported live for chaos_033):
+        // an attached chaos effect's own absolute "this mood's value
+        // becomes N" wording (chaos_001/008/033/058/062/087/095/108/110/
+        // 111/118) shares Dignity's/Delight's exact printed wording, but
+        // the card it's attached to is essentially arbitrary, so its OWN
+        // printed ability almost never actually fixed a value -- rotating
+        // the whole card 180deg the way card.value_locked does would
+        // misleadingly suggest it did. Shown instead as its own badge,
+        // same shape as the delta badge above (see
+        // BoardState::setChaosValueOverride()'s own docblock).
+        if (card.chaos_value_override !== null && card.chaos_value_override !== undefined) {
+            const overrideBadge = document.createElement('span');
+            overrideBadge.className = 'card-thumb__badge card-thumb__badge--chaos-override';
+            overrideBadge.textContent = '=' + card.chaos_value_override;
+            overrideBadge.title = "Value fixed at " + card.chaos_value_override + ' by an attached chaos effect';
+            button.appendChild(overrideBadge);
+        }
+
         if (card.is_creativity_copy) {
             const copyBadge = document.createElement('span');
             copyBadge.className = 'card-thumb__badge card-thumb__badge--copy';
@@ -2963,12 +3247,29 @@
             button.classList.add('card-thumb--suppressed');
         }
 
+        if (card.chaos_effect) {
+            // Chaos Draft (issue #405): a card carrying an attached chaos
+            // effect keeps its own printed ability -- this badge is purely
+            // informational (open the card's own detail dialog for the
+            // attached effect's full rules text), not a state toggle like
+            // Suppressed/value-locked above.
+            const chaosBadge = document.createElement('span');
+            chaosBadge.className = 'card-thumb__badge card-thumb__badge--chaos card-thumb__badge--chaos-' + card.chaos_effect.rarity;
+            chaosBadge.textContent = 'Chaos';
+            chaosBadge.title = card.chaos_effect.rules_text;
+            button.appendChild(chaosBadge);
+        }
+
         if (card.value_locked) {
             // A permanent "after playing this mood, ... this mood's value
             // becomes N" trigger (Dignity, Delight, ...) has locked in its
             // alt value, as opposed to a "while in play" card (Determination)
             // whose value is only ever recomputed live -- rotated 180deg to
-            // distinguish the two at a glance, per table convention.
+            // distinguish the two at a glance, per table convention. Only
+            // ever true for the card's OWN printed ability -- an attached
+            // chaos effect's own "becomes N" wording never sets this (see
+            // card.chaos_value_override above), so it never rotates the
+            // card the way this does.
             button.classList.add('card-thumb--value-locked');
         }
 
@@ -3017,6 +3318,16 @@
         if (card.value !== card.base_value) {
             meta += ', current value ' + card.value;
         }
+        // Chaos Draft (issue #405 follow-up): the net permanent delta an
+        // attached chaos effect has applied -- already folded into
+        // 'current value' above, called out separately here the same way
+        // the thumb's own badge does (see buildCardThumb()).
+        if (card.chaos_value_delta) {
+            meta += ' (chaos: ' + (card.chaos_value_delta > 0 ? '+' : '') + card.chaos_value_delta + ')';
+        }
+        if (card.chaos_value_override !== null && card.chaos_value_override !== undefined) {
+            meta += ' (chaos: fixed at ' + card.chaos_value_override + ')';
+        }
         if (ownerLabel) {
             meta += ' — ' + ownerLabel;
         }
@@ -3033,6 +3344,17 @@
             creativityCopyEl.hidden = false;
         } else {
             creativityCopyEl.hidden = true;
+        }
+
+        // Chaos Draft (issue #405): the attached effect stacks with (never
+        // replaces) this card's own printed ability, which the art/meta
+        // above already show -- this is purely additive information.
+        const chaosEffectEl = document.getElementById('card-detail-chaos-effect');
+        if (card.chaos_effect) {
+            chaosEffectEl.textContent = capitalize(card.chaos_effect.rarity) + ' Chaos effect: ' + card.chaos_effect.rules_text;
+            chaosEffectEl.hidden = false;
+        } else {
+            chaosEffectEl.hidden = true;
         }
 
         const suppressionEl = document.getElementById('card-detail-suppression');
@@ -3266,18 +3588,33 @@
     // pile's own vertical footprint as small as the current viewport
     // allows at all times, including e.g. a phone rotating from portrait
     // to landscape mid-game.
-    const DISCARD_STACK_CARD_WIDTH_PX = 5.5 * 16; // .card-thumb's own fixed 5.5rem width
     const DISCARD_STACK_GAP_PX = 0.5 * 16; // #discard-list's own flex gap
 
-    // Both pixel constants above assume the default 16px root font-size
-    // the rest of this file's own rem/px math already assumes (no page
-    // here overrides it) -- clientWidth itself is only ever available in
-    // pixels, so there's no way to ask for "how many 5.5rem slots fit"
-    // directly.
+    // #discard-list is never touched by the phone-narrow shrink (that one
+    // only ever targets .in-play-zone/deck-view/draft-pool cards, see
+    // style.css), so .card-thumb's own base width applies here at every
+    // viewport EXCEPT the desktop doubling below min-width: 1280px (issue
+    // #417's own "Bigger default card size on desktop" item) -- matched
+    // here by the same 1280px breakpoint, since CSS media queries and
+    // this JS have no way to share one literal source of truth. Both
+    // pixel constants assume the default 16px root font-size the rest of
+    // this file's own rem/px math already assumes (no page here overrides
+    // it) -- clientWidth itself is only ever available in pixels, so
+    // there's no way to ask for "how many rem-sized slots fit" directly.
+    // Also scaled by getCardScale() (issue #417's own card size slider) --
+    // style.css's own --card-scale multiplies .card-thumb's actual
+    // rendered width the exact same way, so this has to match or the
+    // column count would drift from what's really on screen the moment
+    // the slider leaves its 100% default.
+    function discardStackCardWidthPx() {
+        return (window.innerWidth >= 1280 ? 11 : 5.5) * 16 * getCardScale();
+    }
+
     function discardStackColumnCount() {
         const availableWidth = document.getElementById('discard-list').clientWidth;
+        const cardWidthPx = discardStackCardWidthPx();
         const columns = Math.floor(
-            (availableWidth + DISCARD_STACK_GAP_PX) / (DISCARD_STACK_CARD_WIDTH_PX + DISCARD_STACK_GAP_PX)
+            (availableWidth + DISCARD_STACK_GAP_PX) / (cardWidthPx + DISCARD_STACK_GAP_PX)
         );
         return Math.max(1, columns);
     }
@@ -3437,7 +3774,7 @@
     async function downloadGameExport(gameId) {
         const { ok, body } = await getGameExport(gameId);
         if (!ok) {
-            window.alert('Could not download this game\'s data.');
+            await showAlertDialog('Could not download this game\'s data.');
             return;
         }
         downloadFile('game-' + gameId + '-export.json', JSON.stringify(body.export, null, 2), 'application/json');
@@ -3484,7 +3821,7 @@
             successEl.hidden = false;
         } catch (e) {
             successEl.hidden = true;
-            window.alert('Could not copy the game log to your clipboard.');
+            await showAlertDialog('Could not copy the game log to your clipboard.');
         }
     });
 
@@ -3509,7 +3846,7 @@
     document.getElementById('spectate-share-button').addEventListener('click', async () => {
         const { ok, body } = await getOrCreateSpectateCode(currentGameId);
         if (!ok) {
-            window.alert(body.message || 'Could not get a spectate code for this game.');
+            await showAlertDialog(body.message || 'Could not get a spectate code for this game.');
             return;
         }
         document.getElementById('spectate-code-value').textContent = body.code;
@@ -3528,7 +3865,7 @@
             successEl.hidden = false;
         } catch (e) {
             successEl.hidden = true;
-            window.alert('Could not copy the spectate code to your clipboard.');
+            await showAlertDialog('Could not copy the spectate code to your clipboard.');
         }
     });
 
@@ -3755,7 +4092,7 @@
         if (!state || state.game.status !== 'waiting' || state.game.format !== 'team') {
             return false;
         }
-        const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
+        const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
             : state.game.deck_type === 'winston_draft' ? state.winston_draft
                 : state.game.deck_type === 'grid_draft' ? state.grid_draft
                     : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
@@ -3938,9 +4275,6 @@
     // needs -- so a future stat would add its own entry here rather than
     // this doubling as a general-purpose icon library.
     const PLAYER_STAT_ICON_PATHS = {
-        // A seat at the table: a backed bench on two legs.
-        seat: '<rect x="6" y="4" width="12" height="9" rx="1"/>'
-            + '<rect x="7" y="13" width="2" height="6"/><rect x="15" y="13" width="2" height="6"/>',
         // Score: a plain 5-point star.
         points: '<polygon points="12,2 14.4,8.8 21.5,8.9 15.8,13.2 17.9,20.1 '
             + '12,16 6.1,20.1 8.2,13.2 2.5,8.9 9.6,8.8"/>',
@@ -4176,7 +4510,7 @@
         // a pending decision is known (nothing can freeze a still-waiting
         // draft the same way, so there's nothing to gate here yet).
         const canResignWhileWaiting = state.game.status === 'waiting'
-            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'].includes(state.game.deck_type);
+            && ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'].includes(state.game.deck_type);
         const resignButton = document.getElementById('resign-button');
         resignButton.hidden = isReadOnlyView()
             || !(state.game.status === 'in_progress' || canResignWhileWaiting)
@@ -4311,7 +4645,7 @@
                 iconsEl.className = 'player-icons';
                 li.appendChild(iconsEl);
 
-                // Issue #143: seat/points/wins/hand-count each become an
+                // Issue #143: points/wins/hand-count each become an
                 // icon with a numeric badge overlay instead of a plain
                 // "N thing(s)" clause; went-first/on-turn become an
                 // icon-only flag (nothing to count) instead of an appended
@@ -4348,7 +4682,11 @@
                         isSameTeamAsViewer ? 'player-flag--teamMate' : 'player-flag--teamOpponent'
                     ));
                 }
-                iconsEl.appendChild(buildPlayerStat('seat', player.seat_order, 'Seat ' + player.seat_order));
+                // The seat-number icon (issue #143's original "bench" icon)
+                // was removed here per issue #417 -- a player's seat is
+                // already unambiguous from this list's own top-to-bottom
+                // ordering, and the icon itself read as too similar to the
+                // hand-count icon just below it at a glance.
                 iconsEl.appendChild(buildPlayerStat('points', player.total_score, player.total_score + ' point(s)'));
                 iconsEl.appendChild(buildPlayerStat('wins', player.total_wins, player.total_wins + ' win(s)'));
                 iconsEl.appendChild(buildPlayerStat('hand', player.hand_count, player.hand_count + ' card(s) in hand'));
@@ -4427,9 +4765,9 @@
                 document.getElementById('draft-deck-building').hidden = true;
                 renderDuelDeckSubmission(state);
                 autoStartGameIfReady(state.players.every((p) => p.deck_submitted));
-            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft') {
+            } else if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'winston_draft' || state.game.deck_type === 'grid_draft' || state.game.deck_type === 'rotisserie_draft' || state.game.deck_type === 'tiered_rotisserie_draft' || state.game.deck_type === 'chaos_draft') {
                 document.getElementById('duel-deck-submission').hidden = true;
-                const draftState = state.game.deck_type === 'quick_draft' ? state.quick_draft
+                const draftState = state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft' ? state.quick_draft
                     : state.game.deck_type === 'winston_draft' ? state.winston_draft
                         : state.game.deck_type === 'grid_draft' ? state.grid_draft
                             : state.game.deck_type === 'rotisserie_draft' ? state.rotisserie_draft
@@ -4520,7 +4858,11 @@
         // state.you.is_your_turn always being false for a spectator/replay
         // viewer) so a future change to the state.you stub can never
         // silently re-enable controls for either read-only view.
-        const canAct = !isReadOnlyView() && state.game.status === 'in_progress' && state.you.is_your_turn && !pendingDecision;
+        // !chaosDraftOfferOpenForViewer (issue #405 follow-up): mirrors
+        // GameService::assertChaosDraftOfferResolved() -- may be a poll
+        // cycle stale (see that flag's own declaration), so the server's
+        // own rejection message still backs this up either way.
+        const canAct = passButtonCanAct();
 
         document.getElementById('discard-count').textContent = state.discard_pile.length;
         document.getElementById('deck-count').textContent = state.deck_count;
@@ -4580,9 +4922,10 @@
 
         renderTeammateHand(state);
         renderTeamDecision(state.team_decision);
+        checkChaosDraftOffer(state);
         renderInitialCardPass(state);
 
-        document.getElementById('pass-button').disabled = !canAct;
+        refreshPassButtonDisabled();
 
         // .hidden was already decided above (before the 'waiting' branch's
         // early return) -- only .disabled needs the in_progress round's
@@ -4854,6 +5197,239 @@
             boardError.hidden = false;
             return;
         }
+        await refreshBoard();
+    });
+
+    // Chaos Draft (issue #405): the round-start choice/attach mechanic.
+    // Unlike state.team_decision above, this isn't part of the regular
+    // polled game state at all -- GameService::chaosDraftOfferFor() is a
+    // separate, lock-protected endpoint (it lazily creates the round's
+    // own offer on first call), so this panel is driven by its own
+    // fetch, kicked off once per renderBoard() poll below.
+    let chaosDraftOfferRequestInFlight = false;
+    // The effect the viewer has tentatively picked (client-side only,
+    // never sent until they also choose a card) -- cleared whenever the
+    // offer itself changes shape (a fresh poll with no offer, or the
+    // offer having since resolved) so a stale selection can never linger
+    // into a later round's own different offer.
+    let chaosDraftSelectedEffectId = null;
+    // Whether the viewer (or their team) currently has an unresolved
+    // Chaos Draft offer -- GameService::assertChaosDraftOfferResolved()
+    // now rejects playMood()/pass() until it's attached (issue #405
+    // follow-up), so canAct/updatePlayButtonEnabled() below both gate on
+    // this too, matching the server rather than just relying on its own
+    // error message after the fact. Set from renderChaosDraftOffer()'s
+    // own poll, which runs independently of the regular board poll (see
+    // that function's own docblock) -- so this can be a poll cycle stale,
+    // same tradeoff every other chaos-draft-offer UI state already makes.
+    let chaosDraftOfferOpenForViewer = false;
+
+    // Whether #pass-button should currently be clickable -- shared by
+    // renderBoard()'s own regular poll and refreshPassButtonDisabled()
+    // below, so the two can never drift out of sync with each other.
+    function passButtonCanAct() {
+        if (!currentState) {
+            return false;
+        }
+        const pendingDecision = Boolean(currentState.round && currentState.round.pending_decision);
+        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer;
+    }
+
+    // Applies passButtonCanAct() to the DOM immediately -- called both
+    // from renderBoard() and, right after chaosDraftOfferOpenForViewer
+    // changes, from renderChaosDraftOffer() itself (issue #405 follow-up).
+    // That second call matters: the offer panel is driven by its own
+    // separate, faster-than-a-full-poll fetch (see checkChaosDraftOffer()'s
+    // own docblock), so without this, Pass stayed clickable for however
+    // long remained until the NEXT full renderBoard() poll happened to
+    // run -- a live UX gap caught during testing (a click during that
+    // window still failed server-side, but nothing visibly told the
+    // player why).
+    function refreshPassButtonDisabled() {
+        document.getElementById('pass-button').disabled = !passButtonCanAct();
+    }
+
+    async function checkChaosDraftOffer(state) {
+        const eligible = !isSpectating
+            && state.game.deck_type === 'chaos_draft'
+            && state.game.status === 'in_progress'
+            && state.you && state.you.game_player_id != null;
+        if (!eligible) {
+            chaosDraftSelectedEffectId = null;
+            renderChaosDraftOffer(null);
+            return;
+        }
+        if (chaosDraftOfferRequestInFlight) {
+            return;
+        }
+        chaosDraftOfferRequestInFlight = true;
+        const { ok, body } = await getChaosDraftOffer(currentGameId);
+        chaosDraftOfferRequestInFlight = false;
+        if (!ok) {
+            return; // transient failure -- the next poll retries
+        }
+        renderChaosDraftOffer(body.offer);
+    }
+
+    function chaosDraftEffectSummary(effect) {
+        return capitalize(effect.rarity) + ' — ' + effect.rules_text;
+    }
+
+    function renderChaosDraftOffer(offer) {
+        // See chaosDraftOfferOpenForViewer's own declaration -- offer is
+        // only ever non-null while genuinely unresolved (chaosDraftOfferFor()
+        // returns null once resolved_at is set), so this is exactly
+        // "must I choose/attach before I can play or pass this round."
+        chaosDraftOfferOpenForViewer = offer !== null;
+        refreshPassButtonDisabled();
+
+        const panel = document.getElementById('chaos-draft-offer-panel');
+        const choicesEl = document.getElementById('chaos-draft-offer-choices');
+        const attachEl = document.getElementById('chaos-draft-offer-attach');
+        const attachCardsEl = document.getElementById('chaos-draft-offer-attach-cards');
+        const statusEl = document.getElementById('chaos-draft-offer-status');
+        const confirmButton = document.getElementById('chaos-draft-offer-confirm-button');
+        const rejectButton = document.getElementById('chaos-draft-offer-reject-button');
+
+        if (!offer) {
+            panel.hidden = true;
+            choicesEl.innerHTML = '';
+            attachCardsEl.innerHTML = '';
+            attachEl.hidden = true;
+            confirmButton.hidden = true;
+            rejectButton.hidden = true;
+            chaosDraftSelectedEffectId = null;
+            return;
+        }
+
+        panel.hidden = false;
+
+        // Open Team Play's own confirm phase: the proposer just waits;
+        // the OTHER teammate approves/rejects -- mirrors
+        // renderTeamDecision()'s identical propose/confirm shape.
+        if (offer.is_team_offer && offer.phase === 'confirm') {
+            choicesEl.innerHTML = '';
+            attachEl.hidden = true;
+            chaosDraftSelectedEffectId = null;
+
+            const isProposer = offer.proposer_game_player_id === currentState.you.game_player_id;
+            if (isProposer) {
+                statusEl.textContent = 'Waiting for your teammate to confirm your choice.';
+                confirmButton.hidden = true;
+                rejectButton.hidden = true;
+            } else {
+                statusEl.textContent = playerLabelFor(offer.proposer_game_player_id) + ' proposed a Chaos effect. Do you agree?';
+                confirmButton.hidden = false;
+                rejectButton.hidden = false;
+            }
+            return;
+        }
+
+        confirmButton.hidden = true;
+        rejectButton.hidden = true;
+
+        if (chaosDraftSelectedEffectId === null) {
+            attachEl.hidden = true;
+            statusEl.textContent = offer.is_team_offer
+                ? "Choose one of these two effects for your team's card:"
+                : 'Choose one of these two effects for one of your cards:';
+            choicesEl.innerHTML = '';
+            [offer.effect_1, offer.effect_2].forEach((effect) => {
+                choicesEl.appendChild(actionButton(
+                    chaosDraftEffectSummary(effect),
+                    () => {
+                        chaosDraftSelectedEffectId = effect.id;
+                        renderChaosDraftOffer(offer);
+                    }
+                ));
+            });
+            return;
+        }
+
+        // An effect is picked -- show the card picker (own hand, plus the
+        // teammate's own hand too for Open Team Play, per the issue's
+        // "attaches to a card in EITHER teammate's hand").
+        choicesEl.innerHTML = '';
+        statusEl.textContent = 'Attach it to which card?';
+        attachEl.hidden = false;
+        attachCardsEl.innerHTML = '';
+        const ownHand = (currentState.you.hand || []).map((card) => ({ card, ownerLabel: null }));
+        const teammateHand = offer.is_team_offer && currentState.you.teammate_hand
+            ? currentState.you.teammate_hand.map((card) => ({ card, ownerLabel: playerLabelFor(currentState.you.teammate_game_player_id) }))
+            : [];
+        [...ownHand, ...teammateHand].forEach(({ card, ownerLabel }) => {
+            const li = document.createElement('li');
+            li.appendChild(buildCardThumb(card, {
+                onClick: () => submitChaosDraftChoice(offer, chaosDraftSelectedEffectId, card.card_id, ownerLabel),
+            }));
+            attachCardsEl.appendChild(li);
+        });
+    }
+
+    document.getElementById('chaos-draft-offer-back-button').addEventListener('click', () => {
+        chaosDraftSelectedEffectId = null;
+        checkChaosDraftOffer(currentState);
+    });
+
+    async function submitChaosDraftChoice(offer, chosenEffectId, attachGameCardId, teammateOwnerLabel) {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        if (teammateOwnerLabel && !(await showConfirmDialog('Attach this effect to ' + teammateOwnerLabel + "'s card? They'll need to confirm before it's final."))) {
+            return;
+        }
+        const { ok, body } = offer.is_team_offer
+            ? await proposeChaosDraftEffect(currentGameId, chosenEffectId, attachGameCardId)
+            : await chooseChaosDraftEffect(currentGameId, chosenEffectId, attachGameCardId);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not attach that effect.';
+            boardError.hidden = false;
+            return;
+        }
+        chaosDraftSelectedEffectId = null;
+        // See the confirm-button handler's own comment just below for why
+        // this awaits checkChaosDraftOffer() before refreshBoard() rather
+        // than just calling refreshBoard() alone.
+        await checkChaosDraftOffer(currentState);
+        await refreshBoard();
+    }
+
+    document.getElementById('chaos-draft-offer-confirm-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmChaosDraftEffect(currentGameId, true);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not confirm that effect.';
+            boardError.hidden = false;
+            return;
+        }
+        // A bug caught live: refreshBoard()'s own render pass reads
+        // chaosDraftOfferOpenForViewer to decide whether a hand-card click
+        // opens the Play panel or the read-only detail view (see
+        // renderBoard()'s own hand-rendering code) -- but that flag is only
+        // ever updated by checkChaosDraftOffer()'s own unawaited fetch,
+        // fired near the END of that same render pass (see its own call
+        // site's comment), so it's still reporting the JUST-RESOLVED
+        // offer as open by the time the hand renders. Without this,
+        // resolving the offer left every hand-card click routed to the
+        // detail view instead of the Play panel until the NEXT full poll
+        // happened to land. Awaiting a fresh check here first means
+        // chaosDraftOfferOpenForViewer is already correct before
+        // refreshBoard()'s own render pass ever reads it.
+        await checkChaosDraftOffer(currentState);
+        await refreshBoard();
+    });
+
+    document.getElementById('chaos-draft-offer-reject-button').addEventListener('click', async () => {
+        boardError.hidden = true;
+        boardMessage.hidden = true;
+        const { ok, body } = await confirmChaosDraftEffect(currentGameId, false);
+        if (!ok) {
+            boardError.textContent = body.message || 'Could not reject that effect.';
+            boardError.hidden = false;
+            return;
+        }
+        // See the confirm-button handler's own comment just above.
+        await checkChaosDraftOffer(currentState);
         await refreshBoard();
     });
 
@@ -5348,7 +5924,7 @@
     }
 
     document.getElementById('winston-draft-take-button').addEventListener('click', () => submitWinstonDraftAction('take'));
-    document.getElementById('winston-draft-pass-button').addEventListener('click', () => {
+    document.getElementById('winston-draft-pass-button').addEventListener('click', async () => {
         // Passing pile 3 replenishes it (if able) BEFORE the mandatory
         // top-of-deck draw fires (see GameService::submitWinstonDraftPick()'s
         // own 'pass' branch), so with 0 or 1 cards left in the deck that
@@ -5358,7 +5934,7 @@
         // click/bug if they didn't mean to pass -- confirm first.
         const drafting = currentState && currentState.winston_draft && currentState.winston_draft.drafting;
         if (drafting && drafting.is_your_turn && drafting.current_pile_number === 3 && drafting.remaining_deck_count <= 1) {
-            if (!window.confirm("Passing now won't draw a card -- you'll get nothing this round. Are you sure?")) {
+            if (!(await showConfirmDialog("Passing now won't draw a card -- you'll get nothing this round. Are you sure?"))) {
                 return;
             }
         }
@@ -5395,14 +5971,80 @@
             ? (drafting.picks_this_round === 0 ? 'Your turn -- choose a row or column to take.' : 'Your turn -- choose a row or column of what\'s left.')
             : 'Waiting for ' + (drafting.current_turn_username || "your opponent") + "'s turn.";
 
+        // Issue #417's own "change Grid Draft's button placement to make it
+        // clearer what cards you're taking" item, confirmed by the
+        // maintainer: rather than two disconnected rows of "Row N (N)"/
+        // "Col N (N)" buttons below the grid (#grid-draft-picks, removed),
+        // every row/column's own pick button now lives INSIDE this same
+        // grid, right where it visually points -- an arrow button down the
+        // left edge of each row (pointing right, into that row) and one
+        // along the bottom of each column (pointing up, into that column).
+        // One CSS grid (grid-template-columns/-rows both gain a leading/
+        // trailing min-content track beyond the N cell tracks) does the
+        // alignment work that used to need a fixed .grid-draft-pick-button
+        // width -- a button placed in the same row/column track as its own
+        // cells stretches to that track's own size for free, so a row
+        // button's height always matches its row's tallest cell and a
+        // column button's width always matches its column's own cell
+        // width, at any card-scale/breakpoint, with no separate sizing
+        // rule to keep in sync. See buildGridDraftArrowButton() below and
+        // "Grid Draft" in web-static/README.md.
         const gridContainer = document.getElementById('grid-draft-grid');
         gridContainer.innerHTML = '';
-        // style.css hardcodes a 3-column layout for the common 3x3 grid;
-        // override it inline for the 4x4 grid dealt to a 4-player match.
-        gridContainer.style.gridTemplateColumns = 'repeat(' + drafting.grid_size + ', min-content)';
-        drafting.grid_cards.forEach((card) => {
+        const gridSize = drafting.grid_size;
+        // Column 1 / row (gridSize + 1) are the arrow-button tracks;
+        // columns 2..gridSize+1 / rows 1..gridSize are the cells
+        // themselves, in the same row-major order grid_cards reports.
+        gridContainer.style.gridTemplateColumns = 'min-content repeat(' + gridSize + ', min-content)';
+        gridContainer.style.gridTemplateRows = 'repeat(' + gridSize + ', min-content) min-content';
+
+        function buildGridDraftArrowButton(axis, index, glyph) {
+            const cellsRemaining = gridDraftLineCells(axis, index, gridSize)
+                .filter((cell) => drafting.grid_cards[cell] !== null).length;
+            const label = (axis === 'row' ? 'Draft row ' : 'Draft column ') + (index + 1)
+                + ' (' + cellsRemaining + ' card' + (cellsRemaining === 1 ? '' : 's') + ' left)';
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'grid-draft-arrow-button';
+            button.title = label;
+            button.setAttribute('aria-label', label);
+            button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
+            button.addEventListener('click', () => submitGridDraftAction(axis, index));
+
+            // aria-hidden on both -- the button's own aria-label above
+            // already carries the full meaning ("Draft row 2 (3 cards
+            // left)"), the same title/aria-label-on-the-wrapper convention
+            // buildPlayerStat()'s icon+badge already established.
+            const glyphEl = document.createElement('span');
+            glyphEl.className = 'grid-draft-arrow-button__glyph';
+            glyphEl.textContent = glyph;
+            glyphEl.setAttribute('aria-hidden', 'true');
+            button.appendChild(glyphEl);
+
+            const countEl = document.createElement('span');
+            countEl.className = 'grid-draft-arrow-button__count';
+            countEl.textContent = String(cellsRemaining);
+            countEl.setAttribute('aria-hidden', 'true');
+            button.appendChild(countEl);
+
+            return button;
+        }
+
+        for (let row = 0; row < gridSize; row++) {
+            const button = buildGridDraftArrowButton('row', row, '→');
+            button.style.gridColumn = '1';
+            button.style.gridRow = String(row + 1);
+            gridContainer.appendChild(button);
+        }
+
+        drafting.grid_cards.forEach((card, i) => {
+            const row = Math.floor(i / gridSize);
+            const col = i % gridSize;
             const cellEl = document.createElement('div');
             cellEl.className = 'grid-draft-cell';
+            cellEl.style.gridColumn = String(col + 2);
+            cellEl.style.gridRow = String(row + 1);
             if (card) {
                 cellEl.appendChild(buildCardThumb(card, { onClick: () => openCardDetail(card) }));
             } else {
@@ -5411,29 +6053,12 @@
             gridContainer.appendChild(cellEl);
         });
 
-        const picksContainer = document.getElementById('grid-draft-picks');
-        picksContainer.innerHTML = '';
-        // Row buttons and Column buttons each get their own row div (rather
-        // than one shared flex-wrap container) so Column always starts a
-        // new line below Row, regardless of how much horizontal space is
-        // available to wrap into.
-        ['row', 'column'].forEach((axis) => {
-            const axisRow = document.createElement('div');
-            axisRow.className = 'grid-draft-picks-row';
-            for (let index = 0; index < drafting.grid_size; index++) {
-                const cellsRemaining = gridDraftLineCells(axis, index, drafting.grid_size)
-                    .filter((cell) => drafting.grid_cards[cell] !== null).length;
-
-                const button = document.createElement('button');
-                button.type = 'button';
-                button.className = 'grid-draft-pick-button';
-                button.textContent = (axis === 'row' ? 'Row ' : 'Col ') + (index + 1) + ' (' + cellsRemaining + ')';
-                button.disabled = !drafting.is_your_turn || cellsRemaining === 0;
-                button.addEventListener('click', () => submitGridDraftAction(axis, index));
-                axisRow.appendChild(button);
-            }
-            picksContainer.appendChild(axisRow);
-        });
+        for (let col = 0; col < gridSize; col++) {
+            const button = buildGridDraftArrowButton('column', col, '↑');
+            button.style.gridColumn = String(col + 2);
+            button.style.gridRow = String(gridSize + 1);
+            gridContainer.appendChild(button);
+        }
 
         document.getElementById('grid-draft-remaining-deck-count').textContent =
             drafting.remaining_deck_count + ' card' + (drafting.remaining_deck_count === 1 ? '' : 's') + ' left in the pool.';
@@ -6024,7 +6649,7 @@
         const opponent = state.players.find((p) => p.game_player_id !== state.you.game_player_id);
         currentOpponentUsername = opponent ? opponent.username : 'your opponent';
 
-        if (state.game.deck_type === 'quick_draft') {
+        if (state.game.deck_type === 'quick_draft' || state.game.deck_type === 'chaos_draft') {
             const qd = state.quick_draft;
             document.getElementById('quick-draft-panel').hidden = false;
             document.getElementById('winston-draft-panel').hidden = true;
@@ -6220,7 +6845,7 @@
         // a confirmation dialog first, the same "make sure they meant it"
         // gate any other hard-to-reverse, one-way action in this app would
         // get.
-        if (!window.confirm('Resign this game? This cannot be undone.')) {
+        if (!(await showConfirmDialog('Resign this game? This cannot be undone.'))) {
             return;
         }
 
@@ -6828,6 +7453,19 @@
         const playButton = document.getElementById('play-card-button');
         const validationMessage = document.getElementById('choices-validation');
 
+        // Chaos Draft (issue #405 follow-up): choose-and-attach this
+        // round's own offer is now mandatory before ANY card can be
+        // played -- see GameService::assertChaosDraftOfferResolved().
+        // Checked ahead of is_playable below since is_playable is a
+        // purely card-specific server flag that knows nothing about this
+        // (a DB-level, not BoardState-level, restriction).
+        if (chaosDraftOfferOpenForViewer) {
+            validationMessage.textContent = "Choose and attach this round's Chaos Draft effect first (see above).";
+            validationMessage.hidden = false;
+            playButton.disabled = true;
+            return;
+        }
+
         // is_playable covers everything that isn't a per-field choice
         // mistake -- whose turn it is, a play-grant restriction (e.g.
         // Intimidation), an unpayable "to play" cost -- so it overrides
@@ -6886,6 +7524,20 @@
         const artEl = document.getElementById('choices-card-art');
         artEl.src = cardArtUrl(card);
         artEl.alt = card.name + '. ' + (card.rules_text || 'No ability.');
+
+        // Chaos Draft (issue #405): same additive info as openCardDetail()'s
+        // own #card-detail-chaos-effect -- a card carrying an attached
+        // chaos effect is usually reached through THIS panel (its own
+        // is_playable already routes a hand-card click here rather than to
+        // the read-only detail view), so the effect needs to be visible
+        // here too, not just in the read-only view.
+        const chaosEffectEl = document.getElementById('choices-card-chaos-effect');
+        if (card.chaos_effect) {
+            chaosEffectEl.textContent = capitalize(card.chaos_effect.rarity) + ' Chaos effect: ' + card.chaos_effect.rules_text;
+            chaosEffectEl.hidden = false;
+        } else {
+            chaosEffectEl.hidden = true;
+        }
 
         const fieldsContainer = document.getElementById('choices-fields');
         fieldsContainer.innerHTML = '';
@@ -7325,7 +7977,7 @@
     document.getElementById('play-card-button').addEventListener('click', async () => {
         const choices = buildChoicesFromFields(selectedCard.choice_fields);
         if (cardHasNoTargetSelected(selectedCard, choices)
-            && !window.confirm(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`)) {
+            && !(await showConfirmDialog(`You haven't selected a target for ${selectedCard.name} -- its ability won't do anything. Play it anyway?`))) {
             return;
         }
         if (cardHasAnUncheckedConfirmBox(selectedCard, choices)) {
@@ -7336,7 +7988,7 @@
             // reliable here.
             const fieldKey = UNCHECKED_BOX_CONFIRM_FIELD_KEYS[selectedCard.effect_key];
             const field = selectedCard.choice_fields.find((f) => f.key === fieldKey);
-            if (!window.confirm(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`)) {
+            if (!(await showConfirmDialog(`You haven't checked "${field.label}" -- ${selectedCard.name}'s ability won't do anything. Play it anyway?`))) {
                 return;
             }
         }

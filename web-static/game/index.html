@@ -115,18 +115,38 @@
             <p id="board-error" class="error" hidden></p>
             <p id="pending-decision-banner" hidden></p>
 
-            <div id="scoring-preview" hidden>
-                <h4>Scores so far this round</h4>
-                <ul id="scoring-preview-scores"></ul>
-                <p id="scoring-preview-swaps"></p>
-            </div>
+            <!-- Board layout preference (issue #417, migration 0174) --
+                 #board-round-status above and this whole group are the two
+                 pieces applyBoardLayoutPreference() in game.js relocates
+                 as a unit when the preference is 'below_hand' (right
+                 after #choices-panel, i.e. after "Your hand" and the
+                 "selected card to play" panel) -- see that function's own
+                 docblock for exactly how, and why the default
+                 'above_play_area' needs no relocation at all (this group
+                 is already sitting in that exact spot). Wrapped in one
+                 element (rather than moving 4 separate nodes) purely so
+                 the relocation is a single insertAdjacentElement call
+                 instead of four -- #board-round-status itself can't join
+                 this wrapper, since the banners between it and this group
+                 (draft-match-scoreline, rematch-button, replay-controls,
+                 board-message/error, pending-decision-banner) must stay
+                 at the top in EITHER layout, so this group's own original
+                 position has to stay anchored to pending-decision-banner
+                 specifically, not to board-round-status. -->
+            <div id="board-status-group">
+                <div id="scoring-preview" hidden>
+                    <h4>Scores so far this round</h4>
+                    <ul id="scoring-preview-scores"></ul>
+                    <p id="scoring-preview-swaps"></p>
+                </div>
 
-            <h3>Players</h3>
-            <ul id="players-list"></ul>
+                <h3>Players</h3>
+                <ul id="players-list"></ul>
 
-            <div id="team-scores" hidden>
-                <h3>Team scores</h3>
-                <ul id="team-scores-list"></ul>
+                <div id="team-scores" hidden>
+                    <h3>Team scores</h3>
+                    <ul id="team-scores-list"></ul>
+                </div>
             </div>
 
             <div id="duel-deck-submission" hidden>
@@ -190,7 +210,6 @@
                     <h3 id="grid-draft-drafting-title"></h3>
                     <p id="grid-draft-drafting-status"></p>
                     <div id="grid-draft-grid"></div>
-                    <div id="grid-draft-picks"></div>
                     <p id="grid-draft-remaining-deck-count"></p>
                     <h4 id="grid-draft-drafted-so-far-heading">Drafted so far</h4>
                     <ul id="grid-draft-drafted-so-far"></ul>
@@ -335,6 +354,19 @@
                     <button id="team-decision-reject-button" type="button" hidden>Reject</button>
                 </div>
 
+                <div id="chaos-draft-offer-panel" hidden>
+                    <h4>Chaos Draft: choose an effect</h4>
+                    <p id="chaos-draft-offer-status"></p>
+                    <div id="chaos-draft-offer-choices"></div>
+                    <div id="chaos-draft-offer-attach" hidden>
+                        <p id="chaos-draft-offer-attach-prompt">Choose a card to attach it to:</p>
+                        <ul id="chaos-draft-offer-attach-cards"></ul>
+                        <button id="chaos-draft-offer-back-button" type="button">Back</button>
+                    </div>
+                    <button id="chaos-draft-offer-confirm-button" type="button" hidden>Approve</button>
+                    <button id="chaos-draft-offer-reject-button" type="button" hidden>Reject</button>
+                </div>
+
                 <div id="initial-card-pass-panel" hidden>
                     <h4>Pass 2 cards to your teammate</h4>
                     <p id="initial-card-pass-status"></p>
@@ -344,6 +376,7 @@
 
                 <div id="choices-panel" hidden>
                     <img id="choices-card-art" class="card-detail-art">
+                    <p id="choices-card-chaos-effect" hidden></p>
 
                     <div id="choices-fields"></div>
                     <p id="choices-validation" class="error" hidden></p>
@@ -400,6 +433,7 @@
             <p id="opponent-checkboxes-empty" hidden>
                 You don't have any friends yet &mdash; add some from the Friends dialog first.
             </p>
+            <label class="new-game-field" id="new-game-bot-goes-first-label" hidden><input type="checkbox" id="new-game-bot-goes-first"> Let the bot go first</label>
 
             <label class="new-game-field">Format
                 <select id="new-game-format">
@@ -431,6 +465,7 @@
                     <option value="grid_draft">Grid Draft</option>
                     <option value="rotisserie_draft">Rotisserie Draft</option>
                     <option value="tiered_rotisserie_draft">Tiered Rotisserie Draft</option>
+                    <option value="chaos_draft">Chaos Draft</option>
                     <option value="one_of_each">One of Each Card</option>
                 </select>
             </label>
@@ -780,6 +815,7 @@
         <img id="card-detail-art" class="card-detail-art">
         <p id="card-detail-meta"></p>
         <p id="card-detail-creativity-copy" hidden></p>
+        <p id="card-detail-chaos-effect" hidden></p>
         <p id="card-detail-suppression" hidden></p>
         <p id="card-detail-ownership" hidden></p>
         <p id="card-detail-affected-by" hidden></p>
@@ -796,6 +832,27 @@
     <dialog id="art-preview-dialog">
         <img id="art-preview-image" class="art-preview-image">
         <button id="art-preview-close-button" type="button">Close</button>
+    </dialog>
+
+    <!-- Shared confirm/alert modal -- see showConfirmDialog()/
+         showAlertDialog() in game.js for why this exists: window.confirm()/
+         alert()/prompt() are silently disabled entirely by iOS when the
+         page is running inside a Safari window that was ever launched in
+         "standalone" (Add to Home Screen) mode, even in an unrelated tab
+         opened from that same window afterward (a bug caught live: the
+         resign button's own confirm() -- and, once tested further,
+         EVERY other confirm()/alert() in this file -- silently did
+         nothing at all on such a session). A real <dialog>, unlike those,
+         is just a DOM element with no such restriction, so it works
+         identically everywhere. method="dialog" makes clicking either
+         button (or pressing Escape) close the dialog and set its own
+         returnValue automatically, with no manual .close() call needed. -->
+    <dialog id="confirm-dialog">
+        <p id="confirm-dialog-message"></p>
+        <form method="dialog">
+            <button id="confirm-dialog-ok-button" type="submit" value="ok">OK</button>
+            <button id="confirm-dialog-cancel-button" type="submit" value="cancel">Cancel</button>
+        </form>
     </dialog>
 
     <!-- The entire game log (issue #98) -- see openGameLog() in game.js
@@ -940,6 +997,52 @@
                  round Sneakiness swaps your score away, which this still
                  correctly falls back to asking about manually. -->
             <label><input type="checkbox" id="settings-auto-apply-scoring-bonuses-checkbox" checked> Auto-apply Enthusiasm/Passion's scoring bonus</label>
+            <!-- "Custom card/effect formats" (issue #405 follow-up, migration
+                 0184) -- unlike every checkbox above, this one starts
+                 UNCHECKED, matching users.allow_custom_content's own DEFAULT
+                 0: an explicit opt-IN, not a convenience. Gates whether
+                 Chaos Draft's own fan-made effect pool is even offered as a
+                 New Game dialog option (isDeckTypeAvailableForFormat() in
+                 game.js) or seatable at all -- GameService::createGame()
+                 independently re-checks that every seated player (not just
+                 whoever's creating the game) has this on, so this checkbox
+                 is a convenience, not the actual enforcement. -->
+            <label><input type="checkbox" id="settings-allow-custom-content-checkbox"> Show custom card/effect formats (e.g. Chaos Draft) in the New Game dialog</label>
+        </section>
+
+        <hr>
+
+        <!-- Card/icon size slider (issue #417) -- a pure client-side,
+             per-device rendering preference (localStorage, see
+             initCardSizeSlider() in game.js), unlike the two server-synced
+             preferences above -- there's no gameplay behavior for the
+             server to know about here, just how big every card thumbnail
+             (and, per its own follow-up, the top-of-board players list's
+             own icons) renders for this browser. Resizes every .card-thumb
+             on the page (hand, in-play, discard, the Decks dialog's own
+             deck builder/saved/shared-deck views, the draft pool) plus
+             #players-list's own .player-stat/.player-flag icons, not just
+             the live board's own cards -- see "Card/icon size slider" in
+             web-static/README.md. 5% steps (rather than 10%) for finer
+             control over the final size. -->
+        <section id="settings-display-section">
+            <h3>Display</h3>
+            <label for="settings-card-size-slider">Card/icon size (<span id="settings-card-size-value">100%</span>)</label>
+            <input type="range" id="settings-card-size-slider" min="50" max="200" step="5" value="100">
+
+            <!-- Board layout (issue #417, migration 0174) -- a real
+                 server-synced preference (unlike the card size slider
+                 above), since "where does this render" is meaningful
+                 enough to follow the player across devices. See
+                 applyBoardLayoutPreference() in game.js for exactly what
+                 moves. -->
+            <p>
+                <label for="settings-board-layout-select">Round/Score/Players position</label>
+                <select id="settings-board-layout-select">
+                    <option value="above_play_area">Above the play area (default)</option>
+                    <option value="below_hand">Below your hand</option>
+                </select>
+            </p>
         </section>
 
         <hr>

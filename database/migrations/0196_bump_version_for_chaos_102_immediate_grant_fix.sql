@@ -1,0 +1,24 @@
+-- No schema change: pure application logic in MoodPlayService/GameService,
+-- not a new column. Issue #405 follow-up (reported live for chaos_102):
+-- "this should only give an extra play at the beginning of the owner's
+-- turn, not when it is played." Unlike chaos_121/124, whose own printed
+-- text explicitly says "including the turn you play this mood", chaos_102's
+-- own wording ("At the start of each of your turns, if another player has
+-- more moods than you, ...") never covers the turn it's played -- that
+-- turn is already underway by the time the mood enters play. The dispatch
+-- in MoodPlayService::dispatchChaosReactiveHooks() previously applied
+-- ChaosMoodEffect::perpetualTurnStartGrants() immediately, the very turn
+-- ANY while_in_play chaos effect's own card was played, with no way to opt
+-- out. A new ChaosMoodEffect::perpetualGrantsIncludeTheTurnPlayed() (true
+-- by default, false for chaos_102) now gates that immediate application;
+-- computeFreshGrants()'s own future-turn-start call site is untouched and
+-- unaffected. See php-app/README.md's Chaos Draft section for the full
+-- writeup.
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way 0024/.../0195
+-- already did for their own schema-less changes -- MaintenanceGate
+-- compares the deployed VERSION file against this table on every request,
+-- so a VERSION bump with no matching schema_version update leaves the app
+-- showing maintenance mode after deploy even though nothing about the
+-- schema actually changed.
+UPDATE schema_version SET version = '1.28.52' WHERE id = 1;

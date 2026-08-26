@@ -128,6 +128,12 @@ final class GameServiceIntegrationTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
+    /** "Custom card/effect formats" (issue #405 follow-up) -- off by default (migration 0184), see UserRepository::setAllowCustomContent(). */
+    private function optIntoCustomContent(int $userId): void
+    {
+        $this->pdo->prepare('UPDATE users SET allow_custom_content = 1 WHERE id = :id')->execute(['id' => $userId]);
+    }
+
     private function fetchUsername(int $userId): string
     {
         $stmt = $this->pdo->prepare('SELECT username FROM users WHERE id = :id');
@@ -422,6 +428,97 @@ final class GameServiceIntegrationTest extends TestCase
             self::assertSame(4, $countsByColorRarity["{$color}/uncommon"] ?? 0, "{$color} should have exactly 4 uncommons");
             self::assertSame(8, $countsByColorRarity["{$color}/common"] ?? 0, "{$color} should have exactly 8 commons");
         }
+    }
+
+    /**
+     * A bug caught live: Chaos Draft's own 5 conjured token cards (ids
+     * 134-138, migration 0183, issue #405) are all rarity 'common', so
+     * buildStructureDeckCardIds()/buildPowerDeckCardIds()/
+     * randomCardIdsWithCopyLimit() -- each a raw `SELECT id FROM cards
+     * WHERE rarity = ...`/`WHERE color = ... AND rarity = ...` query,
+     * bypassing CardCatalog::load() entirely -- had no `is_token = 0`
+     * filter, so a token could be randomly drawn into a 'structure'/
+     * 'power'/'jceddys_75' deck (and, since buildDraftPool() reuses these
+     * same three builders as pool sources, into a Quick/Winston/Grid/
+     * Rotisserie/Chaos Draft pool too) even though it was never meant to
+     * be a draftable/playable-from-hand card at all -- only ever conjured
+     * into play by the specific chaos effects registered for it.
+     */
+    public function testTokenCardsAreNeverDealtIntoAStructurePowerOrJceddys75Deck(): void
+    {
+        $creator = $this->insertUser('notoken-alice');
+        $bob = $this->insertUser('notoken-bob');
+        $tokenCardIds = [134, 135, 136, 137, 138];
+
+        foreach (['structure', 'power', 'jceddys_75'] as $deckType) {
+            $gameId = $this->games->createGame($creator, [$creator, $bob], deckType: $deckType);
+            $this->games->startGame($gameId);
+
+            $cardIdsStmt = $this->pdo->prepare('SELECT card_id FROM game_cards WHERE game_id = :game_id');
+            $cardIdsStmt->execute(['game_id' => $gameId]);
+            $cardIds = array_map(intval(...), $cardIdsStmt->fetchAll(PDO::FETCH_COLUMN));
+
+            self::assertSame(
+                [],
+                array_values(array_intersect($cardIds, $tokenCardIds)),
+                "a '{$deckType}' deck should never contain a Chaos Draft token card",
+            );
+        }
+    }
+
+    /**
+     * "Custom card/effect formats" (issue #405 follow-up) -- off by
+     * default, so createGame() must reject a chaos_draft game unless
+     * EVERY seated player has opted in, not just the creator (confirmed
+     * by the maintainer: an opted-in creator could otherwise still seat a
+     * non-opted-in player -- a company employee, say -- into a live game
+     * with custom fan-made content and no say in the matter, defeating
+     * the whole point of the preference).
+     */
+    public function testCreateGameRejectsChaosDraftUnlessEverySeatedPlayerOptedIn(): void
+    {
+        $creator = $this->insertUser('cc-alice');
+        $bob = $this->insertUser('cc-bob');
+
+        // Neither has opted in yet.
+        try {
+            $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'chaos_draft', quickDraftPoolSource: 'random_48');
+            self::fail('Expected a GameStateException');
+        } catch (GameStateException $e) {
+            self::assertStringContainsString('cc-alice', $e->getMessage());
+            self::assertStringContainsString('cc-bob', $e->getMessage());
+        }
+
+        // Only the creator opts in -- still rejected, naming just Bob now.
+        $this->optIntoCustomContent($creator);
+        try {
+            $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'chaos_draft', quickDraftPoolSource: 'random_48');
+            self::fail('Expected a GameStateException');
+        } catch (GameStateException $e) {
+            self::assertStringNotContainsString('cc-alice', $e->getMessage());
+            self::assertStringContainsString('cc-bob', $e->getMessage());
+        }
+
+        // Both opted in -- succeeds.
+        $this->optIntoCustomContent($bob);
+        $gameId = $this->games->createGame($creator, [$creator, $bob], format: 'draft', deckType: 'chaos_draft', quickDraftPoolSource: 'random_48');
+        self::assertSame('chaos_draft', $this->fetchGame($gameId)['deck_type']);
+    }
+
+    /**
+     * A practice bot has no Settings UI to ever opt in through, and isn't
+     * a real person the preference exists to protect in the first place
+     * -- requiring it of a bot seat would just silently break Chaos
+     * Draft's own existing bot support for every opted-in human.
+     */
+    public function testCreateGameChaosDraftAllowsANonOptedInBotOpponent(): void
+    {
+        $creator = $this->insertUser('cc-bot-alice');
+        $bot = $this->insertBotUser('cc-bot');
+        $this->optIntoCustomContent($creator);
+
+        $gameId = $this->games->createGame($creator, [$creator, $bot], format: 'draft', deckType: 'chaos_draft', quickDraftPoolSource: 'random_48');
+        self::assertSame('chaos_draft', $this->fetchGame($gameId)['deck_type']);
     }
 
     public function testCreateGameCanRequestTheOneOfEachDeckInstead(): void
@@ -14839,6 +14936,105 @@ final class GameServiceIntegrationTest extends TestCase
         }
 
         self::assertGreaterThan(1, count(array_unique($partnersSeen)), 'randomTeams should not deterministically pick the same partner every time');
+    }
+
+    /**
+     * Issue #417's own "let the bot go first" item -- with exactly one
+     * bot seated in a non-team, non-draft-match game, botGoesFirst: true
+     * makes resolveFirstPlayerId() deterministically return that bot's
+     * own seat instead of a uniform coin flip -- array_rand() over a
+     * single-element candidate list has nothing left to randomize, so
+     * this should hold on EVERY trial, not just most of them. Repeated
+     * 30 times anyway (rather than a single assertion) specifically so a
+     * regression back to the plain coin flip is guaranteed to be caught
+     * here, not just half the time -- with 2 possible first players, the
+     * odds of a genuine 50/50 coin flip landing on the bot in all 30
+     * trials by chance alone are (1/2)^29, astronomically unlikely, so
+     * any failure here means botGoesFirst isn't actually being honored.
+     */
+    public function testBotGoesFirstMakesTheBotGoFirstInANonTeamGame(): void
+    {
+        $creatorUserId = $this->insertUser('botfirst-creator-' . uniqid());
+        $botUserId = $this->insertBotUser('botfirst-bot-' . uniqid());
+
+        for ($i = 0; $i < 30; $i++) {
+            $gameId = $this->games->createGame($creatorUserId, [$creatorUserId, $botUserId], format: 'standard', botGoesFirst: true);
+            $this->games->startGame($gameId);
+
+            $botPlayerId = $this->games->gamePlayerIdFor($gameId, $botUserId);
+            $round = $this->fetchRound($gameId);
+
+            self::assertSame($botPlayerId, (int) $round['first_game_player_id'], 'the bot should have gone first');
+        }
+    }
+
+    /**
+     * The other half of the deterministic test above -- botGoesFirst
+     * defaults to false (games.bot_goes_first's own migration 0171
+     * default-off column), so a game with a bot seated but the flag left
+     * unset should still get the ordinary uniform coin flip, exactly like
+     * before this feature existed. With 2 possible first players, the
+     * odds of all 30 trials landing on the bot by genuine chance are
+     * (1/2)^29, so any failure here means the flag is somehow being
+     * honored (or defaulting to on) when it shouldn't be.
+     */
+    public function testBotGoesFirstDefaultsToOffSoTheBotDoesNotAlwaysGoFirst(): void
+    {
+        $creatorUserId = $this->insertUser('botfirst-default-creator-' . uniqid());
+        $botUserId = $this->insertBotUser('botfirst-default-bot-' . uniqid());
+        $wentFirstSeen = [];
+
+        for ($i = 0; $i < 30; $i++) {
+            $gameId = $this->games->createGame($creatorUserId, [$creatorUserId, $botUserId], format: 'standard');
+            $this->games->startGame($gameId);
+
+            $botPlayerId = $this->games->gamePlayerIdFor($gameId, $botUserId);
+            $round = $this->fetchRound($gameId);
+            $wentFirstSeen[] = (int) $round['first_game_player_id'] === $botPlayerId;
+        }
+
+        self::assertContains(false, $wentFirstSeen, 'the bot should not always go first when botGoesFirst is left at its default');
+    }
+
+    /**
+     * Confirmed by the maintainer: botGoesFirst is deliberately scoped to
+     * non-team formats only -- Open/Closed Team Play's own "who actually
+     * takes the opening turn" is a separate, later turn_order decision
+     * (game_rounds.team_turn_1_game_player_id) never decided at game
+     * creation, so resolveFirstPlayerId()'s own bot-goes-first branch
+     * must never fire for 'team'/'closed_team' even when the flag is
+     * explicitly set. Same repeated-trial reasoning as the default-off
+     * test above -- if the bot's own SEAT (first_game_player_id here is
+     * only ever "a representative member of whichever team went first",
+     * see resolveFirstPlayerId()'s own docblock) always came out on top
+     * across 30 trials, that would mean the flag leaked into a format
+     * it's supposed to be inert for.
+     */
+    public function testBotGoesFirstIsIgnoredForTeamFormat(): void
+    {
+        $userIds = $this->insertUsers('botfirst-team-' . uniqid() . '-', 4);
+        $creatorUserId = $userIds[0];
+        $partnerUserId = $userIds[1];
+        $botUserId = $this->insertBotUser('botfirst-team-bot-' . uniqid());
+        $opponentUserIds = [$botUserId, $userIds[2]];
+        $wentFirstSeen = [];
+
+        for ($i = 0; $i < 30; $i++) {
+            $gameId = $this->games->createGame(
+                $creatorUserId,
+                [$creatorUserId, $partnerUserId, ...$opponentUserIds],
+                format: 'team',
+                partnerUserId: $partnerUserId,
+                botGoesFirst: true,
+            );
+            $this->games->startGame($gameId);
+
+            $botPlayerId = $this->games->gamePlayerIdFor($gameId, $botUserId);
+            $round = $this->fetchRound($gameId);
+            $wentFirstSeen[] = (int) $round['first_game_player_id'] === $botPlayerId;
+        }
+
+        self::assertContains(false, $wentFirstSeen, 'botGoesFirst should be ignored for team format, not force the bot\'s own seat every time');
     }
 
     /**

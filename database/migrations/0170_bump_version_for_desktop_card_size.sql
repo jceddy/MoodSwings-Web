@@ -1,0 +1,17 @@
+-- Issue #417's own "Bigger default card size on desktop" item, confirmed
+-- by the maintainer: .card-thumb's plain 5.5rem width read fine on
+-- phones, but small and hard to read on large desktop monitors. A new
+-- min-width: 1280px media query at the end of web-static/css/style.css
+-- doubles it to 11rem everywhere the class is used, plus doubled
+-- counterparts of every other width-dependent rule proportional to it
+-- (the suppressed-card rotation-clearance offsets, the Grid Draft empty-
+-- cell placeholder, the discard pile's own stacking overlap) --
+-- game.js's own discardStackCardWidthPx() now matches this same 1280px
+-- breakpoint too, so the discard pile's own column-count math still
+-- reflects the card width actually rendered. See "Bigger default card
+-- size on desktop" in web-static/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0169 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.26' WHERE id = 1;

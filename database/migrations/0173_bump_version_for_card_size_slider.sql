@@ -1,0 +1,20 @@
+-- Issue #417's own "Slider for card size in play" item, confirmed by the
+-- maintainer: a client-only, per-device rendering preference (localStorage
+-- key cardScalePreference, same mechanism as the theme preference), with
+-- no per-game behavior for the server to know about, so no new users
+-- column. A new --card-scale custom property in style.css (defined on
+-- :root, defaulting to 1) multiplies every width-dependent .card-thumb-
+-- related rule in the file -- the base/phone-shrink/desktop-double
+-- breakpoints, .card-thumb--suppressed's own rotation-clearance offsets,
+-- .grid-draft-cell/.grid-draft-cell--empty, and the discard pile's own
+-- stacking overlap margin -- resizing every .card-thumb on the page
+-- (hand, in-play, discard, deck builder, draft pool, saved/shared decks),
+-- not just the live board's own cards. The control (a plain <input
+-- type="range" min="50" max="200" step="10">, #settings-card-size-slider)
+-- lives in the Settings dialog's own new "Display" section. See "Card
+-- size slider" in web-static/README.md.
+--
+-- No schema change of its own -- this migration exists purely to keep
+-- schema_version in sync with the VERSION bump, the same way
+-- 0024/.../0172 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.29' WHERE id = 1;
