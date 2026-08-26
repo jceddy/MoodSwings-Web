@@ -9361,11 +9361,15 @@ final class GameService
         // moods carrying an attached chaos effect contributes whatever
         // ChaosMoodEffect::perpetualTurnStartGrants() it returns -- the
         // same "one grant per qualifying mood" shape Hope/Grace/
-        // Stubbornness above already follow. See MoodPlayService's own
-        // dispatchChaosReactiveHooks() for this same hook's OTHER call
-        // site (applied immediately, the very turn a while_in_play chaos
-        // effect's own card is played, for "including the turn you play
-        // this mood" printed text).
+        // Stubbornness above already follow. This is the ONLY call site
+        // for an effect whose own perpetualGrantsIncludeTheTurnPlayed()
+        // returns false (chaos_102 -- issue #405 follow-up, a bug caught
+        // live: its own "at the start of each of your turns" wording
+        // never covers the turn it's played, since that turn already
+        // started before the mood entered play). See MoodPlayService's
+        // own dispatchChaosReactiveHooks() for this same hook's OTHER
+        // call site (applied immediately, the very turn a while_in_play
+        // chaos effect's own card is played, gated on that same flag).
         foreach ($state->moodsOwnedBy($playerId) as $mood) {
             $chaosRow = $state->chaosEffectRow($mood->cardId);
             if ($chaosRow === null) {

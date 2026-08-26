@@ -2562,15 +2562,29 @@ implementations dispatched back-to-back, not merged into one -- see
 `BoardState::chaosEffectRow()`/the composition call sites in
 `MoodPlayService`/`GameService` for exactly where each hook layers on top
 of the card's own. `ChaosMoodEffect` extends the base `computeValue()`/
-`afterPlaying()` shape with 7 more hooks, each defaulting to a no-op in
+`afterPlaying()` shape with 8 more hooks, each defaulting to a no-op in
 `AbstractChaosMoodEffect` so a "simple" effect (most of the 133) only
 implements the one or two it actually needs:
 
 - `perpetualTurnStartGrants()` -- zero or more `grantExtraPlay()`-style
   restriction arrays, applied at every future turn start
-  (`GameService::computeFreshGrants()`) AND immediately the turn a
-  `while_in_play` chaos effect's own card is played (covering "including
-  the turn you play this mood" printed text).
+  (`GameService::computeFreshGrants()`) AND, for an effect whose own
+  `perpetualGrantsIncludeTheTurnPlayed()` returns `true` (the Abstract
+  default), immediately the turn a `while_in_play` chaos effect's own
+  card is played too (covering "including the turn you play this mood"
+  printed text, e.g. chaos_121/124). **`perpetualGrantsIncludeTheTurnPlayed()`
+  (issue #405 follow-up -- a bug caught live, reported for chaos_102:
+  "this should only give an extra play at the beginning of the owner's
+  turn, not when it is played").** chaos_102's own printed text ("At the
+  start of each of your turns, ...") never says "including the turn you
+  play this mood" the way chaos_121/124 explicitly do -- the turn a mood
+  is played into is already underway by the time it enters play, so it
+  was never "the start of" that turn to begin with. Before this fix, the
+  immediate-application call site above applied unconditionally to every
+  `while_in_play` chaos effect using `perpetualTurnStartGrants()`,
+  regardless of whether its own wording actually said so; chaos_102 now
+  overrides this to `false` so it only ever grants via
+  `computeFreshGrants()`'s own future-turn-start call site.
 - `roundStartHook()` -- dispatched exactly once per round, lazily from
   inside `ensureChaosDraftOffersForRound()` itself (the same "no single
   round-creation call site" reasoning as the offer rows above).
