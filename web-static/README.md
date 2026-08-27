@@ -305,8 +305,15 @@ positioned to the value badge's LEFT, on a narrow card that could push
 it far enough to collide with the top-left `--chaos` "Chaos" rarity
 pill) -- offset by the exact same ~20px `.card-thumb__badge--chaos`
 itself uses (nudged up slightly from an initial ~22px, per feedback, so
-the two land EXACTLY level with each other rather than 2px/4px off)
-(see `style.css`'s own comments on all of these).
+the two land EXACTLY level with each other rather than 2px/4px off). An
+explicit `z-index: 1` on the chaos-delta/chaos-override badge (the
+"Chaos" pill keeps its own default `z-index: auto`) settles which one
+wins if the two ever DO overlap anyway despite being on opposite
+corners (an unusually long card name, an extreme card-size-slider
+setting, ...) -- the value CHANGE this badge reports is the more
+actionable of the two to keep legible, so it paints on top rather than
+being hidden underneath (see `style.css`'s own comments on all of
+these).
 
 The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
