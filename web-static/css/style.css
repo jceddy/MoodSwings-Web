@@ -1133,12 +1133,18 @@ body.game-page {
    .card-thumb__badge--chaos-override just below -- the two are mutually
    exclusive on any single card (a chaos effect is either delta-shaped
    or absolute-override-shaped, never both), so there's nothing to stack
-   between THEM. */
+   between THEM. z-index: 1 (explicit, over the "Chaos" pill's own
+   default 0) is a deliberate tie-breaker for if the two ever DO overlap
+   despite being on opposite corners (an unusually long card name, an
+   extreme card-size-slider setting, ...): the value CHANGE this badge
+   reports is the more actionable of the two to keep legible, so it
+   wins and paints on top rather than being hidden underneath. */
 .card-thumb__badge--chaos-delta,
 .card-thumb__badge--chaos-override {
     top: calc((0.25rem + 20px) * var(--card-scale, 1));
     right: calc(0.25rem * var(--card-scale, 1));
     background: #b00020;
+    z-index: 1;
 }
 
 /* Nudged down ~20px from the card's own top edge, same as
