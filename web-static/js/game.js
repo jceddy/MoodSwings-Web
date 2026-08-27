@@ -2027,7 +2027,14 @@
             return false;
         }
         if (format === 'draft') {
-            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft' || deckType === 'chaos_draft' || deckType === 'sealed_deck';
+            // Sealed Deck deliberately excluded here -- it has no live
+            // drafting phase at all, so it's offered as its own top-level
+            // Format option instead (the 'sealed_deck' sentinel handled by
+            // updateDeckTypeAvailability()'s own early-return branch)
+            // rather than duplicating it as one of 'draft' format's own
+            // deck-type choices. Still available under Team Play/Closed
+            // Team Play below, same as every other draft deck_type.
+            return deckType === 'quick_draft' || deckType === 'winston_draft' || deckType === 'grid_draft' || deckType === 'rotisserie_draft' || deckType === 'tiered_rotisserie_draft' || deckType === 'chaos_draft';
         }
         switch (deckType) {
             case 'custom': return format !== 'duel';
@@ -2044,6 +2051,23 @@
         }
     }
 
+    // #new-game-format's own 'sealed_deck' option is a UI-only sentinel --
+    // Sealed Deck has no separate backend format at all, it's still an
+    // ordinary format: 'draft' game (deck_type: 'sealed_deck'), just
+    // offered as its own top-level Format choice instead of one of
+    // 'draft''s own Deck dropdown options (see isDeckTypeAvailableForFormat()'s
+    // own docblock on why it's excluded from that dropdown). Every read of
+    // #new-game-format's value that feeds logic which has to match the
+    // ACTUAL backend format (bot support, the open-lobby player-count
+    // field, what's actually sent to the server) goes through this rather
+    // than reading the select directly; reads that only ever compare
+    // against 'team'/'closed_team'/'duel' don't need it, since the
+    // sentinel already isn't any of those.
+    function effectiveNewGameFormat() {
+        const raw = document.getElementById('new-game-format').value;
+        return raw === 'sealed_deck' ? 'draft' : raw;
+    }
+
     // Unavailable deck types are hidden (not merely disabled) so the
     // dropdown only ever lists options that actually make sense for the
     // currently-selected format. If the previously-selected option becomes
@@ -2054,6 +2078,25 @@
     function updateDeckTypeAvailability() {
         const deckTypeSelect = document.getElementById('new-game-deck-type');
         const format = document.getElementById('new-game-format').value;
+
+        // Sealed Deck's own top-level Format option (a UI-only sentinel --
+        // the game itself is still created as an ordinary format: 'draft'
+        // game, deck_type: 'sealed_deck', see the submit handler below) has
+        // only one possible deck: there's no live drafting phase to choose
+        // a pool source for the way every OTHER draft deck_type has, so the
+        // Deck dropdown itself would just be a single-option no-op. Hiding
+        // it entirely (rather than leaving it forced-and-visible) avoids
+        // that dead control -- the deck-type description right below it
+        // stays visible and up to date regardless, via
+        // updateDeckTypeDescription() below.
+        const isSealedDeckFormat = format === 'sealed_deck';
+        document.getElementById('new-game-deck-type-label').hidden = isSealedDeckFormat;
+        if (isSealedDeckFormat) {
+            deckTypeSelect.value = 'sealed_deck';
+            updateDeckTypeDescription();
+            updateOpponentSelectionLimit();
+            return;
+        }
 
         let fallbackValue = null;
         let selectedStillAvailable = false;
@@ -2633,7 +2676,7 @@
     // Run on the same format/deck-type change events updateDeckTypeAvailability()
     // already listens to.
     function updateBotCheckboxAvailability() {
-        const format = document.getElementById('new-game-format').value;
+        const format = effectiveNewGameFormat();
         const deckType = document.getElementById('new-game-deck-type').value;
         const supported = botsSupportedFor(format, deckType);
 
@@ -2707,7 +2750,7 @@
         const isOpenLobby = document.getElementById('new-game-mode-open').checked;
         document.getElementById('new-game-friends-fields').hidden = isOpenLobby;
 
-        const format = document.getElementById('new-game-format').value;
+        const format = effectiveNewGameFormat();
         document.getElementById('new-game-open-player-count-label').hidden =
             !isOpenLobby || (format !== 'draft' && format !== 'standard');
 
@@ -2989,7 +3032,12 @@
             // these values would trigger it -- see the format/deck-type
             // 'change' listeners below.
             const formatSelect = document.getElementById('new-game-format');
-            formatSelect.value = prefill.format;
+            // prefill.format/prefill.deckType are the real backend values
+            // off the previous game (always 'draft'/'sealed_deck' for a
+            // Sealed Deck rematch, never the UI-only 'sealed_deck' format
+            // sentinel) -- translate back so the dropdown lands on its own
+            // top-level "Sealed Deck" option rather than "Draft".
+            formatSelect.value = (prefill.format === 'draft' && prefill.deckType === 'sealed_deck') ? 'sealed_deck' : prefill.format;
             formatSelect.dispatchEvent(new Event('change'));
 
             const deckTypeSelect = document.getElementById('new-game-deck-type');
@@ -3194,7 +3242,12 @@
             return;
         }
 
-        const format = document.getElementById('new-game-format').value;
+        // Translated to the real backend format ('draft') if the Sealed
+        // Deck sentinel is selected -- see effectiveNewGameFormat()'s own
+        // docblock. Everything below (createGame()/postOpenGame() calls
+        // included) reads this one variable, so the actual request always
+        // sends the real format regardless of which option was picked.
+        const format = effectiveNewGameFormat();
         const isTeamFormat = format === 'team' || format === 'closed_team';
 
         if (!isOpenLobby && isTeamFormat && opponentUserIds.length !== 3) {

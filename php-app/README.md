@@ -3643,6 +3643,19 @@ draft deck type, Sealed Deck has no own "-panel"/"-drafting" markup at all --
 it goes straight to the shared `#draft-deck-building` view every draft deck
 type's own deck-building step already renders from.
 
+**Its own top-level Format option** -- since there's no live drafting phase
+to speak of, the New Game dialog surfaces Sealed Deck as its own choice in
+the Format dropdown (`#new-game-format`, next to "Draft"), not as one of
+"Draft"'s own Deck dropdown options the way it briefly was at first --
+picking it there would have meant a Deck dropdown with exactly one
+non-degenerate choice, and a name ("Sealed Deck") already redundant with the
+deck_type it names. This is a UI-only distinction: choosing it still sends
+`format: 'draft'`/`deck_type: 'sealed_deck'` to `POST /games`/`POST /open-games`
+same as always -- `format` itself never gained a new value, and every
+backend rule in this section is otherwise unaffected. See "New Game dialog"
+in `web-static/README.md` for the frontend mechanics (`#new-game-format`'s
+own `'sealed_deck'` sentinel value, `effectiveNewGameFormat()`).
+
 **Deck-building/match progression/bots** are otherwise identical to every
 other draft deck type: `submitDraftDeck()`, `draftGamesToWin()`'s best-of-three
 (2 players)/single-game (3-4 players) split, `advanceDraftMatch()`'s
