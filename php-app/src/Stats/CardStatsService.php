@@ -105,11 +105,49 @@ final class CardStatsService
         // played twice in one game (e.g. via Duplicity's repeat
         // mechanic) still only counts once toward "was this card played
         // in this game".
+        //
+        // 'mood_played' alone used to be the whole story here, but that
+        // undercounted every RequiresOpponentDecision card (Compulsion,
+        // Fury, Instability, etc. -- see that interface's own docblock
+        // for the full list): GameService::playMood() only logs
+        // 'mood_played' when a play resolves IMMEDIATELY (GameService.php,
+        // playMood()'s own docblock) -- a play that instead pauses for an
+        // opponent's response logs 'pending_decision_created' followed
+        // eventually by 'pending_decision_resolved' and never a
+        // 'mood_played' at all (see respondToDecision()'s own "No closing
+        // 'mood_played' event here" comment). For a card whose decision
+        // fires on nearly every real play (Fury targets anyone with a
+        // mood in play; Compulsion is mandatory unless the target's hand
+        // is empty), that meant it almost never took the one path this
+        // query recognized, despite being played constantly.
+        //
+        // Fixed by also counting 'pending_decision_created', which is
+        // logged the instant ANY play (immediate or paused) actually
+        // starts resolving -- except the two other things that same
+        // event_type is reused for and which are NOT a card being played:
+        // a scoring-time decision re-triggering on a card already played
+        // earlier this round (Enthusiasm's/Passion's own bonus decision,
+        // tagged 'scoring_trigger') and an after-scoring order choice
+        // between two already-resolved afterScoring cards (tagged
+        // 'after_scoring_order_trigger') -- see scoreRoundAndAdvance()'s/
+        // finishScoringAndAdvance()'s own logEvent() calls. Both are
+        // excluded by JSON_EXTRACT below; JSON_EXTRACT() of a NULL
+        // `details` column (the common case -- most events carry no
+        // details at all) is itself NULL, so a plain 'pending_decision_created'
+        // play-start event (no such key present either way) still passes.
         $playedStmt = $pdo->prepare(
             "SELECT DISTINCT ge.acting_game_player_id, gc.card_id
              FROM game_events ge
              JOIN game_cards gc ON gc.id = ge.card_id
-             WHERE ge.game_id = :game_id AND ge.event_type = 'mood_played'"
+             WHERE ge.game_id = :game_id
+               AND (
+                   ge.event_type = 'mood_played'
+                   OR (
+                       ge.event_type = 'pending_decision_created'
+                       AND JSON_EXTRACT(ge.details, '$.scoring_trigger') IS NULL
+                       AND JSON_EXTRACT(ge.details, '$.after_scoring_order_trigger') IS NULL
+                   )
+               )"
         );
         $playedStmt->execute(['game_id' => $gameId]);
         foreach ($playedStmt->fetchAll() as $row) {

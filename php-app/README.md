@@ -5167,10 +5167,24 @@ hook point:
   `DISTINCT` because a deck can legally contain duplicate copies of a
   catalog card (issue #109) -- a duplicate still only counts once toward
   "how many decks this card ended up in", not once per copy. "Played" is
-  `game_events.event_type = 'mood_played'`, joined through
-  `game_events.card_id -> game_cards.id -> game_cards.card_id` for the
-  catalog id, `DISTINCT`-deduped the same way (a card played twice in one
-  game via Duplicity's repeat mechanic still only counts once).
+  `game_events.event_type = 'mood_played'` OR a `'pending_decision_created'`
+  event with neither a `scoring_trigger` nor `after_scoring_order_trigger`
+  key in its own `details` (a bug caught live: a
+  `RequiresOpponentDecision` card -- Compulsion, Fury, Instability, etc.
+  -- only ever logs `'pending_decision_created'` for its own play, never
+  `'mood_played'`, see `GameService::playMood()`'s own `isPending` branch
+  and `respondToDecision()`'s own "No closing 'mood_played' event here"
+  comment -- so for a card whose decision fires on nearly every real play
+  this stayed at "times played: 0" forever until fixed; the two excluded
+  `details` keys are the same event type reused for a scoring-time
+  decision re-triggering on an already-played card and an after-scoring
+  order choice, neither of which is a card being played right then --
+  see `scoreRoundAndAdvance()`/`finishScoringAndAdvance()`), joined
+  through `game_events.card_id -> game_cards.id -> game_cards.card_id`
+  for the catalog id, `DISTINCT`-deduped the same way (a card played
+  twice in one game via Duplicity's repeat mechanic, or one whose pause
+  logs more than one `'pending_decision_created'` for the same play,
+  still only counts once).
 - **Draft pick-position signal**
   (`recordQuickDraftPick()`/`recordWinstonDraftPick()`/
   `recordGridDraftPick()`/`recordRotisserieDraftPick()`) is knowable the

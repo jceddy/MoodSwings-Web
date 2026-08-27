@@ -14409,6 +14409,45 @@ final class GameServiceIntegrationTest extends TestCase
         self::assertSame(0, (int) $charityStats['times_played']);
     }
 
+    /**
+     * A bug caught live: a RequiresOpponentDecision card (Compulsion here)
+     * only logs 'pending_decision_created' for its own play, never
+     * 'mood_played' -- CardStatsService used to only recognize the latter,
+     * so a card whose decision fires on nearly every real play (Fury,
+     * Instability, Compulsion itself) stayed at "times played: 0" forever
+     * despite being played constantly. Covers the real playMood()/
+     * respondToDecision()/recordGameCompletionStats() pipeline end to end;
+     * CardStatsServiceTest.php covers the aggregation query's own filtering
+     * in isolation (including the scoring/order-trigger exclusions).
+     */
+    public function testGameCompletionRecordsCardStatsForAPlayThatPausedForAnOpponentDecision(): void
+    {
+        $winner = $this->insertUser('cardstats-pending-int-winner');
+        $resigner = $this->insertUser('cardstats-pending-int-resigner');
+
+        $stmt = $this->pdo->prepare(
+            "INSERT INTO games (format, status, created_by_user_id, wins_needed) VALUES ('standard', 'in_progress', :created_by, 3)"
+        );
+        $stmt->execute(['created_by' => $winner]);
+        $gameId = (int) $this->pdo->lastInsertId();
+
+        $winnerPlayerId = $this->insertGamePlayer($gameId, $winner, 0);
+        $resignerPlayerId = $this->insertGamePlayer($gameId, $resigner, 1);
+
+        $compulsionId = $this->insertGameCard($gameId, 86, 'hand', $winnerPlayerId); // Compulsion
+        $givenCardId = $this->insertGameCard($gameId, 3, 'hand', $resignerPlayerId); // Charity, in the target's hand
+        $this->insertGameRound($gameId, 1, $winnerPlayerId, $winnerPlayerId, 2);
+
+        $this->games->playMood($gameId, $winnerPlayerId, $compulsionId, ['target_player_id' => $resignerPlayerId]);
+        $this->games->respondToDecision($gameId, $resignerPlayerId, ['given_card_id' => $givenCardId]);
+        $this->games->resignGame($gameId, $resignerPlayerId);
+
+        $compulsionStats = $this->fetchCardStatsRow(86);
+        self::assertNotNull($compulsionStats);
+        self::assertSame(1, (int) $compulsionStats['times_played'], 'a play that paused for an opponent decision still counts as played');
+        self::assertSame(1, (int) $compulsionStats['times_played_in_won_game']);
+    }
+
     public function testCompletedQuickDraftMatchRecordsDeckStatsAndPickPositions(): void
     {
         ['gameId' => $gameId, 'u1' => $u1, 'u2' => $u2] = $this->buildQuickDraftFixture();
