@@ -7292,6 +7292,25 @@ uses. Joining someone else's listing needs no opt-in of its own --
 that's an explicit action the joiner already takes by clicking Join, not
 something done to them.
 
+A `chaos_draft` listing gets the same "custom card/effect formats"
+opt-in (`users.allow_custom_content`, see "Custom card/effect formats
+preference" above) enforced at all three points a friends-created
+Chaos Draft game already enforces it at just one: **posting**
+(`MatchmakingService::postOpenGame()` rejects a `chaos_draft` listing
+from a non-opted-in creator -- otherwise it'd exist only to be hidden
+from every non-opted-in browser and still blow up in `createGame()` the
+moment someone finally joined it), **browsing**
+(`MatchmakingService::listOpenGames()` filters `chaos_draft` listings
+out of a non-opted-in viewer's results entirely -- a bug caught live: a
+player who'd never opted in could otherwise see, and be tempted to
+join, a format whose fan-made effects they'd explicitly not agreed to),
+and **joining** (`MatchmakingService::joinOpenGame()` re-checks the
+joining user directly, since a listing can in principle still be joined
+by id, bypassing the browse filter -- a rejection here is far cleaner
+than letting the join through only to have `createGame()`'s own
+existing all-seated-players check blow up and cancel the whole listing
+out from under everyone else once the roster happens to fill).
+
 **Flow**: `POST /open-games` (creator, requires the opt-in above) →
 `GET /open-games` (any other discoverable, non-blocked user browses,
 excluding listings they've already joined -- see `GET

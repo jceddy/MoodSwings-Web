@@ -61,6 +61,19 @@ final class MatchmakingService
             throw new GameStateException("Open lobby games don't support the \"{$format}\" format.");
         }
 
+        // Same "custom card/effect formats" opt-in (users.allow_custom_content)
+        // GameService::createGame() itself enforces for every seated player --
+        // checked here against the creator alone, since nobody else is known
+        // yet. Without this, a non-opted-in creator could post a Chaos Draft
+        // listing that then has to be hidden from every other non-opted-in
+        // browser (see listOpenGames()) and would still blow up in
+        // createGame() the moment someone finally joined it.
+        if ((string) ($createGameParams['deck_type'] ?? 'structure') === 'chaos_draft' && !(bool) $user['allow_custom_content']) {
+            throw new GameStateException(
+                'Chaos Draft uses custom, fan-made card effects -- opt in first via Settings > "Allow custom card/effect formats" before posting one to the open lobby.'
+            );
+        }
+
         $targetPlayerCount = match ($format) {
             'duel' => 2,
             'team', 'closed_team' => 4,
@@ -74,9 +87,28 @@ final class MatchmakingService
         return $this->listings->create($userId, $createGameParams, $targetPlayerCount);
     }
 
+    /**
+     * Chaos Draft listings are additionally filtered out here for any
+     * viewer who hasn't opted into "custom card/effect formats" (users.
+     * allow_custom_content) -- otherwise they'd see (and could try to
+     * join) a format whose fan-made effects they explicitly haven't
+     * agreed to see, and joining would fail anyway once
+     * GameService::createGame() itself re-checks every seated player
+     * (see joinOpenGame()'s own mirrored check).
+     */
     public function listOpenGames(int $viewerUserId): array
     {
-        return $this->listings->listOpenFor($viewerUserId);
+        $listings = $this->listings->listOpenFor($viewerUserId);
+
+        $viewer = $this->users->findById($viewerUserId);
+        if ($viewer !== null && (bool) $viewer['allow_custom_content']) {
+            return $listings;
+        }
+
+        return array_values(array_filter(
+            $listings,
+            static fn (array $listing): bool => ($listing['create_game_params']['deck_type'] ?? null) !== 'chaos_draft'
+        ));
     }
 
     public function listMyOpenGames(int $userId): array
@@ -151,6 +183,22 @@ final class MatchmakingService
 
             if ($friendship !== null && $friendship['status'] === 'blocked') {
                 throw new OpenGameListingNotFoundException('No open listing found with that id.');
+            }
+
+            // Same opt-in listOpenGames() already filters Chaos Draft
+            // listings on -- enforced again here since a listing could in
+            // principle still be joined directly by id (bypassing the
+            // browse filter), and a rejection here is far cleaner than
+            // letting the join through only to have createGame() blow up
+            // and cancel the whole listing out from under everyone else
+            // once the roster happens to fill.
+            if (($listing['create_game_params']['deck_type'] ?? null) === 'chaos_draft') {
+                $joiningUser = $this->users->findById($joiningUserId);
+                if ($joiningUser === null || !(bool) $joiningUser['allow_custom_content']) {
+                    throw new GameStateException(
+                        'Chaos Draft uses custom, fan-made card effects -- opt in first via Settings > "Allow custom card/effect formats" before joining one.'
+                    );
+                }
             }
 
             $joinedUserIds = $this->listings->joinedUserIds($listingId);
