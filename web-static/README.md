@@ -289,6 +289,15 @@ is non-null (see `chaos_value_override` in `php-app/README.md`). The
 card-detail dialog's meta line surfaces the same fixed value as a
 parenthetical (`(chaos: fixed at N)`).
 
+The value/chaos-delta/chaos-override badge row sits ~20px down from the
+card's own top-right corner (a bug caught live: the un-nudged corner
+used to sit right over the card name printed at the top of the art,
+most visibly whenever a chaos-delta/override badge shared that row with
+the value badge, widening it enough to reach into a longer name) --
+matching the ~20px nudge `.card-thumb__badge--copy`/`--recolored`/
+`--chaos` already used on the opposite (top-left) corner for the exact
+same reason (see `style.css`'s own comments on all of these).
+
 The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
 a `<p>` rules-text paragraph -- both now conveyed only via that image's

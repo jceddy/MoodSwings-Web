@@ -1092,8 +1092,15 @@ body.game-page {
     color: #fff;
 }
 
+/* Nudged down ~20px from the card's own top edge (a bug caught live: a
+   chaos-delta/override badge sharing this same row -- see below -- could
+   push far enough left to cover the card name printed at the top of the
+   art, exactly the reason .card-thumb__badge--copy/--recolored/--chaos
+   were already nudged down on the OPPOSITE corner; see that comment
+   just below). Moved together with --chaos-delta/--chaos-override so
+   the two stay level with each other in their shared row. */
 .card-thumb__badge--value {
-    top: calc(0.25rem * var(--card-scale, 1));
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
     right: calc(0.25rem * var(--card-scale, 1));
 }
 
@@ -1113,18 +1120,19 @@ body.game-page {
    nudges below). Shares its exact position with
    .card-thumb__badge--chaos-override just below -- the two are mutually
    exclusive on any single card (a chaos effect is either delta-shaped or
-   absolute-override-shaped, never both), so there's nothing to stack. */
+   absolute-override-shaped, never both), so there's nothing to stack.
+   Shares --value's own 20px-down nudge just above for the same reason. */
 .card-thumb__badge--chaos-delta,
 .card-thumb__badge--chaos-override {
-    top: calc(0.25rem * var(--card-scale, 1));
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
     right: calc((0.25rem + 1.75rem) * var(--card-scale, 1));
     background: #b00020;
 }
 
-/* Nudged down ~20px from the other corner badges (see .card-thumb__badge
-   itself) -- the extreme top-left corner sits right over the card name
-   printed on the art, while a bit further down only covers non-functional
-   background art. */
+/* Nudged down ~20px from the card's own top edge, same as
+   --value/--chaos-delta/--chaos-override above -- the extreme top-left
+   corner sits right over the card name printed on the art, while a bit
+   further down only covers non-functional background art. */
 .card-thumb__badge--copy {
     top: calc((0.25rem + 20px) * var(--card-scale, 1));
     left: calc(0.25rem * var(--card-scale, 1));
@@ -2239,18 +2247,21 @@ dialog#deck-builder-dialog[open] {
         padding: calc(0.2rem * var(--card-scale, 1)) calc(0.7rem * var(--card-scale, 1));
     }
 
+    /* Doubled counterpart of --value's own 20px -> 40px down-nudge
+       further up (avoids covering the card name -- see that rule's own
+       comment). */
     .card-thumb__badge--value {
-        top: calc(0.5rem * var(--card-scale, 1));
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
         right: calc(0.5rem * var(--card-scale, 1));
     }
 
     /* Doubled counterpart of .card-thumb__badge--chaos-delta further up
-       (0.25rem -> 0.5rem, 1.75rem -> 3.5rem). Covers
-       .card-thumb__badge--chaos-override too -- see that selector's own
-       comment for why the two share a position. */
+       (0.25rem -> 0.5rem, 1.75rem -> 3.5rem, 20px -> 40px down-nudge).
+       Covers .card-thumb__badge--chaos-override too -- see that
+       selector's own comment for why the two share a position. */
     .card-thumb__badge--chaos-delta,
     .card-thumb__badge--chaos-override {
-        top: calc(0.5rem * var(--card-scale, 1));
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
         right: calc((0.5rem + 3.5rem) * var(--card-scale, 1));
     }
 

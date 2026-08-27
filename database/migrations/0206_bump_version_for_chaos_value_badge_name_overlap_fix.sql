@@ -1,0 +1,16 @@
+-- No schema change: a bug caught live -- the top-right value/chaos-delta/
+-- chaos-override badge row (style.css .card-thumb__badge--value/
+-- --chaos-delta/--chaos-override) sat right at a card's own top edge,
+-- unlike the top-left Copy/Recolored/Chaos-rarity badges, which were
+-- already nudged down ~20px specifically to clear the card name printed
+-- at the top of the art. Widening that top-right row to two badges (a
+-- chaos-delta/override badge alongside the value badge) could reach far
+-- enough left to cover part or all of a longer card name. Fixed by
+-- giving the value/chaos-delta/chaos-override badges the same ~20px
+-- (40px at the doubled desktop card size) down-nudge the opposite
+-- corner's badges already use, for the same reason.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0205 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.62' WHERE id = 1;
