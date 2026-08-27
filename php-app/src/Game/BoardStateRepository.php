@@ -52,7 +52,7 @@ final class BoardStateRepository
         // (contrast every other deck_type, where format alone already
         // decides it).
         $hasSeparateDecks = in_array($gameRow['format'], ['duel', 'draft'], true)
-            || in_array($gameRow['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true);
+            || in_array($gameRow['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'sealed_deck'], true);
 
         $playersStmt = $pdo->prepare(
             'SELECT id, team_id, resigned_at, banked_extra_plays FROM game_players WHERE game_id = :game_id ORDER BY seat_order ASC'

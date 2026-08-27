@@ -3598,6 +3598,63 @@ pool). `drafted_so_far`/`opponent_drafted_so_far`/
 totals, unchanged in shape from base Rotisserie Draft -- a single running
 `drafted_card_ids` list already spans every tier.
 
+### Sealed Deck (issue #392)
+
+`deck_type: 'sealed_deck'` is the sixth `format: 'draft'` deck type, reusing
+the same `draft_matches`/`draft_match_players` tables and best-of-three/
+deck-building infrastructure as every other draft-family deck type
+(`games.deck_type = 'sealed_deck'` is the only thing distinguishing it). What's
+genuinely different is that there's no live drafting mechanic at all: each
+seated player is independently dealt their own randomized 45-card pool
+(structure-deck-sized, matching `STRUCTURE_DECK_RARITY_COUNTS`'s own 23+14+6+2
+total) the moment the game is created, and goes straight to building a deck
+from it -- no packs, piles, grid, or shared face-up pool to pick from, unlike
+Quick/Winston/Grid/(Tiered) Rotisserie Draft.
+
+**Independent per-player pools** -- `buildSealedDeckPlayerPool()` calls the
+same shared `buildDraftPool()` helper every other draft deck type uses, but
+`createGame()` calls it once PER SEATED PLAYER (`SEALED_DECK_POOL_SIZE`, 45,
+as both the target size and the minimum for a `custom`/`saved_deck` source),
+rather than the single shared-pool call every other draft deck type makes.
+Two players choosing the same pool source still end up with two different
+45-card pools: `'structure'`/`'random_48'` are independently randomized by
+each call, and even a fixed `'custom'`/`'saved_deck'` source is independently
+shuffled-and-sliced to 45 cards per call (`buildDraftPool()`'s own
+`truncateToTarget` behavior) -- so a shared custom pool still deals each
+player their own random slice of it, not an identical copy. `draft_matches.pool_card_ids`
+stores the flattened union of every player's own pool (informational only,
+matching every other draft deck type's own "whole pool" convention) --
+`draftMatchPoolView()`'s own `undraftedCardIds` computation (`pool_card_ids`
+minus every player's own `drafted_card_ids`) correctly lands on an empty list,
+since nothing here is ever left over the way Quick Draft's discards or Grid
+Draft's round-end remainder are.
+
+**No drafting phase at all** -- `initializeSealedDeck()` runs in place of every
+other deck type's own `initializeXDraft()`: each player's `drafted_card_ids`
+is already written by `createGame()` itself (straight from their own
+`buildSealedDeckPlayerPool()` result), so this simply moves
+`draft_matches.status` directly to `'deck_building'`, skipping `'drafting'`
+altogether. `getState()`'s own `sealed_deck` field
+(`sealedDeckStateFor()`) mirrors `quickDraftStateFor()`'s exact shape (with
+`SEALED_DECK_MIN_DECK_SIZE`, 12, in place of `QUICK_DRAFT_MIN_DECK_SIZE`) for
+consistency, but its own `drafting` sub-field always stays `null` in practice.
+The frontend's own `renderDraftPanel()` reflects this: unlike every other
+draft deck type, Sealed Deck has no own "-panel"/"-drafting" markup at all --
+it goes straight to the shared `#draft-deck-building` view every draft deck
+type's own deck-building step already renders from.
+
+**Deck-building/match progression/bots** are otherwise identical to every
+other draft deck type: `submitDraftDeck()`, `draftGamesToWin()`'s best-of-three
+(2 players)/single-game (3-4 players) split, `advanceDraftMatch()`'s
+between-game sideboarding (from that same fixed 45-card pool, never
+re-dealt), and `advanceBotDraftDeck()`'s automatic bot deck submission all
+already work generically off `draft_matches`/`draft_match_players` -- adding
+`'sealed_deck'` to `DRAFT_DECK_TYPES` was the only change any of them needed.
+Since `advanceBotDraftTurn()` only ever reaches its per-deck-type pick dispatch
+while `draft_matches.status === 'drafting'` (never true for Sealed Deck), a
+bot seated here goes straight to submitting its own deck the very first time
+`advanceAutomatedTurns()` runs, with no pick-turn logic needed at all.
+
 ### Open Team Play
 
 `format: 'team'` seats exactly 4 players as two teams of two, sitting next

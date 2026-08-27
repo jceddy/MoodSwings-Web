@@ -483,6 +483,77 @@ final class GameService
     }
 
     /**
+     * Sealed Deck (issue #392): unlike every other draft-family deck_type
+     * above, there's no live picking/passing phase at all -- each seated
+     * player is independently dealt their own randomized pool, sized to
+     * match the built-in 'structure' deck_type's own total
+     * (STRUCTURE_DECK_RARITY_COUNTS: 23 + 14 + 6 + 2 = 45 -- "a sealed
+     * pool the size of a structure deck box"), and goes straight to
+     * building a deck from it -- no drafting phase for createGame() to
+     * initialize at all (see initializeSealedDeck()). Each player's own
+     * buildSealedDeckPlayerPool() call is independent (not a single
+     * shared pool split via picks the way every other draft-family
+     * deck_type above works), so two players choosing the same pool
+     * source still end up with two DIFFERENT 45-card pools -- the same
+     * "closer in spirit to Quick Draft's own random_48 source, just dealt
+     * whole instead of drafted pack-by-pack" the issue itself describes.
+     */
+    private const SEALED_DECK_POOL_SIZE = 45;
+
+    /**
+     * The same 12-card floor Grid Draft/Rotisserie Draft/Winston Draft
+     * already use (GRID_DRAFT_MIN_DECK_SIZE/ROTISSERIE_DRAFT_MIN_DECK_SIZE/
+     * WINSTON_MIN_DECK_SIZE) -- there's no format-specific reason for
+     * Sealed Deck's own floor to differ, and SEALED_DECK_POOL_SIZE (45)
+     * comfortably clears it regardless of pool source.
+     */
+    private const SEALED_DECK_MIN_DECK_SIZE = 12;
+
+    /**
+     * One seated player's own independent SEALED_DECK_POOL_SIZE-card pool
+     * -- see buildDraftPool(). Called once PER PLAYER by createGame()
+     * (unlike every other build*DraftPool() wrapper above, called exactly
+     * once for the whole match's own shared pool), so 'random_48'/
+     * 'structure''s own randomization naturally lands differently each
+     * call; a 'custom'/'saved_deck' source instead reruns buildDraftPool()'s
+     * own truncateToTarget shuffle-and-slice against the exact same
+     * underlying list each time, which still gives each player their own
+     * independently-random 45-card slice of it rather than identical
+     * pools. $minCustomPoolSize is simply SEALED_DECK_POOL_SIZE itself
+     * (not scaled by player count the way e.g. Rotisserie Draft's own
+     * rotisserieDraftMinPoolSize() is) -- each call only ever needs to
+     * cover ONE player's own pool, never the whole table's at once.
+     */
+    private function buildSealedDeckPlayerPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId): array
+    {
+        return $this->buildDraftPool(
+            $poolSource,
+            $customPoolText,
+            $savedDecklistId,
+            $requestingUserId,
+            self::SEALED_DECK_POOL_SIZE,
+            self::SEALED_DECK_POOL_SIZE,
+        );
+    }
+
+    /**
+     * Sealed Deck's own createGame()-time setup, called in place of every
+     * other draft-family deck_type's own initializeXDraft() -- there's no
+     * live drafting phase to initialize at all (each player's
+     * drafted_card_ids is already written by createGame() itself, from
+     * its own buildSealedDeckPlayerPool() calls, before this runs), so
+     * this simply moves the match straight to 'deck_building' -- the same
+     * transition finalizeQuickDraft()/finalizeWinstonDraft() etc. make
+     * once THEIR OWN live drafting phase ends, just with no phase to end
+     * first.
+     */
+    private function initializeSealedDeck(int $draftMatchId): void
+    {
+        Connection::get()->prepare("UPDATE draft_matches SET status = 'deck_building' WHERE id = :id")
+            ->execute(['id' => $draftMatchId]);
+    }
+
+    /**
      * Rotisserie Draft's own turn order (confirmed by the maintainer) --
      * $pickIndex is a 0-based global counter of picks made so far in this
      * match; returns which of $userIds (in seat order) picks next.
@@ -801,15 +872,18 @@ final class GameService
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
+        ?string $sealedDeckPoolSource = null,
+        ?string $sealedDeckCustomPoolText = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
         }
         if (self::isDuelShapedFormat($format)) {
-            // Quick Draft, Grid Draft, Winston Draft, Rotisserie Draft, and
-            // Tiered Rotisserie Draft all support 3-4 players now (issue
-            // #189) -- 'duel' itself stays locked to exactly 2.
-            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)) {
+            // Quick Draft, Grid Draft, Winston Draft, Rotisserie Draft,
+            // Tiered Rotisserie Draft, and Sealed Deck all support 3-4
+            // players now (issue #189) -- 'duel' itself stays locked to
+            // exactly 2.
+            if ($format === 'draft' && in_array($deckType, ['quick_draft', 'grid_draft', 'winston_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)) {
                 if (count($userIds) < 2 || count($userIds) > 4) {
                     throw new GameStateException("A {$deckType} game must have 2-4 players");
                 }
@@ -877,7 +951,7 @@ final class GameService
         // parsing a decklist.
         $botUserId = $this->botUserIdAmong($userIds);
         if ($botUserId !== null && !$this->botsSupportedFor($format, $deckType)) {
-            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft game');
+            throw new GameStateException('Practice bots are only supported for Traditional/Duel/Team Play/Closed Team Play games using a Structure, Power, jceddy\'s 75 Card, Custom Decklist, or One of Each Card deck, Duel using Custom Decklists (Duel), or any Quick Draft/Winston Draft/Grid Draft/Rotisserie Draft/Tiered Rotisserie Draft/Sealed Deck game');
         }
         if ($botUserId !== null && $deckType === 'custom_duel' && $botDecklistText === null && $botSavedDecklistId === null) {
             throw new GameStateException('A decklist for the practice bot is required for a custom_duel game');
@@ -891,8 +965,8 @@ final class GameService
         $duelDuplicateLimits = null;
         $duelEvenColorDistributionRarities = null;
 
-        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)) {
-            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft" deck types');
+        if ($format === 'draft' && !in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)) {
+            throw new GameStateException('The "draft" format only supports the "quick_draft"/"winston_draft"/"grid_draft"/"rotisserie_draft"/"tiered_rotisserie_draft"/"sealed_deck" deck types');
         }
         // Team Play/Closed Team Play (issue #362) may also draft: each of
         // the 4 players still drafts and builds their own deck
@@ -907,7 +981,7 @@ final class GameService
         // gridDraftDraftingStateFor()'s/draftDeckBuildingStateFor()'s own
         // `team_drafted_cards` field. Closed Team Play stays fully private
         // between teammates instead, exactly like Stage 1 left it.
-        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
+        if (in_array($deckType, ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true) && !in_array($format, ['draft', 'closed_team', 'team'], true)) {
             throw new GameStateException("The \"{$deckType}\" deck type is only supported for the \"draft\" format, Team Play, or Closed Team Play");
         }
 
@@ -969,6 +1043,19 @@ final class GameService
             ? $this->buildTieredRotisserieDraftTierPools((string) $tieredRotisserieDraftMode, $tieredRotisserieDraftTiers, $createdByUserId, count($userIds))
             : null;
 
+        // Sealed Deck (issue #392): one buildSealedDeckPlayerPool() call
+        // PER SEATED PLAYER, each independently randomized -- unlike every
+        // other draft-family deck_type above, there's no single shared
+        // pool to build once. Built here, before the transaction starts,
+        // for the same "fail loudly before anything is written" reason as
+        // $tieredRotisserieDraftTierPools above; order doesn't matter yet
+        // since $userIds isn't seated (shuffledSeatOrder()) until inside
+        // the transaction below -- each of these count($userIds) pools is
+        // statistically identical, so any pool may go to any seat.
+        $sealedDeckPlayerPools = $deckType === 'sealed_deck'
+            ? array_map(fn (): array => $this->buildSealedDeckPlayerPool((string) $sealedDeckPoolSource, $sealedDeckCustomPoolText, $savedDecklistId, $createdByUserId), $userIds)
+            : null;
+
         // Built (and, for a 'custom' pool, fully validated) before the
         // transaction starts, same rationale as parseCustomDecklist()/
         // resolveDuelDeckRules() above -- a bad pool should fail loudly
@@ -983,6 +1070,7 @@ final class GameService
             'grid_draft' => $gridDraftPoolSource,
             'rotisserie_draft' => $rotisserieDraftPoolSource,
             'tiered_rotisserie_draft' => $tieredRotisserieDraftMode,
+            'sealed_deck' => $sealedDeckPoolSource,
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {
@@ -991,6 +1079,13 @@ final class GameService
             'grid_draft' => $this->buildGridDraftPool((string) $gridDraftPoolSource, $gridDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds)),
             'rotisserie_draft' => $this->buildRotisserieDraftPool((string) $rotisserieDraftPoolSource, $rotisserieDraftCustomPoolText, $savedDecklistId, $createdByUserId, count($userIds), $rotisserieDraftCutoffCount),
             'tiered_rotisserie_draft' => array_merge(...array_map(static fn (array $tier): array => $tier['pool_card_ids'], $tieredRotisserieDraftTierPools)),
+            // The flattened union of every player's own individual pool --
+            // draftMatchPoolView()'s own undraftedCardIds computation
+            // (pool_card_ids minus every player's own drafted_card_ids)
+            // then correctly lands on an empty list once the match
+            // completes, since nothing here is ever left undrafted (the
+            // whole pool is handed out whole, not drafted piece by piece).
+            'sealed_deck' => array_merge(...$sealedDeckPlayerPools),
             default => null,
         };
 
@@ -1103,11 +1198,20 @@ final class GameService
                     'INSERT INTO draft_match_players (draft_match_id, user_id, drafted_card_ids) VALUES (:match_id, :user_id, :drafted_card_ids)'
                 );
                 $initialDraftedCardIds = in_array($deckType, ['winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft'], true) ? json_encode([]) : null;
-                foreach ($seatedUserIds as $userId) {
+                foreach (array_values($seatedUserIds) as $seatIndex => $userId) {
                     $insertMatchPlayer->execute([
                         'match_id' => $draftMatchId,
                         'user_id' => $userId,
-                        'drafted_card_ids' => $initialDraftedCardIds,
+                        // Sealed Deck (issue #392): each seat's own
+                        // drafted_card_ids is written immediately, straight
+                        // from $sealedDeckPlayerPools -- there's no live
+                        // drafting phase to accumulate it turn-by-turn the
+                        // way Winston/Grid/Rotisserie Draft's own empty-
+                        // array start does, and no finalize step to write
+                        // it all at once the way Quick Draft's own NULL
+                        // start does either. Any pool may go to any seat
+                        // (see $sealedDeckPlayerPools's own docblock).
+                        'drafted_card_ids' => $deckType === 'sealed_deck' ? json_encode($sealedDeckPlayerPools[$seatIndex]) : $initialDraftedCardIds,
                     ]);
                 }
 
@@ -1121,6 +1225,8 @@ final class GameService
                     $this->initializeRotisserieDraft($gameId, $draftMatchId, $draftPoolCardIds, array_values($seatedUserIds), $rotisserieDraftCutoffCount);
                 } elseif ($deckType === 'tiered_rotisserie_draft') {
                     $this->initializeTieredRotisserieDraft($gameId, $draftMatchId, $tieredRotisserieDraftTierPools, array_values($seatedUserIds), (string) $tieredRotisserieDraftMode);
+                } elseif ($deckType === 'sealed_deck') {
+                    $this->initializeSealedDeck($draftMatchId);
                 }
             }
 
@@ -1162,7 +1268,7 @@ final class GameService
      * botsSupportedFor()/advanceBotDraftTurn() (issue #359) rather than
      * as a wholesale refactor of every existing inline copy.
      */
-    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'];
+    private const DRAFT_DECK_TYPES = ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'];
 
     /**
      * Whether a practice bot (issue #140) can be seated in a game with
@@ -1422,7 +1528,7 @@ final class GameService
      */
     private static function isSharedDeckType(string $deckType): bool
     {
-        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true);
+        return !in_array($deckType, ['custom_duel', 'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true);
     }
 
     /**
@@ -1707,7 +1813,7 @@ final class GameService
         $customDuelDeckCardIds = $game['deck_type'] === 'custom_duel'
             ? $this->requireCustomDuelDecksSubmitted($gameId, $playerIds)
             : [];
-        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)
+        $draftDeckCardIds = in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)
             ? $this->requireDraftDecksSubmitted($gameId, $playerIds)
             : [];
 
@@ -1735,11 +1841,11 @@ final class GameService
             // formats support that ISN'T one shared/identical pool --
             // see BoardStateRepository::load()'s identical check.
             if (self::isDuelShapedFormat($game['format'])
-                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)) {
+                || in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)) {
                 foreach ($playerIds as $playerId) {
                     $playerCardIds = match ($game['deck_type']) {
                         'custom_duel' => $customDuelDeckCardIds[$playerId],
-                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft' => $draftDeckCardIds[$playerId],
+                        'quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck' => $draftDeckCardIds[$playerId],
                         default => $this->deckCardIdsFor($game),
                     };
                     shuffle($playerCardIds);
@@ -2049,7 +2155,7 @@ final class GameService
     {
         $this->withGameLock($gameId, function () use ($gameId, $userId, $playFirst): void {
             $game = $this->fetchGame($gameId);
-            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true) || $game['draft_match_id'] === null) {
+            if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true) || $game['draft_match_id'] === null) {
                 throw new GameStateException("Game {$gameId} is not a draft match game");
             }
             $matchGameNumber = $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null;
@@ -3251,13 +3357,14 @@ final class GameService
             // cutoffs are validated (createGame()) to sum to at least
             // this same floor already.
             'tiered_rotisserie_draft' => self::ROTISSERIE_DRAFT_MIN_DECK_SIZE,
+            'sealed_deck' => self::SEALED_DECK_MIN_DECK_SIZE,
         };
     }
 
     public function submitDraftDeck(int $gameId, int $userId, array $deckCardIds): void
     {
         $game = $this->fetchGame($gameId);
-        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true) || $game['draft_match_id'] === null) {
+        if (!in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true) || $game['draft_match_id'] === null) {
             throw new GameStateException("Game {$gameId} is not a draft game");
         }
         $draftMatchId = (int) $game['draft_match_id'];
@@ -5720,7 +5827,7 @@ final class GameService
 
             if (
                 $game['status'] === 'waiting'
-                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft'], true)
+                && in_array($game['deck_type'], ['quick_draft', 'winston_draft', 'grid_draft', 'rotisserie_draft', 'tiered_rotisserie_draft', 'chaos_draft', 'sealed_deck'], true)
                 && $game['draft_match_id'] !== null
             ) {
                 return $this->resignFromDraftMatch($gameId, $gamePlayerId, (int) $game['draft_match_id'], $game['format']);
@@ -10806,6 +10913,96 @@ final class GameService
     }
 
     /**
+     * getState()'s own 'sealed_deck' field -- quickDraftStateFor()'s exact
+     * shape (see its own docblock), with SEALED_DECK_MIN_DECK_SIZE in
+     * place of QUICK_DRAFT_MIN_DECK_SIZE. $match['status'] === 'drafting'
+     * never actually happens for Sealed Deck (createGame()'s own
+     * initializeSealedDeck() moves it straight to 'deck_building', no live
+     * drafting phase at all -- see that method's own docblock), so
+     * $state['drafting'] always stays null in practice; the branch is kept
+     * anyway purely so this reads as the same shape every other draft
+     * deck_type's own analog does, rather than as a special case a reader
+     * has to reconcile against those.
+     *
+     * @param array<string, mixed> $game
+     */
+    private function sealedDeckStateFor(array $game, int $viewerUserId): array
+    {
+        $draftMatchId = (int) $game['draft_match_id'];
+        $match = $this->fetchDraftMatch($draftMatchId);
+        $userIds = $this->draftMatchUserIds($draftMatchId);
+        $opponentUserId = null;
+        foreach ($userIds as $userId) {
+            if ($userId !== $viewerUserId) {
+                $opponentUserId = $userId;
+                break;
+            }
+        }
+
+        $playersStmt = Connection::get()->prepare(
+            'SELECT dmp.user_id, dmp.wins, dmp.drafted_card_ids, dmp.deck_card_ids, dmp.previous_deck_card_ids, u.username
+             FROM draft_match_players dmp JOIN users u ON u.id = dmp.user_id WHERE dmp.draft_match_id = :id'
+        );
+        $playersStmt->execute(['id' => $draftMatchId]);
+        $playersByUser = [];
+        foreach ($playersStmt->fetchAll() as $row) {
+            $playersByUser[(int) $row['user_id']] = $row;
+        }
+
+        $nextGameId = null;
+        if ($game['status'] === 'completed' && $match['status'] !== 'completed') {
+            $nextGameStmt = Connection::get()->prepare(
+                'SELECT id FROM games WHERE draft_match_id = :match_id ORDER BY match_game_number DESC LIMIT 1'
+            );
+            $nextGameStmt->execute(['match_id' => $draftMatchId]);
+            $latestGameId = (int) $nextGameStmt->fetchColumn();
+            if ($latestGameId !== (int) $game['id']) {
+                $nextGameId = $latestGameId;
+            }
+        }
+
+        $players = [];
+        foreach ($userIds as $userId) {
+            $players[] = [
+                'user_id' => $userId,
+                'username' => $playersByUser[$userId]['username'] ?? null,
+                'wins' => (int) ($playersByUser[$userId]['wins'] ?? 0),
+                'is_you' => $userId === $viewerUserId,
+            ];
+        }
+
+        $state = [
+            'draft_match_id' => $draftMatchId,
+            'match_game_number' => $game['match_game_number'] !== null ? (int) $game['match_game_number'] : null,
+            'status' => $match['status'],
+            'games_to_win' => $this->draftGamesToWin(count($userIds)),
+            'next_game_id' => $nextGameId,
+            'your_wins' => (int) ($playersByUser[$viewerUserId]['wins'] ?? 0),
+            'opponent_wins' => $opponentUserId !== null ? (int) ($playersByUser[$opponentUserId]['wins'] ?? 0) : 0,
+            'players' => $players,
+            'drafting' => null,
+            'deck_building' => null,
+        ];
+
+        $teammateUserId = $this->openTeamPlayTeammateUserId((int) $game['id'], $game['format'], $viewerUserId);
+
+        if ($match['status'] === 'drafting') {
+            $state['drafting'] = $this->quickDraftDraftingStateFor($draftMatchId, (int) $match['current_round'], $viewerUserId, $userIds, $teammateUserId, $playersByUser);
+        } elseif ($match['status'] === 'deck_building') {
+            $state['deck_building'] = $this->draftDeckBuildingStateFor(
+                $playersByUser,
+                $viewerUserId,
+                array_values(array_diff($userIds, [$viewerUserId])),
+                self::SEALED_DECK_MIN_DECK_SIZE,
+                null,
+                $teammateUserId,
+            );
+        }
+
+        return $state;
+    }
+
+    /**
      * getState()'s own 'deck_building' sub-state, shared identically by
      * Quick Draft, Winston Draft, and Grid Draft (quickDraftStateFor()/
      * winstonDraftStateFor()/gridDraftStateFor()) -- only their own min/max
@@ -12064,6 +12261,11 @@ final class GameService
             // 'quick_draft' immediately above -- see
             // tieredRotisserieDraftStateFor().
             'tiered_rotisserie_draft' => null,
+            // Sealed Deck's (issue #392) own analog of 'quick_draft'
+            // immediately above -- see sealedDeckStateFor(). Its own
+            // 'drafting' sub-field always stays null in practice (no live
+            // drafting phase exists for this deck_type at all).
+            'sealed_deck' => null,
         ];
 
         if ($viewerGamePlayerId !== null) {
@@ -12084,6 +12286,8 @@ final class GameService
                 $response['rotisserie_draft'] = $this->rotisserieDraftStateFor($game, $viewerUserId);
             } elseif ($game['deck_type'] === 'tiered_rotisserie_draft' && $game['draft_match_id'] !== null) {
                 $response['tiered_rotisserie_draft'] = $this->tieredRotisserieDraftStateFor($game, $viewerUserId);
+            } elseif ($game['deck_type'] === 'sealed_deck' && $game['draft_match_id'] !== null) {
+                $response['sealed_deck'] = $this->sealedDeckStateFor($game, $viewerUserId);
             }
         }
 
