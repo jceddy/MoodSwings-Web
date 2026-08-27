@@ -1,0 +1,16 @@
+-- No schema change: a non-opted-in player (issue #405's own
+-- users.allow_custom_content preference, "Allow custom card/effect
+-- formats") could still see -- and try to join -- a Chaos Draft listing
+-- in the open games lobby, even though the exact same preference
+-- already hides "Chaos Draft" from their own New Game dialog and
+-- createGame() already rejects seating them in a friends-created one.
+-- MatchmakingService now enforces the same opt-in at all three open-lobby
+-- points: posting a chaos_draft listing (postOpenGame), browsing the
+-- lobby (listOpenGames -- chaos_draft listings are filtered out of a
+-- non-opted-in viewer's results entirely), and joining one directly by id
+-- (joinOpenGame, defense in depth against bypassing the browse filter).
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0203 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.60' WHERE id = 1;

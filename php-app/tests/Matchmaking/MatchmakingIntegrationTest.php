@@ -130,6 +130,15 @@ final class MatchmakingIntegrationTest extends TestCase
         return $this->matchmaking->postOpenGame($userId, ['format' => 'duel', 'deck_type' => 'structure', ...$params], 2);
     }
 
+    private function postChaosDraft(int $userId): int
+    {
+        return $this->matchmaking->postOpenGame(
+            $userId,
+            ['format' => 'draft', 'deck_type' => 'chaos_draft', 'quick_draft_pool_source' => 'random_48'],
+            2
+        );
+    }
+
     public function testPostingWithoutOptingInFails(): void
     {
         $aliceId = $this->insertUser('alice');
@@ -219,6 +228,68 @@ final class MatchmakingIntegrationTest extends TestCase
         $this->block($aliceId, $bobId, $bobId);
 
         self::assertCount(0, $this->matchmaking->listOpenGames($bobId));
+    }
+
+    public function testPostingChaosDraftWithoutOptingInFails(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $this->makeDiscoverable($aliceId);
+
+        $this->expectException(GameStateException::class);
+        $this->postChaosDraft($aliceId);
+    }
+
+    public function testListOpenGamesExcludesChaosDraftForNonOptedInViewer(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+        $this->users->setAllowCustomContent($aliceId, true);
+        $listingId = $this->postChaosDraft($aliceId);
+
+        self::assertCount(0, $this->matchmaking->listOpenGames($bobId));
+
+        $this->users->setAllowCustomContent($bobId, true);
+        self::assertCount(1, $this->matchmaking->listOpenGames($bobId));
+        self::assertSame($listingId, $this->matchmaking->listOpenGames($bobId)[0]['id']);
+    }
+
+    public function testListOpenGamesStillShowsNonChaosListingsToNonOptedInViewer(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+        $this->postDuel($aliceId);
+
+        self::assertCount(1, $this->matchmaking->listOpenGames($bobId));
+    }
+
+    public function testJoinOpenGameRejectsChaosDraftForNonOptedInJoiner(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+        $this->users->setAllowCustomContent($aliceId, true);
+        $listingId = $this->postChaosDraft($aliceId);
+
+        $this->expectException(GameStateException::class);
+        $this->matchmaking->joinOpenGame($bobId, $listingId);
+    }
+
+    public function testJoinCreatesAChaosDraftGameWhenBothOptedIn(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+        $this->users->setAllowCustomContent($aliceId, true);
+        $this->users->setAllowCustomContent($bobId, true);
+        $listingId = $this->postChaosDraft($aliceId);
+
+        $result = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        self::assertSame('started', $result['status']);
+
+        $game = $this->pdo->query("SELECT deck_type FROM games WHERE id = {$result['game_id']}")->fetch();
+        self::assertSame('chaos_draft', $game['deck_type']);
     }
 
     public function testJoinCreatesADuelGameAndClaimsTheListing(): void

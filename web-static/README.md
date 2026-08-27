@@ -735,6 +735,13 @@ multi-seat listing that's taking a while to fill); and `GET
 /open-games?mine=1` (the current user's own open listings, each with a
 Cancel button calling `cancelOpenGame()`).
 
+No frontend filtering of its own -- a `chaos_draft` listing simply never
+appears in `GET /open-games`'s own response for a viewer who hasn't
+opted into "Allow custom card/effect formats" (`MatchmakingService::
+listOpenGames()`, see "Open lobby matchmaking" in `php-app/README.md`),
+the same server-side-only enforcement `createGame()` already uses for
+friends-created Chaos Draft games.
+
 `#settings-matchmaking-discoverable-checkbox`, in the Settings dialog's
 "Game defaults" section right below the custom-content checkbox -- same
 starts-**unchecked**/opt-in shape (`users.matchmaking_discoverable`,
