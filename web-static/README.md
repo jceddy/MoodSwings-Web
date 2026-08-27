@@ -698,7 +698,7 @@ failure.
 
 An alternative to naming specific friend opponents: the New Game
 dialog's `#new-game-mode-fields` radio pair -- "Invite friends"
-(unchanged default) vs. "Post to the open lobby (let strangers join)" --
+(unchanged default) vs. "Post to the open lobby" --
 switches `#new-game-form` into posting an open listing instead
 (`MatchmakingService`, see "Open lobby matchmaking" in
 `php-app/README.md` for the full backend/scope writeup). Every format is
