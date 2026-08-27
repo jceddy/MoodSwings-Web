@@ -3022,16 +3022,18 @@
         chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card',
     };
 
-    // "1 of 4 joined" -- joined_count never includes the listing's own
-    // creator (see MatchmakingService::joinOpenGame()'s own docblock), so
-    // this always reads naturally as "besides you" from the creator's own
-    // point of view, and as "including you" from a joiner's (they're
-    // counted the moment their own join succeeds).
+    // "2 of 4 joined" -- listing.joined_count itself never includes the
+    // listing's own creator (see MatchmakingService::joinOpenGame()'s own
+    // docblock), but the creator has functionally already filled one
+    // seat, so the number shown here always adds 1 for them -- a brand
+    // new listing reads "1 of 4 joined", not the more confusing
+    // "0 of 4" (a bug caught live: the creator's own seat wasn't being
+    // counted at all).
     function openGameSummary(listing) {
         const params = listing.create_game_params;
         const format = NEW_GAME_FORMAT_LABELS[params.format] || params.format;
         const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        return `${format} – ${deckType} (${listing.joined_count} of ${listing.target_player_count} joined)`;
+        return `${format} – ${deckType} (${listing.joined_count + 1} of ${listing.target_player_count} joined)`;
     }
 
     async function loadOpenGamesDialog() {

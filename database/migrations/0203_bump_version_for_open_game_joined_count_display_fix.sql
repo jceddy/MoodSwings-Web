@@ -1,0 +1,15 @@
+-- No schema change: a bug caught live -- a freshly-posted open game
+-- listing (issue #116) showed "0 of 2 joined" (or "0 of N" for any
+-- format), which reads as if nobody -- not even the creator -- had a
+-- seat yet. open_game_listings.joined_count itself is correct as
+-- stored/returned by the API (it deliberately never counts the
+-- listing's own creator, see open_game_listing_joins' own docblock),
+-- but the frontend's own openGameSummary() (game.js) was displaying
+-- that raw count with no adjustment for the creator's own already-filled
+-- seat. Fixed by adding 1 to the displayed number only -- a brand new
+-- listing now reads "1 of 2 joined" instead.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0202 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.59' WHERE id = 1;
