@@ -1099,11 +1099,19 @@ body.game-page {
     color: #fff;
 }
 
-/* Nudged down ~20px from the card's own top edge -- exactly the reason
-   .card-thumb__badge--copy/--recolored/--chaos were already nudged down
-   on the OPPOSITE corner; see that comment just below. */
+/* Sits right at the card's own top edge (maintainer's own call,
+   reversing this rule's brief 20px-down detour in between): unlike the
+   top-left corner (still nudged down -- see
+   .card-thumb__badge--copy/--recolored/--chaos just below -- to clear
+   the card name printed there), this corner overlapping the card's OWN
+   printed die-value icon is fine, arguably preferable -- a live current
+   value up top reads less ambiguously than the two being simultaneously
+   visible and potentially disagreeing. Safe to sit this high again now
+   that .card-thumb__badge--chaos-delta/--chaos-override below no longer
+   shares this same row (that pairing, not the value badge alone, was
+   what originally reached far enough left to cover the card name). */
 .card-thumb__badge--value {
-    top: calc((0.25rem + 20px) * var(--card-scale, 1));
+    top: calc(0.25rem * var(--card-scale, 1));
     right: calc(0.25rem * var(--card-scale, 1));
 }
 
@@ -1127,7 +1135,7 @@ body.game-page {
    there's nothing to stack between THEM. */
 .card-thumb__badge--chaos-delta,
 .card-thumb__badge--chaos-override {
-    top: calc((0.25rem + 20px + 22px) * var(--card-scale, 1));
+    top: calc((0.25rem + 22px) * var(--card-scale, 1));
     right: calc(0.25rem * var(--card-scale, 1));
     background: #b00020;
 }
@@ -2252,21 +2260,20 @@ dialog#deck-builder-dialog[open] {
         padding: calc(0.2rem * var(--card-scale, 1)) calc(0.7rem * var(--card-scale, 1));
     }
 
-    /* Doubled counterpart of --value's own 20px -> 40px down-nudge
-       further up (avoids covering the card name -- see that rule's own
-       comment). */
+    /* Doubled counterpart of --value's own position further up (back at
+       the card's own top edge -- see that rule's own comment). */
     .card-thumb__badge--value {
-        top: calc((0.5rem + 40px) * var(--card-scale, 1));
+        top: calc(0.5rem * var(--card-scale, 1));
         right: calc(0.5rem * var(--card-scale, 1));
     }
 
     /* Doubled counterpart of .card-thumb__badge--chaos-delta further up
-       (0.25rem -> 0.5rem, 20px -> 40px down-nudge, 22px -> 44px stack
-       increment). Covers .card-thumb__badge--chaos-override too -- see
-       that selector's own comment for why the two share a position. */
+       (0.25rem -> 0.5rem, 22px -> 44px stack increment). Covers
+       .card-thumb__badge--chaos-override too -- see that selector's own
+       comment for why the two share a position. */
     .card-thumb__badge--chaos-delta,
     .card-thumb__badge--chaos-override {
-        top: calc((0.5rem + 40px + 44px) * var(--card-scale, 1));
+        top: calc((0.5rem + 44px) * var(--card-scale, 1));
         right: calc(0.5rem * var(--card-scale, 1));
     }
 

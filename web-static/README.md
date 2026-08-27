@@ -289,18 +289,23 @@ is non-null (see `chaos_value_override` in `php-app/README.md`). The
 card-detail dialog's meta line surfaces the same fixed value as a
 parenthetical (`(chaos: fixed at N)`).
 
-The value badge sits ~20px down from the card's own top-right corner (a
-bug caught live: the un-nudged corner used to sit right over the card
-name printed at the top of the art) -- matching the ~20px nudge
-`.card-thumb__badge--copy`/`--recolored`/`--chaos` already used on the
-opposite (top-left) corner for the exact same reason. The chaos-delta/
-chaos-override badge is stacked directly below it (another bug caught
-live: originally positioned to the value badge's LEFT instead, on a
-narrow card that could push it far enough to collide with the top-left
-`--chaos` "Chaos" rarity pill) -- same ~22px stacking increment
-`.card-thumb__badge--copy` + `.card-thumb__badge--recolored` already
-uses for its own vertical stack (see `style.css`'s own comments on all
-of these).
+The value badge sits right at the card's own top-right corner (briefly
+nudged ~20px down in between, to clear the card name printed at the top
+of the art the same way `.card-thumb__badge--copy`/`--recolored`/
+`--chaos` already are on the opposite top-left corner -- reversed on
+the maintainer's own call: overlapping the card's own printed die-value
+icon there is fine, arguably preferable, since a live current value up
+top reads less ambiguously than the two being simultaneously visible).
+Safe to sit this high again since the chaos-delta/chaos-override badge
+no longer shares its row -- that pairing, not the value badge alone,
+was what originally reached far enough left to cover the card name. The
+chaos-delta/chaos-override badge is instead stacked directly below the
+value badge (another bug caught live along the way: originally
+positioned to the value badge's LEFT, on a narrow card that could push
+it far enough to collide with the top-left `--chaos` "Chaos" rarity
+pill) -- same ~22px stacking increment `.card-thumb__badge--copy` +
+`.card-thumb__badge--recolored` already uses for its own vertical stack
+(see `style.css`'s own comments on all of these).
 
 The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and
