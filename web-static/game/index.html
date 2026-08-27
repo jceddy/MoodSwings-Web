@@ -840,36 +840,6 @@
                 </div>
             </div>
 
-            <div id="new-game-sealed-deck-fields" hidden>
-                <p>Choose the pool each player is independently dealt their own random 45-card sealed pool from (a different random pool per player, even with the same source):</p>
-                <label>Pool
-                    <select id="new-game-sealed-deck-pool-source">
-                        <option value="structure">Structure deck (45 cards)</option>
-                        <option value="random_48">45 random cards</option>
-                        <option value="jceddys_75">jceddy's 75 Card deck (75 cards)</option>
-                        <option value="one_of_each">One of Each Card (133 cards)</option>
-                        <option value="custom">Custom pool</option>
-                        <option value="saved_deck">My saved deck</option>
-                    </select>
-                </label>
-                <p id="new-game-sealed-deck-pool-source-description"></p>
-
-                <div id="new-game-sealed-deck-custom-pool-fields" hidden>
-                    <label>Upload a pool file
-                        <input type="file" id="new-game-sealed-deck-custom-pool-file" accept=".txt,text/plain">
-                    </label>
-                    <label>Or paste the pool (one card per line, an optional leading count, at least 45 cards -- each player draws their own random 45-card slice of it)
-                        <textarea id="new-game-sealed-deck-custom-pool-text" class="decklist-textarea" rows="10"></textarea>
-                    </label>
-                </div>
-
-                <div id="new-game-sealed-deck-saved-deck-fields" hidden>
-                    <label>Saved deck
-                        <select id="new-game-sealed-deck-saved-decklist"></select>
-                    </label>
-                </div>
-            </div>
-
             <label class="new-game-field"><input type="checkbox" id="new-game-default-selections"> Default selections mode (pre-fill card choices with a reasonable default; still changeable before submitting)</label>
 
             <button id="new-game-submit-button" type="submit">Create game</button>

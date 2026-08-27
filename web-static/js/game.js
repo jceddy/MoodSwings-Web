@@ -1579,7 +1579,7 @@
         rotisserie_draft: '2-4 players draft one card at a time from a shared, fully face-up pool -- no packs, piles, or grid, just the whole pool laid out at once. A snake-style turn order (choosable cutoff of 13-20 cards per player, default 14) continues until every player has picked that many; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         tiered_rotisserie_draft: 'Like Rotisserie Draft, but split into several tiers drafted one after another (turn order carries straight through from one tier into the next). Choose the fixed rarity tiering (Mythic/Rare/Uncommon/Common, each tier\'s own layout twice what it distributes -- a 15-card pool per player) or configure 2-4 custom tiers yourself, each with its own pool and cutoff count. 2-4 players; a 2-player draft plays a best-of-three match, sideboarding freely between games, while a 3-4 player draft plays a single game.',
         chaos_draft: 'Quick Draft\'s own drafting, deck-building, and match structure, unchanged -- but at the start of every round, each player (or team, in Open Team Play) is offered a choice between two randomly-generated effects and attaches the chosen one permanently to a card in their hand, stacking with that card\'s own printed ability.',
-        sealed_deck: '2-4 players, no live drafting at all: each player is independently dealt their own random 45-card sealed pool (structure-deck-sized) and builds a deck of at least 12 cards straight from it. A 2-player game plays a best-of-three match, sideboarding freely between games from that same fixed pool; a 3-4 player game is a single game.',
+        sealed_deck: '2-4 players, no live drafting at all: each player is independently dealt their own random 45-card Structure deck-style sealed pool (23 common, 14 uncommon, 6 rare, 2 mythic) and builds a deck of at least 12 cards straight from it. A 2-player game plays a best-of-three match, sideboarding freely between games from that same fixed pool; a 3-4 player game is a single game.',
         one_of_each: 'The full 133-card pool — one copy of every printed mood.',
     };
 
@@ -1642,19 +1642,6 @@
     // Card deck's own 150-card pool only at exactly 4 players (the only
     // player count whose 96-card target exceeds 75) before narrowing back
     // down to the target size.
-    // Sealed Deck's own pool sources (issue #392) -- unlike every draft
-    // deck_type above, each player is dealt their OWN independent
-    // 45-card pool rather than drafting a shared one, so these describe
-    // "your own pool," not "the shared pool to draft from."
-    const SEALED_DECK_POOL_SOURCE_DESCRIPTIONS = {
-        structure: 'Your own random 45-card Structure deck pool (23 common, 14 uncommon, 6 rare, 2 mythic) -- like opening a physical Structure Deck box, just for a sealed pool instead of a ready-built deck.',
-        random_48: 'Your own 45 random cards, no duplicates.',
-        jceddys_75: "Your own random 45-card slice of the 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors).",
-        one_of_each: 'Your own random 45-card slice of the full 133-card pool.',
-        custom: "Paste or upload a pool of 45+ cards (same format as a Custom Decklist, but no About/Sideboard sections) -- each player draws their own random 45-card slice of it, so even two players choosing this same pool end up with different sealed pools.",
-        saved_deck: "Deal from one of your own saved decks (or a friend's, if they've shared one with you) instead of pasting or uploading -- each player still draws their own random 45-card slice of it.",
-    };
-
     const GRID_DRAFT_POOL_SOURCE_DESCRIPTIONS = {
         random_48: 'Random cards, no duplicates (54/72/96 for 2/3/4 players).',
         jceddys_75: "The 75-card jceddy's 75 Card deck pool (40 common, 20 uncommon, 10 rare, 5 mythic, split evenly across all 5 colors), randomly narrowed down to the draft's target pool size -- swapped for jceddy's 150 Card deck's own 150-card pool first for a 4-player draft, since 75 alone falls short of the 96 needed.",
@@ -1872,7 +1859,6 @@
         document.getElementById('new-game-grid-draft-fields').hidden = deckType !== 'grid_draft';
         document.getElementById('new-game-rotisserie-draft-fields').hidden = deckType !== 'rotisserie_draft';
         document.getElementById('new-game-tiered-rotisserie-draft-fields').hidden = deckType !== 'tiered_rotisserie_draft';
-        document.getElementById('new-game-sealed-deck-fields').hidden = deckType !== 'sealed_deck';
         if (deckType === 'custom_duel') {
             updateDuelRulesPresetVisibility();
         }
@@ -1890,9 +1876,6 @@
         }
         if (deckType === 'tiered_rotisserie_draft') {
             updateTieredRotisserieDraftModeVisibility();
-        }
-        if (deckType === 'sealed_deck') {
-            updateSealedDeckPoolSourceVisibility();
         }
         updateBotDecklistFieldsVisibility();
     }
@@ -1964,14 +1947,6 @@
     }
 
     // Sealed Deck's own analog of updateQuickDraftPoolSourceVisibility().
-    function updateSealedDeckPoolSourceVisibility() {
-        const poolSource = document.getElementById('new-game-sealed-deck-pool-source').value;
-        document.getElementById('new-game-sealed-deck-pool-source-description').textContent =
-            SEALED_DECK_POOL_SOURCE_DESCRIPTIONS[poolSource] || '';
-        document.getElementById('new-game-sealed-deck-custom-pool-fields').hidden = poolSource !== 'custom';
-        document.getElementById('new-game-sealed-deck-saved-deck-fields').hidden = poolSource !== 'saved_deck';
-    }
-
     // Rotisserie Draft's own analog of updateQuickDraftPoolSourceVisibility().
     function updateRotisserieDraftPoolSourceVisibility() {
         const poolSource = document.getElementById('new-game-rotisserie-draft-pool-source').value;
@@ -2776,7 +2751,6 @@
     document.getElementById('new-game-winston-draft-pool-source').addEventListener('change', updateWinstonDraftPoolSourceVisibility);
     document.getElementById('new-game-grid-draft-pool-source').addEventListener('change', updateGridDraftPoolSourceVisibility);
     document.getElementById('new-game-rotisserie-draft-pool-source').addEventListener('change', updateRotisserieDraftPoolSourceVisibility);
-    document.getElementById('new-game-sealed-deck-pool-source').addEventListener('change', updateSealedDeckPoolSourceVisibility);
     // The cutoff count directly determines the minimum pool size (see
     // currentRotisserieDraftMinPoolSize()), so a change to it needs the
     // same option-label refresh a checked-opponent/format change already
@@ -2832,15 +2806,6 @@
         }
 
         document.getElementById('new-game-rotisserie-draft-custom-pool-text').value = await file.text();
-    });
-
-    document.getElementById('new-game-sealed-deck-custom-pool-file').addEventListener('change', async (event) => {
-        const file = event.target.files[0];
-        if (!file) {
-            return;
-        }
-
-        document.getElementById('new-game-sealed-deck-custom-pool-text').value = await file.text();
     });
 
     // Reading an uploaded decklist file into the textarea lets both input
@@ -3019,7 +2984,6 @@
         await populateSavedDecklistSelect(document.getElementById('new-game-winston-draft-saved-decklist'), 'Choose a saved deck');
         await populateSavedDecklistSelect(document.getElementById('new-game-grid-draft-saved-decklist'), 'Choose a saved deck');
         await populateSavedDecklistSelect(document.getElementById('new-game-rotisserie-draft-saved-decklist'), 'Choose a saved deck');
-        await populateSavedDecklistSelect(document.getElementById('new-game-sealed-deck-saved-decklist'), 'Choose a saved deck');
         await Promise.all([1, 2, 3, 4].map((n) =>
             populateSavedDecklistSelect(document.getElementById('new-game-tiered-rotisserie-draft-tier-' + n + '-saved-decklist'), 'Choose a saved deck')));
 
@@ -3316,22 +3280,20 @@
                 };
             })
             : undefined;
-        const sealedDeckPoolSource = deckType === 'sealed_deck' ? document.getElementById('new-game-sealed-deck-pool-source').value : undefined;
-        const sealedDeckCustomPoolText = deckType === 'sealed_deck' && sealedDeckPoolSource === 'custom'
-            ? document.getElementById('new-game-sealed-deck-custom-pool-text').value
-            : undefined;
-        // A single param shared by deck_type 'custom' and any of the five
+        // A single param shared by deck_type 'custom' and any of the four
         // draft pool sources being 'saved_deck' (issue #290) -- only one
-        // of these six is ever active per submission, so whichever
+        // of these five is ever active per submission, so whichever
         // select is currently relevant is the one read here. Mirrors how
         // GameService::createGame() itself reuses one $savedDecklistId
-        // param across all six -- see its own docblock.
+        // param across all five -- see its own docblock. Sealed Deck has
+        // no pool-source picker of its own (always the Structure pool for
+        // now, see GameService::buildSealedDeckPlayerPool()'s own
+        // docblock), so it never contributes a branch here.
         const savedDecklistId = deckType === 'custom' ? Number(document.getElementById('new-game-saved-decklist').value) || undefined
             : (deckType === 'quick_draft' || deckType === 'chaos_draft') && quickDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-quick-draft-saved-decklist').value) || undefined
             : deckType === 'winston_draft' && winstonDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-winston-draft-saved-decklist').value) || undefined
             : deckType === 'grid_draft' && gridDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-grid-draft-saved-decklist').value) || undefined
             : deckType === 'rotisserie_draft' && rotisserieDraftPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-rotisserie-draft-saved-decklist').value) || undefined
-            : deckType === 'sealed_deck' && sealedDeckPoolSource === 'saved_deck' ? Number(document.getElementById('new-game-sealed-deck-saved-decklist').value) || undefined
             : undefined;
         const defaultSelectionsMode = document.getElementById('new-game-default-selections').checked;
         // Only meaningful for deck_type 'custom_duel' with a bot checked --
@@ -3381,8 +3343,6 @@
                 rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
                 tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
                 tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
-                sealed_deck_pool_source: sealedDeckPoolSource,
-                sealed_deck_custom_pool_text: sealedDeckCustomPoolText,
             });
 
             if (!ok) {
@@ -3423,8 +3383,6 @@
             tieredRotisserieDraftMode,
             tieredRotisserieDraftTiers,
             botGoesFirst,
-            sealedDeckPoolSource,
-            sealedDeckCustomPoolText,
         );
 
         if (!ok) {
