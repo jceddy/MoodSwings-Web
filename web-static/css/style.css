@@ -1126,16 +1126,17 @@ body.game-page {
    same right-alignment, rather than to its left (a bug caught live: on
    a narrow card, sharing the value badge's own row pushed this badge
    far enough left to collide with .card-thumb__badge--chaos's own
-   "Chaos" rarity pill in the OPPOSITE top-left corner) -- stacked using
-   the same 22px increment .card-thumb__badge--copy + .card-thumb__badge--recolored
-   below already uses for its own vertical stack. Shares its exact
-   position with .card-thumb__badge--chaos-override just below -- the
-   two are mutually exclusive on any single card (a chaos effect is
-   either delta-shaped or absolute-override-shaped, never both), so
-   there's nothing to stack between THEM. */
+   "Chaos" rarity pill in the OPPOSITE top-left corner) -- the exact same
+   20px offset that pill uses (maintainer's own follow-up nudge, up from
+   an initial 22px, so the two land EXACTLY level with each other rather
+   than 2px off). Shares its exact position with
+   .card-thumb__badge--chaos-override just below -- the two are mutually
+   exclusive on any single card (a chaos effect is either delta-shaped
+   or absolute-override-shaped, never both), so there's nothing to stack
+   between THEM. */
 .card-thumb__badge--chaos-delta,
 .card-thumb__badge--chaos-override {
-    top: calc((0.25rem + 22px) * var(--card-scale, 1));
+    top: calc((0.25rem + 20px) * var(--card-scale, 1));
     right: calc(0.25rem * var(--card-scale, 1));
     background: #b00020;
 }
@@ -2268,12 +2269,13 @@ dialog#deck-builder-dialog[open] {
     }
 
     /* Doubled counterpart of .card-thumb__badge--chaos-delta further up
-       (0.25rem -> 0.5rem, 22px -> 44px stack increment). Covers
-       .card-thumb__badge--chaos-override too -- see that selector's own
-       comment for why the two share a position. */
+       (0.25rem -> 0.5rem, 20px -> 40px -- the same offset
+       .card-thumb__badge--chaos uses below, so the two land exactly
+       level). Covers .card-thumb__badge--chaos-override too -- see that
+       selector's own comment for why the two share a position. */
     .card-thumb__badge--chaos-delta,
     .card-thumb__badge--chaos-override {
-        top: calc((0.5rem + 44px) * var(--card-scale, 1));
+        top: calc((0.5rem + 40px) * var(--card-scale, 1));
         right: calc(0.5rem * var(--card-scale, 1));
     }
 

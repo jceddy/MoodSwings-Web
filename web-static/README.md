@@ -303,8 +303,9 @@ chaos-delta/chaos-override badge is instead stacked directly below the
 value badge (another bug caught live along the way: originally
 positioned to the value badge's LEFT, on a narrow card that could push
 it far enough to collide with the top-left `--chaos` "Chaos" rarity
-pill) -- same ~22px stacking increment `.card-thumb__badge--copy` +
-`.card-thumb__badge--recolored` already uses for its own vertical stack
+pill) -- offset by the exact same ~20px `.card-thumb__badge--chaos`
+itself uses (nudged up slightly from an initial ~22px, per feedback, so
+the two land EXACTLY level with each other rather than 2px/4px off)
 (see `style.css`'s own comments on all of these).
 
 The card-detail dialog's enlarged
