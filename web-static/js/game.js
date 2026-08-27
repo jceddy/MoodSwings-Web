@@ -2067,7 +2067,15 @@
 
     function updateTeamFields() {
         const format = document.getElementById('new-game-format').value;
-        const isTeamFormat = format === 'team' || format === 'closed_team';
+        // Issue #116: an open-lobby team listing never offers a partner
+        // choice at all -- there's nobody to choose from yet, and
+        // whoever eventually fills the other 3 seats are strangers with
+        // no way to coordinate a pick ahead of time. Teams are always
+        // assigned randomly once the roster fills instead (see
+        // MatchmakingService::joinOpenGame()), so this stays hidden even
+        // for a team format in that mode.
+        const isOpenLobby = document.getElementById('new-game-mode-open').checked;
+        const isTeamFormat = (format === 'team' || format === 'closed_team') && !isOpenLobby;
         document.getElementById('new-game-team-fields').hidden = !isTeamFormat;
         if (!isTeamFormat) {
             return;
@@ -2655,32 +2663,32 @@
     // matters for 'custom_duel' switching away without its own bot
     // decklist filled in -- format alone never disqualifies a bot
     // anymore, Team Play (issue #360) included.
-    // Issue #116: hides the friends picker and narrows the Format select
-    // to "duel"/"draft" -- the only formats MatchmakingService::
-    // postOpenGame() currently accepts, see its own docblock for why --
-    // whenever "Post to the open lobby" is chosen; restores every hidden
-    // format option and the friends picker when switching back. Forces
-    // the format back to "duel" if it was left on a now-hidden option
-    // (e.g. switching modes after already picking "Traditional").
+    // Issue #116: hides the friends picker (every format is supported in
+    // open-lobby mode, unlike the original two-player-only cut) whenever
+    // "Post to the open lobby" is chosen, and shows/hides
+    // #new-game-open-player-count-label -- only 'draft'/'standard' let
+    // the creator actually choose a total (2-4); 'duel' is always 2 and
+    // the team formats are always 4, both forced server-side regardless
+    // of what this field would send, so it stays hidden for those.
+    // updateTeamFields() (called via the format 'change' listener already
+    // wired below) independently keeps #new-game-team-fields hidden in
+    // this mode even for a team format -- there's no partner to choose
+    // from strangers, so teams are always assigned randomly once the
+    // roster fills (see MatchmakingService::joinOpenGame()).
     function updateNewGameModeFields() {
         const isOpenLobby = document.getElementById('new-game-mode-open').checked;
         document.getElementById('new-game-friends-fields').hidden = isOpenLobby;
 
-        const formatSelect = document.getElementById('new-game-format');
-        for (const option of formatSelect.options) {
-            if (option.value === 'standard' || option.value === 'team' || option.value === 'closed_team') {
-                option.hidden = isOpenLobby;
-            }
-        }
-        if (isOpenLobby && !['duel', 'draft'].includes(formatSelect.value)) {
-            formatSelect.value = 'duel';
-            formatSelect.dispatchEvent(new Event('change'));
-        }
+        const format = document.getElementById('new-game-format').value;
+        document.getElementById('new-game-open-player-count-label').hidden =
+            !isOpenLobby || (format !== 'draft' && format !== 'standard');
 
         document.getElementById('new-game-submit-button').textContent = isOpenLobby ? 'Post to open lobby' : 'Create game';
+        updateTeamFields();
     }
     document.getElementById('new-game-mode-friends').addEventListener('change', updateNewGameModeFields);
     document.getElementById('new-game-mode-open').addEventListener('change', updateNewGameModeFields);
+    document.getElementById('new-game-format').addEventListener('change', updateNewGameModeFields);
 
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
@@ -3006,7 +3014,7 @@
     // -- Open games (issue #116) ----------------------------------------
 
     const openGamesDialog = document.getElementById('open-games-dialog');
-    const NEW_GAME_FORMAT_LABELS = { duel: 'Duel', draft: 'Draft' };
+    const NEW_GAME_FORMAT_LABELS = { duel: 'Duel', draft: 'Draft', standard: 'Traditional', team: 'Open Team Play', closed_team: 'Closed Team Play' };
     const NEW_GAME_DECK_TYPE_LABELS = {
         structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", custom: 'Custom Decklist',
         custom_duel: 'Custom Decklists (Duel)', quick_draft: 'Quick Draft', winston_draft: 'Winston Draft',
@@ -3014,17 +3022,22 @@
         chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card',
     };
 
+    // "1 of 4 joined" -- joined_count never includes the listing's own
+    // creator (see MatchmakingService::joinOpenGame()'s own docblock), so
+    // this always reads naturally as "besides you" from the creator's own
+    // point of view, and as "including you" from a joiner's (they're
+    // counted the moment their own join succeeds).
     function openGameSummary(listing) {
         const params = listing.create_game_params;
         const format = NEW_GAME_FORMAT_LABELS[params.format] || params.format;
         const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
-        return `${format} – ${deckType}`;
+        return `${format} – ${deckType} (${listing.joined_count} of ${listing.target_player_count} joined)`;
     }
 
     async function loadOpenGamesDialog() {
         document.getElementById('open-games-error').hidden = true;
 
-        const [availableResp, mineResp] = await Promise.all([listOpenGames(false), listOpenGames(true)]);
+        const [availableResp, joinedResp, mineResp] = await Promise.all([listOpenGames(), listOpenGames('joined'), listOpenGames('mine')]);
 
         const availableList = document.getElementById('open-games-available-list');
         availableList.innerHTML = '';
@@ -3048,11 +3061,45 @@
                     document.getElementById('open-games-error').hidden = false;
                     return;
                 }
-                openGamesDialog.close();
-                showBoard(body.game_id);
+                if (body.status === 'started') {
+                    openGamesDialog.close();
+                    showBoard(body.game_id);
+                    return;
+                }
+                // 'waiting' -- this join didn't fill the last seat.
+                // Nothing to jump to yet; refresh so it now shows up
+                // under "Waiting to start" instead (with a Leave button)
+                // and drops out of "Available to join".
+                await loadOpenGamesDialog();
             });
             item.appendChild(joinButton);
             availableList.appendChild(item);
+        }
+
+        const joinedList = document.getElementById('open-games-joined-list');
+        joinedList.innerHTML = '';
+        const joinedListings = joinedResp.ok ? joinedResp.body.listings : [];
+        document.getElementById('open-games-joined-empty').hidden = joinedListings.length > 0;
+
+        for (const listing of joinedListings) {
+            const item = document.createElement('li');
+            item.append(`${listing.creator_username}: ${openGameSummary(listing)} `);
+            const leaveButton = document.createElement('button');
+            leaveButton.type = 'button';
+            leaveButton.textContent = 'Leave';
+            leaveButton.addEventListener('click', async () => {
+                leaveButton.disabled = true;
+                const { ok, body } = await leaveOpenGame(listing.id);
+                if (!ok) {
+                    leaveButton.disabled = false;
+                    document.getElementById('open-games-error').textContent = body.message || 'Could not leave this listing.';
+                    document.getElementById('open-games-error').hidden = false;
+                    return;
+                }
+                await loadOpenGamesDialog();
+            });
+            item.appendChild(leaveButton);
+            joinedList.appendChild(item);
         }
 
         const mineList = document.getElementById('open-games-mine-list');
@@ -3062,7 +3109,7 @@
 
         for (const listing of mineListings) {
             const item = document.createElement('li');
-            item.append(`${openGameSummary(listing)} (waiting for a player) `);
+            item.append(`${openGameSummary(listing)} `);
             const cancelButton = document.createElement('button');
             cancelButton.type = 'button';
             cancelButton.textContent = 'Cancel';
@@ -3208,14 +3255,18 @@
         // Issue #116: post to the open lobby instead of creating the game
         // directly -- mirrors createGame()'s own params (see above) minus
         // opponent_user_ids/partner_user_id/random_teams/bot_* (none
-        // meaningful here; a stranger, not a chosen friend or bot, fills
-        // the other seat once they join). See MatchmakingService's own
-        // docblock for why wins_needed/format/deck_type combinations
-        // outside "duel"/"draft" are rejected server-side.
+        // meaningful here; strangers, not chosen friends or a bot, fill
+        // the other seats once they join -- teams in particular are
+        // always assigned randomly once the roster fills, see
+        // MatchmakingService::joinOpenGame()). target_player_count only
+        // matters for 'draft'/'standard' (#new-game-open-player-count) --
+        // 'duel' is always 2 and the team formats are always 4, both
+        // forced server-side regardless of what's sent here.
         if (isOpenLobby) {
             const { ok, body } = await postOpenGame({
                 format,
                 deck_type: deckType,
+                target_player_count: Number(document.getElementById('new-game-open-player-count').value),
                 decklist_text: decklistText,
                 duel_deck_rules: duelDeckRules,
                 quick_draft_pool_source: quickDraftPoolSource,

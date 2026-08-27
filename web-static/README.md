@@ -698,25 +698,42 @@ failure.
 
 An alternative to naming specific friend opponents: the New Game
 dialog's `#new-game-mode-fields` radio pair -- "Invite friends"
-(unchanged default) vs. "Post to the open lobby (let a stranger join)" --
+(unchanged default) vs. "Post to the open lobby (let strangers join)" --
 switches `#new-game-form` into posting an open listing instead
 (`MatchmakingService`, see "Open lobby matchmaking" in
-`php-app/README.md` for the full backend/scope writeup). Choosing "open"
-(`updateNewGameModeFields()`) hides `#new-game-friends-fields` and hides
-every Format `<option>` except `duel`/`draft` -- this first cut's only
-supported formats -- forcing the select back to `duel` if it was left on
-a now-hidden option. Submitting in this mode calls `postOpenGame()`
-(app.js) instead of `createGame()`, reusing every already-collected
-field (deck_type, decklist/pool choices, default selections mode, etc.)
-unchanged; on success the dialog closes with a confirmation via
+`php-app/README.md` for the full backend/scope writeup). Every format is
+supported; choosing "open" (`updateNewGameModeFields()`) hides
+`#new-game-friends-fields`, and for `draft`/`standard` shows
+`#new-game-open-player-count-label` -- a `2`-`4` select for exactly how
+many total players (including the creator) the listing needs before it
+starts, forced to `2` for `duel` and `4` for the team formats regardless
+(both hide the field, since there's nothing to choose). A team format's
+own partner-choice fields (`#new-game-team-fields`) stay hidden in this
+mode too, even though the format itself is otherwise shown normally --
+`updateTeamFields()`'s own open-lobby check keeps it that way, since
+teams are always assigned randomly once a listing's roster fills (no
+way to coordinate a partner pick with strangers). Submitting in this
+mode calls `postOpenGame()` (app.js) instead of `createGame()`, reusing
+every already-collected field (deck_type, decklist/pool choices, default
+selections mode, etc.) unchanged plus the player-count select's own
+value; on success the dialog closes with a confirmation via
 `showAlertDialog()` rather than jumping straight to a board, since
-there's no game yet -- just a listing waiting for someone to join it.
+there's no game yet -- just a listing waiting for however many more
+players it needs.
 
 A new "Open games" button (next to "New game"/"Past games") opens
-`#open-games-dialog`, listing both `GET /open-games` (available to join,
-each with a Join button that calls `joinOpenGame()` then jumps straight
-to the resulting board) and `GET /open-games?mine=1` (the current user's
-own open listings, each with a Cancel button calling `cancelOpenGame()`).
+`#open-games-dialog`, with three sections: `GET /open-games` (available
+to join, each showing "X of Y joined" via `openGameSummary()` with a
+Join button calling `joinOpenGame()` -- jumps straight to the resulting
+board once that join's own response reports `{"status": "started"}`,
+or just refreshes the dialog if it instead reports `{"status":
+"waiting"}`, since the listing isn't a real game yet); `GET
+/open-games?joined=1` ("Waiting to start" -- listings the current user
+has joined themselves but that haven't filled yet, each with a Leave
+button calling `leaveOpenGame()`, the only way to back out of a
+multi-seat listing that's taking a while to fill); and `GET
+/open-games?mine=1` (the current user's own open listings, each with a
+Cancel button calling `cancelOpenGame()`).
 
 `#settings-matchmaking-discoverable-checkbox`, in the Settings dialog's
 "Game defaults" section right below the custom-content checkbox -- same

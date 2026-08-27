@@ -383,12 +383,30 @@ function postOpenGame(params) {
     });
 }
 
-function listOpenGames(mine = false) {
-    return apiRequest(`/open-games${mine ? '?mine=1' : ''}`);
+// scope: omitted/'' lists every open listing visible to the current user;
+// 'mine' lists their own posted listings; 'joined' lists listings
+// they've joined but that haven't started yet (see leaveOpenGame()).
+function listOpenGames(scope = '') {
+    return apiRequest(`/open-games${scope ? `?${scope}=1` : ''}`);
 }
 
+// Resolves to { ok, body } where body is either
+// { status: 'started', game_id } once this join fills the listing's
+// last seat, or { status: 'waiting', joined_count, target_player_count }
+// if more players are still needed (issue #116 -- standard/team listings
+// can need more than one more joiner).
 function joinOpenGame(listingId) {
     return apiRequest('/open-games/join', {
+        method: 'POST',
+        body: JSON.stringify({ id: listingId }),
+    });
+}
+
+// Withdraws an earlier joinOpenGame() call on a listing that hasn't
+// started yet -- the only way to back out once committed to a multi-seat
+// listing still waiting on other players.
+function leaveOpenGame(listingId) {
+    return apiRequest('/open-games/leave', {
         method: 'POST',
         body: JSON.stringify({ id: listingId }),
     });

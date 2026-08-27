@@ -35,6 +35,7 @@ use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
 use MoodSwings\Mail\Mailer;
 use MoodSwings\Maintenance\MaintenanceGate;
+use MoodSwings\Matchmaking\AlreadyJoinedListingException;
 use MoodSwings\Matchmaking\MatchmakingService;
 use MoodSwings\Matchmaking\NotAuthorizedToCancelListingException;
 use MoodSwings\Matchmaking\NotDiscoverableException;
@@ -1102,14 +1103,13 @@ if ($path === '/games' && $method === 'POST') {
     }
 }
 
-// Issue #116, first cut: an open lobby a player can post a game to
-// instead of naming specific friend opponents, and any other
-// discoverable, non-blocked player can browse and join. Mirrors POST
-// /games' own body shape minus opponent_user_ids/partner_user_id/
-// random_teams/bot_* -- none of those are known (or meaningful) until a
-// real second player actually joins; see MatchmakingService's own
-// docblock for why this first cut is limited to the "duel"/"draft"
-// formats.
+// Issue #116: an open lobby a player can post a game to instead of
+// naming specific friend opponents, and any other discoverable,
+// non-blocked player can browse and join. Mirrors POST /games' own body
+// shape minus opponent_user_ids/partner_user_id/random_teams/bot_* --
+// none of those are known (or meaningful) until real players actually
+// join, and team formats in particular never get a partner choice here
+// at all (see MatchmakingService::joinOpenGame() for why).
 function openGameCreateParamsFromRequestBody(array $body): array
 {
     return [
@@ -1148,36 +1148,54 @@ function openGameCreateParamsFromRequestBody(array $body): array
 if ($path === '/open-games' && $method === 'POST') {
     $currentUser = requireAuth($auth);
     $body = requestBody();
+    // Only meaningful for 'draft'/'standard' -- forced to the only legal
+    // value for 'duel' (2) and 'team'/'closed_team' (4) regardless of
+    // what's sent here. See MatchmakingService::postOpenGame()'s own
+    // docblock.
+    $targetPlayerCount = isset($body['target_player_count']) ? (int) $body['target_player_count'] : 2;
 
     try {
-        $listingId = $matchmaking->postOpenGame((int) $currentUser['id'], openGameCreateParamsFromRequestBody($body));
+        $listingId = $matchmaking->postOpenGame((int) $currentUser['id'], openGameCreateParamsFromRequestBody($body), $targetPlayerCount);
         respond(201, ['status' => 'ok', 'listing_id' => $listingId]);
     } catch (NotDiscoverableException | GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 
+function openGameListingResponse(array $listing): array
+{
+    return [
+        'id' => (int) $listing['id'],
+        'created_by_user_id' => (int) $listing['created_by_user_id'],
+        'creator_username' => $listing['creator_username'] ?? null,
+        'create_game_params' => $listing['create_game_params'],
+        'target_player_count' => (int) $listing['target_player_count'],
+        // Doesn't include the creator's own seat -- e.g. 1 of 3 means 2
+        // more are needed on top of the creator to reach
+        // target_player_count.
+        'joined_count' => (int) ($listing['joined_count'] ?? 0),
+        'created_at' => $listing['created_at'],
+    ];
+}
+
 // ?mine=1 lists the current user's own open listings (so they can see/
-// cancel what they've posted); omitted (or any other value) lists every
-// other open listing visible to them (MatchmakingService::listOpenGames()
-// -- discoverable creators only, blocked pairs excluded).
+// cancel what they've posted); ?joined=1 lists listings this user has
+// joined but that haven't started yet (so they can see/leave them, see
+// POST /open-games/leave below); omitted (or any other value) lists
+// every other open listing visible to them (MatchmakingService::
+// listOpenGames() -- discoverable creators only, blocked pairs and
+// listings already joined excluded).
 if ($path === '/open-games' && $method === 'GET') {
     $currentUser = requireAuth($auth);
-    $mine = ($_GET['mine'] ?? '') === '1';
-    $listings = $mine
-        ? $matchmaking->listMyOpenGames((int) $currentUser['id'])
-        : $matchmaking->listOpenGames((int) $currentUser['id']);
+    $currentUserId = (int) $currentUser['id'];
 
-    respond(200, ['status' => 'ok', 'listings' => array_map(
-        static fn (array $listing): array => [
-            'id' => (int) $listing['id'],
-            'created_by_user_id' => (int) $listing['created_by_user_id'],
-            'creator_username' => $listing['creator_username'] ?? null,
-            'create_game_params' => $listing['create_game_params'],
-            'created_at' => $listing['created_at'],
-        ],
-        $listings
-    )]);
+    $listings = match (true) {
+        ($_GET['mine'] ?? '') === '1' => $matchmaking->listMyOpenGames($currentUserId),
+        ($_GET['joined'] ?? '') === '1' => $matchmaking->listJoinedOpenGames($currentUserId),
+        default => $matchmaking->listOpenGames($currentUserId),
+    };
+
+    respond(200, ['status' => 'ok', 'listings' => array_map(openGameListingResponse(...), $listings)]);
 }
 
 if ($path === '/open-games/join' && $method === 'POST') {
@@ -1186,12 +1204,25 @@ if ($path === '/open-games/join' && $method === 'POST') {
     $listingId = (int) ($body['id'] ?? 0);
 
     try {
-        $gameId = $matchmaking->joinOpenGame((int) $currentUser['id'], $listingId);
-        respond(201, ['status' => 'ok', 'game_id' => $gameId]);
-    } catch (OpenGameListingNotFoundException $e) {
+        $result = $matchmaking->joinOpenGame((int) $currentUser['id'], $listingId);
+        respond(201, ['status' => 'ok', ...$result]);
+    } catch (OpenGameListingNotFoundException | AlreadyJoinedListingException $e) {
         respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     } catch (GameStateException $e) {
         respond(400, ['status' => 'error', 'message' => $e->getMessage()]);
+    }
+}
+
+if ($path === '/open-games/leave' && $method === 'POST') {
+    $currentUser = requireAuth($auth);
+    $body = requestBody();
+    $listingId = (int) ($body['id'] ?? 0);
+
+    try {
+        $matchmaking->leaveOpenGame((int) $currentUser['id'], $listingId);
+        respond(200, ['status' => 'ok']);
+    } catch (OpenGameListingNotFoundException $e) {
+        respond(404, ['status' => 'error', 'message' => $e->getMessage()]);
     }
 }
 

@@ -10,6 +10,7 @@ use MoodSwings\Game\BoardStateRepository;
 use MoodSwings\Game\Exceptions\GameStateException;
 use MoodSwings\Game\GameService;
 use MoodSwings\Game\ReplayStateBuilder;
+use MoodSwings\Matchmaking\AlreadyJoinedListingException;
 use MoodSwings\Matchmaking\MatchmakingService;
 use MoodSwings\Matchmaking\NotAuthorizedToCancelListingException;
 use MoodSwings\Matchmaking\NotDiscoverableException;
@@ -52,6 +53,7 @@ final class MatchmakingIntegrationTest extends TestCase
         }
 
         $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+        $pdo->exec('TRUNCATE TABLE open_game_listing_joins');
         $pdo->exec('TRUNCATE TABLE open_game_listings');
         $pdo->exec('TRUNCATE TABLE game_events');
         $pdo->exec('TRUNCATE TABLE game_notes');
@@ -122,30 +124,56 @@ final class MatchmakingIntegrationTest extends TestCase
         $this->friendships->create($low, $high, 'blocked', $actorUserId);
     }
 
+    /** @param array{format?: string, deck_type?: string} $params */
+    private function postDuel(int $userId, array $params = []): int
+    {
+        return $this->matchmaking->postOpenGame($userId, ['format' => 'duel', 'deck_type' => 'structure', ...$params], 2);
+    }
+
     public function testPostingWithoutOptingInFails(): void
     {
         $aliceId = $this->insertUser('alice');
 
         $this->expectException(NotDiscoverableException::class);
-        $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel']);
+        $this->postDuel($aliceId);
     }
 
-    public function testTeamFormatIsRejectedForV1(): void
+    public function testUnsupportedFormatIsRejected(): void
     {
         $aliceId = $this->insertUser('alice');
         $this->makeDiscoverable($aliceId);
 
         $this->expectException(GameStateException::class);
-        $this->matchmaking->postOpenGame($aliceId, ['format' => 'team']);
+        $this->matchmaking->postOpenGame($aliceId, ['format' => 'not_a_real_format'], 2);
     }
 
-    public function testStandardFormatIsRejectedForV1(): void
+    public function testTargetPlayerCountIsForcedForDuelRegardlessOfWhatsPassed(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $this->makeDiscoverable($aliceId);
+
+        $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure'], 4);
+
+        self::assertSame(2, $this->matchmaking->listMyOpenGames($aliceId)[0]['target_player_count']);
+    }
+
+    public function testTargetPlayerCountIsForcedToFourForTeamFormats(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $this->makeDiscoverable($aliceId);
+
+        $this->matchmaking->postOpenGame($aliceId, ['format' => 'team', 'deck_type' => 'structure'], 2);
+
+        self::assertSame(4, $this->matchmaking->listMyOpenGames($aliceId)[0]['target_player_count']);
+    }
+
+    public function testTargetPlayerCountOutOfRangeIsRejectedForStandard(): void
     {
         $aliceId = $this->insertUser('alice');
         $this->makeDiscoverable($aliceId);
 
         $this->expectException(GameStateException::class);
-        $this->matchmaking->postOpenGame($aliceId, ['format' => 'standard']);
+        $this->matchmaking->postOpenGame($aliceId, ['format' => 'standard', 'deck_type' => 'structure'], 5);
     }
 
     public function testListOpenGamesExcludesOwnListing(): void
@@ -153,7 +181,7 @@ final class MatchmakingIntegrationTest extends TestCase
         $aliceId = $this->insertUser('alice');
         $this->makeDiscoverable($aliceId);
 
-        $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $this->postDuel($aliceId);
 
         self::assertCount(0, $this->matchmaking->listOpenGames($aliceId));
         self::assertCount(1, $this->matchmaking->listMyOpenGames($aliceId));
@@ -168,7 +196,7 @@ final class MatchmakingIntegrationTest extends TestCase
         // own filter in isolation (covers a listing posted before the
         // creator later opted back out, not just "never opted in").
         $this->makeDiscoverable($aliceId);
-        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $listingId = $this->postDuel($aliceId);
         $this->users->setMatchmakingDiscoverable($aliceId, false);
 
         self::assertCount(0, $this->matchmaking->listOpenGames($bobId));
@@ -186,7 +214,7 @@ final class MatchmakingIntegrationTest extends TestCase
         $aliceId = $this->insertUser('alice');
         $bobId = $this->insertUser('bob');
         $this->makeDiscoverable($aliceId);
-        $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $this->postDuel($aliceId);
 
         $this->block($aliceId, $bobId, $bobId);
 
@@ -199,9 +227,11 @@ final class MatchmakingIntegrationTest extends TestCase
         $bobId = $this->insertUser('bob');
         $this->makeDiscoverable($aliceId);
 
-        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $listingId = $this->postDuel($aliceId);
 
-        $gameId = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        $result = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        self::assertSame('started', $result['status']);
+        $gameId = $result['game_id'];
 
         $game = $this->pdo->query("SELECT format, deck_type FROM games WHERE id = {$gameId}")->fetch();
         self::assertSame('duel', $game['format']);
@@ -219,7 +249,7 @@ final class MatchmakingIntegrationTest extends TestCase
     {
         $aliceId = $this->insertUser('alice');
         $this->makeDiscoverable($aliceId);
-        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $listingId = $this->postDuel($aliceId);
 
         $this->expectException(OpenGameListingNotFoundException::class);
         $this->matchmaking->joinOpenGame($aliceId, $listingId);
@@ -231,7 +261,7 @@ final class MatchmakingIntegrationTest extends TestCase
         $bobId = $this->insertUser('bob');
         $carolId = $this->insertUser('carol');
         $this->makeDiscoverable($aliceId);
-        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $listingId = $this->postDuel($aliceId);
 
         $this->matchmaking->joinOpenGame($bobId, $listingId);
 
@@ -239,12 +269,25 @@ final class MatchmakingIntegrationTest extends TestCase
         $this->matchmaking->joinOpenGame($carolId, $listingId);
     }
 
+    public function testCannotJoinTheSameListingTwice(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'standard', 'deck_type' => 'structure'], 3);
+
+        $this->matchmaking->joinOpenGame($bobId, $listingId);
+
+        $this->expectException(AlreadyJoinedListingException::class);
+        $this->matchmaking->joinOpenGame($bobId, $listingId);
+    }
+
     public function testCannotJoinWhenBlocked(): void
     {
         $aliceId = $this->insertUser('alice');
         $bobId = $this->insertUser('bob');
         $this->makeDiscoverable($aliceId);
-        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $listingId = $this->postDuel($aliceId);
 
         $this->block($aliceId, $bobId, $aliceId);
 
@@ -257,7 +300,7 @@ final class MatchmakingIntegrationTest extends TestCase
         $aliceId = $this->insertUser('alice');
         $bobId = $this->insertUser('bob');
         $this->makeDiscoverable($aliceId);
-        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $listingId = $this->postDuel($aliceId);
 
         $this->matchmaking->cancelOpenGame($aliceId, $listingId);
 
@@ -272,7 +315,7 @@ final class MatchmakingIntegrationTest extends TestCase
         $aliceId = $this->insertUser('alice');
         $bobId = $this->insertUser('bob');
         $this->makeDiscoverable($aliceId);
-        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'duel', 'deck_type' => 'structure']);
+        $listingId = $this->postDuel($aliceId);
 
         $this->expectException(NotAuthorizedToCancelListingException::class);
         $this->matchmaking->cancelOpenGame($bobId, $listingId);
@@ -288,13 +331,148 @@ final class MatchmakingIntegrationTest extends TestCase
             'format' => 'draft',
             'deck_type' => 'quick_draft',
             'quick_draft_pool_source' => 'random_48',
-        ]);
+        ], 2);
 
-        $gameId = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        $result = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        self::assertSame('started', $result['status']);
 
-        $game = $this->pdo->query("SELECT format, deck_type, status FROM games WHERE id = {$gameId}")->fetch();
+        $game = $this->pdo->query("SELECT format, deck_type, status FROM games WHERE id = {$result['game_id']}")->fetch();
         self::assertSame('draft', $game['format']);
         self::assertSame('quick_draft', $game['deck_type']);
         self::assertSame('waiting', $game['status']);
+    }
+
+    /**
+     * A 'standard' listing targeting 3 players stays 'open' -- with a
+     * partial roster -- until all 3 have joined, rather than starting
+     * (or claiming) after just the first joiner the way a 2-player
+     * listing always has.
+     */
+    public function testStandardListingWaitsForEveryJoinerBeforeStarting(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $carolId = $this->insertUser('carol');
+        $this->makeDiscoverable($aliceId);
+
+        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'standard', 'deck_type' => 'structure'], 3);
+
+        $afterBob = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        self::assertSame('waiting', $afterBob['status']);
+        self::assertSame(1, $afterBob['joined_count']);
+        self::assertSame(3, $afterBob['target_player_count']);
+
+        // Still open and still listed, now showing 1 joined -- not
+        // claimed, no game created yet.
+        $myListings = $this->matchmaking->listMyOpenGames($aliceId);
+        self::assertCount(1, $myListings);
+        self::assertSame(1, $myListings[0]['joined_count']);
+        self::assertSame(0, $this->pdo->query('SELECT COUNT(*) FROM games')->fetchColumn());
+
+        $afterCarol = $this->matchmaking->joinOpenGame($carolId, $listingId);
+        self::assertSame('started', $afterCarol['status']);
+
+        $gameId = $afterCarol['game_id'];
+        $game = $this->pdo->query("SELECT format FROM games WHERE id = {$gameId}")->fetch();
+        self::assertSame('standard', $game['format']);
+
+        $seatedUserIds = $this->pdo->query("SELECT user_id FROM game_players WHERE game_id = {$gameId} ORDER BY seat_order")
+            ->fetchAll(PDO::FETCH_COLUMN);
+        self::assertSame([$aliceId, $bobId, $carolId], array_map(intval(...), $seatedUserIds));
+
+        self::assertCount(0, $this->matchmaking->listMyOpenGames($aliceId));
+    }
+
+    /**
+     * A team-format listing always needs exactly 4 (forced regardless of
+     * what's posted, see testTargetPlayerCountIsForcedToFourForTeamFormats()),
+     * and teams are assigned randomly once full -- there's no way to know
+     * a partner ahead of time when every joiner is a stranger, so this
+     * never reads a partner_user_id from create_game_params (there never
+     * is one). Confirms the resulting game actually has two 2-player
+     * teams, without asserting which specific pairing (that's random).
+     */
+    public function testTeamListingAssignsRandomTeamsOnceAllFourHaveJoined(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $carolId = $this->insertUser('carol');
+        $daveId = $this->insertUser('dave');
+        $this->makeDiscoverable($aliceId);
+
+        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'team', 'deck_type' => 'structure'], 4);
+
+        self::assertSame('waiting', $this->matchmaking->joinOpenGame($bobId, $listingId)['status']);
+        self::assertSame('waiting', $this->matchmaking->joinOpenGame($carolId, $listingId)['status']);
+        $result = $this->matchmaking->joinOpenGame($daveId, $listingId);
+        self::assertSame('started', $result['status']);
+
+        $gameId = $result['game_id'];
+        $game = $this->pdo->query("SELECT format FROM games WHERE id = {$gameId}")->fetch();
+        self::assertSame('team', $game['format']);
+
+        $teamIds = $this->pdo->query("SELECT DISTINCT team_id FROM game_players WHERE game_id = {$gameId}")
+            ->fetchAll(PDO::FETCH_COLUMN);
+        self::assertCount(2, $teamIds, 'exactly two teams');
+
+        $teamCounts = $this->pdo->query("SELECT team_id, COUNT(*) AS c FROM game_players WHERE game_id = {$gameId} GROUP BY team_id")
+            ->fetchAll();
+        foreach ($teamCounts as $row) {
+            self::assertSame(2, (int) $row['c'], 'each team has exactly 2 members');
+        }
+    }
+
+    public function testUserCanLeaveAListingTheyJoinedBeforeItFills(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $carolId = $this->insertUser('carol');
+        $this->makeDiscoverable($aliceId);
+
+        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'standard', 'deck_type' => 'structure'], 3);
+
+        $this->matchmaking->joinOpenGame($bobId, $listingId);
+        self::assertCount(1, $this->matchmaking->listJoinedOpenGames($bobId));
+
+        $this->matchmaking->leaveOpenGame($bobId, $listingId);
+        self::assertCount(0, $this->matchmaking->listJoinedOpenGames($bobId));
+
+        // Bob backed out, so the listing should show 0 joined again and
+        // still needs 2 more (carol alone isn't enough to start it).
+        self::assertSame(0, $this->matchmaking->listMyOpenGames($aliceId)[0]['joined_count']);
+
+        $result = $this->matchmaking->joinOpenGame($bobId, $listingId);
+        self::assertSame('waiting', $result['status'], 'bob can rejoin after leaving');
+    }
+
+    public function testCannotLeaveAListingNeverJoined(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'standard', 'deck_type' => 'structure'], 3);
+
+        $this->expectException(OpenGameListingNotFoundException::class);
+        $this->matchmaking->leaveOpenGame($bobId, $listingId);
+    }
+
+    /**
+     * A listing the viewer has already joined shouldn't also show up in
+     * their own "available to join" browse list (a "Join" button makes
+     * no sense there) -- it belongs in listJoinedOpenGames() instead.
+     */
+    public function testListOpenGamesExcludesAListingTheViewerHasAlreadyJoined(): void
+    {
+        $aliceId = $this->insertUser('alice');
+        $bobId = $this->insertUser('bob');
+        $this->makeDiscoverable($aliceId);
+        $listingId = $this->matchmaking->postOpenGame($aliceId, ['format' => 'standard', 'deck_type' => 'structure'], 3);
+
+        self::assertCount(1, $this->matchmaking->listOpenGames($bobId));
+
+        $this->matchmaking->joinOpenGame($bobId, $listingId);
+
+        self::assertCount(0, $this->matchmaking->listOpenGames($bobId));
+        self::assertCount(1, $this->matchmaking->listJoinedOpenGames($bobId));
     }
 }
