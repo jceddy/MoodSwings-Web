@@ -129,7 +129,7 @@ function getCardStats() {
     return apiRequest('/stats/cards');
 }
 
-function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst, sealedDeckPoolSource, sealedDeckCustomPoolText) {
+function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText, duelDeckRules, partnerUserId, quickDraftPoolSource, quickDraftCustomPoolText, winstonDraftPoolSource, winstonDraftCustomPoolText, gridDraftPoolSource, gridDraftCustomPoolText, savedDecklistId, defaultSelectionsMode, botDecklistText, botSavedDecklistId, randomTeams, rotisserieDraftPoolSource, rotisserieDraftCustomPoolText, rotisserieDraftCutoffCount, tieredRotisserieDraftMode, tieredRotisserieDraftTiers, botGoesFirst) {
     return apiRequest('/games', {
         method: 'POST',
         body: JSON.stringify({
@@ -191,10 +191,6 @@ function createGame(opponentUserIds, format, winsNeeded, deckType, decklistText,
             // seated (issue #417) -- see "Practice bots" in
             // web-static/README.md.
             bot_goes_first: botGoesFirst,
-            // Only meaningful for deck_type 'sealed_deck' -- see "Sealed
-            // Deck" in web-static/README.md.
-            sealed_deck_pool_source: sealedDeckPoolSource,
-            sealed_deck_custom_pool_text: sealedDeckCustomPoolText,
         }),
     });
 }

@@ -1343,10 +1343,11 @@ someone else's listing needs no opt-in of its own.
     Selecting it hides the now-redundant Deck dropdown entirely
     (`updateDeckTypeAvailability()`'s own early-return branch,
     `#new-game-deck-type-label`) and forces `#new-game-deck-type`'s value to
-    `'sealed_deck'` under the hood, so `#new-game-sealed-deck-fields` (the
-    pool-source picker) and its description still render exactly as they
-    would if `'sealed_deck'` had been picked from that dropdown directly.
-    Every other read of `#new-game-format`'s value that has to match the
+    `'sealed_deck'` under the hood, so its description still renders exactly
+    as it would if `'sealed_deck'` had been picked from that dropdown
+    directly (there's no pool-source picker of its own to render -- Sealed
+    Deck is always a Structure-deck-style pool for now, see "Sealed Deck" in
+    `php-app/README.md`). Every other read of `#new-game-format`'s value that has to match the
     ACTUAL backend format -- bot support (`botsSupportedFor()`), the
     open-lobby "total players needed" field, and what's actually sent to
     `POST /games`/`POST /open-games` -- goes through `effectiveNewGameFormat()`
@@ -2300,26 +2301,13 @@ someone else's listing needs no opt-in of its own.
       own panel and shows the shared `#draft-deck-building` view directly,
       since `state.sealed_deck.status` is always `'deck_building'` while
       the match is still `'waiting'` (see "Sealed Deck" in
-      `php-app/README.md`). The New Game dialog's own
-      `#new-game-sealed-deck-fields` is the simplest of the six draft
-      deck types' own pool-source pickers: a plain `#new-game-sealed-deck-
-      pool-source` select (Structure/`random_48`/jceddy's 75 Card/One of
-      Each Card/Custom pool/My saved deck, `updateSealedDeckPoolSourceVisibility()`
-      -- the same `updateQuickDraftPoolSourceVisibility()` pattern every
-      other draft type's own pool-source field uses) with no cutoff count
-      or tier configuration to expose, since every player's own pool is
-      independently sized to a fixed 45 cards regardless of player count
-      -- unlike every other draft type's own option labels
-      (`updateDraftPoolSourceOptionLabels()`), Sealed Deck's never need to
-      recompute a size hint on opponent-selection change, since the size
-      is fixed rather than derived from player count. Its description
-      text (`SEALED_DECK_POOL_SOURCE_DESCRIPTIONS`) is phrased around
-      "your own pool" rather than "the shared pool to draft from," the one
-      wording difference from every other draft type's own pool-source
-      descriptions, reflecting that each player is dealt their own
-      independent pool rather than drafting pieces of one shared pool.
-      Sealed Deck is offered as its own top-level `#new-game-format` option
-      ("Sealed Deck," next to "Draft") rather than one of "Draft"'s own Deck
+      `php-app/README.md`). Unlike every other draft type, it has no
+      pool-source picker of its own in the New Game dialog at all -- it's
+      always a Structure-deck-style pool for now (a future request may
+      reintroduce a choice here), so selecting it just shows its
+      description text with nothing further to configure. Sealed Deck is
+      offered as its own top-level `#new-game-format` option ("Sealed
+      Deck," next to "Draft") rather than one of "Draft"'s own Deck
       dropdown choices -- see "New Game dialog"'s own note on this below.
 
     Clicking any hand

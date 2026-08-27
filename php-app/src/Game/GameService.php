@@ -511,29 +511,19 @@ final class GameService
 
     /**
      * One seated player's own independent SEALED_DECK_POOL_SIZE-card pool
-     * -- see buildDraftPool(). Called once PER PLAYER by createGame()
-     * (unlike every other build*DraftPool() wrapper above, called exactly
-     * once for the whole match's own shared pool), so 'random_48'/
-     * 'structure''s own randomization naturally lands differently each
-     * call; a 'custom'/'saved_deck' source instead reruns buildDraftPool()'s
-     * own truncateToTarget shuffle-and-slice against the exact same
-     * underlying list each time, which still gives each player their own
-     * independently-random 45-card slice of it rather than identical
-     * pools. $minCustomPoolSize is simply SEALED_DECK_POOL_SIZE itself
-     * (not scaled by player count the way e.g. Rotisserie Draft's own
-     * rotisserieDraftMinPoolSize() is) -- each call only ever needs to
-     * cover ONE player's own pool, never the whole table's at once.
+     * -- always the 'structure' pool source for now (the same
+     * buildStructureDeckCardIds() every other 'structure' deck_type/pool
+     * source already uses), called once PER PLAYER by createGame() (unlike
+     * every other build*DraftPool() wrapper above, called exactly once for
+     * the whole match's own shared pool) so each player's own random draw
+     * lands differently. A future request may reintroduce the other pool
+     * sources (random/jceddy's 75 Card/custom/saved deck) buildDraftPool()
+     * already supports, but there's no picker for any of them right now --
+     * every Sealed Deck game gets a structure-deck-style pool.
      */
-    private function buildSealedDeckPlayerPool(string $poolSource, ?string $customPoolText, ?int $savedDecklistId, int $requestingUserId): array
+    private function buildSealedDeckPlayerPool(): array
     {
-        return $this->buildDraftPool(
-            $poolSource,
-            $customPoolText,
-            $savedDecklistId,
-            $requestingUserId,
-            self::SEALED_DECK_POOL_SIZE,
-            self::SEALED_DECK_POOL_SIZE,
-        );
+        return $this->buildStructureDeckCardIds();
     }
 
     /**
@@ -872,8 +862,6 @@ final class GameService
         ?string $tieredRotisserieDraftMode = null,
         ?array $tieredRotisserieDraftTiers = null,
         bool $botGoesFirst = false,
-        ?string $sealedDeckPoolSource = null,
-        ?string $sealedDeckCustomPoolText = null,
     ): int {
         if (count($userIds) > self::MAX_PLAYERS) {
             throw new GameStateException('A game cannot have more than ' . self::MAX_PLAYERS . ' players');
@@ -1053,7 +1041,7 @@ final class GameService
         // the transaction below -- each of these count($userIds) pools is
         // statistically identical, so any pool may go to any seat.
         $sealedDeckPlayerPools = $deckType === 'sealed_deck'
-            ? array_map(fn (): array => $this->buildSealedDeckPlayerPool((string) $sealedDeckPoolSource, $sealedDeckCustomPoolText, $savedDecklistId, $createdByUserId), $userIds)
+            ? array_map(fn (): array => $this->buildSealedDeckPlayerPool(), $userIds)
             : null;
 
         // Built (and, for a 'custom' pool, fully validated) before the
@@ -1070,7 +1058,11 @@ final class GameService
             'grid_draft' => $gridDraftPoolSource,
             'rotisserie_draft' => $rotisserieDraftPoolSource,
             'tiered_rotisserie_draft' => $tieredRotisserieDraftMode,
-            'sealed_deck' => $sealedDeckPoolSource,
+            // Always 'structure' for now -- see buildSealedDeckPlayerPool()'s
+            // own docblock. Still routed through this same field (rather
+            // than a bare literal at the insert site) so draft_matches.pool_source
+            // reads the same as every other draft deck type's own row.
+            'sealed_deck' => 'structure',
             default => null,
         };
         $draftPoolCardIds = match ($deckType) {

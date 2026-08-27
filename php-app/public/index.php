@@ -1062,9 +1062,6 @@ if ($path === '/games' && $method === 'POST') {
             ];
         }, $body['tiered_rotisserie_draft_tiers']);
     }
-    // Only meaningful for deck_type 'sealed_deck' -- see createGame()'s own docblock.
-    $sealedDeckPoolSource = isset($body['sealed_deck_pool_source']) ? (string) $body['sealed_deck_pool_source'] : null;
-    $sealedDeckCustomPoolText = isset($body['sealed_deck_custom_pool_text']) ? (string) $body['sealed_deck_custom_pool_text'] : null;
 
     try {
         $gameId = $games->createGame(
@@ -1093,8 +1090,6 @@ if ($path === '/games' && $method === 'POST') {
             $tieredRotisserieDraftMode,
             $tieredRotisserieDraftTiers,
             $botGoesFirst,
-            $sealedDeckPoolSource,
-            $sealedDeckCustomPoolText,
         );
         respond(201, ['status' => 'ok', 'game_id' => $gameId]);
     } catch (GameStateException $e) {
@@ -1147,8 +1142,6 @@ function openGameCreateParamsFromRequestBody(array $body): array
                 ];
             }, $body['tiered_rotisserie_draft_tiers'])
             : null,
-        'sealed_deck_pool_source' => isset($body['sealed_deck_pool_source']) ? (string) $body['sealed_deck_pool_source'] : null,
-        'sealed_deck_custom_pool_text' => isset($body['sealed_deck_custom_pool_text']) ? (string) $body['sealed_deck_custom_pool_text'] : null,
     ];
 }
 

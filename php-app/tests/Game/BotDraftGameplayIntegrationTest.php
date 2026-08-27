@@ -779,7 +779,6 @@ final class BotDraftGameplayIntegrationTest extends TestCase
             [$human, $bot],
             format: 'draft',
             deckType: 'sealed_deck',
-            sealedDeckPoolSource: 'structure',
         );
 
         $draftMatchId = (int) $this->fetchGame($gameId)['draft_match_id'];

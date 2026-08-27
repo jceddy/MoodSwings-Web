@@ -3611,17 +3611,18 @@ total) the moment the game is created, and goes straight to building a deck
 from it -- no packs, piles, grid, or shared face-up pool to pick from, unlike
 Quick/Winston/Grid/(Tiered) Rotisserie Draft.
 
-**Independent per-player pools** -- `buildSealedDeckPlayerPool()` calls the
-same shared `buildDraftPool()` helper every other draft deck type uses, but
-`createGame()` calls it once PER SEATED PLAYER (`SEALED_DECK_POOL_SIZE`, 45,
-as both the target size and the minimum for a `custom`/`saved_deck` source),
-rather than the single shared-pool call every other draft deck type makes.
-Two players choosing the same pool source still end up with two different
-45-card pools: `'structure'`/`'random_48'` are independently randomized by
-each call, and even a fixed `'custom'`/`'saved_deck'` source is independently
-shuffled-and-sliced to 45 cards per call (`buildDraftPool()`'s own
-`truncateToTarget` behavior) -- so a shared custom pool still deals each
-player their own random slice of it, not an identical copy. `draft_matches.pool_card_ids`
+**Independent per-player pools** -- `buildSealedDeckPlayerPool()` always calls
+`buildStructureDeckCardIds()` directly (no pool-source choice, unlike every
+other draft deck type's own `buildDraftPool()`-backed picker), and
+`createGame()` calls it once PER SEATED PLAYER, rather than the single
+shared-pool call every other draft deck type makes. Each call independently
+randomizes its own structure-deck-style 45-card pool
+(`SEALED_DECK_POOL_SIZE`), so two players always end up with two different
+pools even though every pool is built the same way. `draft_matches.pool_source`
+is still recorded as the literal `'structure'` for every Sealed Deck match,
+for consistency with every other draft deck type's own row shape, even though
+there's no longer a user-facing choice behind it -- a future request may
+reintroduce other pool sources here. `draft_matches.pool_card_ids`
 stores the flattened union of every player's own pool (informational only,
 matching every other draft deck type's own "whole pool" convention) --
 `draftMatchPoolView()`'s own `undraftedCardIds` computation (`pool_card_ids`
