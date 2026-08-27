@@ -224,7 +224,7 @@ final class AuthService
     }
 
     /**
-     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool, board_layout_preference: string, allow_custom_content: bool}, expiresAt: DateTimeImmutable}|null
+     * @return array{user: array{id: int, username: string, email: string, phone_number: ?string, share_presence: bool, default_selections_mode_preference: bool, auto_pass_on_empty_hand: bool, auto_apply_scoring_bonuses: bool, board_layout_preference: string, allow_custom_content: bool, matchmaking_discoverable: bool}, expiresAt: DateTimeImmutable}|null
      */
     public function currentUser(string $token): ?array
     {
@@ -291,6 +291,13 @@ final class AuthService
                 // player to have this on, not just the creator). See
                 // UserRepository::setAllowCustomContent().
                 'allow_custom_content' => (bool) $session['allow_custom_content'],
+                // "Discoverable for open games" (issue #116) as a personal
+                // preference (Settings dialog's "Game defaults" section) --
+                // off by default; opts this user's own open game listings
+                // (MatchmakingService) into being visible to strangers
+                // browsing the open lobby at all. See UserRepository::
+                // setMatchmakingDiscoverable().
+                'matchmaking_discoverable' => (bool) $session['matchmaking_discoverable'],
             ],
             'expiresAt' => $expiresAt,
         ];

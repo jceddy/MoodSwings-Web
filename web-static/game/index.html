@@ -55,6 +55,7 @@
             <div id="current-games-section">
                 <h2>Your games</h2>
                 <button id="new-game-button" type="button">New game</button>
+                <button id="open-games-button" type="button">Open games</button>
                 <button id="past-games-button" type="button">Past games</button>
                 <ul id="games-list"></ul>
                 <p id="games-empty" hidden>No games yet &mdash; start one!</p>
@@ -428,11 +429,30 @@
     <dialog id="new-game-dialog">
         <h2>New game</h2>
         <form id="new-game-form">
-            <p>Choose 1-3 friends to play against (games are 2-4 players):</p>
-            <div id="opponent-checkboxes"></div>
-            <p id="opponent-checkboxes-empty" hidden>
-                You don't have any friends yet &mdash; add some from the Friends dialog first.
-            </p>
+            <!-- Issue #116: an alternative to naming specific friend
+                 opponents -- post the game to the open lobby instead, and
+                 any other discoverable, non-blocked player can browse and
+                 join it (see #open-games-dialog below). Restricted to the
+                 "duel"/"draft" formats for now -- see
+                 MatchmakingService's own docblock for why -- so choosing
+                 it also narrows the Format select below via
+                 updateNewGameModeFields(). Requires opting into
+                 "Discoverable for open games" in Settings first (enforced
+                 server-side by MatchmakingService::postOpenGame(); the
+                 New Game dialog doesn't duplicate that check here). -->
+            <fieldset id="new-game-mode-fields">
+                <legend>Opponent</legend>
+                <label><input type="radio" name="new-game-mode" id="new-game-mode-friends" value="friends" checked> Invite friends</label>
+                <label><input type="radio" name="new-game-mode" id="new-game-mode-open" value="open"> Post to the open lobby (let a stranger join)</label>
+            </fieldset>
+
+            <div id="new-game-friends-fields">
+                <p>Choose 1-3 friends to play against (games are 2-4 players):</p>
+                <div id="opponent-checkboxes"></div>
+                <p id="opponent-checkboxes-empty" hidden>
+                    You don't have any friends yet &mdash; add some from the Friends dialog first.
+                </p>
+            </div>
             <label class="new-game-field" id="new-game-bot-goes-first-label" hidden><input type="checkbox" id="new-game-bot-goes-first"> Let the bot go first</label>
 
             <label class="new-game-field">Format
@@ -811,6 +831,26 @@
         <button id="new-game-close-button" type="button">Close</button>
     </dialog>
 
+    <!-- Issue #116: open lobby matchmaking. Lists every open listing
+         visible to the current user (MatchmakingService::listOpenGames()
+         -- discoverable creators only, blocked pairs excluded) plus the
+         current user's own posted listings (which they can cancel). -->
+    <dialog id="open-games-dialog">
+        <h2>Open games</h2>
+        <section>
+            <h3>Available to join</h3>
+            <ul id="open-games-available-list"></ul>
+            <p id="open-games-available-empty" hidden>No open games right now &mdash; check back later, or post your own from the New Game dialog.</p>
+        </section>
+        <section>
+            <h3>Your open listings</h3>
+            <ul id="open-games-mine-list"></ul>
+            <p id="open-games-mine-empty" hidden>You haven't posted any open games.</p>
+        </section>
+        <p id="open-games-error" class="error" hidden></p>
+        <button id="open-games-close-button" type="button">Close</button>
+    </dialog>
+
     <dialog id="card-detail-dialog">
         <img id="card-detail-art" class="card-detail-art">
         <p id="card-detail-meta"></p>
@@ -1008,6 +1048,15 @@
                  whoever's creating the game) has this on, so this checkbox
                  is a convenience, not the actual enforcement. -->
             <label><input type="checkbox" id="settings-allow-custom-content-checkbox"> Show custom card/effect formats (e.g. Chaos Draft) in the New Game dialog</label>
+            <!-- "Discoverable for open games" (issue #116, migration 0198)
+                 -- same starts-UNCHECKED/opt-in shape as the checkbox
+                 above, matching users.matchmaking_discoverable's own
+                 DEFAULT 0. Gates whether this user's own open lobby
+                 listings (New Game dialog's "Post an open game" option)
+                 are shown to strangers browsing the open lobby at all --
+                 turning this off does not hide listings already posted
+                 while it was on; cancel those separately if wanted. -->
+            <label><input type="checkbox" id="settings-matchmaking-discoverable-checkbox"> Discoverable for open games (let strangers see and join games you post to the open lobby)</label>
         </section>
 
         <hr>

@@ -350,6 +350,18 @@
             saveAllowCustomContentPreference(allowCustomContentCheckbox.checked);
         });
 
+        // "Discoverable for open games" (issue #116) -- same wiring
+        // pattern/starts-UNCHECKED opt-in shape as the checkbox above.
+        // Only gates whether THIS user's own open lobby listings are
+        // shown to strangers (MatchmakingService::listOpenGames()) --
+        // joining someone else's listing needs no such opt-in.
+        const matchmakingDiscoverableCheckbox = document.getElementById('settings-matchmaking-discoverable-checkbox');
+        matchmakingDiscoverableCheckbox.checked = user.matchmaking_discoverable;
+        matchmakingDiscoverableCheckbox.addEventListener('change', () => {
+            user.matchmaking_discoverable = matchmakingDiscoverableCheckbox.checked;
+            saveMatchmakingDiscoverablePreference(matchmakingDiscoverableCheckbox.checked);
+        });
+
         // Card/icon size slider (issue #417) -- a client-only preference
         // (see CARD_SCALE_STORAGE_KEY/getCardScale()/applyCardScale()
         // above, already applied once at page load independent of this
@@ -2643,6 +2655,33 @@
     // matters for 'custom_duel' switching away without its own bot
     // decklist filled in -- format alone never disqualifies a bot
     // anymore, Team Play (issue #360) included.
+    // Issue #116: hides the friends picker and narrows the Format select
+    // to "duel"/"draft" -- the only formats MatchmakingService::
+    // postOpenGame() currently accepts, see its own docblock for why --
+    // whenever "Post to the open lobby" is chosen; restores every hidden
+    // format option and the friends picker when switching back. Forces
+    // the format back to "duel" if it was left on a now-hidden option
+    // (e.g. switching modes after already picking "Traditional").
+    function updateNewGameModeFields() {
+        const isOpenLobby = document.getElementById('new-game-mode-open').checked;
+        document.getElementById('new-game-friends-fields').hidden = isOpenLobby;
+
+        const formatSelect = document.getElementById('new-game-format');
+        for (const option of formatSelect.options) {
+            if (option.value === 'standard' || option.value === 'team' || option.value === 'closed_team') {
+                option.hidden = isOpenLobby;
+            }
+        }
+        if (isOpenLobby && !['duel', 'draft'].includes(formatSelect.value)) {
+            formatSelect.value = 'duel';
+            formatSelect.dispatchEvent(new Event('change'));
+        }
+
+        document.getElementById('new-game-submit-button').textContent = isOpenLobby ? 'Post to open lobby' : 'Create game';
+    }
+    document.getElementById('new-game-mode-friends').addEventListener('change', updateNewGameModeFields);
+    document.getElementById('new-game-mode-open').addEventListener('change', updateNewGameModeFields);
+
     document.getElementById('new-game-format').addEventListener('change', updateOpponentSelectionLimit);
     document.getElementById('new-game-format').addEventListener('change', updateDeckTypeAvailability);
     document.getElementById('new-game-format').addEventListener('change', updateBotCheckboxAvailability);
@@ -2820,7 +2859,11 @@
             prefill ? prefill.defaultSelectionsMode : user.default_selections_mode_preference;
         const submitButton = document.getElementById('new-game-submit-button');
         submitButton.disabled = false;
-        submitButton.textContent = 'Create game';
+        // form.reset() above already put the mode radios back to "Invite
+        // friends" (its checked-by-default option) -- this just brings
+        // the rest of the dialog (friends picker/format options/submit
+        // label) back in line with that.
+        updateNewGameModeFields();
         updateDeckTypeAvailability();
 
         const [{ ok, body }, botsResp] = await Promise.all([listFriends(), listPracticeBots()]);
@@ -2960,14 +3003,104 @@
         newGameDialog.close();
     });
 
+    // -- Open games (issue #116) ----------------------------------------
+
+    const openGamesDialog = document.getElementById('open-games-dialog');
+    const NEW_GAME_FORMAT_LABELS = { duel: 'Duel', draft: 'Draft' };
+    const NEW_GAME_DECK_TYPE_LABELS = {
+        structure: 'Structure', power: 'Power', jceddys_75: "jceddy's 75 Card", custom: 'Custom Decklist',
+        custom_duel: 'Custom Decklists (Duel)', quick_draft: 'Quick Draft', winston_draft: 'Winston Draft',
+        grid_draft: 'Grid Draft', rotisserie_draft: 'Rotisserie Draft', tiered_rotisserie_draft: 'Tiered Rotisserie Draft',
+        chaos_draft: 'Chaos Draft', one_of_each: 'One of Each Card',
+    };
+
+    function openGameSummary(listing) {
+        const params = listing.create_game_params;
+        const format = NEW_GAME_FORMAT_LABELS[params.format] || params.format;
+        const deckType = NEW_GAME_DECK_TYPE_LABELS[params.deck_type] || params.deck_type;
+        return `${format} – ${deckType}`;
+    }
+
+    async function loadOpenGamesDialog() {
+        document.getElementById('open-games-error').hidden = true;
+
+        const [availableResp, mineResp] = await Promise.all([listOpenGames(false), listOpenGames(true)]);
+
+        const availableList = document.getElementById('open-games-available-list');
+        availableList.innerHTML = '';
+        const availableListings = availableResp.ok ? availableResp.body.listings : [];
+        document.getElementById('open-games-available-empty').hidden = availableListings.length > 0;
+
+        for (const listing of availableListings) {
+            const item = document.createElement('li');
+            item.append(`${listing.creator_username}: ${openGameSummary(listing)} `);
+            const joinButton = document.createElement('button');
+            joinButton.type = 'button';
+            joinButton.textContent = 'Join';
+            joinButton.addEventListener('click', async () => {
+                joinButton.disabled = true;
+                joinButton.textContent = 'Joining...';
+                const { ok, body } = await joinOpenGame(listing.id);
+                if (!ok) {
+                    joinButton.disabled = false;
+                    joinButton.textContent = 'Join';
+                    document.getElementById('open-games-error').textContent = body.message || 'Could not join this game.';
+                    document.getElementById('open-games-error').hidden = false;
+                    return;
+                }
+                openGamesDialog.close();
+                showBoard(body.game_id);
+            });
+            item.appendChild(joinButton);
+            availableList.appendChild(item);
+        }
+
+        const mineList = document.getElementById('open-games-mine-list');
+        mineList.innerHTML = '';
+        const mineListings = mineResp.ok ? mineResp.body.listings : [];
+        document.getElementById('open-games-mine-empty').hidden = mineListings.length > 0;
+
+        for (const listing of mineListings) {
+            const item = document.createElement('li');
+            item.append(`${openGameSummary(listing)} (waiting for a player) `);
+            const cancelButton = document.createElement('button');
+            cancelButton.type = 'button';
+            cancelButton.textContent = 'Cancel';
+            cancelButton.addEventListener('click', async () => {
+                cancelButton.disabled = true;
+                const { ok, body } = await cancelOpenGame(listing.id);
+                if (!ok) {
+                    cancelButton.disabled = false;
+                    document.getElementById('open-games-error').textContent = body.message || 'Could not cancel this listing.';
+                    document.getElementById('open-games-error').hidden = false;
+                    return;
+                }
+                await loadOpenGamesDialog();
+            });
+            item.appendChild(cancelButton);
+            mineList.appendChild(item);
+        }
+    }
+
+    document.getElementById('open-games-button').addEventListener('click', async () => {
+        await loadOpenGamesDialog();
+        openGamesDialog.showModal();
+    });
+
+    document.getElementById('open-games-close-button').addEventListener('click', () => {
+        openGamesDialog.close();
+    });
+
     newGameForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         newGameError.hidden = true;
 
+        const isOpenLobby = document.getElementById('new-game-mode-open').checked;
+
         const opponentUserIds = Array.from(opponentCheckboxes.querySelectorAll('input:checked'))
             .map((box) => Number(box.value));
 
-        if (opponentUserIds.length === 0) {
+        if (!isOpenLobby && opponentUserIds.length === 0) {
             newGameError.textContent = 'Choose at least one opponent.';
             newGameError.hidden = false;
             return;
@@ -2976,7 +3109,7 @@
         const format = document.getElementById('new-game-format').value;
         const isTeamFormat = format === 'team' || format === 'closed_team';
 
-        if (isTeamFormat && opponentUserIds.length !== 3) {
+        if (!isOpenLobby && isTeamFormat && opponentUserIds.length !== 3) {
             newGameError.textContent = 'Either team format needs exactly 3 opponents (4 players total).';
             newGameError.hidden = false;
             return;
@@ -2987,7 +3120,7 @@
         // a slow response can't be mistaken for a missed click and prompt a
         // second, duplicate submission -- creating two identical games.
         submitButton.disabled = true;
-        submitButton.textContent = 'Creating...';
+        submitButton.textContent = isOpenLobby ? 'Posting...' : 'Creating...';
 
         const randomTeams = isTeamFormat && document.getElementById('new-game-random-teams').checked;
         const partnerUserId = isTeamFormat && !randomTeams ? Number(document.getElementById('new-game-partner').value) : undefined;
@@ -3071,6 +3204,48 @@
         // itself unchecked whenever hidden, so reading .checked
         // unconditionally here already reflects that.
         const botGoesFirst = document.getElementById('new-game-bot-goes-first').checked;
+
+        // Issue #116: post to the open lobby instead of creating the game
+        // directly -- mirrors createGame()'s own params (see above) minus
+        // opponent_user_ids/partner_user_id/random_teams/bot_* (none
+        // meaningful here; a stranger, not a chosen friend or bot, fills
+        // the other seat once they join). See MatchmakingService's own
+        // docblock for why wins_needed/format/deck_type combinations
+        // outside "duel"/"draft" are rejected server-side.
+        if (isOpenLobby) {
+            const { ok, body } = await postOpenGame({
+                format,
+                deck_type: deckType,
+                decklist_text: decklistText,
+                duel_deck_rules: duelDeckRules,
+                quick_draft_pool_source: quickDraftPoolSource,
+                quick_draft_custom_pool_text: quickDraftCustomPoolText,
+                winston_draft_pool_source: winstonDraftPoolSource,
+                winston_draft_custom_pool_text: winstonDraftCustomPoolText,
+                grid_draft_pool_source: gridDraftPoolSource,
+                grid_draft_custom_pool_text: gridDraftCustomPoolText,
+                saved_decklist_id: savedDecklistId,
+                default_selections_mode: defaultSelectionsMode,
+                rotisserie_draft_pool_source: rotisserieDraftPoolSource,
+                rotisserie_draft_custom_pool_text: rotisserieDraftCustomPoolText,
+                rotisserie_draft_cutoff_count: rotisserieDraftCutoffCount,
+                tiered_rotisserie_draft_mode: tieredRotisserieDraftMode,
+                tiered_rotisserie_draft_tiers: tieredRotisserieDraftTiers,
+            });
+
+            if (!ok) {
+                submitButton.disabled = false;
+                submitButton.textContent = 'Post to open lobby';
+                newGameError.textContent = body.message || 'Could not post this game to the open lobby.';
+                newGameError.hidden = false;
+                return;
+            }
+
+            newGameDialog.close();
+            await showAlertDialog('Posted! Your open game will stay listed under "Open games" until someone joins it.');
+            return;
+        }
+
         const { ok, body } = await createGame(
             opponentUserIds,
             format,

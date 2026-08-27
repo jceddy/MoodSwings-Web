@@ -694,6 +694,40 @@ from a non-opted-in invitee surfaces through the New Game dialog's own
 ordinary `#new-game-error` element, the same as any other creation
 failure.
 
+### Open lobby matchmaking (issue #116)
+
+An alternative to naming specific friend opponents: the New Game
+dialog's `#new-game-mode-fields` radio pair -- "Invite friends"
+(unchanged default) vs. "Post to the open lobby (let a stranger join)" --
+switches `#new-game-form` into posting an open listing instead
+(`MatchmakingService`, see "Open lobby matchmaking" in
+`php-app/README.md` for the full backend/scope writeup). Choosing "open"
+(`updateNewGameModeFields()`) hides `#new-game-friends-fields` and hides
+every Format `<option>` except `duel`/`draft` -- this first cut's only
+supported formats -- forcing the select back to `duel` if it was left on
+a now-hidden option. Submitting in this mode calls `postOpenGame()`
+(app.js) instead of `createGame()`, reusing every already-collected
+field (deck_type, decklist/pool choices, default selections mode, etc.)
+unchanged; on success the dialog closes with a confirmation via
+`showAlertDialog()` rather than jumping straight to a board, since
+there's no game yet -- just a listing waiting for someone to join it.
+
+A new "Open games" button (next to "New game"/"Past games") opens
+`#open-games-dialog`, listing both `GET /open-games` (available to join,
+each with a Join button that calls `joinOpenGame()` then jumps straight
+to the resulting board) and `GET /open-games?mine=1` (the current user's
+own open listings, each with a Cancel button calling `cancelOpenGame()`).
+
+`#settings-matchmaking-discoverable-checkbox`, in the Settings dialog's
+"Game defaults" section right below the custom-content checkbox -- same
+starts-**unchecked**/opt-in shape (`users.matchmaking_discoverable`,
+migration `0198`, defaults `false`): posting an open listing exposes
+your username to anyone browsing the lobby, so it's off until you
+explicitly turn it on. Same "sync on open, save on change" wiring as
+every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`).
+Only gates whether YOUR OWN listings are shown to strangers -- joining
+someone else's listing needs no opt-in of its own.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
