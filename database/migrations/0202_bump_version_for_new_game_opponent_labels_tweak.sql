@@ -1,0 +1,11 @@
+-- No schema change: New Game dialog's "Opponent" section (issue #116) --
+-- the "Invite friends"/"Post to the open lobby" radio labels now stack
+-- on their own lines (#new-game-mode-fields label { display: block })
+-- instead of sitting side by side, and the second option's own
+-- "(let strangers join)" reminder text was dropped as redundant now
+-- that the section is easier to read at a glance.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0201 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.58' WHERE id = 1;

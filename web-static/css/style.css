@@ -1854,6 +1854,11 @@ dialog#deck-builder-dialog[open] {
     margin-bottom: 0.25rem;
 }
 
+#new-game-mode-fields label {
+    display: block;
+    margin-bottom: 0.25rem;
+}
+
 #choices-panel,
 #pending-decision-panel,
 #team-decision-panel,
