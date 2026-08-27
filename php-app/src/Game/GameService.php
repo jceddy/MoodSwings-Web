@@ -4373,7 +4373,7 @@ final class GameService
             $round = $this->currentRound($gameId);
             $roundId = (int) $round['id'];
             $this->assertNoPendingDecision($roundId);
-            $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round, $gamePlayerId);
+            $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round);
 
             $state = $this->boardStates->load($gameId);
             $playerChoices = new PlayerChoices($choices);
@@ -4429,7 +4429,7 @@ final class GameService
         $result = $this->withGameLock($gameId, function () use ($gameId, $gamePlayerId, $automated): array {
             $round = $this->currentRound($gameId);
             $this->assertNoPendingDecision((int) $round['id']);
-            $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round, $gamePlayerId);
+            $this->assertChaosDraftOfferResolved($gameId, $this->fetchGame($gameId), $round);
 
             if ((int) $round['current_turn_game_player_id'] !== $gamePlayerId) {
                 throw new GameStateException("It is not player {$gamePlayerId}'s turn");
@@ -4659,17 +4659,19 @@ final class GameService
                 break; // waiting on a real player either way
             }
 
-            // Chaos Draft (issue #405 follow-up): advanceBotChaosDraftOffer()
-            // above already resolves every bot's own OFFER it possibly
-            // can, but a mixed-team offer proposed by a bot and still
-            // awaiting its HUMAN teammate's own confirm can leave
-            // $currentTurnGamePlayerId's own turn still genuinely blocked
-            // (assertChaosDraftOfferResolved() would throw) even though
-            // it belongs to a bot -- dispatching to either branch below
-            // unconditionally would let that exception escape uncaught.
-            // Treated the same as any other "waiting on a real player"
-            // case already in this loop.
-            if ($this->chaosDraftOfferBlocksPlayer($gameId, $this->fetchGame($gameId), $round, $currentTurnGamePlayerId)) {
+            // Chaos Draft (issue #405 follow-up, maintainer request): NOBODY
+            // may play or pass in a round until EVERY player/team has
+            // resolved their own offer -- advanceBotChaosDraftOffer() above
+            // already resolves every bot's own offer it possibly can, but
+            // that still leaves the gate closed while a real human's own
+            // offer sits unresolved (or a mixed-team offer proposed by a
+            // bot is still awaiting its HUMAN teammate's own confirm) --
+            // even when it's a BOT's own turn that comes up next
+            // (assertChaosDraftOfferResolved() would throw). Dispatching to
+            // either branch below unconditionally would let that exception
+            // escape uncaught, so this is treated the same as any other
+            // "waiting on a real player" case already in this loop.
+            if ($this->chaosDraftRoundOffersBlockPlay($gameId, $this->fetchGame($gameId), $round)) {
                 break;
             }
 
@@ -7135,15 +7137,47 @@ final class GameService
     }
 
     /**
+     * True once every seated player/team's own round-start offer is
+     * resolved (or never had one to begin with) -- i.e. the round-wide
+     * gate assertChaosDraftOfferResolved() enforces on playMood()/pass()
+     * is currently OPEN. Deliberately separate from chaosDraftOfferFor()
+     * above -- that one only ever answers "what does THIS viewer still
+     * face," which stays true even once the ROUND overall is still
+     * waiting on someone else. GET /games/chaos-draft-offer returns both
+     * side by side so the frontend can tell "you're done, but still
+     * waiting on others" apart from "hidden, nothing to do" -- without
+     * this, a player who already resolved their own offer would see a
+     * normal, enabled Play/Pass button right up until the server's own
+     * 409 explained why it didn't work.
+     */
+    public function chaosDraftRoundReady(int $gameId): bool
+    {
+        return $this->withGameLock($gameId, function () use ($gameId): bool {
+            $game = $this->fetchGame($gameId);
+            if ($game['deck_type'] !== 'chaos_draft') {
+                return true;
+            }
+
+            $round = $this->currentRound($gameId);
+            $this->ensureChaosDraftOffersForRound($gameId, $game, $round);
+
+            return !$this->chaosDraftRoundOffersBlockPlay($gameId, $game, $round);
+        });
+    }
+
+    /**
      * playMood()/pass() both call this right after assertNoPendingDecision()
      * (issue #405 follow-up -- a rule the maintainer asked for explicitly:
-     * "the player needs to choose and apply a chaos effect before they can
-     * take their turn"). A no-op for every non-chaos_draft game. Unlike
-     * assertNoPendingDecision(), this only blocks the ACTING player (or
-     * their team, in Open Team Play) -- a still-open offer for someone
-     * ELSE this round never stops anyone but themselves, matching
-     * chaosDraftOfferFor()'s own "resolved independently, not turn-gated"
-     * design (see that method's own docblock).
+     * "each player must choose and apply their chaos effect for the round
+     * before anyone can play"). A no-op for every non-chaos_draft game.
+     * Unlike the original version of this rule (which only blocked the
+     * ACTING player/team, per issue #405's own first follow-up), a single
+     * still-open offer ANYWHERE this round -- even someone else's, who
+     * isn't even the one trying to act -- blocks EVERY play or pass until
+     * it's resolved, matching a round-start "draft phase" gating ordinary
+     * play. chaosDraftOfferFor() (the per-player DISPLAY of what a given
+     * player is still facing) is unaffected by this -- it still only ever
+     * shows a player their own outstanding offer, never anyone else's.
      *
      * Calls ensureChaosDraftOffersForRound() itself rather than assuming
      * the frontend's own GET /games/chaos-draft-offer poll already rolled
@@ -7155,7 +7189,7 @@ final class GameService
      * stays unlocked itself, the same way ensureChaosDraftOffersForRound()
      * and fetchChaosDraftOffer() (both called from here) already do.
      */
-    private function assertChaosDraftOfferResolved(int $gameId, array $game, array $round, int $gamePlayerId): void
+    private function assertChaosDraftOfferResolved(int $gameId, array $game, array $round): void
     {
         if ($game['deck_type'] !== 'chaos_draft') {
             return;
@@ -7163,38 +7197,71 @@ final class GameService
 
         $this->ensureChaosDraftOffersForRound($gameId, $game, $round);
 
-        if ($this->chaosDraftOfferBlocksPlayer($gameId, $game, $round, $gamePlayerId)) {
-            throw new GameStateException("Choose and attach this round's Chaos Draft effect before you can play or pass");
+        if ($this->chaosDraftRoundOffersBlockPlay($gameId, $game, $round)) {
+            throw new GameStateException("Every player must choose and attach this round's Chaos Draft effect before anyone can play or pass");
         }
     }
 
     /**
      * The predicate half of assertChaosDraftOfferResolved() above, split
      * out so advanceAutomatedTurns() can check it too WITHOUT throwing --
-     * a bot whose own turn comes up while its team's offer is proposed
-     * but still awaiting a human teammate's own confirm needs to fall
-     * through to "waiting on a real player" (see that call site's own
-     * comment), not have this exception escape uncaught. Doesn't call
-     * ensureChaosDraftOffersForRound() itself -- every caller either
-     * already called it this same request (assertChaosDraftOfferResolved()
-     * above) or is checking a round advanceBotChaosDraftOffer() already
-     * rolled offers for earlier this same automated-turns iteration.
+     * dispatching a bot's own turn action while the gate is still closed
+     * needs to fall through to "waiting on a real player" (see that call
+     * site's own comment), not have this exception escape uncaught.
+     * Doesn't call ensureChaosDraftOffersForRound() itself -- every caller
+     * either already called it this same request
+     * (assertChaosDraftOfferResolved() above) or is checking a round
+     * advanceBotChaosDraftOffer() already rolled offers for earlier this
+     * same automated-turns iteration.
+     *
+     * True the instant ANY seated player (or, in Open Team Play, team)
+     * still has an unresolved offer with something left to attach it to
+     * -- not just whoever's currently trying to act. activeGamePlayerIds()
+     * (resigned players excluded, mirroring every other still-in-progress
+     * check) covers individual formats; team formats are always exactly
+     * the two hardcoded team ids 0/1 (the same convention
+     * ensureChaosDraftOffersForRound() already uses).
      */
-    private function chaosDraftOfferBlocksPlayer(int $gameId, array $game, array $round, int $gamePlayerId): bool
+    private function chaosDraftRoundOffersBlockPlay(int $gameId, array $game, array $round): bool
     {
         if ($game['deck_type'] !== 'chaos_draft') {
             return false;
         }
 
-        $offer = $game['format'] === 'team'
-            ? $this->fetchChaosDraftOffer((int) $round['id'], null, $this->teamIdByGamePlayer($gameId)[$gamePlayerId] ?? null)
-            : $this->fetchChaosDraftOffer((int) $round['id'], $gamePlayerId, null);
+        $roundId = (int) $round['id'];
 
-        if ($offer === null || $offer['resolved_at'] !== null) {
+        if ($game['format'] === 'team') {
+            foreach ([0, 1] as $teamId) {
+                $members = $this->teamMembers($gameId, $teamId);
+                if ($members === []) {
+                    continue;
+                }
+
+                $offer = $this->fetchChaosDraftOffer($roundId, null, $teamId);
+                if ($offer === null || $offer['resolved_at'] !== null) {
+                    continue;
+                }
+
+                if (!$this->chaosDraftOfferHasNothingToAttachTo($gameId, $game, $members[0])) {
+                    return true;
+                }
+            }
+
             return false;
         }
 
-        return !$this->chaosDraftOfferHasNothingToAttachTo($gameId, $game, $gamePlayerId);
+        foreach ($this->activeGamePlayerIds($gameId) as $gamePlayerId) {
+            $offer = $this->fetchChaosDraftOffer($roundId, $gamePlayerId, null);
+            if ($offer === null || $offer['resolved_at'] !== null) {
+                continue;
+            }
+
+            if (!$this->chaosDraftOfferHasNothingToAttachTo($gameId, $game, $gamePlayerId)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -7209,7 +7276,7 @@ final class GameService
      * effect can take it) would otherwise stay shown/blocked by an
      * already-created offer with nothing left to attach it to. Re-checked
      * dynamically here instead, at both chaosDraftOfferFor()'s (display)
-     * and chaosDraftOfferBlocksPlayer()'s (mandatory-resolution) own call
+     * and chaosDraftRoundOffersBlockPlay()'s (mandatory-resolution) own call
      * sites -- safe because nothing in round-completion/scoring depends on
      * every chaos_draft_offers row ending up resolved. Mirrors
      * ensureChaosDraftOffersForRound()'s own per-team-vs-per-player split:

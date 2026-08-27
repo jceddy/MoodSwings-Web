@@ -1,0 +1,18 @@
+-- No schema change: "each player must choose and apply their chaos
+-- effect for the round before anyone can play" (issue #405 follow-up,
+-- maintainer request) -- a round-start "draft phase" gating ordinary
+-- play, strengthening the original rule (issue #405's own first
+-- follow-up) that only blocked the ACTING player/team. Now a single
+-- still-open offer ANYWHERE this round -- even someone else's -- blocks
+-- EVERY playMood()/pass() until it's resolved
+-- (GameService::assertChaosDraftOfferResolved()/chaosDraftRoundOffersBlockPlay()).
+-- GET /games/chaos-draft-offer now also returns a sibling `round_ready`
+-- boolean (GameService::chaosDraftRoundReady()) alongside the viewer's
+-- own `offer`, so the frontend can show "you're done, but still waiting
+-- on someone else" instead of a normal, enabled Play/Pass button right
+-- up until the server's own 409 explained why it didn't work.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0204 already did for their own schema-less changes.
+UPDATE schema_version SET version = '1.28.61' WHERE id = 1;

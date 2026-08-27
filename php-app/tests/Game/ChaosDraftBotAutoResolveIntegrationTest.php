@@ -166,6 +166,18 @@ final class ChaosDraftBotAutoResolveIntegrationTest extends TestCase
             [1 => [3], 2 => [55, 8]],
             firstSeat: 2, // the BOT's own turn
         );
+        // Issue #405's own later follow-up turned this gate into a
+        // round-wide one (assertChaosDraftOfferResolved() now blocks
+        // EVERY seated player, not just whoever's acting, until EVERY
+        // offer is resolved) -- alice's own offer is resolved directly
+        // here so her still having a card in hand doesn't leave the
+        // round frozen on the bot's turn no matter what the bot itself
+        // does; only the BOT's own offer is what this test is actually
+        // about.
+        $this->games->chaosDraftOfferFor(1, $players[1]); // rolls both players' own offer rows
+        $this->pdo->prepare(
+            'UPDATE chaos_draft_offers SET resolved_at = NOW() WHERE game_round_id = (SELECT id FROM game_rounds WHERE game_id = 1) AND game_player_id = :player'
+        )->execute(['player' => $players[1]]);
 
         $this->games->advanceAutomatedTurns(1);
 

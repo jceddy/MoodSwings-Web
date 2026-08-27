@@ -5451,6 +5451,19 @@
     // that function's own docblock) -- so this can be a poll cycle stale,
     // same tradeoff every other chaos-draft-offer UI state already makes.
     let chaosDraftOfferOpenForViewer = false;
+    // Whether the ROUND OVERALL still has anyone's offer (not just the
+    // viewer's own) left unresolved -- GameService::
+    // assertChaosDraftOfferResolved() now blocks EVERY play/pass in the
+    // round until EVERY seated player/team has resolved theirs, a
+    // maintainer-requested strengthening of the original "only the
+    // acting player is blocked" rule (a round-start "draft phase" gating
+    // ordinary play, not merely a rule about your own turn). Distinct
+    // from chaosDraftOfferOpenForViewer above -- a viewer can have
+    // resolved their OWN offer (that flag false) while this one is still
+    // true, waiting on someone else. Defaults true (not blocking) for
+    // the same "can be a poll cycle stale" reasoning
+    // chaosDraftOfferOpenForViewer's own declaration already gives.
+    let chaosDraftRoundReady = true;
 
     // Whether #pass-button should currently be clickable -- shared by
     // renderBoard()'s own regular poll and refreshPassButtonDisabled()
@@ -5460,7 +5473,7 @@
             return false;
         }
         const pendingDecision = Boolean(currentState.round && currentState.round.pending_decision);
-        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer;
+        return !isReadOnlyView() && currentState.game.status === 'in_progress' && currentState.you.is_your_turn && !pendingDecision && !chaosDraftOfferOpenForViewer && chaosDraftRoundReady;
     }
 
     // Applies passButtonCanAct() to the DOM immediately -- called both
@@ -5484,7 +5497,7 @@
             && state.you && state.you.game_player_id != null;
         if (!eligible) {
             chaosDraftSelectedEffectId = null;
-            renderChaosDraftOffer(null);
+            renderChaosDraftOffer(null, true);
             return;
         }
         if (chaosDraftOfferRequestInFlight) {
@@ -5496,19 +5509,24 @@
         if (!ok) {
             return; // transient failure -- the next poll retries
         }
-        renderChaosDraftOffer(body.offer);
+        renderChaosDraftOffer(body.offer, body.round_ready);
     }
 
     function chaosDraftEffectSummary(effect) {
         return capitalize(effect.rarity) + ' — ' + effect.rules_text;
     }
 
-    function renderChaosDraftOffer(offer) {
+    function renderChaosDraftOffer(offer, roundReady) {
         // See chaosDraftOfferOpenForViewer's own declaration -- offer is
         // only ever non-null while genuinely unresolved (chaosDraftOfferFor()
         // returns null once resolved_at is set), so this is exactly
         // "must I choose/attach before I can play or pass this round."
         chaosDraftOfferOpenForViewer = offer !== null;
+        // See chaosDraftRoundReady's own declaration -- distinct from the
+        // flag above: whether anyone ELSE this round still needs to
+        // resolve theirs, which blocks Play/Pass just as much as the
+        // viewer's own still-open offer would.
+        chaosDraftRoundReady = roundReady;
         refreshPassButtonDisabled();
 
         const panel = document.getElementById('chaos-draft-offer-panel');
@@ -5520,13 +5538,24 @@
         const rejectButton = document.getElementById('chaos-draft-offer-reject-button');
 
         if (!offer) {
-            panel.hidden = true;
             choicesEl.innerHTML = '';
             attachCardsEl.innerHTML = '';
             attachEl.hidden = true;
             confirmButton.hidden = true;
             rejectButton.hidden = true;
             chaosDraftSelectedEffectId = null;
+
+            // The viewer is done, but the round overall is still waiting
+            // on someone else's own offer -- keep the panel up with an
+            // explanatory status instead of hiding it, so Play/Pass
+            // staying disabled doesn't look broken or unexplained.
+            if (!roundReady) {
+                panel.hidden = false;
+                statusEl.textContent = "Waiting for every player to choose and attach this round's Chaos Draft effect before play can continue.";
+                return;
+            }
+
+            panel.hidden = true;
             return;
         }
 
@@ -5567,7 +5596,7 @@
                     chaosDraftEffectSummary(effect),
                     () => {
                         chaosDraftSelectedEffectId = effect.id;
-                        renderChaosDraftOffer(offer);
+                        renderChaosDraftOffer(offer, chaosDraftRoundReady);
                     }
                 ));
             });
@@ -7689,6 +7718,13 @@
         // (a DB-level, not BoardState-level, restriction).
         if (chaosDraftOfferOpenForViewer) {
             validationMessage.textContent = "Choose and attach this round's Chaos Draft effect first (see above).";
+            validationMessage.hidden = false;
+            playButton.disabled = true;
+            return;
+        }
+
+        if (!chaosDraftRoundReady) {
+            validationMessage.textContent = "Waiting for every player to choose and attach this round's Chaos Draft effect (see above).";
             validationMessage.hidden = false;
             playButton.disabled = true;
             return;
