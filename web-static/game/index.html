@@ -55,6 +55,7 @@
             <div id="current-games-section">
                 <h2>Your games</h2>
                 <button id="new-game-button" type="button">New game</button>
+                <button id="open-games-button" type="button">Open games</button>
                 <button id="past-games-button" type="button">Past games</button>
                 <ul id="games-list"></ul>
                 <p id="games-empty" hidden>No games yet &mdash; start one!</p>
@@ -428,11 +429,45 @@
     <dialog id="new-game-dialog">
         <h2>New game</h2>
         <form id="new-game-form">
-            <p>Choose 1-3 friends to play against (games are 2-4 players):</p>
-            <div id="opponent-checkboxes"></div>
-            <p id="opponent-checkboxes-empty" hidden>
-                You don't have any friends yet &mdash; add some from the Friends dialog first.
-            </p>
+            <!-- Issue #116: an alternative to naming specific friend
+                 opponents -- post the game to the open lobby instead, and
+                 any other discoverable, non-blocked player can browse and
+                 join it (see #open-games-dialog below). Every format is
+                 supported; for 'draft'/'standard' the creator also picks
+                 exactly how many total players (2-4) the listing needs
+                 before it starts (#new-game-open-player-count-label,
+                 shown/hidden by updateNewGameModeFields()) -- always 2 for
+                 'duel', always 4 for the team formats, forced server-side
+                 regardless of what's sent. Team formats never offer a
+                 partner choice in this mode (#new-game-team-fields stays
+                 hidden even once the roster fills) -- teams are assigned
+                 randomly once all 4 have joined, since there's no way to
+                 know a partner ahead of time from strangers. Requires
+                 opting into "Discoverable for open games" in Settings
+                 first (enforced server-side by
+                 MatchmakingService::postOpenGame(); the New Game dialog
+                 doesn't duplicate that check here). -->
+            <fieldset id="new-game-mode-fields">
+                <legend>Opponent</legend>
+                <label><input type="radio" name="new-game-mode" id="new-game-mode-friends" value="friends" checked> Invite friends</label>
+                <label><input type="radio" name="new-game-mode" id="new-game-mode-open" value="open"> Post to the open lobby (let strangers join)</label>
+            </fieldset>
+
+            <div id="new-game-friends-fields">
+                <p>Choose 1-3 friends to play against (games are 2-4 players):</p>
+                <div id="opponent-checkboxes"></div>
+                <p id="opponent-checkboxes-empty" hidden>
+                    You don't have any friends yet &mdash; add some from the Friends dialog first.
+                </p>
+            </div>
+
+            <label class="new-game-field" id="new-game-open-player-count-label" hidden>Total players needed (including you)
+                <select id="new-game-open-player-count">
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                </select>
+            </label>
             <label class="new-game-field" id="new-game-bot-goes-first-label" hidden><input type="checkbox" id="new-game-bot-goes-first"> Let the bot go first</label>
 
             <label class="new-game-field">Format
@@ -811,6 +846,35 @@
         <button id="new-game-close-button" type="button">Close</button>
     </dialog>
 
+    <!-- Issue #116: open lobby matchmaking. Lists every open listing
+         visible to the current user (MatchmakingService::listOpenGames()
+         -- discoverable creators only, blocked pairs and listings
+         already joined excluded) plus the current user's own posted
+         listings (which they can cancel) and listings they've joined but
+         that are still waiting on more players (which they can leave --
+         a listing needing more than one more player, e.g. a 3-4 player
+         standard/team game, can otherwise sit "waiting" for a while). -->
+    <dialog id="open-games-dialog">
+        <h2>Open games</h2>
+        <section>
+            <h3>Available to join</h3>
+            <ul id="open-games-available-list"></ul>
+            <p id="open-games-available-empty" hidden>No open games right now &mdash; check back later, or post your own from the New Game dialog.</p>
+        </section>
+        <section>
+            <h3>Waiting to start</h3>
+            <ul id="open-games-joined-list"></ul>
+            <p id="open-games-joined-empty" hidden>You haven't joined any open games that are still waiting to start.</p>
+        </section>
+        <section>
+            <h3>Your open listings</h3>
+            <ul id="open-games-mine-list"></ul>
+            <p id="open-games-mine-empty" hidden>You haven't posted any open games.</p>
+        </section>
+        <p id="open-games-error" class="error" hidden></p>
+        <button id="open-games-close-button" type="button">Close</button>
+    </dialog>
+
     <dialog id="card-detail-dialog">
         <img id="card-detail-art" class="card-detail-art">
         <p id="card-detail-meta"></p>
@@ -1008,6 +1072,15 @@
                  whoever's creating the game) has this on, so this checkbox
                  is a convenience, not the actual enforcement. -->
             <label><input type="checkbox" id="settings-allow-custom-content-checkbox"> Show custom card/effect formats (e.g. Chaos Draft) in the New Game dialog</label>
+            <!-- "Discoverable for open games" (issue #116, migration 0198)
+                 -- same starts-UNCHECKED/opt-in shape as the checkbox
+                 above, matching users.matchmaking_discoverable's own
+                 DEFAULT 0. Gates whether this user's own open lobby
+                 listings (New Game dialog's "Post an open game" option)
+                 are shown to strangers browsing the open lobby at all --
+                 turning this off does not hide listings already posted
+                 while it was on; cancel those separately if wanted. -->
+            <label><input type="checkbox" id="settings-matchmaking-discoverable-checkbox"> Discoverable for open games (let strangers see and join games you post to the open lobby)</label>
         </section>
 
         <hr>

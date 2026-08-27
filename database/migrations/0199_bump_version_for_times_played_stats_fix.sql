@@ -1,0 +1,34 @@
+-- No schema change: a bug reported live -- a user noticed 9 cards
+-- showing "times played: 0" on the stats page despite knowing several of
+-- them (Compulsion, Fury, Instability) had genuinely been played against
+-- them repeatedly. Root cause: CardStatsService::recordGameCompletion()'s
+-- own "played" query only recognized game_events.event_type =
+-- 'mood_played', but GameService::playMood() only logs that when a play
+-- resolves IMMEDIATELY -- a play that instead pauses for an opponent's
+-- response (any RequiresOpponentDecision card: Arrogance, Avoidance,
+-- Betrayal, Compulsion, Confusion, Disillusionment, Fury, Instability,
+-- Intimidation, Malice, Pride, Suspicion) logs 'pending_decision_created'
+-- instead and never a 'mood_played' at all. For a card whose decision
+-- fires on nearly every real play (Fury targets anyone with a mood in
+-- play; Compulsion is mandatory unless the target's hand is empty), that
+-- meant "times played" stayed at 0 forever.
+--
+-- Fixed by also counting a 'pending_decision_created' event, excluding
+-- the two other things that same event_type is reused for (a scoring-time
+-- decision re-triggering on an already-played card, and an after-scoring
+-- order choice) via their own distinguishing `details` keys -- see
+-- CardStatsService.php and php-app/README.md's "Card statistics" section
+-- for the full writeup.
+--
+-- This migration exists purely to keep schema_version in sync with the
+-- VERSION bump that shipped alongside this fix, the same way
+-- 0024/.../0198 already did for their own schema-less changes.
+--
+-- Note: card_stats is written incrementally as each game completes (see
+-- CardStatsService's own docblock), and completed games are permanently
+-- deleted after 7 days -- so this fix only corrects times_played going
+-- forward. The undercount for any game already completed and still
+-- within that 7-day window could in principle be backfilled from its
+-- still-live game_events rows, but that's a separate, deliberately
+-- un-automated cleanup, not something this migration attempts.
+UPDATE schema_version SET version = '1.28.55' WHERE id = 1;

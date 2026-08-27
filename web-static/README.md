@@ -694,6 +694,57 @@ from a non-opted-in invitee surfaces through the New Game dialog's own
 ordinary `#new-game-error` element, the same as any other creation
 failure.
 
+### Open lobby matchmaking (issue #116)
+
+An alternative to naming specific friend opponents: the New Game
+dialog's `#new-game-mode-fields` radio pair -- "Invite friends"
+(unchanged default) vs. "Post to the open lobby (let strangers join)" --
+switches `#new-game-form` into posting an open listing instead
+(`MatchmakingService`, see "Open lobby matchmaking" in
+`php-app/README.md` for the full backend/scope writeup). Every format is
+supported; choosing "open" (`updateNewGameModeFields()`) hides
+`#new-game-friends-fields`, and for `draft`/`standard` shows
+`#new-game-open-player-count-label` -- a `2`-`4` select for exactly how
+many total players (including the creator) the listing needs before it
+starts, forced to `2` for `duel` and `4` for the team formats regardless
+(both hide the field, since there's nothing to choose). A team format's
+own partner-choice fields (`#new-game-team-fields`) stay hidden in this
+mode too, even though the format itself is otherwise shown normally --
+`updateTeamFields()`'s own open-lobby check keeps it that way, since
+teams are always assigned randomly once a listing's roster fills (no
+way to coordinate a partner pick with strangers). Submitting in this
+mode calls `postOpenGame()` (app.js) instead of `createGame()`, reusing
+every already-collected field (deck_type, decklist/pool choices, default
+selections mode, etc.) unchanged plus the player-count select's own
+value; on success the dialog closes with a confirmation via
+`showAlertDialog()` rather than jumping straight to a board, since
+there's no game yet -- just a listing waiting for however many more
+players it needs.
+
+A new "Open games" button (next to "New game"/"Past games") opens
+`#open-games-dialog`, with three sections: `GET /open-games` (available
+to join, each showing "X of Y joined" via `openGameSummary()` with a
+Join button calling `joinOpenGame()` -- jumps straight to the resulting
+board once that join's own response reports `{"status": "started"}`,
+or just refreshes the dialog if it instead reports `{"status":
+"waiting"}`, since the listing isn't a real game yet); `GET
+/open-games?joined=1` ("Waiting to start" -- listings the current user
+has joined themselves but that haven't filled yet, each with a Leave
+button calling `leaveOpenGame()`, the only way to back out of a
+multi-seat listing that's taking a while to fill); and `GET
+/open-games?mine=1` (the current user's own open listings, each with a
+Cancel button calling `cancelOpenGame()`).
+
+`#settings-matchmaking-discoverable-checkbox`, in the Settings dialog's
+"Game defaults" section right below the custom-content checkbox -- same
+starts-**unchecked**/opt-in shape (`users.matchmaking_discoverable`,
+migration `0198`, defaults `false`): posting an open listing exposes
+your username to anyone browsing the lobby, so it's off until you
+explicitly turn it on. Same "sync on open, save on change" wiring as
+every other Settings checkbox (`POST /user/matchmaking-discoverable-preference`).
+Only gates whether YOUR OWN listings are shown to strangers -- joining
+someone else's listing needs no opt-in of its own.
+
 ## Pages
 
 - `index.html` (`/`) — Login form. If the visitor already has an active
