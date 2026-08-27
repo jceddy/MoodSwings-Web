@@ -1330,7 +1330,36 @@ someone else's listing needs no opt-in of its own.
     the selected partner as `partner_user_id` or, if the random checkbox is
     checked, `random_teams: true` with no `partner_user_id` at all. See
     "Open Team Play"/"Closed Team Play" in `php-app/README.md` for the
-    formats themselves. The
+    formats themselves.
+
+    `#new-game-format`'s own "Sealed Deck" option (issue #392, right after
+    "Draft") is a UI-only sentinel with no backend format of its own --
+    Sealed Deck has no live drafting phase to distinguish it from an
+    ordinary deck-building step, so unlike Quick/Winston/Grid/(Tiered)
+    Rotisserie/Chaos Draft it never actually needed the real `'draft'`
+    format's own separate-per-player-decks plumbing exposed as a THIRD
+    dropdown option here -- see "Sealed Deck" in `php-app/README.md` for why
+    it's not simply another `format: 'draft'` deck-type choice either.
+    Selecting it hides the now-redundant Deck dropdown entirely
+    (`updateDeckTypeAvailability()`'s own early-return branch,
+    `#new-game-deck-type-label`) and forces `#new-game-deck-type`'s value to
+    `'sealed_deck'` under the hood, so `#new-game-sealed-deck-fields` (the
+    pool-source picker) and its description still render exactly as they
+    would if `'sealed_deck'` had been picked from that dropdown directly.
+    Every other read of `#new-game-format`'s value that has to match the
+    ACTUAL backend format -- bot support (`botsSupportedFor()`), the
+    open-lobby "total players needed" field, and what's actually sent to
+    `POST /games`/`POST /open-games` -- goes through `effectiveNewGameFormat()`
+    instead of reading the `<select>` directly, translating the sentinel
+    back to `'draft'` (reads that only ever compare against `'team'`/
+    `'closed_team'`/`'duel'` don't need this, since the sentinel already
+    isn't any of those). A rematch prefill undoes the same translation in
+    reverse (`format: 'draft'` + `deck_type: 'sealed_deck'` on the previous
+    game selects "Sealed Deck" here, not "Draft") so reopening the dialog
+    from a finished Sealed Deck game lands back on the same option a human
+    would have picked.
+
+    The
     dialog's Deck dropdown (`#new-game-deck-type` -- Structure, Power,
     jceddy's 75 Card, Custom Decklist, Custom Decklists (Duel), Quick
     Draft, Winston Draft, Grid Draft, One of Each Card, in that order,
@@ -2289,6 +2318,9 @@ someone else's listing needs no opt-in of its own.
       wording difference from every other draft type's own pool-source
       descriptions, reflecting that each player is dealt their own
       independent pool rather than drafting pieces of one shared pool.
+      Sealed Deck is offered as its own top-level `#new-game-format` option
+      ("Sealed Deck," next to "Draft") rather than one of "Draft"'s own Deck
+      dropdown choices -- see "New Game dialog"'s own note on this below.
 
     Clicking any hand
     card opens `#choices-panel` inline, underneath the hand -- a plain
