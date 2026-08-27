@@ -266,9 +266,9 @@ OWN printed ability had fixed its value, and silently replaced rather
 than stacked with whatever alt/dice value the card's own printed ability
 already produced -- see `chaos_value_delta` in `php-app/README.md`) gets
 its own small red `.card-thumb__badge--chaos-delta` badge instead,
-reading `+N`/`-N`, positioned immediately left of the value badge --
-never a rotation, since nothing about the card's own printed ability
-locked anything. Shown whenever `card.chaos_value_delta` is nonzero
+reading `+N`/`-N`, positioned directly below the value badge (same
+right-alignment) -- never a rotation, since nothing about the card's
+own printed ability locked anything. Shown whenever `card.chaos_value_delta` is nonzero
 (0 -- the common case, nothing to show -- reads as falsy in JS, so the
 badge is simply omitted). The card-detail dialog's own meta line
 (`openCardDetail()`) surfaces the same net delta as a parenthetical
@@ -289,14 +289,18 @@ is non-null (see `chaos_value_override` in `php-app/README.md`). The
 card-detail dialog's meta line surfaces the same fixed value as a
 parenthetical (`(chaos: fixed at N)`).
 
-The value/chaos-delta/chaos-override badge row sits ~20px down from the
-card's own top-right corner (a bug caught live: the un-nudged corner
-used to sit right over the card name printed at the top of the art,
-most visibly whenever a chaos-delta/override badge shared that row with
-the value badge, widening it enough to reach into a longer name) --
-matching the ~20px nudge `.card-thumb__badge--copy`/`--recolored`/
-`--chaos` already used on the opposite (top-left) corner for the exact
-same reason (see `style.css`'s own comments on all of these).
+The value badge sits ~20px down from the card's own top-right corner (a
+bug caught live: the un-nudged corner used to sit right over the card
+name printed at the top of the art) -- matching the ~20px nudge
+`.card-thumb__badge--copy`/`--recolored`/`--chaos` already used on the
+opposite (top-left) corner for the exact same reason. The chaos-delta/
+chaos-override badge is stacked directly below it (another bug caught
+live: originally positioned to the value badge's LEFT instead, on a
+narrow card that could push it far enough to collide with the top-left
+`--chaos` "Chaos" rarity pill) -- same ~22px stacking increment
+`.card-thumb__badge--copy` + `.card-thumb__badge--recolored` already
+uses for its own vertical stack (see `style.css`'s own comments on all
+of these).
 
 The card-detail dialog's enlarged
 `#card-detail-art` image replaces what used to be a `<h3>` name heading and

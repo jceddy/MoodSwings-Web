@@ -939,9 +939,12 @@ body.game-page {
         top: calc((0.25rem + 15px) * var(--card-scale, 1));
     }
 
+    /* Stacked below --value's own suppressed position above (16px, a
+       proportionally-scaled-down counterpart of the 22px stack increment
+       used at full card width -- 4/5.5 of 22 rounds to 16). */
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--chaos-delta,
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--chaos-override {
-        top: calc((0.25rem + 15px) * var(--card-scale, 1));
+        top: calc((0.25rem + 15px + 16px) * var(--card-scale, 1));
     }
 
     .in-play-zone .card-thumb--suppressed .card-thumb__badge--suppressed {
@@ -1064,9 +1067,13 @@ body.game-page {
     top: calc((0.25rem + 20px) * var(--card-scale, 1));
 }
 
+/* Stacked below --value's own suppressed position above, same 22px
+   increment its non-suppressed counterpart further down uses -- see
+   that rule's own comment for why they're no longer positioned to
+   --value's left. */
 .card-thumb--suppressed .card-thumb__badge--chaos-delta,
 .card-thumb--suppressed .card-thumb__badge--chaos-override {
-    top: calc((0.25rem + 20px) * var(--card-scale, 1));
+    top: calc((0.25rem + 20px + 22px) * var(--card-scale, 1));
 }
 
 .card-thumb--suppressed .card-thumb__badge--suppressed {
@@ -1092,13 +1099,9 @@ body.game-page {
     color: #fff;
 }
 
-/* Nudged down ~20px from the card's own top edge (a bug caught live: a
-   chaos-delta/override badge sharing this same row -- see below -- could
-   push far enough left to cover the card name printed at the top of the
-   art, exactly the reason .card-thumb__badge--copy/--recolored/--chaos
-   were already nudged down on the OPPOSITE corner; see that comment
-   just below). Moved together with --chaos-delta/--chaos-override so
-   the two stay level with each other in their shared row. */
+/* Nudged down ~20px from the card's own top edge -- exactly the reason
+   .card-thumb__badge--copy/--recolored/--chaos were already nudged down
+   on the OPPOSITE corner; see that comment just below. */
 .card-thumb__badge--value {
     top: calc((0.25rem + 20px) * var(--card-scale, 1));
     right: calc(0.25rem * var(--card-scale, 1));
@@ -1111,21 +1114,21 @@ body.game-page {
    is now a separate, additively-stacking badge rather than folded into
    'value_locked' (which incorrectly rotated the card 180 degrees, as if
    the card's OWN printed ability had fixed its value, when a delta
-   effect never does that). Positioned immediately left of the value
-   badge -- the reserved 1.75rem gap is sized to comfortably clear a
-   2-3 character value badge (this game's values never realistically
-   exceed 2 digits) without measuring its actual rendered width, the
-   same "close enough" fixed-offset convention every other badge
-   stacking rule on this page already uses (see e.g. the 20px/22px
-   nudges below). Shares its exact position with
-   .card-thumb__badge--chaos-override just below -- the two are mutually
-   exclusive on any single card (a chaos effect is either delta-shaped or
-   absolute-override-shaped, never both), so there's nothing to stack.
-   Shares --value's own 20px-down nudge just above for the same reason. */
+   effect never does that). Positioned directly BELOW the value badge,
+   same right-alignment, rather than to its left (a bug caught live: on
+   a narrow card, sharing the value badge's own row pushed this badge
+   far enough left to collide with .card-thumb__badge--chaos's own
+   "Chaos" rarity pill in the OPPOSITE top-left corner) -- stacked using
+   the same 22px increment .card-thumb__badge--copy + .card-thumb__badge--recolored
+   below already uses for its own vertical stack. Shares its exact
+   position with .card-thumb__badge--chaos-override just below -- the
+   two are mutually exclusive on any single card (a chaos effect is
+   either delta-shaped or absolute-override-shaped, never both), so
+   there's nothing to stack between THEM. */
 .card-thumb__badge--chaos-delta,
 .card-thumb__badge--chaos-override {
-    top: calc((0.25rem + 20px) * var(--card-scale, 1));
-    right: calc((0.25rem + 1.75rem) * var(--card-scale, 1));
+    top: calc((0.25rem + 20px + 22px) * var(--card-scale, 1));
+    right: calc(0.25rem * var(--card-scale, 1));
     background: #b00020;
 }
 
@@ -2228,9 +2231,11 @@ dialog#deck-builder-dialog[open] {
         top: calc((0.5rem + 40px) * var(--card-scale, 1));
     }
 
+    /* Stacked below --value's own suppressed position above, same 44px
+       increment its non-suppressed counterpart further down uses. */
     .card-thumb--suppressed .card-thumb__badge--chaos-delta,
     .card-thumb--suppressed .card-thumb__badge--chaos-override {
-        top: calc((0.5rem + 40px) * var(--card-scale, 1));
+        top: calc((0.5rem + 40px + 44px) * var(--card-scale, 1));
     }
 
     .card-thumb--suppressed .card-thumb__badge--suppressed {
@@ -2256,13 +2261,13 @@ dialog#deck-builder-dialog[open] {
     }
 
     /* Doubled counterpart of .card-thumb__badge--chaos-delta further up
-       (0.25rem -> 0.5rem, 1.75rem -> 3.5rem, 20px -> 40px down-nudge).
-       Covers .card-thumb__badge--chaos-override too -- see that
-       selector's own comment for why the two share a position. */
+       (0.25rem -> 0.5rem, 20px -> 40px down-nudge, 22px -> 44px stack
+       increment). Covers .card-thumb__badge--chaos-override too -- see
+       that selector's own comment for why the two share a position. */
     .card-thumb__badge--chaos-delta,
     .card-thumb__badge--chaos-override {
-        top: calc((0.5rem + 40px) * var(--card-scale, 1));
-        right: calc((0.5rem + 3.5rem) * var(--card-scale, 1));
+        top: calc((0.5rem + 40px + 44px) * var(--card-scale, 1));
+        right: calc(0.5rem * var(--card-scale, 1));
     }
 
     .card-thumb__badge--copy {
